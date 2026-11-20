@@ -204,7 +204,7 @@ func TestDeleteInstanceDataCascades(t *testing.T) {
 	addPlatformMember(t, s, team.ID, labUser.ID)
 	addPlatformMember(t, s, team.ID, mainUser.ID)
 	if ok, err := s.UpdateTeam(ctx, team.ID, func(tm *Team) error {
-		tm.Repos = []TeamRepo{{"lab", "acme/widgets"}, {"lab", ""}, {"main", "acme/widgets"}}
+		tm.Repos = []TeamRepo{{Instance: "lab", Project: "acme/widgets"}, {Instance: "lab"}, {Instance: "main", Project: "acme/widgets"}}
 		return nil
 	}); err != nil || !ok {
 		t.Fatal(ok, err)
@@ -270,7 +270,7 @@ func TestDeleteInstanceDataCascades(t *testing.T) {
 		members = append(members, id)
 	}
 	rows.Close()
-	if len(members) != 1 || members[0] != mainUser.ID || len(tm.Repos) != 1 || tm.Repos[0] != (TeamRepo{"main", "acme/widgets"}) {
+	if len(members) != 1 || members[0] != mainUser.ID || len(tm.Repos) != 1 || tm.Repos[0] != (TeamRepo{Instance: "main", Project: "acme/widgets"}) {
 		t.Fatalf("team members %v, team %+v; want only main's member and repository", members, tm)
 	}
 	repos, _ := s.DashboardRepos(ctx)

@@ -31,7 +31,30 @@ var ErrUnknownAccount = errors.New("no such account")
 
 // TeamRepo is a repository a team covers on an instance; an empty Project
 // covers every repository of Instance.
-type TeamRepo struct{ Instance, Project string }
+//
+// Owner is the owner tick: the team whose chain the repository (or, for an
+// instance entry, each repository of the instance with no owner of its own)
+// uses. At most one team owns each (instance, project).
+type TeamRepo struct {
+	Instance, Project string
+	Owner             bool
+}
+
+// OwnerTakenError is returned by UpdateTeam for an owner tick another team
+// already has at the same level. Project is empty for an instance entry.
+type OwnerTakenError struct{ Instance, Project, Team string }
+
+func (e *OwnerTakenError) Error() string {
+	what := e.Project
+	if what == "" {
+		what = e.Instance + " (whole instance)"
+	}
+	return what + " already has owner " + e.Team
+}
+
+// ownersLockKey is the pg_advisory_xact_lock key that serialises owner
+// ticks, so the check for another owner holds until the tick is stored.
+const ownersLockKey = 0x6f776e72 // "ownr"
 
 // Team is a named group of accounts. Members are ordered by account ID and
 // each has a role on the team; platform accounts (no longer used) are never
@@ -103,7 +126,7 @@ func loadTeams(ctx context.Context, q interface {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = q.Query(ctx, `SELECT team_id, instance, project FROM team_repos WHERE team_id = ANY($1)
+	rows, err = q.Query(ctx, `SELECT team_id, instance, project, owner FROM team_repos WHERE team_id = ANY($1)
 		ORDER BY instance, lower(project)`, ids)
 	if err != nil {
 		return nil, err
@@ -111,7 +134,7 @@ func loadTeams(ctx context.Context, q interface {
 	for rows.Next() {
 		var teamID int64
 		var r TeamRepo
-		if err := rows.Scan(&teamID, &r.Instance, &r.Project); err != nil {
+		if err := rows.Scan(&teamID, &r.Instance, &r.Project, &r.Owner); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -216,21 +239,44 @@ func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) erro
 			return false, ErrUnknownAccount
 		}
 	}
-	seen := map[TeamRepo]bool{}
+	seen := map[TeamRepo]int{}
 	var instances, projects []string
+	var owners []bool
 	for _, r := range t.Repos {
-		key := TeamRepo{r.Instance, strings.ToLower(r.Project)}
-		if !seen[key] {
-			seen[key] = true
-			instances, projects = append(instances, r.Instance), append(projects, r.Project)
+		key := TeamRepo{Instance: r.Instance, Project: strings.ToLower(r.Project)}
+		if i, ok := seen[key]; ok {
+			owners[i] = owners[i] || r.Owner
+			continue
+		}
+		seen[key] = len(instances)
+		instances, projects, owners = append(instances, r.Instance), append(projects, r.Project), append(owners, r.Owner)
+	}
+	if slices.Contains(owners, true) {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, ownersLockKey); err != nil {
+			return false, err
+		}
+		for i, owner := range owners {
+			if !owner {
+				continue
+			}
+			var other string
+			err := tx.QueryRow(ctx, `SELECT t.name FROM team_repos r JOIN teams t ON t.id = r.team_id
+				WHERE r.owner AND r.instance = $1 AND lower(r.project) = lower($2) AND r.team_id <> $3`,
+				instances[i], projects[i], id).Scan(&other)
+			if err == nil {
+				return false, &OwnerTakenError{Instance: instances[i], Project: projects[i], Team: other}
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return false, err
+			}
 		}
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM team_repos WHERE team_id = $1`, id); err != nil {
 		return false, err
 	}
 	if len(instances) > 0 {
-		if _, err := tx.Exec(ctx, `INSERT INTO team_repos (team_id, instance, project)
-			SELECT $1, i, p FROM unnest($2::text[], $3::text[]) AS u(i, p)`, id, instances, projects); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO team_repos (team_id, instance, project, owner)
+			SELECT $1, i, p, o FROM unnest($2::text[], $3::text[], $4::boolean[]) AS u(i, p, o)`, id, instances, projects, owners); err != nil {
 			return false, err
 		}
 	}
@@ -238,6 +284,22 @@ func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) erro
 		return false, err
 	}
 	return true, nil
+}
+
+// OwnerTeam returns the team that owns project on instance: the owner of
+// its own entry (matched ignoring case), else of the instance entry. ok is
+// false when neither has an owner.
+func (s *Store) OwnerTeam(ctx context.Context, instance, project string) (teamID int64, ok bool, err error) {
+	err = s.pool.QueryRow(ctx, `SELECT team_id FROM team_repos
+		WHERE owner AND instance = $1 AND (lower(project) = lower($2) OR project = '')
+		ORDER BY project = '' LIMIT 1`, instance, project).Scan(&teamID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return teamID, true, nil
 }
 
 // DeleteTeam removes a team with its members, repositories, entries, chain

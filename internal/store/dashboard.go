@@ -85,8 +85,13 @@ type DashboardRepo struct {
 	MonthlyTokenQuota *int64
 	// ModelID names the repository's entry in the list of models, or
 	// ConfigModelID (nil: follow the default). Saving it locks the entry, so
-	// it can't be deleted meanwhile.
+	// it can't be deleted meanwhile. A change of it rewrites the repository
+	// chain to match: a custom chain of that 1 entry, or none. Kept in step
+	// with the chain's first entry for the previous release.
 	ModelID *string
+	// ChainMode is "custom" when the repository has its own chain, "inherit"
+	// otherwise. Only the chain writes set it.
+	ChainMode string
 }
 
 // TrustedAuthor is one user on a repository's allowlist: the platform's user
@@ -179,7 +184,8 @@ func readLinks(b []byte) ([]Link, error) {
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills, repo_skills,
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
 	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs, enabled, graph_context`
+	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs, enabled, graph_context,
+	chain_mode`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
@@ -187,7 +193,8 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills, &r.RepoSkills,
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout,
-		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota, &r.CheckDeleted, &ci, &r.Enabled, &r.GraphContext)
+		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota, &r.CheckDeleted, &ci, &r.Enabled, &r.GraphContext,
+		&r.ChainMode)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -298,6 +305,13 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if err := lockModel(ctx, tx, r.ModelID); err != nil {
 		return err
 	}
+	var oldModel *string
+	err = tx.QueryRow(ctx, `SELECT model_id FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2) FOR UPDATE`,
+		r.Instance, r.Project).Scan(&oldModel)
+	existed := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
@@ -325,7 +339,17 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci); err != nil {
 		return err
 	}
+	if existed && !samePtr(oldModel, r.ModelID) || !existed && r.ModelID != nil {
+		if err := setRepoModelChain(ctx, tx, r.Instance, r.Project, r.ModelID); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
+}
+
+// samePtr reports whether a and b are both nil or point to equal strings.
+func samePtr(a, b *string) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
 // nilIfEmpty is s, or nil when s is empty, so an empty list is stored as NULL.
@@ -380,6 +404,11 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	if err != nil {
 		return false, err
 	}
+	if tag.RowsAffected() == 1 && r.ModelID != nil {
+		if err := setRepoModelChain(ctx, tx, r.Instance, r.Project, r.ModelID); err != nil {
+			return false, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
@@ -408,6 +437,11 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 	}
 	if err != nil {
 		return false, err
+	}
+	oldModel := r.ModelID
+	if oldModel != nil {
+		v := *oldModel
+		oldModel = &v
 	}
 	apply(&r)
 	skills := nilIfEmpty(r.Skills)
@@ -441,6 +475,11 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout), r.LinkedReposEnabled, links,
 		r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci); err != nil {
 		return false, err
+	}
+	if !samePtr(oldModel, r.ModelID) {
+		if err := setRepoModelChain(ctx, tx, instance, project, r.ModelID); err != nil {
+			return false, err
+		}
 	}
 	return true, tx.Commit(ctx)
 }

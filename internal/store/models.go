@@ -257,6 +257,14 @@ func (s *Store) SetDefaultLLMModel(ctx context.Context, id string, at time.Time)
 	if err := lockModelList(ctx, tx); err != nil {
 		return false, err
 	}
+	if found, err := setDefault(ctx, tx, id, at); err != nil || !found {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
+// setDefault is SetDefaultLLMModel inside tx, which holds the list lock.
+func setDefault(ctx context.Context, tx pgx.Tx, id string, at time.Time) (found bool, err error) {
 	var exists bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM llm_models WHERE id = $1)`, id).Scan(&exists); err != nil {
 		return false, err
@@ -274,10 +282,7 @@ func (s *Store) SetDefaultLLMModel(ctx context.Context, id string, at time.Time)
 	if err != nil {
 		return false, err
 	}
-	if err := writeDefaultToSettings(ctx, tx, m, at); err != nil {
-		return false, err
-	}
-	return true, tx.Commit(ctx)
+	return true, writeDefaultToSettings(ctx, tx, m, at)
 }
 
 // DeleteLLMModel removes an entry. The default is refused with

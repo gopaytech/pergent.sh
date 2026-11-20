@@ -351,3 +351,75 @@ func TestTeamKeepsPlatformMembershipsUnlisted(t *testing.T) {
 		t.Fatalf("platform membership rows = %d, %v; want 1 kept", n, err)
 	}
 }
+
+func setOwner(t *testing.T, s *Store, teamID int64, repos ...TeamRepo) error {
+	t.Helper()
+	_, err := s.UpdateTeam(ctx, teamID, func(tm *Team) error { tm.Repos = repos; return nil })
+	return err
+}
+
+// The owner of the repository entry wins over the owner of the instance
+// entry.
+func TestOwnerMostSpecific(t *testing.T) {
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "Platform", t0)
+	b, _ := s.CreateTeam(ctx, "Payments", t0)
+	if err := setOwner(t, s, a.ID, TeamRepo{Instance: "main", Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := setOwner(t, s, b.ID, TeamRepo{Instance: "main", Project: "acme/api", Owner: true}, TeamRepo{Instance: "main", Project: "acme/web"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := s.Team(ctx, b.ID)
+	if !slices.Equal(got.Repos, []TeamRepo{{Instance: "main", Project: "acme/api", Owner: true}, {Instance: "main", Project: "acme/web"}}) {
+		t.Errorf("repos = %+v; want the owner tick read back", got.Repos)
+	}
+	for _, c := range []struct {
+		instance, project string
+		want              int64
+		ok                bool
+	}{
+		{"main", "ACME/api", b.ID, true},
+		{"main", "acme/web", a.ID, true}, // b covers it but does not own it
+		{"main", "acme/other", a.ID, true},
+		{"other", "acme/api", 0, false},
+	} {
+		id, ok, err := s.OwnerTeam(ctx, c.instance, c.project)
+		if err != nil || id != c.want || ok != c.ok {
+			t.Errorf("OwnerTeam(%s, %s) = %d, %v, %v; want %d, %v", c.instance, c.project, id, ok, err, c.want, c.ok)
+		}
+	}
+	// A save of the team that leaves the tick keeps it.
+	if _, err := s.UpdateTeam(ctx, b.ID, func(tm *Team) error { tm.Name = "Payments team"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if id, _, _ := s.OwnerTeam(ctx, "main", "acme/api"); id != b.ID {
+		t.Errorf("owner after a rename = %d; want %d", id, b.ID)
+	}
+}
+
+// A second owner at the same level is refused with the owner's name.
+func TestOwnerTakenError(t *testing.T) {
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "Payments", t0)
+	b, _ := s.CreateTeam(ctx, "Growth", t0)
+	if err := setOwner(t, s, a.ID, TeamRepo{Instance: "main", Project: "payments/api", Owner: true}, TeamRepo{Instance: "lab", Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+	err := setOwner(t, s, b.ID, TeamRepo{Instance: "main", Project: "payments/api", Owner: true})
+	var taken *OwnerTakenError
+	if !errors.As(err, &taken) || err.Error() != "payments/api already has owner Payments" {
+		t.Errorf("second owner = %v; want payments/api already has owner Payments", err)
+	}
+	err = setOwner(t, s, b.ID, TeamRepo{Instance: "lab", Owner: true})
+	if !errors.As(err, &taken) || err.Error() != "lab (whole instance) already has owner Payments" {
+		t.Errorf("second instance owner = %v", err)
+	}
+	if got, _, _ := s.Team(ctx, b.ID); len(got.Repos) != 0 {
+		t.Errorf("refused team repos = %+v; want nothing stored", got.Repos)
+	}
+	// Covering it without the tick is fine; so is a tick at another level.
+	if err := setOwner(t, s, b.ID, TeamRepo{Instance: "main", Project: "payments/api"}, TeamRepo{Instance: "main", Owner: true}); err != nil {
+		t.Errorf("cover without owning: %v", err)
+	}
+}
