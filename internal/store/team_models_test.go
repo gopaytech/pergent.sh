@@ -300,7 +300,12 @@ func TestTeamModelCRUD(t *testing.T) {
 		!m.CreatedAt.Equal(t0) || !m.UpdatedAt.Equal(t0) {
 		t.Errorf("created = %+v", m)
 	}
-	second := newTeamModel(t, s, team, "Another", nil)
+	// A minute later, so "oldest first" has one answer: two rows made at
+	// the same time come back in id order, which is random.
+	second, err := s.CreateTeamModel(ctx, TeamModel{TeamID: team, Name: "Another", Provider: "openai", Model: "gpt-5"}, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("CreateTeamModel(Another): %v", err)
+	}
 
 	// Update with no key keeps it; a name, base URL and key change.
 	if found, err := s.UpdateTeamModel(ctx, team, m.ID, strp("Renamed"), nil, nil, t0.Add(time.Hour)); err != nil || !found {
