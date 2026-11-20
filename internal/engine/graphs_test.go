@@ -452,3 +452,21 @@ func TestReconcileGraphPauseAndRemove(t *testing.T) {
 		t.Errorf("the removal kept the graph file: %v", err)
 	}
 }
+
+// A graph as graphify 0.9.112 and pergent's converter really write it (of
+// internal/kube, at a made-up commit) is taken and stored.
+func TestCompleteGraphConverterOutput(t *testing.T) {
+	b, err := os.ReadFile("testdata/graph-converted.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := graphEnv(t, true)
+	id, token := startedBuild(t, env, "main", "0123456789abcdef0123456789abcdef01234567")
+	if out, err := env.Engine.CompleteGraph(env.ctx, id, token, b); err != nil || out != codegraph.Stored {
+		t.Fatalf("CompleteGraph = %v, %v", out, err)
+	}
+	g, _ := repoGraph(t, env)
+	if g.Error != "" || g.Nodes != 225 || g.Edges != 541 {
+		t.Errorf("row = %+v", g)
+	}
+}

@@ -35,6 +35,10 @@ its result back with.
 {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
 {{- end -}}
 
+{{- define "pergent-sh.graphImage" -}}
+{{ .Values.graphs.image.repository }}:{{ .Values.graphs.image.tag | default .Chart.AppVersion }}
+{{- end -}}
+
 {{- define "pergent-sh.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "pergent-sh.fullname" .) .Values.serviceAccount.name -}}
@@ -88,6 +92,9 @@ reach its Jobs, or whose Jobs land where the Role does not reach.
 {{- $dashboard := default dict .Values.config.dashboard -}}
 {{- if and .Values.adminPassword.existingSecret (not $dashboard.admin_password_env) -}}
 {{- fail "adminPassword.existingSecret needs config.dashboard.admin_password_env: the name of the env var the password is passed as" -}}
+{{- end -}}
+{{- if and .Values.graphs.enabled (not $dashboard.url) -}}
+{{- fail "graphs.enabled needs config.dashboard.url: a repository turns its Code graph on in the dashboard" -}}
 {{- end -}}
 {{- if or (hasKey .Values "ingress") (hasKey .Values "dashboardIngress") -}}
 {{- fail "ingress and dashboardIngress were removed: the chart creates only a Service; route to it yourself (see the README, \"Exposing pergent.sh\")" -}}

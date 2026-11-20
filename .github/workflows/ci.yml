@@ -113,6 +113,24 @@ jobs:
             echo "config.metrics_listen was accepted" >&2
             exit 1
           fi
+          # Code graphs are off by default: no PVC, no env, no fsGroup. On, they
+          # need the dashboard and add all three.
+          if helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            | grep -qE 'PERGENT_SH_GRAPH|PersistentVolumeClaim|fsGroup'; then
+            echo "code graphs are on by default" >&2
+            exit 1
+          fi
+          graphs=$(helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --set config.dashboard.url=https://pergent-dashboard.example.com --set graphs.enabled=true)
+          echo "$graphs" | grep -q 'kind: PersistentVolumeClaim$'
+          echo "$graphs" | grep -q 'claimName: t-pergent-sh-graphs$'
+          echo "$graphs" | grep -q 'value: /var/lib/pergent-sh/graphs$'
+          echo "$graphs" | grep -q 'value: "ghcr.io/gopaytech/pergent.sh-graph:'
+          if helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --set graphs.enabled=true > /dev/null 2>&1; then
+            echo "graphs.enabled was accepted without the dashboard" >&2
+            exit 1
+          fi
 
   # Publishes the newest main build as ghcr.io/gopaytech/pergent.sh:main and
   # :sha-<short sha>. Not on pull requests. `latest` stays the release tag
@@ -192,4 +210,28 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+      # The code graph build image: graph.Dockerfile, same tags.
+      - name: Extract graph image metadata
+        id: graphmeta
+        if: steps.tip.outputs.current == 'true'
+        uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-graph
+          flavor: latest=false
+          tags: |
+            type=raw,value=main
+            type=sha
+      - name: Build and push the graph image
+        if: steps.tip.outputs.current == 'true'
+        uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09 # v5.0.0
+        with:
+          context: .
+          file: graph.Dockerfile
+          provenance: false
+          push: true
+          tags: ${{ steps.graphmeta.outputs.tags }}
+          labels: ${{ steps.graphmeta.outputs.labels }}
+          cache-from: type=gha,scope=graph
+          cache-to: type=gha,mode=max,scope=graph
           platforms: linux/amd64,linux/arm64

@@ -1,0 +1,20 @@
+{{- if .Values.graphs.enabled }}
+# The code graphs, one file per repository, newest only. Mounted only on the
+# pergent.sh pod (one replica, Recreate), so ReadWriteOnce is enough.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "pergent-sh.fullname" . }}-graphs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pergent-sh.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- with .Values.graphs.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.graphs.persistence.size | quote }}
+{{- end }}
