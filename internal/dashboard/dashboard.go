@@ -301,6 +301,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.Handle("GET /api/me", d.Auth.Require(http.HandlerFunc(d.me)))
 	d.writeRoutes(mux)
 	d.orgRoutes(mux)
+	d.teamRoutes(mux)
 	d.commandRoutes(mux)
 	d.operatorRoutes(mux)
 	d.readRoutes(mux)

@@ -1116,10 +1116,47 @@ type TeamMemberView struct {
 	Role      string `json:"role"`
 }
 
-// TeamRepoView is a repository a team covers.
+// TeamRepoView is a repository a team covers. Owner is the owner tick: the
+// team whose chain the repository (or, for an instance entry, each
+// repository of the instance with no owner of its own) uses. In a team
+// change, a missing owner is false: the change replaces the ticks too.
 type TeamRepoView struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
+	Owner    bool   `json:"owner"`
+}
+
+// MyTeamView is a team of GET /api/me/teams: Role is the session's on it,
+// "viewer" or "maintainer" ("admin" for an admin, who sees every team).
+type MyTeamView struct {
+	ID    int64          `json:"id"`
+	Name  string         `json:"name"`
+	Role  string         `json:"role"`
+	Repos []TeamRepoView `json:"repos"`
+}
+
+// TeamModelsView is GET /api/teams/{id}/models: the team's own entries.
+// Role is the session's on the team; CanEdit is whether it may add, change
+// and remove them (a maintainer or an admin).
+type TeamModelsView struct {
+	Team    TeamRef         `json:"team"`
+	Role    string          `json:"role"`
+	CanEdit bool            `json:"canEdit"`
+	Models  []TeamModelView `json:"models"`
+}
+
+// TeamModelView is one of a team's entries. BaseURL is "" for a viewer; the
+// key is never sent, only whether one is set. UsedIn and Mark are
+// ModelAdminView's.
+type TeamModelView struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Provider string     `json:"provider"`
+	Model    string     `json:"model"`
+	BaseURL  string     `json:"baseURL"`
+	Key      SecretView `json:"key"`
+	UsedIn   []string   `json:"usedIn"`
+	Mark     *MarkView  `json:"mark"`
 }
 
 // RepoTeamsView is GET .../teams of a repository: every team, by name

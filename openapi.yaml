@@ -2461,6 +2461,9 @@ paths:
         named twice has the higher role. A repository is one switched on, or
         `{"instance": X, "project": ""}` for every repository of instance X,
         which also covers repositories switched on later (400 otherwise).
+        `owner` ticks the team as the repository's owner team; another team's
+        tick at the same level is 409. Ticks set and cleared are audited
+        (`owner_set`, `owner_cleared`).
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -2489,7 +2492,9 @@ paths:
       tags: [Organization]
       summary: Remove a team
       description: |
-        Admins only. Removes the team, not its members' accounts.
+        Admins only. Removes the team, not its members' accounts. Its own
+        entries, keys and chain go with it, and its entries leave the
+        repository chains that name them (`team_models_deleted`).
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -2503,6 +2508,216 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/me/teams:
+    get:
+      operationId: listMyTeams
+      tags: [Organization]
+      summary: The session's teams
+      description: |
+        The teams the session is a member of, with its role on each; every
+        team, as `admin`, for an admin.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The teams.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/MyTeamView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/models:
+    get:
+      operationId: listTeamModels
+      tags: [Organization]
+      summary: A team's own entries
+      description: |
+        Members of the team and admins; anyone else gets 404. Never a key; the
+        base URL only for those who may change it.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      responses:
+        '200':
+          description: The entries.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamModelsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createTeamModel
+      tags: [Organization]
+      summary: Add an entry to a team
+      description: |
+        Maintainers of the team and admins. 403 for a viewer of the team or a
+        maintainer of another team, 404 for anyone else. The name is unique in
+        the team (409); the key is sealed and never returned. Audited as
+        `team_model_added`.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateTeamModelRequest'}
+      responses:
+        '201':
+          description: Added.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamModelView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/models/{model}:
+    put:
+      operationId: updateTeamModel
+      tags: [Organization]
+      summary: Change a team entry's name, base URL or key
+      description: |
+        As adding one. A new key clears the entry's auth mark. Audited as
+        `team_model_updated`.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - $ref: '#/components/parameters/TeamModelId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateTeamModelRequest'}
+      responses:
+        '200':
+          description: Changed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamModelView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deleteTeamModel
+      tags: [Organization]
+      summary: Remove a team entry
+      description: |
+        As adding one. The entry leaves every chain that names it in the same
+        step (`usedIn` lists them first), and its mark goes. Audited as
+        `team_model_removed`, with the chains it left.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - $ref: '#/components/parameters/TeamModelId'
+      responses:
+        '204':
+          description: Removed.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/models/{model}/mark:
+    delete:
+      operationId: clearTeamModelMark
+      tags: [Organization]
+      summary: Clear a team entry's mark
+      description: |
+        As adding one. Only the team's own entries: a global entry's mark is
+        the admins' (`DELETE /api/admin/models/{id}/mark`). 204 whether it had
+        a mark or not; a cleared one is audited (`model_mark_cleared`).
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - $ref: '#/components/parameters/TeamModelId'
+      responses:
+        '204':
+          description: No mark now.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/chain:
+    get:
+      operationId: getTeamChain
+      tags: [Organization]
+      summary: A team's chain
+      description: |
+        Members of the team and admins; anyone else gets 404. While the team
+        has no chain its repositories use the global one, which is shown
+        (`source` `global`).
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      responses:
+        '200':
+          description: The chain.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putTeamChain
+      tags: [Organization]
+      summary: Save a team's chain
+      description: |
+        Maintainers of the team and admins (403 for a viewer of the team or a
+        maintainer of another team, 404 for anyone else). The team's own
+        entries and the global entries teams may use, at most 5; another
+        team's entry or a global entry teams may not use is 400. No entries
+        is no chain. Audited as `chain_changed`.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChainRequest'}
+      responses:
+        '200':
+          description: The chain saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/audit:
     get:
@@ -4159,6 +4374,12 @@ components:
         type: integer
         format: int64
         minimum: 1
+    TeamModelId:
+      name: model
+      in: path
+      required: true
+      description: The ID of one of the team's entries.
+      schema: {type: string}
     SkillName:
       name: name
       in: path
@@ -4628,8 +4849,17 @@ components:
                 enum: [viewer, maintainer]
         repos:
           type: array
-          description: An empty `project` covers every repository of the instance, now and later.
-          items: {$ref: '#/components/schemas/TeamRepoView'}
+          description: An empty `project` covers every repository of the instance, now and later. The list replaces the owner ticks too, so send `owner` for each tick to keep.
+          items:
+            type: object
+            required: [instance, project]
+            properties:
+              instance: {type: string}
+              project: {type: string}
+              owner:
+                type: boolean
+                default: false
+                description: The owner tick. A second owner at the same level is 409 (`<project> already has owner <team>`, `<instance> (whole instance)` for an instance entry).
     CreateInstanceRequest:
       type: object
       required: [name, platform]
@@ -6817,10 +7047,99 @@ components:
     TeamRepoView:
       description: A repository a team covers.
       type: object
-      required: [instance, project]
+      required: [instance, project, owner]
       properties:
         instance: {type: string}
         project: {type: string}
+        owner:
+          type: boolean
+          description: The owner tick. The team's chain is the one the repository uses (for an instance entry, each repository of the instance with no owner of its own). At most one team owns each repository or instance entry.
+    MyTeamView:
+      description: A team of the session's, with its role there.
+      type: object
+      required: [id, name, role, repos]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        role:
+          type: string
+          enum: [admin, maintainer, viewer]
+          description: '`admin` for an admin, who sees every team.'
+        repos:
+          type: array
+          items: {$ref: '#/components/schemas/TeamRepoView'}
+    TeamModelsView:
+      description: A team's own entries.
+      type: object
+      required: [team, role, canEdit, models]
+      properties:
+        team: {$ref: '#/components/schemas/TeamRef'}
+        role:
+          type: string
+          enum: [admin, maintainer, viewer]
+        canEdit:
+          type: boolean
+          description: The session may add, change and remove the entries (a maintainer of the team, or an admin).
+        models:
+          type: array
+          items: {$ref: '#/components/schemas/TeamModelView'}
+    TeamModelView:
+      description: One of a team's entries. It runs only for repositories its team owns.
+      type: object
+      required: [id, name, provider, model, baseURL, key, usedIn, mark]
+      properties:
+        id: {type: string}
+        name:
+          type: string
+          description: Unique in the team, ignoring case; it can hold no markdown.
+        provider: {type: string}
+        model: {type: string}
+        baseURL:
+          type: string
+          description: Empty for a viewer.
+        key: {$ref: '#/components/schemas/SecretView'}
+        usedIn:
+          type: array
+          items: {type: string}
+          description: The chains that name it.
+        mark:
+          oneOf:
+            - $ref: '#/components/schemas/MarkView'
+            - type: 'null'
+    CreateTeamModelRequest:
+      type: object
+      required: [name, provider, model, apiKey]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9 ._:/+-]*$'
+        provider: {type: string, maxLength: 256}
+        model: {type: string, maxLength: 256}
+        baseURL:
+          type: string
+          description: Empty, or an absolute http or https URL without credentials (at most 2048 characters).
+        apiKey:
+          type: string
+          format: password
+          description: At most 16 KiB. Sealed, and never returned.
+    UpdateTeamModelRequest:
+      type: object
+      additionalProperties: false
+      description: Each field is optional; a `provider` or `model` is 400, as they never change.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9 ._:/+-]*$'
+        baseURL: {type: string}
+        apiKey:
+          type: string
+          format: password
+          description: Replaces the key, and clears an auth mark. Never returned.
     TeamView:
       description: One team.
       type: object

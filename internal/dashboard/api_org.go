@@ -26,7 +26,7 @@ const (
 	msgUsernameTaken  = "this username is taken"
 	msgBusy           = "the server is busy, please try again"
 	msgBadTeamBody    = `the body must be {"name": ...}`
-	msgBadTeamUpdate  = `the body must be {"name": ..., "members": [{"accountId": ..., "role": "viewer" or "maintainer"}], "repos": [{"instance": ..., "project": ...}]}`
+	msgBadTeamUpdate  = `the body must be {"name": ..., "members": [{"accountId": ..., "role": "viewer" or "maintainer"}], "repos": [{"instance": ..., "project": ..., "owner": ...}]}`
 	msgBadTeamName    = "the team needs a name of at most 100 characters"
 	msgBadMemberRole  = `a member's role must be "viewer" or "maintainer"`
 	msgTeamNameTaken  = "a team with this name exists already"
@@ -403,7 +403,7 @@ func teamView(t store.Team, accounts map[int64]store.Account) TeamView {
 		v.Members = append(v.Members, TeamMemberView{AccountID: m.AccountID, Username: a.Username, Email: a.Email, Role: m.Role})
 	}
 	for _, tr := range t.Repos {
-		v.Repos = append(v.Repos, TeamRepoView{Instance: tr.Instance, Project: tr.Project})
+		v.Repos = append(v.Repos, TeamRepoView{Instance: tr.Instance, Project: tr.Project, Owner: tr.Owner})
 	}
 	return v
 }
@@ -541,7 +541,11 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 		after = *t
 		return nil
 	})
+	var taken *store.OwnerTakenError
 	switch {
+	case errors.As(err, &taken):
+		writeError(w, http.StatusConflict, taken.Error())
+		return
 	case errors.Is(err, store.ErrExists):
 		writeError(w, http.StatusConflict, msgTeamNameTaken)
 		return
@@ -566,6 +570,7 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 		d.Log.Info("dashboard: team changed", "team", after.Name, "changed", strings.Join(parts, ", "), "by", se.Username)
 		d.audit(ctx, se, "team_updated", "", "", after.Name+": "+strings.Join(parts, ", "))
 	}
+	d.auditOwners(ctx, se, before, after)
 	t, found, err := d.Store.Team(ctx, id)
 	if err == nil && !found {
 		err = errors.New("the team changed isn't there")
@@ -594,7 +599,7 @@ func (d *Dashboard) teamRepos(ctx context.Context, in []TeamRepoView) ([]store.T
 	}
 	var out []store.TeamRepo
 	for _, tr := range in {
-		repo := store.TeamRepo{Instance: tr.Instance, Project: tr.Project}
+		repo := store.TeamRepo{Instance: tr.Instance, Project: tr.Project, Owner: tr.Owner}
 		if tr.Project == "" {
 			if !d.knownInstance(tr.Instance) {
 				return nil, msgRepoNotOn, nil
@@ -681,6 +686,12 @@ func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
+	// Its entries go with it; the audit log names them.
+	models, err := d.Store.TeamModels(ctx, id)
+	if err != nil {
+		d.failed(w, r, "reading the team's models", err)
+		return
+	}
 	var name string
 	deleted, err := d.Store.DeleteTeam(ctx, id, func(t store.Team) error {
 		name = t.Name
@@ -697,6 +708,14 @@ func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Log.Info("dashboard: team removed", "team", name, "by", se.Username)
 	d.audit(ctx, se, "team_deleted", "", "", name)
+	if len(models) > 0 {
+		names := make([]string, 0, len(models))
+		for _, m := range models {
+			names = append(names, m.Name)
+		}
+		d.reloadModels(ctx, "")
+		d.audit(ctx, se, "team_models_deleted", "", "", name+": "+strings.Join(names, ", "))
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -812,7 +831,47 @@ func (d *Dashboard) setTeamRepo(ctx context.Context, se Session, id int64, repo 
 		d.Log.Info("dashboard: team changed", "team", after.Name, "changed", "repos", "by", se.Username)
 		d.audit(ctx, se, "team_updated", repo.Instance, repo.Project, after.Name+": repos")
 	}
+	d.auditOwners(ctx, se, before, after)
 	return nil
+}
+
+// auditOwners audits each owner tick a team change set (owner_set) or
+// cleared (owner_cleared), with the repository or instance it is on.
+func (d *Dashboard) auditOwners(ctx context.Context, se Session, before, after store.Team) {
+	owned := func(t store.Team) map[RepoKey]store.TeamRepo {
+		out := map[RepoKey]store.TeamRepo{}
+		for _, r := range t.Repos {
+			if r.Owner {
+				out[repoKey(r.Instance, r.Project)] = r
+			}
+		}
+		return out
+	}
+	was, now := owned(before), owned(after)
+	label := func(r store.TeamRepo) string {
+		if r.Project == "" {
+			return r.Instance + " (whole instance)"
+		}
+		return r.Instance + "/" + r.Project
+	}
+	keys := slices.Collect(maps.Keys(now))
+	sortKeys(keys)
+	for _, k := range keys {
+		if _, had := was[k]; !had {
+			r := now[k]
+			d.Log.Info("dashboard: owner set", "team", after.Name, "instance", r.Instance, "project", r.Project, "by", se.Username)
+			d.audit(ctx, se, "owner_set", r.Instance, r.Project, after.Name+": "+label(r))
+		}
+	}
+	keys = slices.Collect(maps.Keys(was))
+	sortKeys(keys)
+	for _, k := range keys {
+		if _, still := now[k]; !still {
+			r := was[k]
+			d.Log.Info("dashboard: owner cleared", "team", before.Name, "instance", r.Instance, "project", r.Project, "by", se.Username)
+			d.audit(ctx, se, "owner_cleared", r.Instance, r.Project, before.Name+": "+label(r))
+		}
+	}
 }
 
 // --- the audit log ---
