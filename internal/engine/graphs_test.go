@@ -87,7 +87,7 @@ func startedBuild(t *testing.T, env *testEnv, branch, commit string) (id, token 
 func storeTestGraph(t *testing.T, env *testEnv, branch, commit string) {
 	t.Helper()
 	id, token := startedBuild(t, env, branch, commit)
-	if out, err := env.Engine.CompleteGraph(env.ctx, id, token, testGraphFile(t, commit)); err != nil || out != GraphStored {
+	if out, err := env.Engine.CompleteGraph(env.ctx, id, token, testGraphFile(t, commit)); err != nil || out != codegraph.Stored {
 		t.Fatalf("CompleteGraph = %v, %v", out, err)
 	}
 }
@@ -208,12 +208,12 @@ func TestDispatchGraphStorageOff(t *testing.T) {
 func TestCompleteGraphStores(t *testing.T) {
 	env := graphEnv(t, true)
 	id, token := startedBuild(t, env, "main", sha('d'))
-	if out, err := env.Engine.CompleteGraph(env.ctx, id, "wrong", testGraphFile(t, sha('d'))); err != nil || out != GraphUnauthorized {
+	if out, err := env.Engine.CompleteGraph(env.ctx, id, "wrong", testGraphFile(t, sha('d'))); err != nil || out != codegraph.Unauthorized {
 		t.Fatalf("wrong token = %v, %v", out, err)
 	}
 	// Extra spaces: what is stored is pergent.sh's own encoding.
 	spaced := []byte(" " + string(testGraphFile(t, sha('d'))) + "  ")
-	if out, err := env.Engine.CompleteGraph(env.ctx, id, token, spaced); err != nil || out != GraphStored {
+	if out, err := env.Engine.CompleteGraph(env.ctx, id, token, spaced); err != nil || out != codegraph.Stored {
 		t.Fatalf("CompleteGraph = %v, %v", out, err)
 	}
 	path := env.Engine.graphPath(testInstance, testProjectPath)
@@ -230,7 +230,7 @@ func TestCompleteGraphStores(t *testing.T) {
 		t.Errorf("row = %+v", g)
 	}
 	// The token is spent with the build.
-	if out, _ := env.Engine.CompleteGraph(env.ctx, id, token, testGraphFile(t, sha('d'))); out != GraphUnauthorized {
+	if out, _ := env.Engine.CompleteGraph(env.ctx, id, token, testGraphFile(t, sha('d'))); out != codegraph.Unauthorized {
 		t.Errorf("a second post = %v; want unauthorized", out)
 	}
 }
@@ -261,7 +261,7 @@ func TestCompleteGraphFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			id, token := startedBuild(t, env, "main", sha('f'))
-			if out, err := env.Engine.CompleteGraph(env.ctx, id, token, tc.body(t)); err != nil || out != GraphStored {
+			if out, err := env.Engine.CompleteGraph(env.ctx, id, token, tc.body(t)); err != nil || out != codegraph.Stored {
 				t.Fatalf("CompleteGraph = %v, %v", out, err)
 			}
 			g, _ := repoGraph(t, env)
@@ -282,7 +282,7 @@ func TestCompleteGraphAfterSwitchOff(t *testing.T) {
 	if _, _, err := env.Store.SetDashboardRepoGraph(env.ctx, testInstance, testProjectPath, false); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := env.Engine.CompleteGraph(env.ctx, id, token, testGraphFile(t, sha('d'))); err != nil || out != GraphStored {
+	if out, err := env.Engine.CompleteGraph(env.ctx, id, token, testGraphFile(t, sha('d'))); err != nil || out != codegraph.Stored {
 		t.Fatalf("CompleteGraph = %v, %v", out, err)
 	}
 	if _, err := os.Stat(env.Engine.graphPath(testInstance, testProjectPath)); !errors.Is(err, os.ErrNotExist) {
@@ -326,7 +326,7 @@ func resultToken(t *testing.T, env *testEnv, id string) string {
 
 // A running review gets its own repository's graph with its result token,
 // which stays usable for the result. A wrong token, the switch off, or no
-// graph is ErrNoGraph.
+// graph is codegraph.ErrNoGraph.
 func TestRunGraph(t *testing.T) {
 	env := graphEnv(t, true)
 	storeTestGraph(t, env, "main", sha('d'))
@@ -334,7 +334,7 @@ func TestRunGraph(t *testing.T) {
 	dispatch(t, env)
 	token := resultToken(t, env, id)
 
-	if _, err := env.Engine.RunGraph(env.ctx, id, "wrong"); !errors.Is(err, ErrNoGraph) {
+	if _, err := env.Engine.RunGraph(env.ctx, id, "wrong"); !errors.Is(err, codegraph.ErrNoGraph) {
 		t.Errorf("wrong token = %v", err)
 	}
 	f, err := env.Engine.RunGraph(env.ctx, id, token)
@@ -353,7 +353,7 @@ func TestRunGraph(t *testing.T) {
 	if _, _, err := env.Store.SetDashboardRepoGraph(env.ctx, testInstance, testProjectPath, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.Engine.RunGraph(env.ctx, id, token); !errors.Is(err, ErrNoGraph) {
+	if _, err := env.Engine.RunGraph(env.ctx, id, token); !errors.Is(err, codegraph.ErrNoGraph) {
 		t.Errorf("switch off = %v", err)
 	}
 }

@@ -6,6 +6,8 @@
 // graphify wrote is ever stored.
 package codegraph
 
+import "errors"
+
 // ErrorBody is what a build posts when it has no graph.
 type ErrorBody struct {
 	Error string `json:"error"`
@@ -53,3 +55,17 @@ func Shown(msg string) string {
 	}
 	return MsgFailed
 }
+
+// Outcome is what became of a build's post.
+type Outcome int
+
+const (
+	// Stored: the post was the build's and is recorded, as a graph or a
+	// failure.
+	Stored Outcome = iota + 1
+	// Unauthorized: the token is not a running build's; nothing changed.
+	Unauthorized
+)
+
+// ErrNoGraph is the answer for a review with no graph to download.
+var ErrNoGraph = errors.New("no graph for this run")

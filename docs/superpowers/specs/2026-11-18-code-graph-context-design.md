@@ -298,7 +298,7 @@ edges, whether a build is queued or running, and the last error. Never the conte
 #### Release order
 
 pergent first (the release with `graph`, `graph convert` and `--graph`), then pergent.sh: move the `go.mod` pin and
-`defaultImage` to that release together. Until then pergent.sh pins the pergent commit of the open graph PR as a
+`defaultImage` to that release together. Until then pergent.sh pins the pergent master commit that merged the graph PR as a
 pseudo-version, and the review image does not know `--graph`.
 
 #### Open after the first slice

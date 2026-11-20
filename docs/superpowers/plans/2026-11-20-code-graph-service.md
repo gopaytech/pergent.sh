@@ -1,7 +1,7 @@
 # Code graph, step 3 (pergent.sh) — plan
 
 Spec: `docs/superpowers/specs/2026-11-18-code-graph-context-design.md`, section **Step 3 in pergent.sh**.
-pergent side: the open graph PR (`graph/`, `pergent graph convert`, `--graph`), pinned here as a pseudo-version.
+pergent side: the merged graph PR (`graph/`, `pergent graph convert`, `--graph`), pinned here as a pseudo-version of its master merge commit until the next pergent release.
 
 **Goal:** a per-repository Code graph switch, off by default. With it on, pergent.sh builds a graph of the default
 branch in a Job, keeps the newest one on a PVC, and gives it to review Jobs of changes into that branch. With it off,

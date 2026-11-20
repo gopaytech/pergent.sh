@@ -319,3 +319,18 @@ func TestPagesWrapTheAppOnly(t *testing.T) {
 		t.Errorf("Pages saw %v; want the three pages", seen)
 	}
 }
+
+// The graph routes exist only when the install keeps code graphs.
+func TestRoutesGraphsOnlyWhenOn(t *testing.T) {
+	cfg := &config.Config{}
+	mux := Routes(Deps{Config: cfg, Instances: instances.New(cfg, nil, nil)})
+	for _, r := range []struct{ method, path string }{{http.MethodPost, "/graphs/b1/result"}, {http.MethodGet, "/runs/r1/graph"}} {
+		req := httptest.NewRequest(r.method, r.path, strings.NewReader("{}"))
+		req.Header.Set("Authorization", "Bearer t")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s without graphs = %d; want 404 or 405", r.method, r.path, rec.Code)
+		}
+	}
+}

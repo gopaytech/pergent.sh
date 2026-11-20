@@ -309,6 +309,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		fetcher      *skillfetch.Fetcher
 		fetchResults callback.FetchResults
 		scanResults  callback.ScanResults
+		graphs       callback.GraphResults
 		api          *reviewapi.Handler
 	)
 	if cfg.DashboardEnabled() {
@@ -317,6 +318,13 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		eng.Scans = true
 		eng.ScanImage = os.Getenv("PERGENT_SH_IMAGE")
 		scanResults = eng
+		// Code graphs need the graphs volume and the graph image (the chart's
+		// graphs.enabled sets both); a repository turns them on in the
+		// dashboard.
+		eng.GraphDir, eng.GraphImage = os.Getenv("PERGENT_SH_GRAPHS_DIR"), os.Getenv("PERGENT_SH_GRAPH_IMAGE")
+		if eng.GraphsOn() {
+			graphs = eng
+		}
 		// Skills are installed from a connected instance's repositories with
 		// its review bot or App, the reader the dashboard has for it, and
 		// from a public URL by a Job, which needs pergent.sh's own image
@@ -368,7 +376,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
 		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, CI: eng, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
-		SkillFetches: fetchResults, ReadinessScans: scanResults, ReviewAPI: api, Log: log,
+		SkillFetches: fetchResults, ReadinessScans: scanResults, Graphs: graphs, ReviewAPI: api, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -406,6 +414,10 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	})
 	if eng.Scans {
 		loops = append(loops, eng.RunScans)
+	}
+	if eng.GraphsOn() {
+		log.Info("code graphs on", "dir", eng.GraphDir, "image", eng.GraphImage)
+		loops = append(loops, eng.RunGraphs)
 	}
 	if metricsLn != nil {
 		log.Info("serving metrics", "listen", cfg.MetricsListen)

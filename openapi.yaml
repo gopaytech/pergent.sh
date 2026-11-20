@@ -22,7 +22,7 @@ info:
     | Group | Caller | Authentication |
     | --- | --- | --- |
     | `/webhooks/...` | GitLab, GitHub | `X-Gitlab-Token` header, `X-Hub-Signature-256` signature |
-    | `/runs/{id}/result`, `/skill-fetches/{id}/result`, `/readiness-scans/{id}/result` | Jobs pergent.sh started | one-time bearer token per Job |
+    | `/runs/{id}/result`, `/runs/{id}/graph`, `/skill-fetches/{id}/result`, `/readiness-scans/{id}/result`, `/graphs/{id}/result` | Jobs pergent.sh started | one-time bearer token per Job |
     | `/v1/...` | systems that ask for reviews (the review API) | `Authorization: Bearer <key>`, a client key an admin made |
     | `/auth/...` | the dashboard in a browser | none, or the sign-in cookies |
     | `/api/...` | the dashboard in a browser | session cookie, plus `X-CSRF-Token` on writes |
@@ -31,8 +31,9 @@ info:
 
     **Conditional routes.** `/auth/`, `/api/` and `/v1/` exist only when
     `dashboard.url` is set. `/skill-fetches/{id}/result` and
-    `/readiness-scans/{id}/result` exist only then too. Without them the path
-    is 404.
+    `/readiness-scans/{id}/result` exist only then too. `/graphs/{id}/result`
+    and `/runs/{id}/graph` exist only when the install also keeps code graphs
+    (`graphs.enabled` in the chart). Without them the path is 404.
 
     **Review API.** `/v1/` is a separate API from the dashboard's. Every
     response is sent `Cache-Control: no-store` and `X-Content-Type-Options:
@@ -423,6 +424,84 @@ paths:
               schema: {type: string}
         '413':
           description: The body is over 1 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  /graphs/{id}/result:
+    post:
+      operationId: postGraphResult
+      tags: [Job callbacks]
+      summary: Deliver a repository's code graph
+      description: |
+        Posted once by a graph build Job with its one-time bearer token: a
+        pergent-graph/v1 file, or `{"error": "<message>"}`. Only registered
+        when the install keeps code graphs (the chart's `graphs.enabled`);
+        else 404. pergent.sh checks the graph, refuses one of another
+        commit, and stores its own encoding of it. A body over 64 MiB makes
+        the build fail at once (with the right token only) and is answered
+        413. A token that is not a running build's, or a second post, is 401.
+      x-pergent-access: none
+      security:
+        - graphBuildToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The build's id.
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: A pergent-graph/v1 file, or an object with one `error` string.
+      responses:
+        '204':
+          description: Recorded, as a graph or as the build's failure.
+        '401':
+          description: The bearer token is missing or is not a running build's.
+          content:
+            text/plain:
+              schema: {type: string}
+        '413':
+          description: The body is over 64 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  /runs/{id}/graph:
+    get:
+      operationId: getRunGraph
+      tags: [Job callbacks]
+      summary: Download a review's code graph
+      description: |
+        Called by a review Job's `graph` init container with the run's result
+        token, which it does not spend. Answers the pergent-graph/v1 file of
+        the run's repository while the run is running, the repository's Code
+        graph switch is on, and the graph was built from the branch the change
+        targets. Anything else, a missing or wrong token included, is 404.
+        Only registered when the install keeps code graphs; else 404.
+      x-pergent-access: none
+      security:
+        - runResultToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The run's id.
+          schema: {type: string}
+      responses:
+        '200':
+          description: The graph.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: A pergent-graph/v1 file.
+        '404':
+          description: No graph for this run.
           content:
             text/plain:
               schema: {type: string}
@@ -3856,6 +3935,10 @@ components:
       type: http
       scheme: bearer
       description: The readiness scan Job's one-time token. It opens this scan's result route only.
+    graphBuildToken:
+      type: http
+      scheme: bearer
+      description: The graph build Job's one-time token. It opens this build's result route only.
   parameters:
     InstanceName:
       name: instance

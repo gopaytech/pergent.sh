@@ -371,29 +371,21 @@ func (e *Engine) sweepGraphs(ctx context.Context) {
 	}
 }
 
-// GraphOutcome is what became of a build's post.
-type GraphOutcome int
-
-const (
-	GraphStored GraphOutcome = iota + 1
-	GraphUnauthorized
-)
-
 // CompleteGraph takes what a build Job posted with token: a graph, or a
 // codegraph.ErrorBody. A token that is not the running build's is
-// GraphUnauthorized and changes nothing. A graph that doesn't decode as
+// codegraph.Unauthorized and changes nothing. A graph that doesn't decode as
 // pergent-graph/v1, or is of another commit, fails the build; an error is
 // stored in pergent.sh's words (codegraph.Shown). A good graph is encoded
 // again, written to its file (a temp file, then renamed), then recorded. Both
-// are GraphStored: the Job has nothing to try again.
-func (e *Engine) CompleteGraph(ctx context.Context, id, token string, body []byte) (GraphOutcome, error) {
+// are codegraph.Stored: the Job has nothing to try again.
+func (e *Engine) CompleteGraph(ctx context.Context, id, token string, body []byte) (codegraph.Outcome, error) {
 	hash := hashToken(token)
 	g, ok, err := e.Store.GraphBuild(ctx, id, hash)
 	if err != nil {
 		return 0, err
 	}
 	if !ok {
-		return GraphUnauthorized, nil
+		return codegraph.Unauthorized, nil
 	}
 	log := e.log().With("build", id, "instance", g.Instance, "project", g.Project)
 	f, decodeErr := graph.Decode(bytes.NewReader(body))
@@ -404,21 +396,21 @@ func (e *Engine) CompleteGraph(ctx context.Context, id, token string, body []byt
 		if dec.Decode(&eb) == nil && eb.Error != "" {
 			log.Info("code graph: the build failed", "reason", codegraph.Shown(eb.Error))
 			e.failGraph(ctx, id, codegraph.Shown(eb.Error))
-			return GraphStored, nil
+			return codegraph.Stored, nil
 		}
 		log.Info("code graph: the build sent a graph that can't be used", "reason", decodeErr.Error())
 		e.failGraph(ctx, id, codegraph.MsgUnusable)
-		return GraphStored, nil
+		return codegraph.Stored, nil
 	}
 	if f.Commit != g.BuildCommit {
 		e.failGraph(ctx, id, codegraph.MsgWrongHead)
-		return GraphStored, nil
+		return codegraph.Stored, nil
 	}
 	out, err := f.Encode()
 	if err != nil {
 		log.Info("code graph: the graph can't be encoded", "reason", err.Error())
 		e.failGraph(ctx, id, codegraph.MsgUnusable)
-		return GraphStored, nil
+		return codegraph.Stored, nil
 	}
 
 	e.graphMu.Lock()
@@ -429,7 +421,7 @@ func (e *Engine) CompleteGraph(ctx context.Context, id, token string, body []byt
 		return 0, err
 	} else if !on {
 		e.dropGraphLocked(ctx, g.Instance, g.Project)
-		return GraphStored, nil
+		return codegraph.Stored, nil
 	}
 	// The file goes first: a row that names a commit its file doesn't hold
 	// would never be built again, a file newer than its row is rebuilt by
@@ -437,7 +429,7 @@ func (e *Engine) CompleteGraph(ctx context.Context, id, token string, body []byt
 	if err := writeGraphFile(e.graphPath(g.Instance, g.Project), out); err != nil {
 		log.Error("code graph: writing the graph failed", "error", e.redact(err.Error()))
 		e.failGraph(ctx, id, codegraph.MsgStore)
-		return GraphStored, nil
+		return codegraph.Stored, nil
 	}
 	stored, err := e.Store.StoreGraph(ctx, id, hash, store.StoredGraph{SizeBytes: int64(len(out)), Nodes: len(f.Nodes), Edges: len(f.Edges)}, e.now())
 	if err != nil {
@@ -446,7 +438,7 @@ func (e *Engine) CompleteGraph(ctx context.Context, id, token string, body []byt
 	if stored {
 		log.Info("code graph: stored", "commit", f.Commit, "bytes", len(out), "nodes", len(f.Nodes), "edges", len(f.Edges))
 	}
-	return GraphStored, nil
+	return codegraph.Stored, nil
 }
 
 // GraphTooLarge fails the build whose Job posted a body over the limit, when
@@ -535,40 +527,37 @@ func (e *Engine) reviewGraphURL(ctx context.Context, runID, instance, project, t
 	return strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + runID + "/graph"
 }
 
-// ErrNoGraph is RunGraph's answer for a run with no graph to download.
-var ErrNoGraph = errors.New("no graph for this run")
-
 // RunGraph opens the graph run's Job may download with token: the run is
 // running and token is its result token (checked, never spent), the run is a
 // review of a repository whose switch is on, and the stored graph is of the
-// branch the change targets. Anything else is ErrNoGraph. The caller closes
+// branch the change targets. Anything else is codegraph.ErrNoGraph. The caller closes
 // the file.
 func (e *Engine) RunGraph(ctx context.Context, runID, token string) (*os.File, error) {
 	if !e.GraphsOn() {
-		return nil, ErrNoGraph
+		return nil, codegraph.ErrNoGraph
 	}
 	r, ok, err := e.Store.GraphRun(ctx, runID, hashToken(token), e.now())
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, ErrNoGraph
+		return nil, codegraph.ErrNoGraph
 	}
 	if on, err := e.graphOn(ctx, r.Instance, r.Project); err != nil {
 		return nil, err
 	} else if !on {
-		return nil, ErrNoGraph
+		return nil, codegraph.ErrNoGraph
 	}
 	g, ok, err := e.Store.RepoGraph(ctx, r.Instance, r.Project)
 	if err != nil {
 		return nil, err
 	}
 	if !ok || g.Commit == "" || g.Branch != r.TargetBranch {
-		return nil, ErrNoGraph
+		return nil, codegraph.ErrNoGraph
 	}
 	f, err := os.Open(e.graphPath(r.Instance, r.Project))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, ErrNoGraph
+		return nil, codegraph.ErrNoGraph
 	}
 	if err != nil {
 		return nil, fmt.Errorf("open the graph: %w", err)
