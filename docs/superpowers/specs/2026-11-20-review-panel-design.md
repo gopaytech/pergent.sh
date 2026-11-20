@@ -1,6 +1,6 @@
 # Review panel
 
-Status: agreed with the owner on 2026-11-20, section by section, in a design session. It builds on `2026-11-19-team-models-and-fallback-design.md` (chains and fallback).
+Status: agreed with the owner on 2026-11-20, section by section, in a design session. The owner answered the first 13 open questions the same day. It builds on `2026-11-19-team-models-and-fallback-design.md` (chains and fallback).
 
 ## Why
 
@@ -40,14 +40,23 @@ These are the owner's.
 
 | Topic | Decision |
 |---|---|
-| Where | In pergent.sh (approach B). Job A runs chain A and Job B runs chain B, in parallel. Each is today's review Job with its own verification off. Then Job P runs `pergent agent --panel` and writes one merged result. |
+| Where | In pergent.sh (approach B). Job A runs chain A and Job B runs chain B, in parallel. Each is today's review Job with its skill verification off. Then Job P runs `pergent agent --panel` and writes one merged result. |
 | Panel scope | Batches on both models, then cross-verify. Cross-batch and impact runs stay inside Jobs A and B. Each member Job is a full review. |
+| Verify switch | The new switch turns off only the skill verification. The impact check keeps its own verification inside Jobs A and B. |
 | Merge | A model merges, inside cross-verify. No separate merge run. |
+| Judge runs | One pair per skill (B judges A, A judges B), as today's verification runs once per skill. |
 | Config | A second chain, chain B, at the same 3 levels as team models (global, team, repository). Same edit rights. Fallback works inside each member. |
 | Providers | Model B may be any provider, with its own key and base URL. |
+| Same model | If B falls back to the model A ran on, B skips that entry and takes its next different one. With none left, the review is "A only", with a note. |
+| Models in P | Each judge run uses the entry its member really ran on, after fallback. A P run may fall back on quota, billing or auth along that member's chain. |
 | Publishing | Only Job P publishes. The running status is set at the first Job start, as today. Dismissals, carried files and CI results go to both A and B. |
+| Dismissals | A past dismissal matches a group when it matches the fingerprint of any member of the group. |
+| API and re-runs | A review API request and a re-run command both run as a panel (all 3 Jobs) when the repository has chain B. |
 | Cost and time | About 2 reviews and 2 small judge runs. A and B keep the review timeout. P starts when both are terminal and has its own timeout of 10 min. |
 | Quota | The token quota counts all 3 runs. If the quota would stop B from starting, A runs alone and the comment says so. |
+| Older image | Chain B is refused on save unless `jobs.image` has a version tag at or above the first pergent with `--panel`. A tag that is not a version (for example `:main`) is refused too. |
+
+Why on save: pergent.sh cannot ask an image what it supports. It reads the version from a finished result or from the image tag (`CarriedSupport` in `internal/result/result.go`). An older P exits 2 on the unknown `--panel` flag.
 
 ## How Job P merges
 
@@ -71,16 +80,19 @@ These are the owner's.
 | Blocking from one model, the other says real | Blocking. |
 | Blocking from one model, the other says not real | Demoted to a suggestion, with `<model> disagreed: <reason>`. |
 | Blocking from one model, no usable answer | Stays blocking, with a note. |
+| Blocking from one model, a suggestion from the other | Tagged `both`. The row says `<model> rated it a suggestion`. The verdict is "blocking from one model": it stays blocking unless the other model's judge run says not real. |
 | Suggestion | Never judged, only merged. |
 
 ## Failures
 
 | Case | Result |
 |---|---|
-| B's review fails | Continue with A only. In Job P, A's blocking findings get today's single-model verification. The comment says so. |
-| One panel run fails | Its half of the judging is missing. Those findings stay blocking, with a note. |
-| Both panel runs fail | Exact-match merge only. Every blocking finding stays, with a note. |
+| B's review fails | "A only". In Job P, A's blocking findings get today's single-model verification. The comment says so. |
+| A's review fails, B's passes | "B only", the mirror of "A only". B's blocking findings get today's single-model verification in P. |
+| One judge run fails | Its half of the judging is missing. Those findings stay blocking, with a note. |
+| Both judge runs fail | Exact-match merge: today's `finding.Dedup` key (same file, same line, same normalized title). Every blocking finding stays, with a note. |
 | The quota would stop B | A runs alone, with a note. |
+| The quota would stop P | The same as "both judge runs fail". |
 
 ## Data
 
@@ -88,10 +100,11 @@ These are the owner's.
 |---|---|
 | `runs.panel_of` | Groups the 3 runs of one panel review. |
 | `runs.panel_role` | `a`, `b` or `p`. |
-| Usage | Per run, so the dashboard shows the cost per model and the total. |
+| `model_chains.role` | `a` (the default) or `b`, added to the unique key on scope, team, instance and project. Chain B has its own inherit or custom mode at each level. Existing rows become `role = a`, unchanged. |
+| `run_usage` | Keyed by run, skill and model. P writes one row per model, so the dashboard splits P's cost between the 2 models and shows the total. |
 | Fallback | A member that falls back uses `attempt_of`, as in team models. Job P waits for the member's final attempt. |
 
-Migrations only add, so the previous release still runs.
+Migrations should only add, so the previous release still runs. The 2 key changes above break that: see open question 2.
 
 ## Who can edit
 
@@ -108,10 +121,11 @@ The same rights as the team model chain.
 
 This part lands in the pergent repository. Its plan goes in pergent's own `docs/superpowers/plans/`.
 
-- **A switch to skip verification** in the member Jobs, so A and B return their blocking findings before any judging.
-- **`pergent agent --panel`** reads the results of A and B and the checkout. It starts run 1 on model B and run 2 on model A, each with only its own key in the opencode environment.
+- **A switch to skip the skill verification** in the member Jobs, so A and B return their blocking findings before any judging. The impact check's verification stays on.
+- **`pergent agent --panel`** reads the results of A and B and the checkout. Per skill, it starts run 1 on model B and run 2 on model A, each with only its own key in the opencode environment.
 - **Grouping and verdict** follow the tables above. The verdict and confidence of each skill are computed after the merge.
-- **Single-model fallback**: when only A's result is usable, it runs today's verification on A's blocking findings.
+- **Single-model fallback**: when only one member's result is usable, it runs today's verification on that member's blocking findings.
+- **Usage** is reported per skill and per model.
 - **The comment** (`render/`):
 
   | Where | What |
@@ -119,6 +133,7 @@ This part lands in the pergent repository. Its plan goes in pergent's own `docs/
   | Header | `Panel: <model A> + <model B>` |
   | Each finding row | Tagged `both`, `A` or `B` |
   | A demoted finding | `<model> disagreed: <reason>` |
+  | A mixed group | `<model> rated it a suggestion` |
   | A partial panel | A note that says which part is missing |
   | Confidence | The lower of the two models |
 
@@ -128,7 +143,7 @@ pergent.sh then moves its `go.mod` pin and `defaultImage` together, as for any c
 
 - **Run page**: the 3 runs show as one review, with the cost of each model and the total.
 - **Repository page**: `Panel: on (A: <model>, B: <model>)`.
-- **Repository settings**: chain B, edited like chain A.
+- **Repository settings**: chain B, edited like chain A, with its own inherit or custom mode.
 
 ## Security
 
@@ -143,9 +158,9 @@ In Job P each key reaches only the environment of its own opencode run.
 
 | Where | What |
 |---|---|
-| pergent | Unit tests with fake answers: grouping, every verdict row, every failure case, and a golden comment with the tags. |
+| pergent | Unit tests with fake answers: grouping, every verdict row, every failure case, usage per model, and a golden comment with the tags. |
 | pergent.sh, chain B off | The review Job and dispatch are unchanged, byte for byte (golden). |
-| pergent.sh, chain B on | With fake Job results: the 3-Job flow, `panel_of`, publish, B fails, B falls back. |
+| pergent.sh, chain B on | With fake Job results: the 3-Job flow, `panel_of`, publish, A fails, B fails, B falls back to A's model, an API review, a re-run, the image check on save. |
 
 ## Measurement
 
@@ -155,18 +170,8 @@ When the budget allows: the 5 saved bug cases plus 5 more, each on A alone, B al
 
 ## Open questions
 
-Not decided. The plan must not answer them without the owner.
+Still open. The plan must not answer them without the owner.
 
-1. **A member on fallback.** P waits for the final attempt. Does the review timeout count from that member's first attempt or its last? If B falls back to the same model as A, is it still a panel?
-2. **The models in Job P.** Do runs 1 and 2 use the entry each member finally ran on, or the first usable entry of each chain when P starts? Can a P run fall back on quota, billing or auth?
-3. **A fails and B passes.** The decisions cover B failing. Does A failing mean "B only", or a failed review?
-4. **Mixed severities in a group.** A has it blocking and B has it as a suggestion. The group is tagged `both`. Does the row show that B rated it lower?
-5. **Exact-match merge.** When both panel runs fail, what counts as the same finding: the fingerprint, or the file, line and title?
-6. **One judge run per skill, or one for all skills?** Today's verification runs once per skill.
-7. **Impact verification.** Impact runs stay inside A and B. Does their own verification also stay on there?
-8. **Usage in Job P.** P spends tokens on 2 models in one run. `run_usage` is keyed by run and skill. How is P's spend split per model?
-9. **Quota and Job P.** If the quota would stop P from starting, is that "both panel runs fail"?
-10. **Dismissals of a merged finding.** A dismissal matches by fingerprint. The next review may take the group's text from the other model, with another fingerprint. How does the dismissal follow it?
-11. **Storage of chain B.** `model_chains` has one chain per scope target. Does chain B get a new column, and does a repository get its own inherit or custom mode for it?
-12. **An older pergent image.** It exits 2 on `--panel` and ignores a new verification switch. Is chain B refused until the pinned image supports the panel?
-13. **API reviews and re-runs.** Does a review API request with a chain B run as a panel? Does a re-run command start all 3 Jobs again?
+1. **The timeout of a member on fallback.** Does the review timeout count from that member's first attempt or from its last?
+2. **The previous release after the migration.** Today's code writes `run_usage` with `ON CONFLICT (run_id, skill)` and `model_chains` with `ON CONFLICT` on scope, team, instance and project. With model and role in those keys, the old unique indexes must go, and the previous release then fails on those writes. Do we accept that, or keep the old keys (for example, P's per-model usage and chain B in their own tables)?
+3. **An image pinned back after chain B is saved.** The check runs on save. If `jobs.image` later moves to an older or unknown tag, does dispatch run "A only" with a note, or fail the review?
