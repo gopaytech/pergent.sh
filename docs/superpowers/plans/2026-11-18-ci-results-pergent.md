@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go, the existing `internal/review`, `internal/redact`, `render` packages.
 
-**Spec:** `docs/superpowers/specs/2026-11-18-ci-job-results-design.md` in pergent.sh (section "### pergent"). This plan runs in the **pergent** repository (`/Users/zufardhiyaulhaq/Documents/personal/github/pergent`), on a new branch `feat/ci-results` from `origin/master` (local `master` is behind).
+**Spec:** `docs/superpowers/specs/2026-11-18-ci-job-results-design.md` in pergent.sh (section "### pergent"). This plan runs in the **pergent** repository, on a new branch `feat/ci-results` from `origin/master` (local `master` is behind).
 
 ## Global Constraints
 
@@ -17,7 +17,7 @@
 - Flag `--ci-results`, default `getenv("PERGENT_CI_RESULTS")`. Attached file name `ci-results.md`. Cap `64 << 10` bytes.
 - The text is redacted with `redact.String` before it is attached. It never reaches the result, the comment or a failure text.
 - Verification, repair and impact runs never get the file.
-- `make vet` and `make test` pass. Commit with `git -c user.email=zufardhiyaulhaq@gmail.com commit`, message ending `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never push, tag or open a PR unless the owner asks.
+- `make vet` and `make test` pass. End each commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never push, tag or open a PR unless the owner asks.
 
 ## Rulings on the spec
 
