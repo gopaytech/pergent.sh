@@ -287,3 +287,26 @@ func (s *Store) DeleteRepoGraph(ctx context.Context, instance, project string) (
 	}
 	return job, true, nil
 }
+
+// GraphRunRef is the change a review downloads a graph for.
+type GraphRunRef struct{ Instance, Project, TargetBranch string }
+
+// GraphRun returns the review run id when its result token's hash is hash,
+// the token has not expired at now, and the run is running. It does not spend
+// the token. An API review (no repository) is never returned.
+func (s *Store) GraphRun(ctx context.Context, id string, hash []byte, now time.Time) (GraphRunRef, bool, error) {
+	if !validUUID(id) || hash == nil {
+		return GraphRunRef{}, false, nil
+	}
+	var r GraphRunRef
+	err := s.pool.QueryRow(ctx, `SELECT instance, project_path, target_branch FROM runs
+		WHERE id = $1::uuid AND kind = 'mr' AND state = 'running' AND token_hash = $2 AND token_expires_at >= $3`,
+		id, hash, now).Scan(&r.Instance, &r.Project, &r.TargetBranch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GraphRunRef{}, false, nil
+	}
+	if err != nil {
+		return GraphRunRef{}, false, err
+	}
+	return r, true, nil
+}

@@ -605,6 +605,15 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if plat.isGitHub() {
 		commentLimit = kube.CommentLimitGitHub
 	}
+	// The code graph: only with the repository's switch on does anything
+	// read or ask for one, so with it off the Job is the Job of before.
+	var graphURL, graphImage string
+	if repo.GraphContext {
+		e.WantGraph(repo.Instance, repo.Project)
+		if graphURL = e.reviewGraphURL(ctx, run.ID, repo.Instance, repo.Project, mr.TargetBranch); graphURL != "" {
+			graphImage = e.ScanImage
+		}
+	}
 	params := kube.JobParams{
 		Name:           name,
 		RunID:          run.ID,
@@ -632,6 +641,8 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		IID:            run.MR.IID,
 		ProjectPath:    run.ProjectPath,
 		MRURL:          mr.WebURL,
+		GraphURL:       graphURL,
+		GraphImage:     graphImage,
 	}
 	secrets := kube.Secrets{GitToken: string(gitToken), LLMKey: llmKey, ResultToken: token}
 	if err := e.Launcher.Launch(ctx, params, secrets); err != nil {
