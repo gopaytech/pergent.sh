@@ -209,7 +209,7 @@ func (l *Launcher) LaunchGraph(ctx context.Context, p GraphJobParams, gitToken, 
 }
 
 // The review Job's side: the graph init container downloads the run's graph
-// into its own volume, outside /work, and pergent reads it with --graph.
+// into its own volume, outside /work, and pergent reads it from PERGENT_GRAPH.
 const (
 	containerGraph = "graph"
 	graphMount     = "/graph"

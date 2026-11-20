@@ -11,7 +11,7 @@ With the switch off, nothing changes: pergent.sh builds no graph, stores none, a
 ## Turn it on
 
 1. The install must keep graphs: set `graphs.enabled: true` in the Helm chart. It needs the dashboard (`config.dashboard.url`). The chart then makes a PersistentVolumeClaim (`graphs.persistence.size`, default `5Gi`; `graphs.persistence.storageClass`), mounts it on the pergent.sh pod only, and sets `PERGENT_SH_GRAPHS_DIR` and `PERGENT_SH_GRAPH_IMAGE`.
-2. The review image must know pergent's `--graph` flag: the pergent release after v0.10.0. **An older image exits 2 on the unknown flag, so every review of a repository with the switch on fails.** Keep the switch off until `jobs.image` is that release.
+2. The review Job gives pergent the graph in the environment variable `PERGENT_GRAPH`, not as a flag. A pergent image older than the change that reads `PERGENT_GRAPH` (v0.10.0, the default review image, is one) ignores the variable: the review runs as it would without a graph, and the build still runs and stores graphs. A pergent image that reads it uses the graph.
 3. On the repository's page, open **Settings** and tick **Build and use a code graph**. Maintainers and admins of the repository can change it. A repository from the config file has no switch: it is always off.
 
 The same page shows the stored graph: its branch and commit, nodes, edges and size, when it was built, a build that is queued or running, and why the last build failed. Never the graph itself.
@@ -51,7 +51,7 @@ graphify never shares a container with a token or the LLM key, and it runs with 
 ## The review
 
 - A review gets the graph only when the switch is on, a graph is stored, and the change targets the branch the graph was built from. A change into another branch gets none, because its line numbers can be far off.
-- Then the review Job has one more init container, `graph`, with pergent.sh's image and the run's result token only. It downloads `GET /runs/<id>/graph` into `/graph/graph.json`, outside the checkout, and pergent gets `--graph=/graph/graph.json`. The pergent container mounts `/graph` read-only.
+- Then the review Job has one more init container, `graph`, with pergent.sh's image and the run's result token only. It downloads `GET /runs/<id>/graph` into `/graph/graph.json`, outside the checkout, and pergent gets `PERGENT_GRAPH=/graph/graph.json`. The pergent container mounts `/graph` read-only.
 - The download answers only the run's own repository, only while the run is running, and only with that run's token, which it doesn't spend. Anything else is `404`.
 - A failed download leaves no file, and the `graph` container still exits 0. pergent then logs `graph: skipped` and reviews as it would without a graph. A graph never makes a review pass or fail.
 

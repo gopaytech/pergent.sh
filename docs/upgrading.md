@@ -6,7 +6,7 @@
 
 - **Migration `0044`** runs at startup. It adds one column with a default (`dashboard_repos.graph_context`, `false`) and one table (`repo_graphs`), dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores both.
 - **Chart:** new values `graphs.enabled` (default `false`), `graphs.persistence.size`, `graphs.persistence.storageClass` and `graphs.image`. With `graphs.enabled: false` the chart renders the same objects as before. `graphs.enabled: true` needs `config.dashboard.url`, adds a PersistentVolumeClaim, `fsGroup: 65532` on the pod and two environment variables, and uses the new image `ghcr.io/gopaytech/pergent.sh-graph`.
-- **The review image must know `--graph`** before a repository turns the switch on: the pergent release after v0.10.0. An older image fails every review of that repository on the unknown flag. The version is named in the release notes.
+- The review Job passes the graph to pergent as the environment variable `PERGENT_GRAPH`. A pergent image older than the change that reads it, such as v0.10.0, ignores the variable and reviews without the graph, so turning the switch on never fails a review.
 - With a public `callback_url`, route `/graphs/` like `/runs/`.
 - The audit log has `graph_on` and `graph_off`. `RepositoryDetailView` has a new `graph` field.
 - There is no config change, so a rollback needs no config edit. After a rollback the graphs volume and the `repo_graphs` rows stay unused.

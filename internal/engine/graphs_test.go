@@ -113,6 +113,11 @@ func hasGraph(job *batchv1.Job) bool {
 			return true
 		}
 	}
+	for _, e := range spec.Containers[0].Env {
+		if e.Name == "PERGENT_GRAPH" {
+			return true
+		}
+	}
 	for _, v := range spec.Volumes {
 		if v.Name == "graph" {
 			return true
@@ -145,7 +150,7 @@ func TestDispatchGraphOff(t *testing.T) {
 
 // With the switch on, a review asks for a head check, and a change into the
 // branch the stored graph was built from gets the graph init container and
-// --graph; a change into another branch does not.
+// PERGENT_GRAPH; a change into another branch does not.
 func TestDispatchGraphOn(t *testing.T) {
 	for _, tc := range []struct {
 		name, branch string

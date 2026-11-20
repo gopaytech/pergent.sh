@@ -170,8 +170,9 @@ func TestLaunchGraph(t *testing.T) {
 
 // A review Job with a graph URL gets one more init container, which holds the
 // result token alone and writes only the graph volume; the pergent container
-// reads that volume read-only and gets --graph. The repository volume is not
-// the graph's.
+// reads that volume read-only and gets PERGENT_GRAPH, never --graph: an older
+// pergent image exits 2 on an unknown flag but ignores an unknown variable.
+// The repository volume is not the graph's.
 func TestBuildJobWithGraph(t *testing.T) {
 	p := testParams()
 	p.GraphURL = "http://pergent-sh:8080/runs/" + p.RunID + "/graph"
@@ -197,8 +198,13 @@ func TestBuildJobWithGraph(t *testing.T) {
 		t.Errorf("graph container security context = %+v", sc)
 	}
 	pergent := containerByName(t, spec.Containers, "pergent")
-	if !slices.Contains(pergent.Args, "--graph=/graph/graph.json") {
-		t.Errorf("pergent args = %v", pergent.Args)
+	if got, ok := envValue(pergent.Env, "PERGENT_GRAPH"); !ok || got != "/graph/graph.json" {
+		t.Errorf("PERGENT_GRAPH = %q, %v; want /graph/graph.json", got, ok)
+	}
+	for _, a := range pergent.Args {
+		if strings.HasPrefix(a, "--graph") {
+			t.Errorf("pergent got %s; an older image exits 2 on it", a)
+		}
 	}
 	var mounted bool
 	for _, m := range pergent.VolumeMounts {
@@ -225,10 +231,8 @@ func TestBuildJobWithGraph(t *testing.T) {
 	if len(spec.InitContainers) != 1 || len(spec.Volumes) != 2 {
 		t.Errorf("no graph: %d init containers, %d volumes", len(spec.InitContainers), len(spec.Volumes))
 	}
-	for _, a := range containerByName(t, spec.Containers, "pergent").Args {
-		if strings.HasPrefix(a, "--graph") {
-			t.Errorf("no graph, but pergent got %s", a)
-		}
+	if got, ok := envValue(containerByName(t, spec.Containers, "pergent").Env, "PERGENT_GRAPH"); ok {
+		t.Errorf("no graph, but pergent got PERGENT_GRAPH=%s", got)
 	}
 }
 

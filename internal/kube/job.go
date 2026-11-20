@@ -121,7 +121,7 @@ type JobParams struct {
 	APIClient string
 	// GraphURL is where the Job downloads its repository's code graph
 	// (/runs/<id>/graph), with GraphImage (pergent.sh's own image). Both set
-	// add the graph init container and --graph; either empty leaves the Job
+	// add the graph init container and PERGENT_GRAPH; either empty leaves the Job
 	// as it was before code graphs existed.
 	GraphURL, GraphImage string
 }
@@ -293,9 +293,6 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasCarried {
 		args = append(args, "--carried=/in/carried.json")
 	}
-	if hasGraph {
-		args = append(args, "--graph="+GraphFile)
-	}
 	args = append(args,
 		"--scrub-instructions",
 		"--timeout="+p.Timeout.String(),
@@ -328,6 +325,11 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasCI {
 		// An environment variable for the same reason.
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_CI_RESULTS", Value: "/in/ci-results.md"})
+	}
+	if hasGraph {
+		// An environment variable for the same reason: an older image then
+		// reviews without the graph.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_GRAPH", Value: GraphFile})
 	}
 	if p.CheckDeleted {
 		// An environment variable for the same reason.
