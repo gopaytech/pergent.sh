@@ -1,6 +1,6 @@
 # Review panel
 
-Status: agreed with the owner on 2026-11-20, section by section, in a design session. The owner answered the first 13 open questions the same day. It builds on `2026-11-19-team-models-and-fallback-design.md` (chains and fallback).
+Status: agreed with the owner on 2026-11-20, section by section, in a design session. The owner answered all 16 open questions the same day. It builds on `2026-11-19-team-models-and-fallback-design.md` (chains and fallback).
 
 ## Why
 
@@ -52,9 +52,9 @@ These are the owner's.
 | Publishing | Only Job P publishes. The running status is set at the first Job start, as today. Dismissals, carried files and CI results go to both A and B. |
 | Dismissals | A past dismissal matches a group when it matches the fingerprint of any member of the group. |
 | API and re-runs | A review API request and a re-run command both run as a panel (all 3 Jobs) when the repository has chain B. |
-| Cost and time | About 2 reviews and 2 small judge runs. A and B keep the review timeout. P starts when both are terminal and has its own timeout of 10 min. |
+| Cost and time | About 2 reviews and 2 small judge runs. Each attempt of A or B gets the full review timeout, as in team models (each attempt is a new Job). P waits for each member's final attempt, then has its own timeout of 10 min. At worst a panel takes 2 review timeouts, the same as a single review that falls back. |
 | Quota | The token quota counts all 3 runs. If the quota would stop B from starting, A runs alone and the comment says so. |
-| Older image | Chain B is refused on save unless `jobs.image` has a version tag at or above the first pergent with `--panel`. A tag that is not a version (for example `:main`) is refused too. |
+| Older image | Chain B is refused on save unless `jobs.image` has a version tag at or above the first pergent with `--panel`. A tag that is not a version (for example `:main`) is refused too. If `jobs.image` later moves to an older or unknown tag, dispatch runs A only with the note `panel off: the review image does not support it`. It never fails the review. |
 
 Why on save: pergent.sh cannot ask an image what it supports. It reads the version from a finished result or from the image tag (`CarriedSupport` in `internal/result/result.go`). An older P exits 2 on the unknown `--panel` flag.
 
@@ -100,11 +100,12 @@ Why on save: pergent.sh cannot ask an image what it supports. It reads the versi
 |---|---|
 | `runs.panel_of` | Groups the 3 runs of one panel review. |
 | `runs.panel_role` | `a`, `b` or `p`. |
-| `model_chains.role` | `a` (the default) or `b`, added to the unique key on scope, team, instance and project. Chain B has its own inherit or custom mode at each level. Existing rows become `role = a`, unchanged. |
-| `run_usage` | Keyed by run, skill and model. P writes one row per model, so the dashboard splits P's cost between the 2 models and shows the total. |
+| `panel_chains`, `panel_chain_entries` | Chain B. New tables with the same shape as `model_chains` and `model_chain_entries`, read and written by the same Go code. Chain B has its own inherit or custom mode at each level. `model_chains` is unchanged. |
+| `run_usage_models` | New table: run, skill, model and tokens. P writes one row per model, so the dashboard splits P's cost between the 2 models. |
+| `run_usage` | Unchanged: one row per run and skill, the total. Its key stays. |
 | Fallback | A member that falls back uses `attempt_of`, as in team models. Job P waits for the member's final attempt. |
 
-Migrations should only add, so the previous release still runs. The 2 key changes above break that: see open question 2.
+Migrations only add, so the previous release still runs. No existing unique key changes.
 
 ## Who can edit
 
@@ -160,18 +161,10 @@ In Job P each key reaches only the environment of its own opencode run.
 |---|---|
 | pergent | Unit tests with fake answers: grouping, every verdict row, every failure case, usage per model, and a golden comment with the tags. |
 | pergent.sh, chain B off | The review Job and dispatch are unchanged, byte for byte (golden). |
-| pergent.sh, chain B on | With fake Job results: the 3-Job flow, `panel_of`, publish, A fails, B fails, B falls back to A's model, an API review, a re-run, the image check on save. |
+| pergent.sh, chain B on | With fake Job results: the 3-Job flow, `panel_of`, publish, A fails, B fails, B falls back to A's model, an API review, a re-run, the image check on save and at dispatch, `run_usage_models`. |
 
 ## Measurement
 
 When the budget allows: the 5 saved bug cases plus 5 more, each on A alone, B alone and the panel.
 
 **Success**: the panel finds at least 1 bug that neither single model found, at no more than 2.5x the cost of one review. Otherwise the panel stays experimental and off.
-
-## Open questions
-
-Still open. The plan must not answer them without the owner.
-
-1. **The timeout of a member on fallback.** Does the review timeout count from that member's first attempt or from its last?
-2. **The previous release after the migration.** Today's code writes `run_usage` with `ON CONFLICT (run_id, skill)` and `model_chains` with `ON CONFLICT` on scope, team, instance and project. With model and role in those keys, the old unique indexes must go, and the previous release then fails on those writes. Do we accept that, or keep the old keys (for example, P's per-model usage and chain B in their own tables)?
-3. **An image pinned back after chain B is saved.** The check runs on save. If `jobs.image` later moves to an older or unknown tag, does dispatch run "A only" with a note, or fail the review?
