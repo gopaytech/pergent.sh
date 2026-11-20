@@ -21,7 +21,10 @@ type DashboardRepo struct {
 	// Enabled is false for a paused repository: its row and settings stay,
 	// but nothing reviews it. Only SetDashboardRepoEnabled writes it; a new
 	// row is enabled.
-	Enabled      bool
+	Enabled bool
+	// GraphContext is the Code graph switch (off for a new row). Only
+	// SetDashboardRepoGraph writes it.
+	GraphContext bool
 	Approve      *bool
 	ReviewDrafts *bool
 	// InlineFindings is whether findings are posted as threads on their
@@ -176,7 +179,7 @@ func readLinks(b []byte) ([]Link, error) {
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills, repo_skills,
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
 	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs, enabled`
+	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs, enabled, graph_context`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
@@ -184,7 +187,7 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills, &r.RepoSkills,
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout,
-		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota, &r.CheckDeleted, &ci, &r.Enabled)
+		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota, &r.CheckDeleted, &ci, &r.Enabled, &r.GraphContext)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}

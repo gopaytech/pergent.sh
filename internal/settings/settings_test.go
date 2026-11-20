@@ -1030,3 +1030,24 @@ func TestResolverPausedRepo(t *testing.T) {
 		t.Fatalf("Get after resume = %+v; want on with approve off", eff)
 	}
 }
+
+// The Code graph switch comes from the dashboard row; a repository of the
+// config file has none, so it is off there.
+func TestResolverGraphContext(t *testing.T) {
+	st := newStore(t)
+	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/gadgets", CreatedBy: "alice"})
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
+	if eff := get(t, r, "main", "acme/gadgets"); eff.GraphContext {
+		t.Fatalf("a new repository = %+v; want the graph off", eff)
+	}
+	if _, _, err := st.SetDashboardRepoGraph(ctx, "main", "acme/gadgets", true); err != nil {
+		t.Fatal(err)
+	}
+	if eff := get(t, r, "main", "acme/gadgets"); !eff.GraphContext {
+		t.Fatalf("after the switch = %+v; want the graph on", eff)
+	}
+	if eff := get(t, r, "main", "acme/widgets"); eff.Source != SourceConfig || eff.GraphContext {
+		t.Fatalf("the config repository = %+v; want the graph off", eff)
+	}
+}
