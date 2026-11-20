@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -36,14 +35,6 @@ type LLMModel struct {
 	APIKeySealed                       []byte
 	Default, TeamsMayUse               bool
 	CreatedAt, UpdatedAt               time.Time
-}
-
-// ModelInUseError is returned by DeleteLLMModel for a model a repository
-// names.
-type ModelInUseError struct{ Repos []RepoRef }
-
-func (e *ModelInUseError) Error() string {
-	return fmt.Sprintf("store: model is in use by %d repositories", len(e.Repos))
 }
 
 const modelColumns = `id, COALESCE(name, provider || '/' || model), provider, model, base_url, api_key_sealed, is_default,
@@ -84,16 +75,6 @@ func (s *Store) LLMModels(ctx context.Context) ([]LLMModel, error) {
 	return out, rows.Err()
 }
 
-// modelTaken reports whether an entry has this provider, model and base URL.
-// The database no longer refuses it (0045 dropped the rule), so the store
-// does, under the list lock, until names tell entries apart in the API.
-func modelTaken(ctx context.Context, tx pgx.Tx, provider, model, baseURL string) (bool, error) {
-	var taken bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM llm_models
-		WHERE provider = $1 AND model = $2 AND base_url = $3)`, provider, model, baseURL).Scan(&taken)
-	return taken, err
-}
-
 // lockModelList takes the lock that serialises changes to the list until the
 // transaction ends.
 func lockModelList(ctx context.Context, tx pgx.Tx) error {
@@ -118,9 +99,9 @@ func writeDefaultToSettings(ctx context.Context, tx pgx.Tx, m LLMModel, at time.
 
 // CreateLLMModel adds m (its ID, Default and times are ignored; at is both
 // times) and returns it as stored. The entry becomes the default when there
-// is none, which the first one is. The same provider, model and base URL as
-// an entry already there is ErrExists; a name taken is ErrNameTaken. An empty
-// name stores none, which reads as provider/model.
+// is none, which the first one is. A name taken is ErrNameTaken; the same
+// provider, model and base URL as another entry is allowed, as names tell
+// them apart. An empty name stores none, which reads as provider/model.
 func (s *Store) CreateLLMModel(ctx context.Context, m LLMModel, at time.Time) (LLMModel, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -129,12 +110,6 @@ func (s *Store) CreateLLMModel(ctx context.Context, m LLMModel, at time.Time) (L
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
 	if err := lockModelList(ctx, tx); err != nil {
-		return LLMModel{}, err
-	}
-	if taken, err := modelTaken(ctx, tx, m.Provider, m.Model, m.BaseURL); err != nil || taken {
-		if taken {
-			err = ErrExists
-		}
 		return LLMModel{}, err
 	}
 	if m.Name != "" {
@@ -166,8 +141,8 @@ func (s *Store) CreateLLMModel(ctx context.Context, m LLMModel, at time.Time) (L
 
 // UpdateLLMModel changes the base URL and, unless keySealed is nil, the key
 // of an entry; its provider and model never change. found is false when
-// there is no such entry. A base URL that makes it the same as another entry
-// is ErrExists. The default entry is written to llm_settings again. A new key
+// there is no such entry. The default entry is written to llm_settings
+// again. A new key
 // clears the entry's auth mark in the same transaction.
 func (s *Store) UpdateLLMModel(ctx context.Context, id, baseURL string, keySealed []byte, at time.Time) (found bool, err error) {
 	tx, err := s.pool.Begin(ctx)
@@ -178,15 +153,6 @@ func (s *Store) UpdateLLMModel(ctx context.Context, id, baseURL string, keySeale
 
 	if err := lockModelList(ctx, tx); err != nil {
 		return false, err
-	}
-	// The same check as modelTaken, for the entry's own provider and model.
-	var taken bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM llm_models o JOIN llm_models m ON m.id = $1
-		WHERE o.id <> m.id AND o.provider = m.provider AND o.model = m.model AND o.base_url = $2)`, id, baseURL).Scan(&taken); err != nil {
-		return false, err
-	}
-	if taken {
-		return false, ErrExists
 	}
 	m, err := scanModel(tx.QueryRow(ctx, `UPDATE llm_models SET base_url = $2, api_key_sealed = COALESCE($3, api_key_sealed), updated_at = $4
 		WHERE id = $1 RETURNING `+modelColumns, id, baseURL, keySealed, at))
@@ -287,13 +253,12 @@ func setDefault(ctx context.Context, tx pgx.Tx, id string, at time.Time) (found 
 
 // DeleteLLMModel removes an entry. The default is refused with
 // ErrModelIsDefault, unless shadowed: the config file's llm: block is the
-// default then and the flag is dormant, so the entry may go once no
-// repository names it (that check answers first), and the oldest entry left
+// default then and the flag is dormant, so the entry may go, and the oldest
+// entry left
 // takes the flag and is written to llm_settings; with none left there is no
-// default. An entry a dashboard repository names is refused with a
-// *ModelInUseError listing them. The entry's row is locked first, and a save
-// of a repository naming it locks the row too (lockModel), so a delete and
-// such a save cannot both succeed. A missing entry is ErrModelNotFound.
+// default. An entry chains or a repository's model_id name goes all the
+// same: they keep naming it, and the resolver skips it as removed. A missing
+// entry is ErrModelNotFound.
 func (s *Store) DeleteLLMModel(ctx context.Context, id string, shadowed bool) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -314,27 +279,6 @@ func (s *Store) DeleteLLMModel(ctx context.Context, id string, shadowed bool) er
 	}
 	if isDefault && !shadowed {
 		return ErrModelIsDefault
-	}
-	inUse := &ModelInUseError{}
-	rows, err := tx.Query(ctx, `SELECT instance, project FROM dashboard_repos WHERE model_id = $1
-		ORDER BY instance, lower(project)`, id)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var r RepoRef
-		if err := rows.Scan(&r.Instance, &r.Project); err != nil {
-			rows.Close()
-			return err
-		}
-		inUse.Repos = append(inUse.Repos, r)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if len(inUse.Repos) > 0 {
-		return inUse
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM llm_models WHERE id = $1`, id); err != nil {
 		return err

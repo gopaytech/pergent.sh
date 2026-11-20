@@ -58,29 +58,24 @@ func auditDetails(e *env, action string) []string {
 }
 
 // An admin adds entries, makes another one the default, and removes one that
-// is not; the first entry is the default, a duplicate and a different
-// provider or model on a change are refused, and every change is audited with
-// the provider and model.
+// is not; the first entry is the default, a different provider or model on a
+// change is refused, and every change is audited with the name, provider and
+// model.
 func TestModelsAdminLifecycle(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
 
 	one := decode[ModelAdminView](t, e.sendJSON(c, "POST", modelsURL,
-		map[string]any{"provider": "anthropic", "model": "claude-sonnet-4", "apiKey": llmKeyOne}), "POST one", http.StatusCreated)
+		map[string]any{"name": "one", "provider": "anthropic", "model": "claude-sonnet-4", "apiKey": llmKeyOne}), "POST one", http.StatusCreated)
 	two := decode[ModelAdminView](t, e.sendJSON(c, "POST", modelsURL,
-		map[string]any{"provider": "openai", "model": "gpt-x", "baseURL": modelBaseURL, "apiKey": llmKeyTwo}), "POST two", http.StatusCreated)
+		map[string]any{"name": "two", "provider": "openai", "model": "gpt-x", "baseURL": modelBaseURL, "apiKey": llmKeyTwo}), "POST two", http.StatusCreated)
 	if !one.Default || two.Default {
 		t.Errorf("default flags = %v, %v; want the first entry the default and not the second", one.Default, two.Default)
 	}
 
-	// The same provider, model and base URL is refused; another base URL is
-	// another entry.
-	rec := e.sendJSON(c, "POST", modelsURL, map[string]any{"provider": "openai", "model": "gpt-x", "baseURL": modelBaseURL, "apiKey": "k"})
-	if rec.Code != http.StatusConflict || errorOf(t, rec) != msgModelExists {
-		t.Errorf("duplicate POST = %d %s, want 409", rec.Code, rec.Body)
-	}
+	// The same model again is another entry, told apart by its name.
 	decode[ModelAdminView](t, e.sendJSON(c, "POST", modelsURL,
-		map[string]any{"provider": "openai", "model": "gpt-x", "apiKey": llmKeyThree}), "POST same model, no base URL", http.StatusCreated)
+		map[string]any{"name": "three", "provider": "openai", "model": "gpt-x", "apiKey": llmKeyThree}), "POST same model, no base URL", http.StatusCreated)
 
 	// The provider and model of an entry never change.
 	for _, body := range []map[string]any{
@@ -94,11 +89,6 @@ func TestModelsAdminLifecycle(t *testing.T) {
 		}
 	}
 	wantCode(t, e.sendJSON(c, "PUT", modelsURL+"/no-such-entry", map[string]any{"baseURL": ""}), "PUT unknown", http.StatusNotFound)
-	// A base URL that makes it the entry added last is a duplicate.
-	rec = e.sendJSON(c, "PUT", modelsURL+"/"+two.ID, map[string]any{"baseURL": ""})
-	if rec.Code != http.StatusConflict || errorOf(t, rec) != msgModelExists {
-		t.Errorf("PUT into a duplicate = %d %s, want 409", rec.Code, rec.Body)
-	}
 
 	// Another default; the list says so, and the registry follows.
 	list := decode[ModelsAdminView](t, e.send(c, "POST", modelsURL+"/"+two.ID+"/default", ""), "default", http.StatusOK)
@@ -120,7 +110,7 @@ func TestModelsAdminLifecycle(t *testing.T) {
 	wantCode(t, e.send(c, "POST", modelsURL+"/no-such-entry/default", ""), "default of an unknown entry", http.StatusNotFound)
 
 	// The default can't go; another can.
-	rec = e.send(c, "DELETE", modelsURL+"/"+two.ID, "")
+	rec := e.send(c, "DELETE", modelsURL+"/"+two.ID, "")
 	if rec.Code != http.StatusConflict || errorOf(t, rec) != msgModelIsDefault {
 		t.Errorf("DELETE of the default = %d %s, want 409", rec.Code, rec.Body)
 	}
@@ -130,13 +120,13 @@ func TestModelsAdminLifecycle(t *testing.T) {
 		t.Error("the removed entry is still in the registry")
 	}
 
-	if got := auditDetails(e, "model_added"); !slices.Equal(got, []string{"anthropic / claude-sonnet-4", "openai / gpt-x", "openai / gpt-x"}) {
+	if got := auditDetails(e, "model_added"); !slices.Equal(got, []string{"one (anthropic / claude-sonnet-4)", "two (openai / gpt-x)", "three (openai / gpt-x)"}) {
 		t.Errorf("model_added details = %q", got)
 	}
 	if got := auditDetails(e, "model_default_changed"); !slices.Equal(got, []string{"openai / gpt-x (was anthropic / claude-sonnet-4)"}) {
 		t.Errorf("model_default_changed details = %q", got)
 	}
-	if got := auditDetails(e, "model_removed"); !slices.Equal(got, []string{"anthropic / claude-sonnet-4"}) {
+	if got := auditDetails(e, "model_removed"); !slices.Equal(got, []string{"one (anthropic / claude-sonnet-4)"}) {
 		t.Errorf("model_removed details = %q", got)
 	}
 }
@@ -147,13 +137,13 @@ func TestModelsNeverReturnAKey(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
 	one := decode[ModelAdminView](t, e.sendJSON(c, "POST", modelsURL,
-		map[string]any{"provider": "anthropic", "model": "m", "baseURL": modelBaseURL, "apiKey": llmKeyOne}), "POST", http.StatusCreated)
+		map[string]any{"name": "one", "provider": "anthropic", "model": "m", "baseURL": modelBaseURL, "apiKey": llmKeyOne}), "POST", http.StatusCreated)
 	e.sendJSON(c, "PUT", modelsURL+"/"+one.ID, map[string]any{"baseURL": modelBaseURL, "apiKey": llmKeyTwo})
 	two := decode[ModelAdminView](t, e.sendJSON(c, "POST", modelsURL,
-		map[string]any{"provider": "openai", "model": "m", "apiKey": llmKeyThree}), "POST", http.StatusCreated)
+		map[string]any{"name": "two", "provider": "openai", "model": "m", "apiKey": llmKeyThree}), "POST", http.StatusCreated)
 	e.send(c, "POST", modelsURL+"/"+two.ID+"/default", "")
 	// Failing writes echo nothing either.
-	e.sendJSON(c, "POST", modelsURL, map[string]any{"provider": "anthropic", "model": "m", "baseURL": modelBaseURL, "apiKey": "dup-" + llmKeyOne})
+	e.sendJSON(c, "POST", modelsURL, map[string]any{"name": "one", "provider": "anthropic", "model": "m", "baseURL": modelBaseURL, "apiKey": "dup-" + llmKeyOne})
 	e.sendJSON(c, "PUT", modelsURL+"/"+one.ID, map[string]any{"baseURL": "not a url", "apiKey": "bad-" + llmKeyOne})
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.ModelID = &one.ID })
 	e.send(c, "DELETE", modelsURL+"/"+one.ID, "")
@@ -252,35 +242,6 @@ func TestSetDefaultReportsFollowers(t *testing.T) {
 	if got := getJSON[RepositoryDetailView](e, c, gadgetsURL).Model; got != "openai / gpt-x" {
 		t.Errorf("gadgets runs on %q after the default moved, want openai / gpt-x", got)
 	}
-}
-
-// A model a repository names is not removed: the answer names the
-// repositories, and removing it works once none does.
-func TestRemoveInUseNamesRepositories(t *testing.T) {
-	e := newEnv(t, nil)
-	c := e.operator()
-	e.addModel("anthropic", "claude-sonnet-4", "", llmKeyOne)
-	two := e.addModel("openai", "gpt-x", "", llmKeyTwo)
-	e.dashboardRepo("main", "acme/gizmos", func(r *store.DashboardRepo) { r.ModelID = &two.ID })
-	e.dashboardRepo("gh", "acme/Aardvark", func(r *store.DashboardRepo) { r.ModelID = &two.ID })
-
-	rec := e.send(c, "DELETE", modelsURL+"/"+two.ID, "")
-	v := decode[ModelInUseView](t, rec, "DELETE", http.StatusConflict)
-	want := []RepoRefView{{Instance: "gh", Project: "acme/Aardvark"}, {Instance: "main", Project: "acme/gizmos"}}
-	if v.Error != msgModelInUse || !slices.Equal(v.Repositories, want) {
-		t.Errorf("409 = %+v, want %q and %+v", v, msgModelInUse, want)
-	}
-	if len(auditDetails(e, "model_removed")) != 0 {
-		t.Error("a refused removal was audited")
-	}
-	if _, ok := e.reg.ModelByID(two.ID); !ok {
-		t.Error("the refused removal took the entry out of the registry")
-	}
-
-	// Repositories moved off it, the entry goes.
-	wantCode(t, e.send(c, "PUT", "/api/repositories/main/acme/gizmos/settings", `{"model":null}`), "clear model of gizmos", http.StatusOK)
-	wantCode(t, e.send(c, "PUT", "/api/repositories/gh/acme/Aardvark/settings", `{"model":null}`), "clear model of Aardvark", http.StatusOK)
-	wantCode(t, e.send(c, "DELETE", modelsURL+"/"+two.ID, ""), "DELETE", http.StatusNoContent)
 }
 
 // An admin of the repository names a model of the list, and null puts it

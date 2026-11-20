@@ -928,7 +928,9 @@ var openAPISchemas = map[string]schemaType{
 	"ModelsAdminView":         outputSchema(ModelsAdminView{}),
 	"ModelAdminView":          outputSchema(ModelAdminView{}),
 	"RepoRefView":             outputSchema(RepoRefView{}),
-	"ModelInUseView":          outputSchema(ModelInUseView{}),
+	"MarkView":                outputSchema(MarkView{}),
+	"ChainView":               outputSchema(ChainView{}),
+	"ChainEntryView":          outputSchema(ChainEntryView{}),
 	"ModelChoiceView":         outputSchema(ModelChoiceView{}),
 	"SignInAdminView":         outputSchema(SignInAdminView{}),
 	"SignInTestView":          outputSchema(SignInTestView{}),
@@ -1001,6 +1003,7 @@ var openAPISchemas = map[string]schemaType{
 // bodies the handlers decode into a struct declared inside the function.
 var openAPIUntypedSchemas = map[string]string{
 	"ErrorBody":                 "map[string]string{error, code}",
+	"ChainRequest":              "struct in decodeChain",
 	"StatusBody":                "map[string]string{status}",
 	"InstanceTrustRequest":      "struct in Dashboard.putInstanceTrust",
 	"InstanceTokenQuotaRequest": "struct in Dashboard.putInstanceQuota",

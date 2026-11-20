@@ -129,6 +129,13 @@ func skipReason(in Input, ref store.EntryRef, m instances.Model, known bool) str
 	return ""
 }
 
+// EntryReason is why the entry at ref would be skipped in the chain of in
+// (Resolve's rules), "" when it would run: the state a page shows for it.
+func EntryReason(in Input, ref store.EntryRef) string {
+	m, known := in.Entries[ref]
+	return skipReason(in, ref, m, known)
+}
+
 // teamSaved reports whether the chain is held to what teams may use: a team
 // chain, or the chain of a repository a team owns that a team's maintainer
 // saved. The global chain, a repository chain with no owner (only an admin

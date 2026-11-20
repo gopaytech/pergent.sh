@@ -359,3 +359,23 @@ func TestSavedByAdminMigration(t *testing.T) {
 		t.Errorf("admin-saved chains after 0046 = %d, %v; want 2", n, err)
 	}
 }
+
+// Chains reads every chain with its entries, by ID.
+func TestChains(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	g := newModel(t, s, "openai", "gpt-5", "", nil)
+	for _, c := range []Chain{
+		{Scope: ScopeGlobal, Entries: []EntryRef{{SourceGlobal, g.ID}}, SavedByAdmin: true},
+		{Scope: ScopeTeam, TeamID: team, Entries: []EntryRef{{SourceGlobal, g.ID}}},
+	} {
+		if err := s.SaveChain(ctx, c, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chains, err := s.Chains(ctx)
+	if err != nil || len(chains) != 2 || chains[0].Scope != ScopeGlobal || !chains[0].SavedByAdmin ||
+		chains[1].TeamID != team || len(chains[1].Entries) != 1 {
+		t.Errorf("Chains = %+v, %v", chains, err)
+	}
+}

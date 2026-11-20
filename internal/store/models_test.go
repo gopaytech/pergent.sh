@@ -3,7 +3,6 @@ package store
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"regexp"
 	"slices"
@@ -71,14 +70,6 @@ func TestModelsMigrationOnlyAdds(t *testing.T) {
 			!strings.Contains(strings.ToUpper(stmt), "DEFAULT") {
 			t.Errorf("%q adds a NOT NULL column with no default", strings.TrimSpace(stmt))
 		}
-	}
-}
-
-func TestModelInUseErrorCountsRepositories(t *testing.T) {
-	var err error = &ModelInUseError{Repos: []RepoRef{{"lab", "a/b"}, {"lab", "c/d"}}}
-	var inUse *ModelInUseError
-	if !errors.As(err, &inUse) || !strings.Contains(err.Error(), "2 repositories") {
-		t.Errorf("ModelInUseError = %v", err)
 	}
 }
 
@@ -200,21 +191,16 @@ func TestCreateLLMModelFirstIsDefault(t *testing.T) {
 	}
 }
 
-func TestCreateLLMModelDuplicate(t *testing.T) {
+// The same provider, model and base URL is another entry now: names tell
+// them apart (0045 dropped the rule, and the store no longer checks it).
+func TestCreateLLMModelSameModelTwice(t *testing.T) {
 	s := newStore(t)
 	newModel(t, s, "anthropic", "sonnet", "", nil)
-	if _, err := s.CreateLLMModel(ctx, LLMModel{Provider: "anthropic", Model: "sonnet"}, t0); !errors.Is(err, ErrExists) {
-		t.Fatalf("an exact duplicate = %v; want ErrExists", err)
+	if _, err := s.CreateLLMModel(ctx, LLMModel{Name: "second key", Provider: "anthropic", Model: "sonnet"}, t0); err != nil {
+		t.Fatalf("the same model again = %v; want a second entry", err)
 	}
-	// A different base URL, model or provider is another entry.
-	newModel(t, s, "anthropic", "sonnet", "https://proxy.example.com", nil)
-	newModel(t, s, "anthropic", "haiku", "", nil)
-	newModel(t, s, "bedrock", "sonnet", "", nil)
-	if _, err := s.CreateLLMModel(ctx, LLMModel{Provider: "anthropic", Model: "sonnet", BaseURL: "https://proxy.example.com"}, t0); !errors.Is(err, ErrExists) {
-		t.Errorf("a duplicate with a base URL = %v; want ErrExists", err)
-	}
-	if models, _ := s.LLMModels(ctx); len(models) != 4 || len(defaultsOf(models)) != 1 {
-		t.Errorf("list = %+v; want four entries and one default", models)
+	if models, _ := s.LLMModels(ctx); len(models) != 2 || len(defaultsOf(models)) != 1 {
+		t.Errorf("list = %+v; want two entries and one default", models)
 	}
 }
 
@@ -246,16 +232,16 @@ func TestUpdateLLMModelKeepsKeyOnNil(t *testing.T) {
 	}
 }
 
-// A base URL that makes an entry the same as another is a duplicate too.
-func TestUpdateLLMModelBaseURLDuplicate(t *testing.T) {
+// A base URL that makes an entry the same as another is allowed.
+func TestUpdateLLMModelBaseURLSameAsAnother(t *testing.T) {
 	s := newStore(t)
 	newModel(t, s, "anthropic", "sonnet", "https://a.example.com", nil)
 	m := newModel(t, s, "anthropic", "sonnet", "https://b.example.com", nil)
-	if _, err := s.UpdateLLMModel(ctx, m.ID, "https://a.example.com", nil, t0); !errors.Is(err, ErrExists) {
-		t.Errorf("UpdateLLMModel to a taken base URL = %v; want ErrExists", err)
+	if found, err := s.UpdateLLMModel(ctx, m.ID, "https://a.example.com", nil, t0); err != nil || !found {
+		t.Errorf("UpdateLLMModel to another entry's base URL = %v, %v; want it changed", found, err)
 	}
-	if got := modelByID(t, s, m.ID); got.BaseURL != "https://b.example.com" {
-		t.Errorf("base URL after the refusal = %q; want it unchanged", got.BaseURL)
+	if got := modelByID(t, s, m.ID); got.BaseURL != "https://a.example.com" {
+		t.Errorf("base URL = %q", got.BaseURL)
 	}
 }
 
@@ -383,48 +369,27 @@ func TestUpdateDefaultWritesLLMSettings(t *testing.T) {
 	}
 }
 
+// An entry repositories and chains name is removed all the same: they keep
+// naming it, so the resolver skips it as removed (spec: "skip, and the
+// dashboard warns").
 func TestDeleteLLMModelInUse(t *testing.T) {
 	s := newStore(t)
 	newModel(t, s, "anthropic", "sonnet", "", nil)
 	b := newModel(t, s, "openai", "gpt", "", nil)
-	c := newModel(t, s, "bedrock", "haiku", "", nil)
-	for _, r := range []DashboardRepo{
-		{Instance: "lab", Project: "acme/web", ModelID: &b.ID},
-		{Instance: "gh", Project: "Acme/API", ModelID: &b.ID},
-		{Instance: "lab", Project: "acme/cli", ModelID: &c.ID},
-		{Instance: "lab", Project: "acme/follows"},
-	} {
-		if err := s.UpsertDashboardRepo(ctx, r); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	err := s.DeleteLLMModel(ctx, b.ID, false)
-	var inUse *ModelInUseError
-	if !errors.As(err, &inUse) || !slices.Equal(inUse.Repos, []RepoRef{{"gh", "Acme/API"}, {"lab", "acme/web"}}) {
-		t.Fatalf("DeleteLLMModel of a model two repositories name = %#v; want those two, in order", err)
-	}
-	if got := modelByID(t, s, b.ID); got.ID != b.ID {
-		t.Fatal("the model was deleted")
-	}
-
-	// Once the repositories move off it, it goes; the other repository keeps its own.
-	for _, p := range [][2]string{{"gh", "Acme/API"}, {"lab", "acme/web"}} {
-		if found, err := s.UpdateDashboardRepo(ctx, p[0], p[1], func(r *DashboardRepo) { r.ModelID = nil }); err != nil || !found {
-			t.Fatal(found, err)
-		}
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web", ModelID: &b.ID}); err != nil {
+		t.Fatal(err)
 	}
 	if err := s.DeleteLLMModel(ctx, b.ID, false); err != nil {
-		t.Fatalf("DeleteLLMModel of an unused model: %v", err)
+		t.Fatalf("DeleteLLMModel of a model a repository names: %v", err)
 	}
 	if err := s.DeleteLLMModel(ctx, b.ID, false); !errors.Is(err, ErrModelNotFound) {
 		t.Errorf("DeleteLLMModel again = %v; want ErrModelNotFound", err)
 	}
-	if err := s.DeleteLLMModel(ctx, c.ID, false); !errors.As(err, &inUse) || len(inUse.Repos) != 1 {
-		t.Errorf("DeleteLLMModel of the model the third repository names = %v", err)
+	if repo, _, _ := s.DashboardRepo(ctx, "lab", "acme/web"); repo.ModelID == nil || *repo.ModelID != b.ID {
+		t.Errorf("the repository's model = %v; want it kept", repo.ModelID)
 	}
-	if repo, _, _ := s.DashboardRepo(ctx, "lab", "acme/cli"); repo.ModelID == nil || *repo.ModelID != c.ID {
-		t.Errorf("the third repository's model = %v; want it kept", repo.ModelID)
+	if c, found := mustChain(t, s, ScopeRepo, 0, "lab", "acme/web"); !found || !slices.Equal(c.Entries, []EntryRef{{SourceGlobal, b.ID}}) {
+		t.Errorf("the repository's chain = %+v, %v; want it kept", c, found)
 	}
 }
 
@@ -445,13 +410,12 @@ func TestDeleteDefaultRefused(t *testing.T) {
 	if len(mustModels(t, s)) != 2 {
 		t.Fatal("the default was deleted")
 	}
-	// Moving the default off makes it an ordinary entry, in use.
+	// Moving the default off makes it an ordinary entry, which goes.
 	if found, err := s.SetDefaultLLMModel(ctx, b.ID, t0); err != nil || !found {
 		t.Fatal(found, err)
 	}
-	var inUse *ModelInUseError
-	if err := s.DeleteLLMModel(ctx, a.ID, false); !errors.As(err, &inUse) {
-		t.Errorf("DeleteLLMModel of the old default = %v; want in use", err)
+	if err := s.DeleteLLMModel(ctx, a.ID, false); err != nil {
+		t.Errorf("DeleteLLMModel of the old default = %v; want it removed", err)
 	}
 	// llm_settings still follows the default, and the refusals wrote nothing.
 	if r, _ := settings(t, s); r.Provider != "openai" {
@@ -460,8 +424,8 @@ func TestDeleteDefaultRefused(t *testing.T) {
 }
 
 // While the config file's llm: block is the default, the flag on a dashboard
-// entry is dormant: it may be deleted unless a repository names it, and the
-// oldest entry left takes the flag, in llm_settings too.
+// entry is dormant: it may be deleted, and the oldest entry left takes the
+// flag, in llm_settings too.
 func TestDeleteShadowedDefault(t *testing.T) {
 	s := newStore(t)
 	// Added an hour apart, so "oldest" is not a tie.
@@ -477,21 +441,9 @@ func TestDeleteShadowedDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// In use answers first, and nothing changes.
-	var inUse *ModelInUseError
-	if err := s.DeleteLLMModel(ctx, a.ID, true); !errors.As(err, &inUse) || len(inUse.Repos) != 1 {
-		t.Fatalf("DeleteLLMModel of a shadowed default a repository names = %v; want in use", err)
-	}
-	if got := defaultsOf(mustModels(t, s)); !slices.Equal(got, []string{a.ID}) {
-		t.Fatalf("defaults after a refusal = %v; want a", got)
-	}
 	// Not shadowed, it is still the default and is refused.
 	if err := s.DeleteLLMModel(ctx, a.ID, false); !errors.Is(err, ErrModelIsDefault) {
 		t.Fatalf("DeleteLLMModel of the default = %v; want ErrModelIsDefault", err)
-	}
-
-	if found, err := s.UpdateDashboardRepo(ctx, "lab", "acme/web", func(r *DashboardRepo) { r.ModelID = nil }); err != nil || !found {
-		t.Fatal(found, err)
 	}
 	if err := s.DeleteLLMModel(ctx, a.ID, true); err != nil {
 		t.Fatalf("DeleteLLMModel of a shadowed default: %v", err)
@@ -678,61 +630,6 @@ func TestSavingARepoLocksItsModel(t *testing.T) {
 
 // A delete and a save naming the model race: exactly one wins, and a
 // repository never ends up pointing at nothing.
-func TestDeleteRacesRepoModelSave(t *testing.T) {
-	s := newStore(t)
-	newModel(t, s, "anthropic", "sonnet", "", nil)
-	for i := 0; i < 20; i++ {
-		m := newModel(t, s, "openai", fmt.Sprintf("gpt-%d", i), "", nil)
-		project := fmt.Sprintf("acme/repo-%d", i)
-		if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: project}); err != nil {
-			t.Fatal(err)
-		}
-		nils, errs := race(
-			func() error { return s.DeleteLLMModel(ctx, m.ID, false) },
-			func() error {
-				_, err := s.UpdateDashboardRepo(ctx, "lab", project, func(r *DashboardRepo) { r.ModelID = &m.ID })
-				return err
-			})
-		if nils != 1 {
-			t.Fatalf("round %d: delete = %v, save = %v; want exactly one to succeed", i, errs[0], errs[1])
-		}
-		exists := false
-		for _, got := range mustModels(t, s) {
-			exists = exists || got.ID == m.ID
-		}
-		repo, _, _ := s.DashboardRepo(ctx, "lab", project)
-		if exists != (repo.ModelID != nil) {
-			t.Fatalf("round %d: model exists = %v but the repository names %v", i, exists, repo.ModelID)
-		}
-	}
-}
-
-func TestDeleteRacesRepoModelInsert(t *testing.T) {
-	s := newStore(t)
-	newModel(t, s, "anthropic", "sonnet", "", nil)
-	for i := 0; i < 20; i++ {
-		m := newModel(t, s, "openai", fmt.Sprintf("gpt-%d", i), "", nil)
-		project := fmt.Sprintf("acme/repo-%d", i)
-		nils, errs := race(
-			func() error { return s.DeleteLLMModel(ctx, m.ID, false) },
-			func() error {
-				_, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: project, ModelID: &m.ID})
-				return err
-			})
-		if nils != 1 {
-			t.Fatalf("round %d: delete = %v, insert = %v; want exactly one to succeed", i, errs[0], errs[1])
-		}
-		exists := false
-		for _, got := range mustModels(t, s) {
-			exists = exists || got.ID == m.ID
-		}
-		_, stored, _ := s.DashboardRepo(ctx, "lab", project)
-		if exists != stored {
-			t.Fatalf("round %d: model exists = %v but the repository stored = %v", i, exists, stored)
-		}
-	}
-}
-
 // Two entries created together on an empty list: one default, no error.
 func TestCreateLLMModelRaceHasOneDefault(t *testing.T) {
 	s := newStore(t)

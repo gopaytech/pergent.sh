@@ -187,6 +187,11 @@ func (s *Store) Chain(ctx context.Context, scope string, teamID int64, instance,
 	return chains[0], true, nil
 }
 
+// Chains returns every chain, by ID.
+func (s *Store) Chains(ctx context.Context) ([]Chain, error) {
+	return loadChains(ctx, s.pool, ``)
+}
+
 // ChainsNaming returns every chain that names ref, by ID.
 func (s *Store) ChainsNaming(ctx context.Context, ref EntryRef) ([]Chain, error) {
 	return loadChains(ctx, s.pool, `WHERE c.id IN (SELECT chain_id FROM model_chain_entries

@@ -1195,21 +1195,26 @@ type AuditView struct {
 //     the repositories the instance's review bot or App can set up that
 //     aren't switched on (the same list as the picker's).
 //   - GET /api/admin/models: ModelsAdminView (admins), the list of models:
-//     the config file's llm: block first, as a read-only entry with the ID
-//     "config", then those added in the dashboard, oldest first. POST
-//     /api/admin/models {"provider", "model", "baseURL", "apiKey"} adds one
-//     (the key is required; 400 for a missing or oversized field, 409 for
-//     the same provider, model and base URL as an entry there): 201,
-//     ModelAdminView. The first entry is the default.
-//     PUT /api/admin/models/{id} {"baseURL", "apiKey"?} changes the base URL
-//     and, when given, the key; a provider or model in the body is 400, as
-//     they never change (add another entry), and the config's entry is 409:
-//     200, ModelAdminView. POST /api/admin/models/{id}/default makes it the
-//     default (409 while the config has an llm: block, which is the default):
-//     200, ModelsAdminView. DELETE /api/admin/models/{id}: 204; 409
-//     ModelInUseView while a repository names it, and 409 {"error"} for the
-//     default (not while the config has an llm: block: that entry is the
-//     default then) and the config's entry. A key is sealed and never returned.
+//     the config file's entries first (its llm: block, ID "config", then
+//     llm.fallbacks, "config-1" on), read-only, then those added in the
+//     dashboard, oldest first. POST /api/admin/models {"name", "provider",
+//     "model", "baseURL", "apiKey", "teamsMayUse"?} adds one (name and key
+//     are required; 400 for a missing or wrong field, 409 for a name another
+//     global entry has): 201, ModelAdminView. The first entry is the default.
+//     PUT /api/admin/models/{id} {"baseURL", "apiKey"?, "name"?,
+//     "teamsMayUse"?} changes the base URL and what else is sent; a provider
+//     or model in the body is 400, as they never change (add another entry),
+//     and the config's entries are 409: 200, ModelAdminView. POST
+//     /api/admin/models/{id}/default makes it the default (409 while the
+//     config has an llm: block, which is the default): 200, ModelsAdminView.
+//     DELETE /api/admin/models/{id}: 204, chains that name it keeping it as
+//     removed; 409 for the default (not while the config has an llm: block:
+//     that entry is the default then) and the config's entries. DELETE
+//     /api/admin/models/{id}/mark clears its mark: 204. A key is sealed and
+//     never returned.
+//   - GET /api/admin/chain: ChainView (admins), the global chain. PUT
+//     /api/admin/chain {"entries": [{"source", "id"}]}: global entries only,
+//     the config's in front, at most 5; 200, ChainView.
 //   - GET /api/admin/sign-in: SignInAdminView (admins). PUT /api/admin/sign-in
 //     {"mode", "label", "issuer", "clientID", "clientSecret", "header",
 //     "audience", "jwksURL", "emailClaim", "allowedDomains", "allowedEmails"}
@@ -1317,32 +1322,85 @@ type ModelsAdminView struct {
 }
 
 // ModelAdminView is one entry of the list. Source is "config" (read-only, ID
-// "config") or "dashboard". Default is true for the entry reviews use when a
-// repository names none; while the config has an llm: block that is its entry
-// alone. Key says whether a key is set and when it changed; the key is never
-// sent. Repositories are those that name the entry, by instance and project.
+// "config", or "config-1" to "config-4" for llm.fallbacks) or "dashboard".
+// Name is unique among global entries ignoring case, and can hold no
+// markdown: it reaches the MR comment after a fallback. Default is true for
+// the entry reviews use when a repository names none; while the config has
+// an llm: block that is its entry alone. TeamsMayUse lets team chains name
+// it. Key says whether a key is set and when it changed; the key is never
+// sent. Repositories are those whose old model setting names the entry;
+// UsedIn labels every chain that names it ("global chain", "team <name>",
+// "<instance>/<project>"). Mark is null unless the provider marked it.
 type ModelAdminView struct {
 	ID           string        `json:"id"`
+	Name         string        `json:"name"`
 	Provider     string        `json:"provider"`
 	Model        string        `json:"model"`
 	BaseURL      string        `json:"baseURL"`
 	Source       string        `json:"source"`
 	Default      bool          `json:"default"`
+	TeamsMayUse  bool          `json:"teamsMayUse"`
 	Key          SecretView    `json:"key"`
 	Repositories []RepoRefView `json:"repositories"`
+	UsedIn       []string      `json:"usedIn"`
+	Mark         *MarkView     `json:"mark"`
+}
+
+// MarkView is what the provider said about an entry: Class "quota" or
+// "billing" until Until, or "auth" (Until null: until its key is edited).
+// Live is false once Until has passed; the mark is then ignored.
+type MarkView struct {
+	Class string     `json:"class"`
+	Until *time.Time `json:"until"`
+	SetAt time.Time  `json:"setAt"`
+	Live  bool       `json:"live"`
+}
+
+// ChainView is a chain as GET .../chain shows it. Scope is the chain asked
+// for: "global", "team" or "repo". Source is where its entries come from:
+// "repository" (a repository's own chain), "team" (its owner team's, Team
+// naming it) or "global". ReadOnly is true when the session may not change
+// it. SavedByAdmin is whether an admin saved the chain shown (a repository
+// chain an admin saved may name global entries teams may not use). Choices
+// are the entries the session may put in it, empty when ReadOnly.
+type ChainView struct {
+	Scope        string           `json:"scope"`
+	Source       string           `json:"source"`
+	Team         string           `json:"team"`
+	ReadOnly     bool             `json:"readOnly"`
+	SavedByAdmin bool             `json:"savedByAdmin"`
+	Entries      []ChainEntryView `json:"entries"`
+	Choices      []ChainEntryView `json:"choices"`
+}
+
+// ChainEntryView is an entry of a chain, or one that may be put in it. Source
+// is "global" or "team" (Team is then its team's name). State is what the
+// resolver does with it now: "ready", "exhausted" (a quota or billing mark),
+// "key_rejected" (an auth mark), "removed", "not_allowed" (a global entry
+// teams may not use), "not_owner" (a team entry of a team that doesn't own
+// the repository) or "key_unusable". Class and Until are its mark's, "" and
+// null with none; CanClear is whether the session may clear it. Fixed is set
+// on the config file's entries, which stay at the front of the global chain.
+// Never a base URL or a key.
+type ChainEntryView struct {
+	Position int        `json:"position"`
+	Source   string     `json:"source"`
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Provider string     `json:"provider"`
+	Model    string     `json:"model"`
+	Team     string     `json:"team"`
+	State    string     `json:"state"`
+	Class    string     `json:"class"`
+	Until    *time.Time `json:"until"`
+	CanClear bool       `json:"canClear"`
+	Fixed    bool       `json:"fixed"`
 }
 
 // RepoRefView names a repository by instance and project.
 type RepoRefView struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
-}
-
-// ModelInUseView is the 409 of a delete of a model that repositories name:
-// Repositories are the ones that do.
-type ModelInUseView struct {
-	Error        string        `json:"error"`
-	Repositories []RepoRefView `json:"repositories"`
 }
 
 // UsageTokensView is tokens used: input and output, which every total and

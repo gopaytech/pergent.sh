@@ -105,18 +105,34 @@ func repoChain(ctx context.Context, st *store.Store, repo settings.Effective, in
 // or else the dashboard's default; when none of those has a usable key it is
 // empty, so the run waits as it did before chains.
 func GlobalChain(ctx context.Context, st *store.Store, reg *instances.Registry) ([]store.EntryRef, error) {
-	global := reg.GlobalModels()
-	var refs []store.EntryRef
+	refs, _, stored, err := GlobalRefs(ctx, st, reg)
+	if err != nil || stored {
+		return refs, err
+	}
+	for _, m := range reg.GlobalModels() {
+		if m.Key != "" && slices.Contains(refs, RefOf(m)) {
+			return refs, nil
+		}
+	}
+	return nil, nil
+}
+
+// GlobalRefs is the global chain as it is written, keys or not: the config's
+// entries first (fixed of them, which no save moves), then the stored
+// chain's others; with no stored chain (stored false) the config's entries,
+// or else the dashboard's default, or none.
+func GlobalRefs(ctx context.Context, st *store.Store, reg *instances.Registry) (refs []store.EntryRef, fixed int, stored bool, err error) {
 	fromConfig := map[string]bool{}
-	for _, m := range global {
+	for _, m := range reg.GlobalModels() {
 		if m.Source == instances.SourceConfig {
 			refs = append(refs, RefOf(m))
 			fromConfig[m.ID] = true
 		}
 	}
+	fixed = len(refs)
 	c, found, err := st.Chain(ctx, store.ScopeGlobal, 0, "", "")
 	if err != nil {
-		return nil, fmt.Errorf("read the global chain: %w", err)
+		return nil, 0, false, fmt.Errorf("read the global chain: %w", err)
 	}
 	if found && len(c.Entries) > 0 {
 		for _, r := range c.Entries {
@@ -124,19 +140,14 @@ func GlobalChain(ctx context.Context, st *store.Store, reg *instances.Registry) 
 				refs = append(refs, r)
 			}
 		}
-		return refs, nil
+		return refs, fixed, true, nil
 	}
 	if refs == nil {
-		if m, ok := reg.DefaultModel(); ok {
+		if m, _ := reg.DefaultModel(); m.ID != "" {
 			refs = []store.EntryRef{RefOf(m)}
 		}
 	}
-	for _, m := range global {
-		if m.Key != "" && slices.Contains(refs, RefOf(m)) {
-			return refs, nil
-		}
-	}
-	return nil, nil
+	return refs, fixed, false, nil
 }
 
 // RefOf is how a chain names m.
