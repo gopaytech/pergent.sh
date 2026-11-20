@@ -977,10 +977,41 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	for _, c := range waiting {
 		wv = append(wv, WaitingView{Number: c.IID, Head: c.Head, Title: c.Title, Author: c.Author, WebURL: c.WebURL, Since: c.Since, Reason: c.Reason})
 	}
+	gv, err := d.graphView(ctx, repo)
+	if err != nil {
+		return RepositoryDetailView{}, err
+	}
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
 		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly,
 		Model:                      d.effectiveModel(repo.ModelID), ModelChoices: d.modelChoices(role),
-		Quota: d.quotaView(ctx, se, repo)}, nil
+		Quota: d.quotaView(ctx, se, repo), Graph: gv}, nil
+}
+
+// graphsOn reports whether the install keeps code graphs.
+func (d *Dashboard) graphsOn() bool { return d.graphs != nil && d.graphs.GraphsOn() }
+
+// graphView is repo's Code graph switch and status. With the switch off
+// nothing is read: its graph was deleted with it.
+func (d *Dashboard) graphView(ctx context.Context, repo settings.Effective) (GraphView, error) {
+	v := GraphView{Enabled: repo.GraphContext, Available: d.graphsOn()}
+	if !repo.GraphContext {
+		return v, nil
+	}
+	g, ok, err := d.Store.RepoGraph(ctx, repo.Instance, repo.Project)
+	if err != nil || !ok {
+		return v, err
+	}
+	v.Branch, v.Commit, v.SizeBytes, v.Nodes, v.Edges = g.Branch, g.Commit, g.SizeBytes, g.Nodes, g.Edges
+	v.Building, v.Error = string(g.BuildState), g.Error
+	if !g.BuiltAt.IsZero() {
+		t := g.BuiltAt
+		v.BuiltAt = &t
+	}
+	if !g.FailedAt.IsZero() {
+		t := g.FailedAt
+		v.FailedAt = &t
+	}
+	return v, nil
 }
 
 // settingViews is repo's settings as RepositoryDetailView shows them.

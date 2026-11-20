@@ -1270,6 +1270,49 @@ describe("RepositoryDetail while paused, and Remove", () => {
   });
 });
 
+describe("RepositoryDetail code graph", () => {
+  it("turns the code graph on from the settings tab and shows its status", async () => {
+    const on = {
+      ...payments,
+      graph: {
+        ...payments.graph,
+        enabled: true,
+        branch: "main",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        nodes: 12,
+        edges: 30,
+        sizeBytes: 4096,
+        building: "queued" as const,
+        error: "graphify couldn't read the repository",
+      },
+    };
+    const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/graph": { body: on } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await screen.findByRole("checkbox", { name: "Build and use a code graph" });
+    expect(box).not.toBeChecked();
+    await userEvent.click(box);
+    await waitFor(() => expect(fake.find("PUT", "/api/repositories/main/acme/payments/graph")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/graph")[0].body).toEqual({ enabled: true });
+    expect(await screen.findByText(/main at 0123456789ab, 12 nodes, 30 edges, 4 KiB/)).toBeInTheDocument();
+    expect(screen.getByText("queued")).toBeInTheDocument();
+    expect(screen.getByText("graphify couldn't read the repository")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Build and use a code graph" })).toBeChecked();
+  });
+
+  it("can't be turned on when the install keeps no graphs", async () => {
+    const off = { ...payments, graph: { ...payments.graph, available: false } };
+    renderAt("/repos/main/acme/payments?tab=settings", { ...base, "GET /api/repositories/main/acme/payments": { body: off } });
+    expect(await screen.findByRole("checkbox", { name: "Build and use a code graph" })).toBeDisabled();
+    expect(screen.getByText(/This install keeps no code graphs/)).toBeInTheDocument();
+  });
+
+  it("is not shown for a repository managed by the config file", async () => {
+    renderAt("/repos/main/acme/widgets?tab=settings", base);
+    expect(await screen.findByRole("tab", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Code graph" })).not.toBeInTheDocument();
+  });
+});
+
 function renderAt(path: string, routes: Parameters<typeof fakeApi>[0]) {
   fakeApi(routes);
   return renderApp(path);

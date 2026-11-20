@@ -22,7 +22,7 @@ info:
     | Group | Caller | Authentication |
     | --- | --- | --- |
     | `/webhooks/...` | GitLab, GitHub | `X-Gitlab-Token` header, `X-Hub-Signature-256` signature |
-    | `/runs/{id}/result`, `/skill-fetches/{id}/result`, `/readiness-scans/{id}/result` | Jobs pergent.sh started | one-time bearer token per Job |
+    | `/runs/{id}/result`, `/runs/{id}/graph`, `/skill-fetches/{id}/result`, `/readiness-scans/{id}/result`, `/graphs/{id}/result` | Jobs pergent.sh started | one-time bearer token per Job |
     | `/v1/...` | systems that ask for reviews (the review API) | `Authorization: Bearer <key>`, a client key an admin made |
     | `/auth/...` | the dashboard in a browser | none, or the sign-in cookies |
     | `/api/...` | the dashboard in a browser | session cookie, plus `X-CSRF-Token` on writes |
@@ -31,8 +31,9 @@ info:
 
     **Conditional routes.** `/auth/`, `/api/` and `/v1/` exist only when
     `dashboard.url` is set. `/skill-fetches/{id}/result` and
-    `/readiness-scans/{id}/result` exist only then too. Without them the path
-    is 404.
+    `/readiness-scans/{id}/result` exist only then too. `/graphs/{id}/result`
+    and `/runs/{id}/graph` exist only when the install also keeps code graphs
+    (`graphs.enabled` in the chart). Without them the path is 404.
 
     **Review API.** `/v1/` is a separate API from the dashboard's. Every
     response is sent `Cache-Control: no-store` and `X-Content-Type-Options:
@@ -423,6 +424,84 @@ paths:
               schema: {type: string}
         '413':
           description: The body is over 1 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  /graphs/{id}/result:
+    post:
+      operationId: postGraphResult
+      tags: [Job callbacks]
+      summary: Deliver a repository's code graph
+      description: |
+        Posted once by a graph build Job with its one-time bearer token: a
+        pergent-graph/v1 file, or `{"error": "<message>"}`. Only registered
+        when the install keeps code graphs (the chart's `graphs.enabled`);
+        else 404. pergent.sh checks the graph, refuses one of another
+        commit, and stores its own encoding of it. A body over 64 MiB makes
+        the build fail at once (with the right token only) and is answered
+        413. A token that is not a running build's, or a second post, is 401.
+      x-pergent-access: none
+      security:
+        - graphBuildToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The build's id.
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: A pergent-graph/v1 file, or an object with one `error` string.
+      responses:
+        '204':
+          description: Recorded, as a graph or as the build's failure.
+        '401':
+          description: The bearer token is missing or is not a running build's.
+          content:
+            text/plain:
+              schema: {type: string}
+        '413':
+          description: The body is over 64 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  /runs/{id}/graph:
+    get:
+      operationId: getRunGraph
+      tags: [Job callbacks]
+      summary: Download a review's code graph
+      description: |
+        Called by a review Job's `graph` init container with the run's result
+        token, which it does not spend. Answers the pergent-graph/v1 file of
+        the run's repository while the run is running, the repository's Code
+        graph switch is on, and the graph was built from the branch the change
+        targets. Anything else, a missing or wrong token included, is 404.
+        Only registered when the install keeps code graphs; else 404.
+      x-pergent-access: none
+      security:
+        - runResultToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The run's id.
+          schema: {type: string}
+      responses:
+        '200':
+          description: The graph.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: A pergent-graph/v1 file.
+        '404':
+          description: No graph for this run.
           content:
             text/plain:
               schema: {type: string}
@@ -1658,6 +1737,44 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/graph:
+    put:
+      operationId: putRepositoryGraph
+      tags: [Repositories]
+      summary: Turn a repository's Code graph switch on or off
+      description: |
+        For maintainers and admins of the repository (403 otherwise). A
+        repository set up in the config file is 409, and so is turning the
+        switch on when the install keeps no code graphs (the chart's
+        `graphs.enabled`). On asks for a head check, so the first graph is
+        built without waiting for a review. Off deletes the stored graph and
+        any build under way. The value it has already changes nothing. Each
+        change is an audit entry, `graph_on` or `graph_off`.
+      x-pergent-access: session
+      x-pergent-pattern: PUT /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutRepositoryGraphRequest'}
+      responses:
+        '200':
+          description: The repository after the change.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/settings:
     put:
@@ -3856,6 +3973,10 @@ components:
       type: http
       scheme: bearer
       description: The readiness scan Job's one-time token. It opens this scan's result route only.
+    graphBuildToken:
+      type: http
+      scheme: bearer
+      description: The graph build Job's one-time token. It opens this build's result route only.
   parameters:
     InstanceName:
       name: instance
@@ -4383,6 +4504,14 @@ components:
                 type: string
                 enum: [viewer, maintainer]
                 description: Defaults to `viewer`.
+    PutRepositoryGraphRequest:
+      type: object
+      required: [enabled]
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+          description: True turns the Code graph switch on, false turns it off.
     PutRepositoryTeamsRequest:
       type: object
       required: [teams]
@@ -5852,7 +5981,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, modelChoices, quota]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, modelChoices, quota, graph]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -5894,6 +6023,45 @@ components:
           oneOf:
             - {$ref: '#/components/schemas/QuotaView'}
             - {type: 'null'}
+        graph: {$ref: '#/components/schemas/GraphView'}
+    GraphView:
+      description: |
+        A repository's Code graph switch and the stored graph's status, never its contents. With the switch off
+        the rest is empty: the graph was deleted with it.
+      type: object
+      required: [enabled, available, branch, commit, builtAt, sizeBytes, nodes, edges, building, error, failedAt]
+      properties:
+        enabled:
+          type: boolean
+          description: The switch.
+        available:
+          type: boolean
+          description: Whether this install keeps code graphs. The switch can be turned on only then.
+        branch:
+          type: string
+          description: The default branch the stored graph was built from. Empty with no graph yet.
+        commit:
+          type: string
+          description: The commit the stored graph was built from. Empty with no graph yet.
+        builtAt:
+          type: [string, 'null']
+          format: date-time
+        sizeBytes:
+          type: integer
+        nodes:
+          type: integer
+        edges:
+          type: integer
+        building:
+          type: string
+          enum: ['', queued, running]
+          description: The build under way, if any.
+        error:
+          type: string
+          description: Why the last build failed. Empty after a build stored a graph.
+        failedAt:
+          type: [string, 'null']
+          format: date-time
     QuotaView:
       description: What a repository and its instance used this UTC month, each against its quota.
       type: object

@@ -413,6 +413,27 @@ type RepositoryDetailView struct {
 	// instance's quotas, for an admin; null for anyone else, and when the
 	// usage can't be read.
 	Quota *QuotaView `json:"quota"`
+	// Graph is the repository's Code graph: the switch and the stored
+	// graph's status, never its contents.
+	Graph GraphView `json:"graph"`
+}
+
+// GraphView is a repository's Code graph switch and status. Available is
+// whether this install keeps graphs (the switch can only be turned on then).
+// The rest is the stored graph (Commit "" is none yet), the build under way
+// ("", "queued" or "running") and the last build's error.
+type GraphView struct {
+	Enabled   bool       `json:"enabled"`
+	Available bool       `json:"available"`
+	Branch    string     `json:"branch"`
+	Commit    string     `json:"commit"`
+	BuiltAt   *time.Time `json:"builtAt"`
+	SizeBytes int64      `json:"sizeBytes"`
+	Nodes     int        `json:"nodes"`
+	Edges     int        `json:"edges"`
+	Building  string     `json:"building"`
+	Error     string     `json:"error"`
+	FailedAt  *time.Time `json:"failedAt"`
 }
 
 // QuotaView is what a repository and its instance used this month (UTC), each
@@ -878,7 +899,8 @@ type LLMView struct {
 // exactly like one that doesn't exist (404), whatever the write. A
 // repository listed in the config is read-only here (409). Each change is
 // recorded in the audit log: repository_on, repository_paused,
-// repository_resumed, repository_removed, settings_updated (detail: the settings in the body) and settings_reset.
+// repository_resumed, repository_removed, settings_updated (detail: the settings in the body), settings_reset,
+// graph_on and graph_off.
 // Errors are {"error": "message"}.
 //
 //   - GET /api/repositories/available?instance=&search=&page=: AvailableView,

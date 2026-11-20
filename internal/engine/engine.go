@@ -82,6 +82,10 @@ type Engine struct {
 	// ScanImage is pergent.sh's own image (PERGENT_SH_IMAGE, set by the
 	// chart), which a scan Job runs scan-repo in.
 	ScanImage string
+	// GraphDir is the graphs volume (PERGENT_SH_GRAPHS_DIR) and GraphImage
+	// the graph build image (PERGENT_SH_GRAPH_IMAGE), both set by the chart
+	// with graphs.enabled. Either empty turns code graphs off (GraphsOn).
+	GraphDir, GraphImage string
 	// CallbackClient sends the API reviews' callbacks; nil means one with a
 	// 10 s timeout. Whatever it is, a redirect is never followed.
 	CallbackClient *http.Client
@@ -138,6 +142,12 @@ type Engine struct {
 	// (upgradeScans); upgradeMu makes the Run and RunScans calls one.
 	upgradeMu   sync.Mutex
 	upgradeDone bool
+
+	// graphWant holds the head checks WantGraph asked for; graphMu orders
+	// writing a graph's file against deleting it (one replica).
+	graphOnce sync.Once
+	graphWant chan RepoKey
+	graphMu   sync.Mutex
 
 	scanWakeOnce sync.Once
 	scanWake     chan struct{}

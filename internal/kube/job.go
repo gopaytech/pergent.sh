@@ -119,6 +119,11 @@ type JobParams struct {
 	// Non-nil makes the Job an API review's. APIClient names the client.
 	Import    []byte
 	APIClient string
+	// GraphURL is where the Job downloads its repository's code graph
+	// (/runs/<id>/graph), with GraphImage (pergent.sh's own image). Both set
+	// add the graph init container and PERGENT_GRAPH; either empty leaves the Job
+	// as it was before code graphs existed.
+	GraphURL, GraphImage string
 }
 
 // LinkedClone is one linked repository to clone: Dir is its directory name
@@ -270,6 +275,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 	hasDescription := p.Inputs != nil && len(p.Inputs.Description) > 0
 	hasLinked := p.Inputs != nil && len(p.Inputs.Linked) > 0
 	hasCI := p.Inputs != nil && len(p.Inputs.CIResults) > 0
+	hasGraph := p.GraphURL != "" && p.GraphImage != ""
 
 	args := []string{
 		"agent",
@@ -319,6 +325,11 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasCI {
 		// An environment variable for the same reason.
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_CI_RESULTS", Value: "/in/ci-results.md"})
+	}
+	if hasGraph {
+		// An environment variable for the same reason: an older image then
+		// reviews without the graph.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_GRAPH", Value: GraphFile})
 	}
 	if p.CheckDeleted {
 		// An environment variable for the same reason.
@@ -375,6 +386,11 @@ func BuildJob(p JobParams) *batchv1.Job {
 		Resources:       p.Resources,
 		SecurityContext: lockedDown(),
 	}
+	initContainers := []corev1.Container{checkout}
+	if hasGraph {
+		initContainers = append(initContainers, graphContainer(p))
+		pergent.VolumeMounts = append(pergent.VolumeMounts, corev1.VolumeMount{Name: "graph", MountPath: graphMount, ReadOnly: true})
+	}
 
 	// ConfigMap keys can't contain "/", so items put each skill under skills/.
 	var items []corev1.KeyToPath
@@ -411,6 +427,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 			Items:                items,
 		}}},
 	}
+	if hasGraph {
+		volumes = append(volumes, graphVolume())
+	}
 	if p.Import != nil {
 		// 0444: readable by any user the image runs as. Only the checkout
 		// container mounts it.
@@ -435,7 +454,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 					AutomountServiceAccountToken:  ptr(false),
 					EnableServiceLinks:            ptr(false),
 					Volumes:                       volumes,
-					InitContainers:                []corev1.Container{checkout},
+					InitContainers:                initContainers,
 					Containers:                    []corev1.Container{pergent},
 				},
 			},

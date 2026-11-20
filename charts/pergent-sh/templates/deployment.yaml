@@ -37,6 +37,10 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        {{- if .Values.graphs.enabled }}
+        # The graphs volume is written by the pod's user.
+        fsGroup: 65532
+        {{- end }}
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -53,6 +57,13 @@ spec:
             # this same image (pergent-sh fetch-skills).
             - name: PERGENT_SH_IMAGE
               value: {{ include "pergent-sh.image" . | quote }}
+          {{- if .Values.graphs.enabled }}
+            # Code graphs: the volume they are kept on and the build image.
+            - name: PERGENT_SH_GRAPHS_DIR
+              value: /var/lib/pergent-sh/graphs
+            - name: PERGENT_SH_GRAPH_IMAGE
+              value: {{ include "pergent-sh.graphImage" . | quote }}
+          {{- end }}
           {{- if .Values.adminPassword.existingSecret }}
             # The first local admin's password, under the name the config's
             # dashboard.admin_password_env gives it.
@@ -104,10 +115,19 @@ spec:
               mountPath: /etc/pergent-sh/config.yaml
               subPath: config.yaml
               readOnly: true
+            {{- if .Values.graphs.enabled }}
+            - name: graphs
+              mountPath: /var/lib/pergent-sh/graphs
+            {{- end }}
       volumes:
         - name: config
           configMap:
             name: {{ include "pergent-sh.fullname" . }}
+        {{- if .Values.graphs.enabled }}
+        - name: graphs
+          persistentVolumeClaim:
+            claimName: {{ include "pergent-sh.fullname" . }}-graphs
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

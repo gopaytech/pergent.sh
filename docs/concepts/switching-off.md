@@ -4,9 +4,9 @@ A repository is on when it is listed in the config or switched on in the [dashbo
 
 | Action | Who | Where | Asks first | What happens |
 |---|---|---|---|---|
-| Pause | admin | the switch on **Repositories** | no | The repository stays in the list with every setting. On the next reconcile pergent.sh deletes its webhook and revokes its deploy token. Its readiness scans and setup problems are deleted. Its dismissals, comment commands, inline threads, finding fates and review history stay. |
+| Pause | admin | the switch on **Repositories** | no | The repository stays in the list with every setting. On the next reconcile pergent.sh deletes its webhook and revokes its deploy token. Its readiness scans and setup problems are deleted. Its dismissals, comment commands, inline threads, finding fates, [code graph](code-graph.md) and review history stay. |
 | Resume | admin | the same switch | no | pergent.sh creates a new webhook and deploy token and queues a readiness scan. The settings, dismissals and review history are the ones from before the pause. |
-| Remove | admin | **Remove repository** on the repository's page | yes | The repository, its settings and its team links are deleted. Its webhook and deploy token are removed, and so are its dismissals, comment commands, inline threads and finding fates. It can be added again with **+ Add repository**, with every setting at its default. |
+| Remove | admin | **Remove repository** on the repository's page | yes | The repository, its settings and its team links are deleted. Its webhook and deploy token are removed, and so are its dismissals, comment commands, inline threads, finding fates and [code graph](code-graph.md). It can be added again with **+ Add repository**, with every setting at its default. |
 
 The reconcile of that one repository starts within seconds of the switch. The hourly reconcile also covers every repository.
 

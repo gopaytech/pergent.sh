@@ -47,6 +47,8 @@ const (
 )
 
 const (
+	// scanLog starts a readiness scan's log lines.
+	scanLog = "readiness scan: "
 	// podResultVersion is the version of the readiness.PodResult a scan stores.
 	podResultVersion = 1
 	// gitLabDeveloper is GitLab's Developer access level.
@@ -100,22 +102,9 @@ func (e *Engine) scanGitLabSettings(ctx context.Context, gl *gitlab.Client, p st
 	t := scanTarget{RepoURL: p.HTTPURLToRepo, GitUser: p.DeployTokenUsername,
 		Pod: readiness.PodResult{Version: podResultVersion}}
 
-	gp, err := gl.GetProject(ctx, strconv.FormatInt(p.ProjectID, 10))
+	gp, commit, err := e.gitLabHead(ctx, log, scanLog, gl, p)
 	if err != nil {
-		log.Info("readiness scan: couldn't read the project", "error", e.redact(err.Error()))
-		return t, errDefaultBranch
-	}
-	if gp.DefaultBranch == "" {
-		return t, errNoDefaultBranch
-	}
-	commit, err := gl.CommitSHA(ctx, p.ProjectID, gp.DefaultBranch)
-	if errors.Is(err, gitlab.ErrNotFound) {
-		return t, errNoDefaultBranch
-	}
-	if err != nil {
-		log.Info("readiness scan: couldn't read the default branch", "branch", gp.DefaultBranch,
-			"error", e.redact(err.Error()))
-		return t, errDefaultBranch
+		return t, err
 	}
 	t.Branch, t.Commit = gp.DefaultBranch, commit
 
@@ -149,18 +138,8 @@ func (e *Engine) scanGitLabSettings(ctx context.Context, gl *gitlab.Client, p st
 		t.Pod.RequiredChecks = readiness.PodItem{State: readiness.Warning, Reason: "pipelines don't have to succeed before merging"}
 	}
 
-	// The clone token is dispatch's: the project's sealed deploy token.
-	if len(p.DeployTokenSealed) == 0 {
-		return t, errNoCloneToken
-	}
-	tok, err := e.Box.Open(p.DeployTokenSealed)
-	if err != nil {
-		// Sealed with another key: reconcile replaces it.
-		log.Warn("readiness scan: the stored deploy token can't be decrypted", "error", e.redact(err.Error()))
-		return t, errNoCloneToken
-	}
-	t.GitToken = tok
-	return t, nil
+	t.GitToken, err = e.gitLabCloneToken(log, scanLog, p)
+	return t, err
 }
 
 // gitLabProtection returns the protected branch rules that apply to branch:
@@ -200,28 +179,11 @@ func (e *Engine) scanGitHubSettings(ctx context.Context, instance string, app *g
 	owner, name, _ := strings.Cut(p.Path, "/")
 	c := app.Client(p.InstallationID)
 
-	repo, err := c.Repo(ctx, owner, name)
+	defaultBranch, branch, err := e.gitHubHead(ctx, log, scanLog, c, owner, name)
 	if err != nil {
-		log.Info("readiness scan: couldn't read the repository", "error", e.redact(err.Error()))
-		return t, errDefaultBranch
+		return t, err
 	}
-	if repo.DefaultBranch == "" {
-		return t, errNoDefaultBranch
-	}
-	branch, err := c.Branch(ctx, owner, name, repo.DefaultBranch)
-	if errors.Is(err, github.ErrNotFound) {
-		// A repository with no commits names a default branch that isn't there.
-		return t, errNoDefaultBranch
-	}
-	if err == nil && branch.Commit == "" {
-		err = errors.New("GitHub returned no commit")
-	}
-	if err != nil {
-		log.Info("readiness scan: couldn't read the default branch", "branch", repo.DefaultBranch,
-			"error", e.redact(err.Error()))
-		return t, errDefaultBranch
-	}
-	t.Branch, t.Commit = repo.DefaultBranch, branch.Commit
+	t.Branch, t.Commit = defaultBranch, branch.Commit
 
 	types, rulesErr := c.BranchRuleTypes(ctx, owner, name, t.Branch)
 	if rulesErr != nil {
@@ -271,15 +233,8 @@ func (e *Engine) scanGitHubSettings(ctx context.Context, instance string, app *g
 		t.Pod.ActionsRead, t.Pod.CheckRunEvent = &a, &r
 	}
 
-	// The clone token is minted as dispatch does: this one repository,
-	// contents:read, never stored.
-	tok, _, err := app.CloneToken(ctx, p.InstallationID, p.ProjectID)
-	if err != nil {
-		log.Warn("readiness scan: couldn't mint the clone token", "error", e.redact(err.Error()))
-		return t, errNoCloneToken
-	}
-	t.GitToken = []byte(tok)
-	return t, nil
+	t.GitToken, err = e.gitHubCloneToken(ctx, log, scanLog, app, p)
+	return t, err
 }
 
 // gitHubProtection: the branch is protected when something stops a direct

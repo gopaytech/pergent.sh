@@ -83,6 +83,9 @@ type Options struct {
 	// scans after a skill setting is saved; the engine is one. Nil answers
 	// Scan now 404, as with scans off, and saves recheck nothing.
 	Readiness Readiness
+	// Graphs is the engine's side of the Code graph switch. Nil, or one that
+	// is not GraphsOn, refuses turning the switch on (409).
+	Graphs Graphs
 	// DeleteJob deletes a Kubernetes Job by name; removing an API client
 	// calls it for each live review the client had. Nil deletes none.
 	DeleteJob func(ctx context.Context, name string) error
@@ -103,6 +106,15 @@ type Readiness interface {
 	RequestScan(ctx context.Context, instance, project, actor string) (store.ReadinessScan, error)
 	RecheckReadiness(instance, project string)
 	RecheckAllReadiness()
+}
+
+// Graphs is the engine's side of the Code graph switch: whether the install
+// keeps graphs, a head check after the switch goes on, and deleting the
+// graph after it goes off. WantGraph must not block.
+type Graphs interface {
+	GraphsOn() bool
+	WantGraph(instance, project string)
+	DropGraph(ctx context.Context, instance, project string)
 }
 
 // Connector connects instances to GitLab and GitHub while pergent.sh runs;
@@ -183,6 +195,7 @@ type Dashboard struct {
 	wake          func()
 	fetcher       *skillfetch.Fetcher
 	readiness     Readiness
+	graphs        Graphs
 	deleteJob     func(ctx context.Context, name string) error
 	sendCallback  func(ctx context.Context, url string, body []byte, delivery string, secrets ...string) store.CallbackAttempt
 	// loadLLM reads the LLM saved in the dashboard again
@@ -241,7 +254,7 @@ func New(o Options) (*Dashboard, error) {
 	}
 	d := &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
-		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness, deleteJob: o.DeleteJob, sendCallback: o.SendCallback,
+		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness, graphs: o.Graphs, deleteJob: o.DeleteJob, sendCallback: o.SendCallback,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		idp: idpClient(o.HTTPClient), oidc: &oidcCache{},

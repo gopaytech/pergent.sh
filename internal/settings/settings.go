@@ -150,6 +150,9 @@ type Effective struct {
 	// Paused is true for a dashboard repository that is paused. Only
 	// ListAll and GetAny return one; List and Get never do.
 	Paused bool
+	// GraphContext is the Code graph switch of a dashboard repository. A
+	// repository of the config file has none: it is false there.
+	GraphContext bool
 }
 
 // Resolver resolves repositories from Config and, when Store is not nil, the
@@ -574,6 +577,7 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	eff := r.defaultsFor(SourceDashboard, platform, row.Instance, row.Project, stored)
 	eff.Paused = !row.Enabled
+	eff.GraphContext = row.GraphContext
 	if row.Approve != nil {
 		eff.Approve, eff.Overridden[KeyApprove] = *row.Approve, true
 	}

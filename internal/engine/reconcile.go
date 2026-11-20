@@ -162,6 +162,7 @@ func (e *Engine) reconcile(ctx context.Context, only map[repoKey]bool) error {
 		if !wanted[keyOf(p.Instance, p.Path)] {
 			e.dropScans(ctx, p.Instance, p.Path)
 			e.dropAttention(ctx, p.Instance, p.Path)
+			e.DropGraph(ctx, p.Instance, p.Path)
 		}
 	}
 	// A repository switched off in the dashboard before reconcile ever set
@@ -169,6 +170,10 @@ func (e *Engine) reconcile(ctx context.Context, only map[repoKey]bool) error {
 	for k := range only {
 		if !wanted[k] {
 			e.dropScans(ctx, k.instance, k.path)
+			// A paused repository keeps its graph.
+			if !paused[k] {
+				e.DropGraph(ctx, k.instance, k.path)
+			}
 		}
 	}
 	return errors.Join(errs...)

@@ -5,6 +5,8 @@
 //	pergent-sh admin reset-password <username>
 //	pergent-sh fetch-skills --dir <clone> --path <folder> --commit-file <file> --error-file <file> --result-url <url>
 //	pergent-sh scan-repo --dir <clone> --commit-file <file> --error-file <file> --input-file <file> --result-url <url>
+//	pergent-sh post-graph --work <dir> --out <dir> --result-url <url>
+//	pergent-sh get-graph --url <url> --out <file>
 //
 // serve needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus
 // the LLM key, the GitLab tokens, the GitHub App private keys (or approve
@@ -22,6 +24,10 @@
 // scan-repo runs in a readiness scan Job, likewise: it scans a clone of one
 // repository's default branch and posts what it found back to pergent.sh. It
 // needs only PERGENT_SH_SCAN_TOKEN; its input is the file --input-file names.
+//
+// post-graph runs in a graph build Job and posts the code graph it built; it
+// needs only PERGENT_SH_GRAPH_TOKEN. get-graph runs in a review Job and
+// downloads the run's code graph; it needs only PERGENT_RESULT_TOKEN.
 package main
 
 import (
@@ -83,7 +89,9 @@ const (
 	fetchSweepEvery = time.Minute
 	usage           = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>\n" +
 		"       pergent-sh fetch-skills --dir <clone> [--path <folder>] --commit-file <file> --error-file <file> --result-url <url>\n" +
-		"       pergent-sh scan-repo --dir <clone> --commit-file <file> --error-file <file> --input-file <file> --result-url <url>"
+		"       pergent-sh scan-repo --dir <clone> --commit-file <file> --error-file <file> --input-file <file> --result-url <url>\n" +
+		"       pergent-sh post-graph --work <dir> --out <dir> --result-url <url>\n" +
+		"       pergent-sh get-graph --url <url> --out <file>"
 )
 
 func main() {
@@ -106,6 +114,10 @@ func main() {
 		os.Exit(runFetchSkills(ctx, cmd.fetch, os.Stderr))
 	case "scan-repo":
 		os.Exit(runScanRepo(ctx, cmd.scan, os.Stderr))
+	case "post-graph":
+		os.Exit(runPostGraph(ctx, cmd.postGraph, os.Stderr))
+	case "get-graph":
+		os.Exit(runGetGraph(ctx, cmd.getGraph, os.Stderr))
 	}
 	if err := serve(ctx, cmd.configPath, log); err != nil {
 		log.Error("pergent-sh stopped", "error", err.Error())
@@ -122,6 +134,8 @@ type command struct {
 	username   string
 	fetch      fetchOptions
 	scan       scanOptions
+	postGraph  postGraphOptions
+	getGraph   getGraphOptions
 }
 
 // parseArgs reads "serve [--config <path>]", "admin reset-password
@@ -159,6 +173,18 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 			return command{}, err
 		}
 		return command{name: "scan-repo", scan: o}, nil
+	case "post-graph":
+		o, err := parsePostGraphArgs(args[1:], stderr)
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: "post-graph", postGraph: o}, nil
+	case "get-graph":
+		o, err := parseGetGraphArgs(args[1:], stderr)
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: "get-graph", getGraph: o}, nil
 	}
 	return command{}, errors.New(usage)
 }
@@ -283,6 +309,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		fetcher      *skillfetch.Fetcher
 		fetchResults callback.FetchResults
 		scanResults  callback.ScanResults
+		graphs       callback.GraphResults
 		api          *reviewapi.Handler
 	)
 	if cfg.DashboardEnabled() {
@@ -291,6 +318,13 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		eng.Scans = true
 		eng.ScanImage = os.Getenv("PERGENT_SH_IMAGE")
 		scanResults = eng
+		// Code graphs need the graphs volume and the graph image (the chart's
+		// graphs.enabled sets both); a repository turns them on in the
+		// dashboard.
+		eng.GraphDir, eng.GraphImage = os.Getenv("PERGENT_SH_GRAPHS_DIR"), os.Getenv("PERGENT_SH_GRAPH_IMAGE")
+		if eng.GraphsOn() {
+			graphs = eng
+		}
 		// Skills are installed from a connected instance's repositories with
 		// its review bot or App, the reader the dashboard has for it, and
 		// from a public URL by a Job, which needs pergent.sh's own image
@@ -309,7 +343,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		Sources: conn.sources, Catalogs: conn.catalogs, ReconcileSoon: eng.ReconcileSoon,
 		// The engine queues the readiness scans (eng.Scans is on whenever
 		// the dashboard is) and rechecks them after a skill setting is saved.
-		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng,
+		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng, Graphs: eng,
 		// Removing an API client ends its live reviews: their Jobs go.
 		DeleteJob: launcher.Delete,
 		// Send test callback goes the way a real callback does: the engine's
@@ -342,7 +376,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
 		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, CI: eng, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
-		SkillFetches: fetchResults, ReadinessScans: scanResults, ReviewAPI: api, Log: log,
+		SkillFetches: fetchResults, ReadinessScans: scanResults, Graphs: graphs, ReviewAPI: api, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -380,6 +414,10 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	})
 	if eng.Scans {
 		loops = append(loops, eng.RunScans)
+	}
+	if eng.GraphsOn() {
+		log.Info("code graphs on", "dir", eng.GraphDir, "image", eng.GraphImage)
+		loops = append(loops, eng.RunGraphs)
 	}
 	if metricsLn != nil {
 		log.Info("serving metrics", "listen", cfg.MetricsListen)

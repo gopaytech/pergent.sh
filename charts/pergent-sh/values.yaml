@@ -128,6 +128,25 @@ metrics:
     # -- Extra labels, for a Prometheus that selects ServiceMonitors by label.
     labels: {}
 
+# Code graphs (docs/concepts/code-graph.md). Off by default, and then nothing
+# changes. With them on, a repository's maintainers can turn on its Code graph
+# switch in the dashboard: pergent.sh builds a graph of the default branch in a
+# Job and gives it to the reviews of changes into that branch. The graphs are
+# kept on a ReadWriteOnce volume mounted only on the pergent.sh pod.
+graphs:
+  # -- Keep code graphs: a PVC, and the graph build image. Needs the dashboard (config.dashboard.url), where the switch is.
+  enabled: false
+  image:
+    # -- The graph build image: graphify and the pergent converter, no token. Its Job runs as user 65532.
+    repository: ghcr.io/gopaytech/pergent.sh-graph
+    # -- Its tag. Empty means the chart appVersion, as for image.tag.
+    tag: ""
+  persistence:
+    # -- Size of the graphs volume. Only the newest graph of each repository is kept.
+    size: 5Gi
+    # -- Storage class of the graphs volume. Empty uses the cluster's default.
+    storageClass: ""
+
 # -- Resources of the pergent.sh pod.
 resources:
   requests:
