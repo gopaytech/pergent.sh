@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/metrics"
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -45,8 +46,9 @@ type repoLister interface {
 }
 
 // metricsSource returns what a scrape reads: the totals from the database
-// with the repository and skill names bounded to what is listed now.
-func metricsSource(st metricsStore, repos repoLister) func(context.Context) (metrics.Snapshot, error) {
+// with the repository and skill names bounded to what is listed now, and the
+// model entries named as entries (nil: none known) names them.
+func metricsSource(st metricsStore, repos repoLister, entries func() []instances.Model) func(context.Context) (metrics.Snapshot, error) {
 	return func(ctx context.Context) (metrics.Snapshot, error) {
 		totals, err := st.MetricsTotals(ctx)
 		if err != nil {
@@ -60,7 +62,69 @@ func metricsSource(st metricsStore, repos repoLister) func(context.Context) (met
 		if err != nil {
 			return metrics.Snapshot{}, fmt.Errorf("list the skill library: %w", err)
 		}
-		return snapshotOf(totals, on, library), nil
+		snap := snapshotOf(totals, on, library)
+		var known []instances.Model
+		if entries != nil {
+			known = entries()
+		}
+		modelMetrics(&snap, totals, known)
+		return snap, nil
+	}
+}
+
+// The labels of the model chains' metrics for what they must not name.
+const (
+	labelNoEntry      = "(none)"
+	labelRemovedEntry = "(removed)"
+	labelOther        = "(other)"
+)
+
+// modelMetrics adds the fallbacks and the marked entries to snap. An entry is
+// named by its name: a marked entry the store has no row for is named as
+// entries names it (the config's), or labelRemovedEntry, never by its ID.
+// Class and source are one of the values pergent.sh writes, or labelOther.
+func modelMetrics(snap *metrics.Snapshot, t store.MetricsTotals, entries []instances.Model) {
+	names := make(map[store.EntryRef]string, len(entries))
+	for _, m := range entries {
+		src := store.SourceGlobal
+		if m.Source == instances.SourceTeam {
+			src = store.SourceTeam
+		}
+		names[store.EntryRef{Source: src, ID: m.ID}] = m.Name
+	}
+	class := func(v string) string {
+		switch v {
+		case store.ClassQuota, store.ClassBilling, store.ClassAuth:
+			return v
+		}
+		return labelOther
+	}
+	source := func(v string) string {
+		switch v {
+		case store.SourceGlobal, store.SourceTeam:
+			return v
+		}
+		return labelOther
+	}
+	named := func(v string) string {
+		if v == "" {
+			return labelNoEntry
+		}
+		return v
+	}
+	label := func(name, value string) metrics.Label { return metrics.Label{Name: name, Value: value} }
+	for _, u := range t.Fallbacks {
+		snap.Add(metrics.ModelFallbackTotal, u.Count, label("from_model", named(u.From)), label("to_model", named(u.To)),
+			label("class", class(u.Class)), label("source", source(u.Source)))
+	}
+	for _, u := range t.Exhausted {
+		name := u.Name
+		if n, ok := names[store.EntryRef{Source: u.Source, ID: u.ID}]; ok && n != "" {
+			name = n
+		} else if u.Name == u.ID {
+			name = labelRemovedEntry
+		}
+		snap.Add(metrics.ModelEntryExhausted, 1, label("model", name), label("source", source(u.Source)), label("class", class(u.Class)))
 	}
 }
 

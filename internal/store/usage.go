@@ -585,10 +585,10 @@ type FallbackTotal struct {
 	Count                   int64
 }
 
-// ExhaustedEntry is an entry with a live mark: its name (its ID when it has
-// no row: the config entries, or one removed), source and class.
+// ExhaustedEntry is an entry with a live mark: its ID, its name (its ID when
+// it has no row: the config entries, or one removed), source and class.
 type ExhaustedEntry struct {
-	Name, Source, Class string
+	ID, Name, Source, Class string
 }
 
 // TokenTotal is what one skill used with one model in one repository.
@@ -851,7 +851,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 		return MetricsTotals{}, err
 	}
 
-	if rows, err = s.pool.Query(ctx, `SELECT COALESCE(g.name, g.provider || '/' || g.model, tm.name, k.model_id), k.source, k.class
+	if rows, err = s.pool.Query(ctx, `SELECT k.model_id, COALESCE(g.name, g.provider || '/' || g.model, tm.name, k.model_id), k.source, k.class
 		FROM model_entry_marks k
 		LEFT JOIN llm_models g ON k.source = 'global' AND g.id = k.model_id
 		LEFT JOIN team_models tm ON k.source = 'team' AND tm.id = k.model_id
@@ -861,7 +861,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	}
 	if t.Exhausted, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ExhaustedEntry, error) {
 		var u ExhaustedEntry
-		err := row.Scan(&u.Name, &u.Source, &u.Class)
+		err := row.Scan(&u.ID, &u.Name, &u.Source, &u.Class)
 		return u, err
 	}); err != nil {
 		return MetricsTotals{}, err

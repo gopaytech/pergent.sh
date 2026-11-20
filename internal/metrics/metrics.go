@@ -29,11 +29,16 @@ const (
 	APIReviewsTotal   = "pergent_api_reviews_total"
 	APITokensTotal    = "pergent_api_tokens_total"
 	APICallbacksTotal = "pergent_api_callbacks_total"
+	// The model chains' metrics name entries by their names, never by an ID
+	// or anything of a key.
+	ModelFallbackTotal  = "pergent_model_fallback_total"
+	ModelEntryExhausted = "pergent_model_entry_exhausted"
 )
 
 // names lists the metrics New declares, with their help text.
 var names = []string{TokensTotal, ReviewsTotal, ReviewsNoResultTotal, ReviewsSupersededTotal,
-	SkillRunsTotal, FindingsTotal, FindingsDismissed, APIReviewsTotal, APITokensTotal, APICallbacksTotal}
+	SkillRunsTotal, FindingsTotal, FindingsDismissed, APIReviewsTotal, APITokensTotal, APICallbacksTotal,
+	ModelFallbackTotal, ModelEntryExhausted}
 
 var help = map[string]string{
 	TokensTotal:            "Tokens used by reviews, by kind: input, output, reasoning, cache_read or cache_write. The reasoning, cache_read and cache_write series are absent for a repository, skill and model when no review reported them, and count only the reviews that did when some did not.",
@@ -46,11 +51,13 @@ var help = map[string]string{
 	APIReviewsTotal:        "API reviews that finished, by client and result: no_blocking, blocking, nothing_reviewed, failed or superseded. Reviews still queued or running are not counted. Deleting a client removes its series.",
 	APITokensTotal:         "Tokens used by API reviews, by client and kind: input, output, reasoning, cache_read or cache_write. The reasoning, cache_read and cache_write series are absent for a client when no review reported them, and count only the reviews that did when some did not.",
 	APICallbacksTotal:      "Callbacks to API clients, by client and outcome: delivered and gave_up count callbacks, failed_attempt counts tries that failed. A callback given up because its client has no callback URL is in neither gave_up nor failed_attempt.",
+	ModelFallbackTotal:     "Review attempts dropped for the next entry of their model chain, by the entry dropped (from_model), the entry the next attempt ran on (to_model, none when it ran on none), the class the provider gave (quota, billing or auth) and the dropped entry's source (global or team). Dropped attempts are in no review count, only in this and the tokens.",
+	ModelEntryExhausted:    "Model entries skipped now because the provider said they are out of quota or credit, or rejected their key: 1 per entry, by name, source and class. A gauge: the series goes when the mark ends or is cleared.",
 }
 
 // gauges lists the metrics that go down as well as up; every other metric is
 // a counter.
-var gauges = map[string]bool{FindingsDismissed: true}
+var gauges = map[string]bool{FindingsDismissed: true, ModelEntryExhausted: true}
 
 // Label is one label of a series.
 type Label struct{ Name, Value string }

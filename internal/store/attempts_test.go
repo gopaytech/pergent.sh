@@ -327,7 +327,8 @@ func TestMetricsLeaveOutFellBack(t *testing.T) {
 		{From: "", To: "none", Class: ClassQuota, Source: "", Count: 1}}; !sameFallbacks(got.Fallbacks, want) {
 		t.Errorf("fallbacks = %+v; want %+v", got.Fallbacks, want)
 	}
-	if want := []ExhaustedEntry{{Name: "Main", Source: SourceGlobal, Class: ClassQuota}, {Name: "rejected", Source: SourceTeam, Class: ClassAuth}}; !slices.Equal(got.Exhausted, want) {
+	if want := []ExhaustedEntry{{ID: main.ID, Name: "Main", Source: SourceGlobal, Class: ClassQuota},
+		{ID: "rejected", Name: "rejected", Source: SourceTeam, Class: ClassAuth}}; !slices.Equal(got.Exhausted, want) {
 		t.Errorf("exhausted = %+v; want %+v", got.Exhausted, want)
 	}
 }
