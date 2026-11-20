@@ -36,6 +36,9 @@ import (
 //   - "failed": no usable review (the Job failed, a skill failed, the
 //     result was unusable, or it couldn't be posted);
 //   - "superseded": replaced by a newer push, or the change was closed;
+//   - "fell_back": an attempt dropped because the provider refused its model
+//     entry (out of quota or credit, or its key rejected); the review went on
+//     with the next entry of the chain, so it is never a failure;
 //   - "skipped": not reviewed because the repository has no skills (no Job,
 //     no comment, no status); never counted as a review or a failure;
 //   - "waiting": held because the repository doesn't trust the change's
@@ -56,6 +59,7 @@ const (
 	OutcomeNoBlocking = store.OutcomeNoBlocking
 	OutcomeFailed     = store.OutcomeFailed
 	OutcomeSuperseded = store.OutcomeSuperseded
+	OutcomeFellBack   = store.OutcomeFellBack
 	OutcomeSkipped    = store.OutcomeSkipped
 	OutcomeUnknown    = store.OutcomeUnknown
 	OutcomeWaiting    = store.OutcomeWaiting

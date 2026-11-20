@@ -165,6 +165,20 @@ type Run struct {
 	// client of an API review, nil for a merge request's.
 	Kind        string
 	APIClientID *int64
+	// AttemptOf is the first run of the review this run is a later attempt
+	// of (EnqueueAttempt), nil for a first attempt. ChainPosition and
+	// ChainLength are the place of the entry it ran on in the chain in
+	// effect, and the chain's length (0 before SetRunEntry); ModelSource,
+	// ModelTeamID, ModelEntryID and ModelEntryName say which entry that was,
+	// the name as it was then. FallbackClass is why position 1 was not used
+	// ("" when it was). StatusRef is the platform status all attempts share
+	// (a GitHub Check Run ID; 0 when none is kept).
+	AttemptOf                                 *string
+	ChainPosition, ChainLength                int
+	ModelSource, ModelEntryID, ModelEntryName string
+	FallbackClass                             string
+	ModelTeamID                               *int64
+	StatusRef                                 int64
 }
 
 // What a run reviews (Run.Kind).
@@ -208,6 +222,9 @@ const (
 	// OutcomeWaiting is a run held until someone with write access starts it.
 	OutcomeWaiting = "waiting"
 	OutcomeUnknown = "unknown"
+	// OutcomeFellBack is an attempt dropped for the next entry of its chain
+	// (EnqueueAttempt): its state is superseded and OutcomeReason the class.
+	OutcomeFellBack = "fell_back"
 
 	// OutcomeNothingReviewed is an API review in which no skill reviewed a
 	// file: never a pass.
@@ -261,7 +278,9 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
 	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout,
 	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen, quota_checked, kind, api_client_id,
-	ci_checked, ci_deadline, ci_jobs`
+	ci_checked, ci_deadline, ci_jobs, attempt_of::text, COALESCE(chain_position, 0), COALESCE(chain_length, 0),
+	COALESCE(model_source, ''), model_team_id, COALESCE(model_entry_id, ''), COALESCE(model_entry_name, ''),
+	COALESCE(status_ref, 0), fallback_class`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -279,7 +298,8 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
 		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider,
 		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen, &r.QuotaChecked, &r.Kind, &r.APIClientID,
-		&r.CIChecked, &r.CIDeadline, &ciJobs)
+		&r.CIChecked, &r.CIDeadline, &ciJobs, &r.AttemptOf, &r.ChainPosition, &r.ChainLength,
+		&r.ModelSource, &r.ModelTeamID, &r.ModelEntryID, &r.ModelEntryName, &r.StatusRef, &r.FallbackClass)
 	if err != nil {
 		return Run{}, err
 	}
@@ -512,7 +532,8 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 // CountReruns returns how many runs asked for (TriggerRerun,
 // TriggerRerunFailed and, for one merge request, TriggerStart) were created at
 // or after since: those of the merge request mr, or, with mr nil, of every
-// merge request of the project projectID on instance, starts left out. A run since superseded still counts. The count and
+// merge request of the project projectID on instance, starts left out. A run since superseded still counts; a
+// later attempt of a review (EnqueueAttempt) is not one anybody asked for and never counts. The count and
 // the EnqueueRerun after it are not one step, so a cap checked with them is
 // exact for one caller at a time (one engine replica's command step) and
 // may be overshot by a few by concurrent button presses.
@@ -524,7 +545,8 @@ func (s *Store) CountReruns(ctx context.Context, mr *MRKey, instance string, pro
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM runs
 		WHERE instance = $1 AND project_id = $2 AND ($3::bigint IS NULL OR mr_iid = $3)
-		  AND trigger <> 'push' AND ($3::bigint IS NOT NULL OR trigger <> 'start') AND created_at >= $4`,
+		  AND trigger <> 'push' AND ($3::bigint IS NOT NULL OR trigger <> 'start') AND created_at >= $4
+		  AND attempt_of IS NULL`,
 		instance, projectID, iid, since).Scan(&n)
 	return n, err
 }

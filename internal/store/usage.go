@@ -21,7 +21,8 @@ type SkillUsage struct {
 }
 
 // RecordUsage stores what each skill of run id used, with the run's
-// repository, merge request, trigger, provider, model and time, and marks the run as
+// repository, merge request, trigger, provider, model and time, and whose key
+// paid (the run's entry: global, or a team and its ID), and marks the run as
 // recorded, even with no skills. A row already there is kept.
 func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage) error {
 	tx, err := s.pool.Begin(ctx)
@@ -32,10 +33,12 @@ func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage)
 	for _, u := range skills {
 		if _, err := tx.Exec(ctx, `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid,
 				trigger, incremental, provider, model, verdict, reported_at, tokens_in, tokens_out, cache_read, cache_write,
-				reasoning, findings, blocking)
+				reasoning, findings, blocking, source, team_id)
 			SELECT r.id, $2::text, r.instance, r.project_id, r.project_path, r.mr_iid, r.trigger, r.incremental,
 				COALESCE(r.provider, ''), COALESCE(r.model, ''), $3::text, COALESCE(r.reported_at, r.created_at), $4::bigint, $5::bigint,
-				$6::bigint, $7::bigint, $8::bigint, $9::integer, $10::integer
+				$6::bigint, $7::bigint, $8::bigint, $9::integer, $10::integer,
+				CASE WHEN r.model_source = 'team' THEN 'team' ELSE 'global' END,
+				CASE WHEN r.model_source = 'team' THEN r.model_team_id END
 			FROM runs r WHERE r.id = $1::uuid
 			ON CONFLICT (run_id, skill) DO NOTHING`,
 			id, u.Skill, u.Verdict, u.In, u.Out, u.CacheRead, u.CacheWrite, u.Reasoning, u.Findings, u.Blocking); err != nil {
@@ -568,6 +571,24 @@ type MetricsTotals struct {
 	APIReviews   []APIReviewTotal
 	APITokens    []APITokenTotal
 	APICallbacks []APICallbackTotal
+	// Fallbacks are the attempts dropped for the next entry of a chain;
+	// Exhausted the entries with a live mark.
+	Fallbacks []FallbackTotal
+	Exhausted []ExhaustedEntry
+}
+
+// FallbackTotal is the attempts dropped from entry From (by name, of Source)
+// for the next attempt's entry To ("none" when that attempt has none yet),
+// for one class. A dropped attempt is in no other count but the tokens.
+type FallbackTotal struct {
+	From, To, Class, Source string
+	Count                   int64
+}
+
+// ExhaustedEntry is an entry with a live mark: its name (its ID when it has
+// no row: the config entries, or one removed), source and class.
+type ExhaustedEntry struct {
+	Name, Source, Class string
 }
 
 // TokenTotal is what one skill used with one model in one repository.
@@ -673,8 +694,10 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 		return MetricsTotals{}, err
 	}
 
+	// A dropped attempt (fell_back) is not a review: the next attempt is. Its
+	// tokens were spent, so Tokens keeps them.
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, trigger, incremental, count(DISTINCT run_id)
-		FROM run_usage WHERE instance <> '' GROUP BY instance, project_path, trigger, incremental`); err != nil {
+		FROM run_usage WHERE instance <> '' AND `+notFellBack+` GROUP BY instance, project_path, trigger, incremental`); err != nil {
 		return MetricsTotals{}, err
 	}
 	if t.Reviews, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ReviewTotal, error) {
@@ -689,6 +712,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	// told apart as UsageWasted does.
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, failure_step, count(*)
 		FROM runs WHERE instance <> '' AND result IS NULL AND failure_reason <> '' AND dispatched_at IS NOT NULL
+		  AND outcome <> 'fell_back'
 		GROUP BY instance, project_path, failure_step`); err != nil {
 		return MetricsTotals{}, err
 	}
@@ -714,7 +738,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	}
 
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, skill, verdict, count(*)
-		FROM run_usage WHERE instance <> '' GROUP BY instance, project_path, skill, verdict`); err != nil {
+		FROM run_usage WHERE instance <> '' AND `+notFellBack+` GROUP BY instance, project_path, skill, verdict`); err != nil {
 		return MetricsTotals{}, err
 	}
 	if t.SkillRuns, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (SkillRunTotal, error) {
@@ -807,5 +831,44 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	}); err != nil {
 		return MetricsTotals{}, err
 	}
+
+	// The next attempt of a dropped one is the oldest later attempt of the
+	// same review.
+	if rows, err = s.pool.Query(ctx, `SELECT COALESCE(f.model_entry_name, ''), COALESCE(NULLIF(n.model_entry_name, ''), 'none'),
+			f.outcome_reason, COALESCE(f.model_source, ''), count(*)
+		FROM runs f LEFT JOIN LATERAL (SELECT model_entry_name FROM runs n
+			WHERE n.attempt_of = COALESCE(f.attempt_of, f.id) AND (n.created_at, n.id) > (f.created_at, f.id)
+			ORDER BY n.created_at, n.id LIMIT 1) n ON true
+		WHERE f.outcome = 'fell_back'
+		GROUP BY 1, 2, 3, 4`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.Fallbacks, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (FallbackTotal, error) {
+		var u FallbackTotal
+		err := row.Scan(&u.From, &u.To, &u.Class, &u.Source, &u.Count)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	if rows, err = s.pool.Query(ctx, `SELECT COALESCE(g.name, g.provider || '/' || g.model, tm.name, k.model_id), k.source, k.class
+		FROM model_entry_marks k
+		LEFT JOIN llm_models g ON k.source = 'global' AND g.id = k.model_id
+		LEFT JOIN team_models tm ON k.source = 'team' AND tm.id = k.model_id
+		WHERE k.until IS NULL OR k.until > now()
+		ORDER BY k.source, 1`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.Exhausted, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ExhaustedEntry, error) {
+		var u ExhaustedEntry
+		err := row.Scan(&u.Name, &u.Source, &u.Class)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
 	return t, nil
 }
+
+// notFellBack keeps the run_usage rows of runs not dropped for the next entry
+// of their chain.
+const notFellBack = `NOT EXISTS (SELECT 1 FROM runs fb WHERE fb.id = run_usage.run_id AND fb.outcome = 'fell_back')`

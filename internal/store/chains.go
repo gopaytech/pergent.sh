@@ -94,7 +94,7 @@ func writeChainEntries(ctx context.Context, tx pgx.Tx, chainID int64, entries []
 		sources[i], ids[i] = e.Source, e.ID
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO model_chain_entries (chain_id, position, source, model_id)
-		SELECT $1, u.n, u.source, u.id FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS u(source, id, n)`,
+		SELECT $1::bigint, u.n, u.source, u.id FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS u(source, id, n)`,
 		chainID, sources, ids)
 	return err
 }
