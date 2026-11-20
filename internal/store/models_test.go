@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func newModel(t *testing.T, s *Store, provider, model, baseURL string, key []byte) LLMModel {
@@ -80,6 +82,22 @@ func TestModelInUseErrorCountsRepositories(t *testing.T) {
 	}
 }
 
+// modelsAt33 reads the list with the columns 0033 made, for a database
+// migrated that far: LLMModels reads columns later migrations add.
+func modelsAt33(t *testing.T, s *Store) ([]LLMModel, error) {
+	t.Helper()
+	rows, err := s.pool.Query(ctx, `SELECT id, provider, model, base_url, api_key_sealed, is_default, created_at, updated_at
+		FROM llm_models ORDER BY created_at, id`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (LLMModel, error) {
+		var m LLMModel
+		err := row.Scan(&m.ID, &m.Provider, &m.Model, &m.BaseURL, &m.APIKeySealed, &m.Default, &m.CreatedAt, &m.UpdatedAt)
+		return m, err
+	})
+}
+
 // The row of llm_settings becomes the first entry and the default, with the
 // same sealed key; no row is an empty list.
 func TestMigrationCopiesLLMSettings(t *testing.T) {
@@ -90,9 +108,9 @@ func TestMigrationCopiesLLMSettings(t *testing.T) {
 	}
 	applyUpTo(t, s, 33)
 
-	models, err := s.LLMModels(ctx)
+	models, err := modelsAt33(t, s)
 	if err != nil || len(models) != 1 {
-		t.Fatalf("LLMModels = %+v, %v; want one entry", models, err)
+		t.Fatalf("models = %+v, %v; want one entry", models, err)
 	}
 	m := models[0]
 	if !m.Default || m.Provider != "anthropic" || m.Model != "claude-sonnet-4" || m.BaseURL != "https://llm.example.com" ||
@@ -107,8 +125,8 @@ func TestMigrationCopiesLLMSettings(t *testing.T) {
 
 func TestMigrationWithoutLLMSettingsIsEmpty(t *testing.T) {
 	s := newStoreAt(t, 33)
-	if models, err := s.LLMModels(ctx); err != nil || len(models) != 0 {
-		t.Errorf("LLMModels = %+v, %v; want none", models, err)
+	if models, err := modelsAt33(t, s); err != nil || len(models) != 0 {
+		t.Errorf("models = %+v, %v; want none", models, err)
 	}
 }
 
