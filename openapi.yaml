@@ -1738,6 +1738,44 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/graph:
+    put:
+      operationId: putRepositoryGraph
+      tags: [Repositories]
+      summary: Turn a repository's Code graph switch on or off
+      description: |
+        For maintainers and admins of the repository (403 otherwise). A
+        repository set up in the config file is 409, and so is turning the
+        switch on when the install keeps no code graphs (the chart's
+        `graphs.enabled`). On asks for a head check, so the first graph is
+        built without waiting for a review. Off deletes the stored graph and
+        any build under way. The value it has already changes nothing. Each
+        change is an audit entry, `graph_on` or `graph_off`.
+      x-pergent-access: session
+      x-pergent-pattern: PUT /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutRepositoryGraphRequest'}
+      responses:
+        '200':
+          description: The repository after the change.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/settings:
     put:
       operationId: updateRepositorySettings
@@ -4466,6 +4504,14 @@ components:
                 type: string
                 enum: [viewer, maintainer]
                 description: Defaults to `viewer`.
+    PutRepositoryGraphRequest:
+      type: object
+      required: [enabled]
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+          description: True turns the Code graph switch on, false turns it off.
     PutRepositoryTeamsRequest:
       type: object
       required: [teams]
@@ -5935,7 +5981,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, modelChoices, quota]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, modelChoices, quota, graph]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -5977,6 +6023,45 @@ components:
           oneOf:
             - {$ref: '#/components/schemas/QuotaView'}
             - {type: 'null'}
+        graph: {$ref: '#/components/schemas/GraphView'}
+    GraphView:
+      description: |
+        A repository's Code graph switch and the stored graph's status, never its contents. With the switch off
+        the rest is empty: the graph was deleted with it.
+      type: object
+      required: [enabled, available, branch, commit, builtAt, sizeBytes, nodes, edges, building, error, failedAt]
+      properties:
+        enabled:
+          type: boolean
+          description: The switch.
+        available:
+          type: boolean
+          description: Whether this install keeps code graphs. The switch can be turned on only then.
+        branch:
+          type: string
+          description: The default branch the stored graph was built from. Empty with no graph yet.
+        commit:
+          type: string
+          description: The commit the stored graph was built from. Empty with no graph yet.
+        builtAt:
+          type: [string, 'null']
+          format: date-time
+        sizeBytes:
+          type: integer
+        nodes:
+          type: integer
+        edges:
+          type: integer
+        building:
+          type: string
+          enum: ['', queued, running]
+          description: The build under way, if any.
+        error:
+          type: string
+          description: Why the last build failed. Empty after a build stored a graph.
+        failedAt:
+          type: [string, 'null']
+          format: date-time
     QuotaView:
       description: What a repository and its instance used this UTC month, each against its quota.
       type: object

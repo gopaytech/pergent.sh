@@ -58,6 +58,7 @@ const (
 	msgConfigManaged  = "this repository is managed by the config file; change it there"
 	msgAlreadyOn      = "this repository is switched on already"
 	msgBadEnabled     = `the body must be {"enabled": true or false}`
+	msgGraphsOff      = "this install keeps no code graphs (the chart's graphs.enabled is off)"
 	msgPaused         = "the repository is paused"
 	msgWriteFailed    = "could not save the change, please try again"
 	msgUserLookup     = "could not look the user up on the platform, please try again"
@@ -557,7 +558,81 @@ func (d *Dashboard) repositoryPut(w http.ResponseWriter, r *http.Request) {
 		d.putRepositoryTeams(w, r)
 		return
 	}
+	if strings.HasSuffix(r.PathValue("rest"), "/graph") {
+		d.putGraph(w, r)
+		return
+	}
 	d.putSettings(w, r)
+}
+
+// --- PUT /api/repositories/{instance}/{project...}/graph ---
+
+// putGraph turns the repository's Code graph switch on ({"enabled": true})
+// or off ({"enabled": false}), for its maintainers and admins. On asks for a
+// head check, so the first graph is built without waiting for a review; it
+// is 409 when the install keeps no graphs. Off deletes the stored graph and
+// any build. The value it has already changes nothing (no audit entry).
+func (d *Dashboard) putGraph(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	repo, ok := d.target(w, r, "/graph", RoleMaintainer)
+	if !ok {
+		return
+	}
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := decodeStrict(r, &body); err != nil || body.Enabled == nil {
+		writeError(w, http.StatusBadRequest, msgBadEnabled)
+		return
+	}
+	on := *body.Enabled
+	if on && !d.graphsOn() {
+		writeError(w, http.StatusConflict, msgGraphsOff)
+		return
+	}
+	found, changed, err := d.Store.SetDashboardRepoGraph(ctx, repo.Instance, repo.Project, on)
+	if err != nil {
+		d.Log.Error("dashboard: turning the code graph on or off failed", "instance", repo.Instance, "project", repo.Project,
+			"error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	if !found {
+		notFound(w)
+		return
+	}
+	if changed {
+		action := "graph_off"
+		if on {
+			action = "graph_on"
+		}
+		d.Log.Info("dashboard: code graph "+strings.TrimPrefix(action, "graph_"), "instance", repo.Instance,
+			"project", repo.Project, "by", se.Username)
+		d.audit(ctx, se, action, repo.Instance, repo.Project, "")
+	}
+	// Off deletes whatever is left, also when the switch was off already: a
+	// graph never outlives its switch.
+	if d.graphs != nil {
+		if on {
+			d.graphs.WantGraph(repo.Instance, repo.Project)
+		} else {
+			d.graphs.DropGraph(ctx, repo.Instance, repo.Project)
+		}
+	}
+	now, ok, err := d.Repos.GetAny(ctx, repo.Instance, repo.Project)
+	if err == nil && !ok {
+		err = errors.New("the repository isn't there any more")
+	}
+	if err != nil {
+		d.failed(w, r, "loading a repository", err)
+		return
+	}
+	view, err := d.detailView(ctx, se, now)
+	if err != nil {
+		d.failed(w, r, "loading a repository", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {

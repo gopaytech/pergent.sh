@@ -343,7 +343,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		Sources: conn.sources, Catalogs: conn.catalogs, ReconcileSoon: eng.ReconcileSoon,
 		// The engine queues the readiness scans (eng.Scans is on whenever
 		// the dashboard is) and rechecks them after a skill setting is saved.
-		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng,
+		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng, Graphs: eng,
 		// Removing an API client ends its live reviews: their Jobs go.
 		DeleteJob: launcher.Delete,
 		// Send test callback goes the way a real callback does: the engine's
