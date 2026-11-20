@@ -10,6 +10,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/gopaytech/pergent.sh/internal/codegraph"
 )
 
 const testBuildID = "3b1f6d20-8c4e-4a57-9e02-6f1d7c8a9b30"
@@ -226,6 +228,21 @@ func TestBuildJobWithGraph(t *testing.T) {
 	for _, a := range containerByName(t, spec.Containers, "pergent").Args {
 		if strings.HasPrefix(a, "--graph") {
 			t.Errorf("no graph, but pergent got %s", a)
+		}
+	}
+}
+
+// The fixed messages the Job writes are the ones pergent.sh knows, so they
+// reach the dashboard as written.
+func TestGraphJobMessagesKnown(t *testing.T) {
+	for _, m := range []string{codegraph.MsgGraphify, codegraph.MsgConvert} {
+		if !strings.Contains(graphifyScript, `"`+m+`"`) {
+			t.Errorf("the graphify script doesn't write %q", m)
+		}
+	}
+	for _, m := range []string{codegraph.MsgCloneFetch, codegraph.MsgCloneMoved} {
+		if !strings.Contains(scanScript, `"`+m+`"`) {
+			t.Errorf("scan.sh doesn't write %q", m)
 		}
 	}
 }

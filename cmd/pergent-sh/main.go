@@ -5,6 +5,8 @@
 //	pergent-sh admin reset-password <username>
 //	pergent-sh fetch-skills --dir <clone> --path <folder> --commit-file <file> --error-file <file> --result-url <url>
 //	pergent-sh scan-repo --dir <clone> --commit-file <file> --error-file <file> --input-file <file> --result-url <url>
+//	pergent-sh post-graph --work <dir> --out <dir> --result-url <url>
+//	pergent-sh get-graph --url <url> --out <file>
 //
 // serve needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus
 // the LLM key, the GitLab tokens, the GitHub App private keys (or approve
@@ -22,6 +24,10 @@
 // scan-repo runs in a readiness scan Job, likewise: it scans a clone of one
 // repository's default branch and posts what it found back to pergent.sh. It
 // needs only PERGENT_SH_SCAN_TOKEN; its input is the file --input-file names.
+//
+// post-graph runs in a graph build Job and posts the code graph it built; it
+// needs only PERGENT_SH_GRAPH_TOKEN. get-graph runs in a review Job and
+// downloads the run's code graph; it needs only PERGENT_RESULT_TOKEN.
 package main
 
 import (
@@ -83,7 +89,9 @@ const (
 	fetchSweepEvery = time.Minute
 	usage           = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>\n" +
 		"       pergent-sh fetch-skills --dir <clone> [--path <folder>] --commit-file <file> --error-file <file> --result-url <url>\n" +
-		"       pergent-sh scan-repo --dir <clone> --commit-file <file> --error-file <file> --input-file <file> --result-url <url>"
+		"       pergent-sh scan-repo --dir <clone> --commit-file <file> --error-file <file> --input-file <file> --result-url <url>\n" +
+		"       pergent-sh post-graph --work <dir> --out <dir> --result-url <url>\n" +
+		"       pergent-sh get-graph --url <url> --out <file>"
 )
 
 func main() {
@@ -106,6 +114,10 @@ func main() {
 		os.Exit(runFetchSkills(ctx, cmd.fetch, os.Stderr))
 	case "scan-repo":
 		os.Exit(runScanRepo(ctx, cmd.scan, os.Stderr))
+	case "post-graph":
+		os.Exit(runPostGraph(ctx, cmd.postGraph, os.Stderr))
+	case "get-graph":
+		os.Exit(runGetGraph(ctx, cmd.getGraph, os.Stderr))
 	}
 	if err := serve(ctx, cmd.configPath, log); err != nil {
 		log.Error("pergent-sh stopped", "error", err.Error())
@@ -122,6 +134,8 @@ type command struct {
 	username   string
 	fetch      fetchOptions
 	scan       scanOptions
+	postGraph  postGraphOptions
+	getGraph   getGraphOptions
 }
 
 // parseArgs reads "serve [--config <path>]", "admin reset-password
@@ -159,6 +173,18 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 			return command{}, err
 		}
 		return command{name: "scan-repo", scan: o}, nil
+	case "post-graph":
+		o, err := parsePostGraphArgs(args[1:], stderr)
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: "post-graph", postGraph: o}, nil
+	case "get-graph":
+		o, err := parseGetGraphArgs(args[1:], stderr)
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: "get-graph", getGraph: o}, nil
 	}
 	return command{}, errors.New(usage)
 }
