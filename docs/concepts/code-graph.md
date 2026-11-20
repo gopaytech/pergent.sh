@@ -1,10 +1,17 @@
-# 🕸️ Code graph
+# 🕸️ Code graph (experimental)
+
+> **Experimental.** The code graph is off by default, and in our tests it did not help:
+>
+> - **Cost:** on 3 changes reviewed with `deepseek-v4-pro`, the reviews with the graph used 22% fewer steps and 30% fewer `grep` calls, but the token cost was only 0.6% lower.
+> - **Bugs:** on 5 changes with a known bug, reviewed with `qwen3.7-plus`, the review found 0 of the 5 bugs, with the graph and without it. With the graph it cost 68% more.
+>
+> Keep it off unless you are measuring it.
 
 ## What it is
 
 A code graph lists the files, functions, methods and types of a repository's default branch, and who calls and imports what. With it, pergent gives each batch of a review a short hint: the callers and callees of the code the batch changes, and the files that import the changed files. The model then needs fewer `read` and `grep` steps to find related code. pergent's own [Code graph](https://github.com/gopaytech/pergent/blob/master/docs/concepts/code-graph.md) page says what the hint holds.
 
-It is **off by default, per repository**. In a test on 10 changes it cut the steps by about 22% and the `grep` calls by about 30%, but the token cost did not change. Turn it on where you want to try it.
+It is **off by default, per repository**. Turn it on only for a repository where you measure it.
 
 With the switch off, nothing changes: pergent.sh builds no graph, stores none, and the review Job is the same as before.
 
