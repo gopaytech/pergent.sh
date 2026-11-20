@@ -479,6 +479,35 @@ func TestCreateCheckRun(t *testing.T) {
 	jsonEq(t, rec.get(1).Body, `{"name":"pergent","head_sha":"h1","status":"completed","conclusion":"neutral","output":{"title":"No blocking issues","summary":"See the PR comment."}}`)
 }
 
+// UpdateCheckRun changes a check run in place: its status, conclusion (only
+// when completed) and output, never its name or commit. A check run that is
+// gone is ErrNotFound.
+func TestUpdateCheckRun(t *testing.T) {
+	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/9") {
+			w.WriteHeader(404)
+			_, _ = io.WriteString(w, `{"message":"Not Found"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":555}`)
+	})
+	if err := c.UpdateCheckRun(ctx, "acme", "widgets", 555, "in_progress", "success", "retrying on backup model (2 of 3)", "See the PR comment."); err != nil {
+		t.Fatal(err)
+	}
+	got := rec.get(0)
+	expect(t, got, "PATCH", "/repos/acme/widgets/check-runs/555", "")
+	jsonEq(t, got.Body, `{"status":"in_progress","output":{"title":"retrying on backup model (2 of 3)","summary":"See the PR comment."}}`)
+
+	if err := c.UpdateCheckRun(ctx, "acme", "widgets", 555, "completed", "failure", "Failed", "See the PR comment."); err != nil {
+		t.Fatal(err)
+	}
+	jsonEq(t, rec.get(1).Body, `{"status":"completed","conclusion":"failure","output":{"title":"Failed","summary":"See the PR comment."}}`)
+
+	if err := c.UpdateCheckRun(ctx, "acme", "widgets", 9, "completed", "failure", "Failed", "x"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateCheckRun of a gone check run = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateReview(t *testing.T) {
 	c, rec := serve(t, jsonReply(map[string]any{"id": 80}))
 	id, err := c.CreateReview(ctx, "acme", "widgets", 3, "h1", "APPROVE")

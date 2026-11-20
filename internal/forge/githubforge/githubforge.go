@@ -396,6 +396,37 @@ func (f *Forge) SetStatus(ctx context.Context, repoID int64, sha string, s forge
 	return mapErr(err)
 }
 
+// SetStatusRef is SetStatus on Check Run ref, updated in place; ref 0, or one
+// that is gone, creates a new one. A running status with a description shows
+// it (an attempt on a backup model says so). It returns the Check Run's ID.
+func (f *Forge) SetStatusRef(ctx context.Context, repoID int64, sha string, ref int64, s forge.StatusState, description string) (int64, error) {
+	c, r, err := f.client(ctx, repoID)
+	if err != nil {
+		return 0, err
+	}
+	status, conclusion, title := "completed", Conclusion(s), description
+	switch s {
+	case forge.StatusRunning:
+		status, conclusion = "in_progress", ""
+		if title == "" {
+			title = runningTitle
+		}
+	case forge.StatusPending:
+		status, conclusion = "queued", ""
+	}
+	if ref != 0 {
+		err := c.UpdateCheckRun(ctx, r.Owner, r.Name, ref, status, conclusion, title, checkSummary)
+		if err == nil {
+			return ref, nil
+		}
+		if !errors.Is(err, github.ErrNotFound) {
+			return 0, mapErr(err)
+		}
+	}
+	id, err := c.CreateCheckRun(ctx, r.Owner, r.Name, checkName, sha, status, conclusion, title, checkSummary)
+	return id, mapErr(err)
+}
+
 // UserByName looks a login up through the installation that covers repo.
 func (f *Forge) UserByName(ctx context.Context, repo, username string) (forge.User, error) {
 	c, _, _, err := f.source(ctx, repo)

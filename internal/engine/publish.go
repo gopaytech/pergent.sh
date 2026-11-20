@@ -180,7 +180,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if err := e.upsertComment(ctx, plat.Forge, run, d.Comment); err != nil {
 		return fmt.Errorf("post comment: %w", err)
 	}
-	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, StatusState(d.Status), d.Description); err != nil {
+	if err := e.setStatus(ctx, plat, run, StatusState(d.Status), d.Description); err != nil {
 		return fmt.Errorf("set commit status: %w", err)
 	}
 	approved, held := false, approvalMade
@@ -817,7 +817,7 @@ func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
-	if err := plat.Forge.SetStatus(sctx, run.MR.ProjectID, run.HeadSHA, status, gaveUpDescription); err != nil {
+	if err := e.setStatus(sctx, plat, run, status, gaveUpDescription); err != nil {
 		log.Warn("couldn't set the final status of the review that wasn't posted", "error", e.redact(err.Error()))
 	}
 }
@@ -995,7 +995,7 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 		case newer:
 			log.Debug("not setting the canceled status: a newer run of the head owns it")
 		case ok && plat.Forge != nil:
-			if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusCanceled, supersededDescription); err != nil {
+			if err := e.setStatus(ctx, plat, run, forge.StatusCanceled, supersededDescription); err != nil {
 				return fmt.Errorf("set canceled status: %w", err)
 			}
 		default:

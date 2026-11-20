@@ -713,7 +713,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		d.log.Info("couldn't record the review's model, step limit and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 
-	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusRunning, d.runningText()); err != nil {
+	if err := e.setStatus(ctx, plat, run, forge.StatusRunning, d.runningText()); err != nil {
 		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
 	}
 	return nil
@@ -1093,7 +1093,7 @@ type holdNote struct {
 // can't be set or posted is logged: the run waits either way.
 func (d *dispatcher) announceHold(ctx context.Context, plat Platform, description string, note *holdNote) {
 	run := d.run
-	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusPending, description); err != nil {
+	if err := d.e.setStatus(ctx, plat, run, forge.StatusPending, description); err != nil {
 		d.log.Warn("the pending status can't be set", "error", d.redact(err.Error()))
 	}
 	if note == nil {

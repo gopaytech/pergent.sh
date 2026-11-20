@@ -99,7 +99,7 @@ func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) 
 	}
 	// Best effort: the next attempt sets the running status again.
 	if plat, ok := e.Platforms.Get(run.MR.Instance); ok && plat.Forge != nil {
-		if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusRunning, description); err != nil {
+		if err := e.setStatus(ctx, plat, run, forge.StatusRunning, description); err != nil {
 			log.Warn("couldn't set the running commit status", "error", e.redact(err.Error()))
 		}
 	}
@@ -122,4 +122,26 @@ func (e *Engine) auditMark(ctx context.Context, run store.Run, log *slog.Logger)
 	}); err != nil {
 		log.Error("recording an audit entry failed", "action", "model_marked", "error", e.redact(err.Error()))
 	}
+}
+
+// setStatus sets run's status on its head. Where the platform's status can
+// be changed in place (forge.StatusUpdater: a GitHub Check Run), the run's
+// own is changed, so every attempt of a review shares one: an attempt copies
+// the ref. A new ref is stored on the run, best effort: a lost write only
+// makes the next call create another.
+func (e *Engine) setStatus(ctx context.Context, plat Platform, run store.Run, s forge.StatusState, description string) error {
+	su, ok := plat.Forge.(forge.StatusUpdater)
+	if !ok {
+		return plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, s, description)
+	}
+	ref, err := su.SetStatusRef(ctx, run.MR.ProjectID, run.HeadSHA, run.StatusRef, s, description)
+	if err != nil {
+		return err
+	}
+	if ref != run.StatusRef {
+		if err := e.Store.SetRunStatusRef(ctx, run.ID, ref); err != nil {
+			e.log().Warn("couldn't record the run's status ID", "run", run.ID, "error", e.redact(err.Error()))
+		}
+	}
+	return nil
 }

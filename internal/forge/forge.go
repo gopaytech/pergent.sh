@@ -189,6 +189,16 @@ type Forge interface {
 	UserByName(ctx context.Context, repo, username string) (User, error)
 }
 
+// StatusUpdater is a Forge whose status is an object with an ID that can be
+// changed in place (a GitHub Check Run), so the attempts of one review share
+// one. ref is the ID SetStatusRef returned before, 0 for none: it creates the
+// status then, and updates ref otherwise; a ref that is gone is created
+// again. It returns the ID now in use. A platform where a status of the same
+// name on the same commit replaces the old one (GitLab) needs none.
+type StatusUpdater interface {
+	SetStatusRef(ctx context.Context, projectID int64, sha string, ref int64, s StatusState, description string) (int64, error)
+}
+
 // MaxSourceFile is the most a SourceReader reads of one file: 900 KiB, the
 // same as inputs.ConfigMapLimit (a test keeps the two equal; forge can't
 // import inputs). Nothing a review reads can be larger, and a repository is
