@@ -233,6 +233,36 @@ type RunDetailView struct {
 	// told us when it failed to start. Admins only: for anyone else the key
 	// is left out. Present from the moment the run has a Job.
 	Kubernetes *KubernetesView `json:"kubernetes,omitempty"`
+	// Entry is the chain entry the run ran on, by the name it had then;
+	// null for a run that recorded none (before chains, or before it was
+	// dispatched).
+	Entry *RunEntryView `json:"entry"`
+	// Attempts are every attempt of the review this run is one of, oldest
+	// first, this run included; empty for a review of one attempt.
+	Attempts []AttemptView `json:"attempts"`
+}
+
+// RunEntryView is the entry a run ran on: its name, its place in the chain
+// in effect (Position of Length), its source ("global" or "team") and its
+// team's name ("" for a global one).
+type RunEntryView struct {
+	Name     string `json:"name"`
+	Position int    `json:"position"`
+	Length   int    `json:"length"`
+	Source   string `json:"source"`
+	Team     string `json:"team"`
+}
+
+// AttemptView is one attempt of a review. Outcome is the run's ("fell_back"
+// for one that was dropped for the next entry, "" while it runs); Reason is
+// the class a dropped attempt fell back on ("quota", "billing" or "auth"),
+// "" otherwise.
+type AttemptView struct {
+	RunID    string `json:"runId"`
+	Name     string `json:"name"`
+	Position int    `json:"position"`
+	Outcome  string `json:"outcome"`
+	Reason   string `json:"reason"`
 }
 
 // KubernetesView is the cluster side of a run, for an admin to look it up
@@ -387,10 +417,10 @@ type Last7View struct {
 // reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR,
-// rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors and model (the ID of
-// the entry of the list of models the repository runs on; null follows the
-// default) and monthlyTokenQuota (the repository's token quota per UTC month,
-// null for none; shown to admins only, left out for anyone else).
+// rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors and monthlyTokenQuota
+// (the repository's token quota per UTC month, null for none; shown to admins
+// only, left out for anyone else). The model is the model chain's (GET
+// .../chain).
 type RepositoryDetailView struct {
 	Repo      RepositoryView         `json:"repo"`
 	Settings  map[string]SettingView `json:"settings"`
@@ -405,14 +435,11 @@ type RepositoryDetailView struct {
 	// InstanceTrustedAuthorsOnly is the instance's trusted-authors mode,
 	// what the repository follows when it sets none.
 	InstanceTrustedAuthorsOnly string `json:"instanceTrustedAuthorsOnly"`
-	// Model is the provider and model reviews of the repository run on, as
-	// "provider / model": the one it chose, else the default's. "" when
-	// neither is there. Anyone who sees the repository sees it; the base URL
-	// and the key are never in it.
+	// Model is the provider and model of position 1 of the chain in effect
+	// (GET .../chain has the chain), as "provider / model"; "" when the
+	// chain is empty or that entry was removed. Anyone who sees the
+	// repository sees it; the base URL and the key are never in it.
 	Model string `json:"model"`
-	// ModelChoices are the entries of the list a repository can be given, for
-	// an admin of the repository; empty for anyone else.
-	ModelChoices []ModelChoiceView `json:"modelChoices"`
 	// Quota is this month's tokens against the repository's and its
 	// instance's quotas, for an admin; null for anyone else, and when the
 	// usage can't be read.
@@ -452,16 +479,6 @@ type QuotaView struct {
 type QuotaUseView struct {
 	Used  int64  `json:"used"`
 	Limit *int64 `json:"limit"`
-}
-
-// ModelChoiceView is an entry of the list of models a repository can be
-// given: its ID, and "provider / model" to show. Default marks the entry
-// reviews use when a repository names none, so the page can name what
-// "Default" would move the repository to.
-type ModelChoiceView struct {
-	ID      string `json:"id"`
-	Label   string `json:"label"`
-	Default bool   `json:"default"`
 }
 
 // WaitingView is a change of an author the repository doesn't trust, not
@@ -956,18 +973,20 @@ type LLMView struct {
 //     "6Gi", from 256Mi, and no less than jobs.resources.requests.memory,
 //     to 32Gi), and rerunLimitPerMR and
 //     rerunLimitPerRepo (a whole number, 1 to 1000; only an admin changes
-//     these, else 403, and a maintainer's reset leaves them), and model (the
-//     ID of an entry of the list of models, or null to follow the default;
-//     only an admin of the repository changes it, else 403, and a
-//     maintainer's reset leaves it; an ID that is not in the list, "config"
-//     included while the config has no llm: block, is 400), and monthlyTokenQuota (a
+//     these, else 403, and a maintainer's reset leaves them), and monthlyTokenQuota (a
 //     whole number from 1 to 1000000000000000, or null for none; only an admin
 //     changes it, else 403, and a maintainer's reset leaves it). Any other key, or a value
-//     out of bounds, is 400 and nothing changes. 200, RepositoryDetailView.
+//     out of bounds, is 400 and nothing changes; so is model, which the
+//     model chain replaced. 200, RepositoryDetailView.
 //   - POST /api/repositories/{instance}/{project...}/settings/reset: every
 //     setting back to its default, except that a maintainer's reset leaves
 //     the two re-run caps, the linked repositories setting, the links, who is
-//     trusted, the model and the token quota as they are (only an admin resets those). 200, RepositoryDetailView.
+//     trusted and the token quota as they are (only an admin resets those).
+//     The model chain stays. 200, RepositoryDetailView.
+//   - GET .../chain: ChainView, the model chain in effect, for anyone who
+//     sees the repository. PUT .../chain {"entries"} and POST
+//     .../chain/reset: admins and maintainers of the owner team (403 for
+//     anyone else who sees it); see api_chains.go.
 //   - GET /api/admin/linkable?instance=&repo=&search= (admins only): LinkableView,
 //     the repositories the instance's review App reaches (at most 200, by name),
 //     each with whether `repo` (a repository switched on, GitHub only; 400 for
@@ -1201,9 +1220,13 @@ type AuditView struct {
 // it is set and when it last changed. Every write needs the CSRF token and is
 // recorded in the audit log without a value: instance_added,
 // instance_updated (detail: the fields changed), instance_removed,
-// model_added, model_updated (detail: the model, then the fields changed,
-// "api_key" among them), model_default_changed, model_removed (detail: the
-// provider and model) and defaults_updated.
+// model_added, model_updated (detail: the name and model, then the fields
+// changed, "api_key" among them), teams_may_use_changed, model_default_changed,
+// model_removed (detail: the name and model), model_mark_cleared,
+// chain_changed (detail: the chain and its entry names in order) and
+// defaults_updated. The team routes add owner_set, owner_cleared,
+// team_model_added, team_model_updated, team_model_removed and
+// team_models_deleted.
 //
 //   - GET /api/admin/instances: [InstanceAdminView], the config's first,
 //     then those added in the dashboard.
@@ -1461,13 +1484,17 @@ type UsageDayView struct {
 // UsageRepositoryRowView is one repository in GET /api/admin/usage.
 // SwitchedOn is false for a repository paused (Paused) or removed since, or
 // on an instance that was removed: its usage is kept.
+// GlobalTokens and TeamTokens split its tokens (in plus out) by whose key
+// paid: the global entries' or teams' own.
 type UsageRepositoryRowView struct {
-	Instance   string          `json:"instance"`
-	Project    string          `json:"project"`
-	SwitchedOn bool            `json:"switchedOn"`
-	Paused     bool            `json:"paused"`
-	Tokens     UsageTokensView `json:"tokens"`
-	Reviews    int64           `json:"reviews"`
+	Instance     string          `json:"instance"`
+	Project      string          `json:"project"`
+	SwitchedOn   bool            `json:"switchedOn"`
+	Paused       bool            `json:"paused"`
+	Tokens       UsageTokensView `json:"tokens"`
+	Reviews      int64           `json:"reviews"`
+	GlobalTokens int64           `json:"globalTokens"`
+	TeamTokens   int64           `json:"teamTokens"`
 }
 
 // UsageTenantView is one tenant of an API client in GET /api/admin/usage.

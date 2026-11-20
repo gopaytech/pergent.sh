@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/instances"
-	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -26,8 +25,8 @@ const (
 	msgConfigModel    = "this model is set in the config file; change it there"
 	msgModelIsDefault = "this is the default model: make another one the default first"
 
-	msgNeedsAdminModel = "only admins of this repository change its model"
-	msgUnknownModel    = "model must be the ID of a model in the list, or null to follow the default"
+	msgModelInChain = "a repository's model is its model chain now: PUT .../chain, or POST .../chain/reset to inherit"
+	msgUnknownModel = "a model the repository names is not in the list"
 )
 
 // modelLabel is how a provider and model are shown and audited. It holds
@@ -498,66 +497,19 @@ func (d *Dashboard) deleteModel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// --- a repository's model ---
-
-// effectiveModel is "provider / model" for the entry a repository runs on:
-// the one it names, else the default; "" when there is none (the entry was
-// removed from the config file, or nothing is set up).
-func (d *Dashboard) effectiveModel(modelID string) string {
-	for _, m := range d.registry.Models() {
-		if (modelID == "" && m.Default) || (modelID != "" && m.ID == modelID) {
-			return modelLabel(m.LLM.Provider, m.LLM.Model)
-		}
-	}
-	return ""
-}
-
-// modelChoices are the entries a repository can be given, for an admin of
-// the repository: an ID and a name each, never a base URL or a key. Anyone
-// else gets an empty list.
-func (d *Dashboard) modelChoices(role Role) []ModelChoiceView {
-	out := []ModelChoiceView{}
-	if role < RoleAdmin {
-		return out
-	}
-	for _, m := range d.registry.Models() {
-		out = append(out, ModelChoiceView{ID: m.ID, Label: modelLabel(m.LLM.Provider, m.LLM.Model), Default: m.Default})
-	}
-	return out
-}
-
 // hasConfigModel reports whether the config file's llm: block supplies the
 // entry "config".
 func (d *Dashboard) hasConfigModel() bool {
 	return slices.ContainsFunc(d.registry.Models(), func(m instances.Model) bool { return m.ID == store.ConfigModelID })
 }
 
-// modelValue is a repository's model setting as the API shows it: the entry's
-// ID, or null for the default.
-func modelValue(repo settings.Effective) any {
-	if repo.ModelID == "" {
-		return nil
+// defaultModelLabel is "provider / model" of the default entry; "" when there
+// is none.
+func (d *Dashboard) defaultModelLabel() string {
+	for _, m := range d.registry.Models() {
+		if m.Default {
+			return modelLabel(m.LLM.Provider, m.LLM.Model)
+		}
 	}
-	return repo.ModelID
-}
-
-// isModelKey reports whether key is the model setting, which only an admin
-// of the repository changes: it decides what the reviews cost.
-func isModelKey(key string) bool { return key == "model" }
-
-// effectiveModelOrID is effectiveModel, or the ID when the entry is gone.
-func (d *Dashboard) effectiveModelOrID(id string) string {
-	if label := d.effectiveModel(id); label != "" {
-		return label
-	}
-	return id
-}
-
-// modelSettingDetail is the audit detail of a change to the model setting,
-// naming the provider and model it was given, or "default".
-func (d *Dashboard) modelSettingDetail(id *string) string {
-	if id == nil {
-		return "model (default)"
-	}
-	return "model (" + d.effectiveModelOrID(*id) + ")"
+	return ""
 }

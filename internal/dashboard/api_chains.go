@@ -11,6 +11,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -400,4 +401,212 @@ func (d *Dashboard) clearMark(w http.ResponseWriter, r *http.Request, se Session
 		d.audit(ctx, se, "model_mark_cleared", instance, project, name)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- a repository's chain ---
+
+const (
+	msgRepoChainWrite   = "only admins and maintainers of the repository's owner team change its model chain"
+	msgRepoChainNoOwner = "only admins change the model chain of a repository with no owner team"
+	msgEmptyRepoChain   = "a repository's chain needs an entry: reset it to inherit its owner team's or the global chain"
+)
+
+// repoShown is the chain in effect for repo, as the resolver reads it
+// (chain.Load): its own, else its owner team's, else the global one, written
+// out in full (chain.GlobalRefs) even with no usable key. owner is its owner
+// team, 0 for none.
+func (d *Dashboard) repoShown(ctx context.Context, repo settings.Effective) (c shownChain, owner int64, err error) {
+	in, err := chain.Load(ctx, d.Store, d.registry, d.now(), store.Run{}, repo)
+	if err != nil {
+		return shownChain{}, 0, err
+	}
+	c = shownChain{scope: store.ScopeRepo, in: in}
+	switch in.Scope {
+	case store.ScopeRepo:
+		c.source = "repository"
+	case store.ScopeTeam:
+		c.source = store.ScopeTeam
+	default:
+		c.source = store.ScopeGlobal
+		if c.in.Refs, c.fixed, _, err = chain.GlobalRefs(ctx, d.Store, d.registry); err != nil {
+			return shownChain{}, 0, err
+		}
+		c.in.SavedByAdmin = true
+	}
+	if in.OwnerTeam != 0 && in.Scope == store.ScopeTeam {
+		teams, err := d.teamNames(ctx)
+		if err != nil {
+			return shownChain{}, 0, err
+		}
+		c.team = teams[in.OwnerTeam]
+	}
+	return c, in.OwnerTeam, nil
+}
+
+// maintainsTeam reports whether se is a maintainer of team.
+func (d *Dashboard) maintainsTeam(ctx context.Context, se Session, team int64) (bool, error) {
+	if team == 0 {
+		return false, nil
+	}
+	_, role, _, err := d.teamAccess(ctx, se, team)
+	return role >= RoleMaintainer, err
+}
+
+// repoChoices are the entries se may put in repo's chain, nil when it may
+// not change it: an admin any global entry and the owner team's entries; a
+// maintainer of the owner team that team's entries and the global entries
+// teams may use (never the config file's). msg is the 403's message when nil.
+func (d *Dashboard) repoChoices(ctx context.Context, se Session, owner int64) (choices []instances.Model, msg string, err error) {
+	if se.Admin {
+		choices = append([]instances.Model{}, d.registry.GlobalModels()...)
+		if owner != 0 {
+			choices = append(choices, d.registry.TeamModels(owner)...)
+		}
+		return choices, "", nil
+	}
+	if owner == 0 {
+		return nil, msgRepoChainNoOwner, nil
+	}
+	ok, err := d.maintainsTeam(ctx, se, owner)
+	if err != nil || !ok {
+		return nil, msgRepoChainWrite, err
+	}
+	return d.teamChoices(owner), "", nil
+}
+
+// repoClears lets an admin clear any mark and a maintainer of the owner team
+// those of the team's own entries.
+func repoClears(se Session, owner int64, choices []instances.Model, in chain.Input) func(store.EntryRef) bool {
+	if choices == nil {
+		return func(store.EntryRef) bool { return false }
+	}
+	return teamClears(se.Admin, owner, in)
+}
+
+// writeRepoChain answers with repo's chain as se sees it.
+func (d *Dashboard) writeRepoChain(w http.ResponseWriter, r *http.Request, se Session, repo settings.Effective) {
+	ctx := r.Context()
+	c, owner, err := d.repoShown(ctx, repo)
+	if err != nil {
+		d.failed(w, r, "reading the model chain", err)
+		return
+	}
+	var choices []instances.Model
+	if se.Role(repo.Instance, repo.Project) >= RoleMaintainer {
+		if choices, _, err = d.repoChoices(ctx, se, owner); err != nil {
+			d.failed(w, r, "reading the owner team", err)
+			return
+		}
+	}
+	teams, err := d.teamNames(ctx)
+	if err != nil {
+		d.failed(w, r, "listing teams", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d.chainView(c, choices, teams, repoClears(se, owner, choices, c.in)))
+}
+
+// --- GET .../chain ---
+
+func (d *Dashboard) repositoryChain(w http.ResponseWriter, r *http.Request, se Session, repo settings.Effective) {
+	d.writeRepoChain(w, r, se, repo)
+}
+
+// repoChainTarget is the repository of a chain write, with the entries se
+// may put in its chain: 404 when se doesn't see it, 403 for anyone but an
+// admin or a maintainer of its owner team. ok is false when it answered.
+func (d *Dashboard) repoChainTarget(w http.ResponseWriter, r *http.Request, suffix string) (settings.Effective, []instances.Model, bool) {
+	ctx, se := r.Context(), session(r)
+	repo, ok := d.targetAny(w, r, suffix, RoleViewer)
+	if !ok {
+		return settings.Effective{}, nil, false
+	}
+	owner, _, err := d.Store.OwnerTeam(ctx, repo.Instance, repo.Project)
+	if err != nil {
+		d.failed(w, r, "reading the owner team", err)
+		return settings.Effective{}, nil, false
+	}
+	choices, msg, err := d.repoChoices(ctx, se, owner)
+	if err != nil {
+		d.failed(w, r, "reading the owner team", err)
+		return settings.Effective{}, nil, false
+	}
+	if choices == nil {
+		writeError(w, http.StatusForbidden, msg)
+		return settings.Effective{}, nil, false
+	}
+	return repo, choices, true
+}
+
+// --- PUT .../chain ---
+
+// putRepoChain gives the repository its own chain, which replaces its owner
+// team's for it alone. The chain records whether an admin saved it: one an
+// admin saved may keep global entries teams may not use (owner ruling
+// 2026-11-20); a maintainer's save may hold only what teams may use.
+func (d *Dashboard) putRepoChain(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	repo, choices, ok := d.repoChainTarget(w, r, "/chain")
+	if !ok {
+		return
+	}
+	refs, msg := decodeChain(r)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if len(refs) == 0 {
+		writeError(w, http.StatusBadRequest, msgEmptyRepoChain)
+		return
+	}
+	in, err := d.chainEntries(ctx)
+	if err != nil {
+		d.failed(w, r, "reading the models", err)
+		return
+	}
+	if msg := checkEntries(refs, choices, in.Entries); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if !d.saveChain(ctx, w, store.Chain{Scope: store.ScopeRepo, Instance: repo.Instance, Project: repo.Project,
+		Entries: refs, SavedByAdmin: se.Admin}) {
+		return
+	}
+	d.Log.Info("dashboard: model chain changed", "chain", "repository", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
+	d.audit(ctx, se, "chain_changed", repo.Instance, repo.Project, "repository: "+entryNames(refs, in.Entries))
+	d.writeRepoChain(w, r, se, repo)
+}
+
+// --- POST .../chain/reset ---
+
+// resetRepoChain drops the repository's own chain: it inherits again. Who
+// may is who may save it. (DELETE on a repository's path is the admins'
+// Remove, so the reset is a POST, as the settings' is.)
+func (d *Dashboard) resetRepoChain(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	repo, _, ok := d.repoChainTarget(w, r, "/chain/reset")
+	if !ok {
+		return
+	}
+	if err := d.Store.ResetRepoChain(ctx, repo.Instance, repo.Project); err != nil {
+		d.Log.Error("dashboard: resetting a model chain failed", "instance", repo.Instance, "project", repo.Project, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	d.Log.Info("dashboard: model chain reset", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
+	d.audit(ctx, se, "chain_changed", repo.Instance, repo.Project, "repository: inherit")
+	d.writeRepoChain(w, r, se, repo)
+}
+
+// chainModelLabel is "provider / model" of position 1 of the chain in
+// effect for repo; "" when there is none or it was removed.
+func (d *Dashboard) chainModelLabel(ctx context.Context, repo settings.Effective) (string, error) {
+	c, _, err := d.repoShown(ctx, repo)
+	if err != nil || len(c.in.Refs) == 0 {
+		return "", err
+	}
+	if m, ok := c.in.Entries[c.in.Refs[0]]; ok {
+		return modelLabel(m.LLM.Provider, m.LLM.Model), nil
+	}
+	return "", nil
 }

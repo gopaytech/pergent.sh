@@ -327,3 +327,236 @@ func (e *env) wantNoSecret(secrets ...string) {
 		}
 	}
 }
+
+// --- repository chains (C3) ---
+
+func repoChainURL(project string) string { return "/api/repositories/main/" + project + "/chain" }
+
+// sharedAndPrivate adds a global entry teams may use and one they may not.
+func (te *teamsEnv) sharedAndPrivate() (shared, private store.LLMModel) {
+	te.t.Helper()
+	shared = te.addModel("openai", "gpt-shared", "", llmKeyOne)
+	private = te.addModel("openai", "gpt-private", "", llmKeyTwo)
+	if found, err := te.st.SetLLMModelMeta(ctx, shared.ID, nil, boolPtr(true), te.clock.now()); err != nil || !found {
+		te.t.Fatal(found, err)
+	}
+	if err := te.reg.LoadLLM(ctx); err != nil {
+		te.t.Fatal(err)
+	}
+	return shared, private
+}
+
+// A repository that inherits shows the chain in effect and where it comes
+// from: its owner team's, else the global one. A viewer may not edit it.
+func TestRepoChainInheritShowsSource(t *testing.T) {
+	te := newTeamsEnv(t)
+	te.addModel("openai", "gpt-default", "", llmKeyOne)
+	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
+	v := getJSON[ChainView](te.env, te.viewer, repoChainURL("acme/payments"))
+	if v.Scope != store.ScopeRepo || v.Source != "global" || !v.ReadOnly || len(v.Choices) != 0 {
+		t.Errorf("owner team with no chain = %+v", v)
+	}
+	decode[ChainView](t, te.sendJSON(te.maintainer, "PUT", teamURL(te.payments, "/chain"), entryBody("team/"+own.ID)), "PUT team chain", http.StatusOK)
+	v = getJSON[ChainView](te.env, te.viewer, repoChainURL("acme/payments"))
+	if v.Source != "team" || v.Team != "Payments" || !slices.Equal(chainRefs(v), []string{"team/" + own.ID}) || v.Entries[0].State != "ready" {
+		t.Errorf("owner team's chain = %+v", v)
+	}
+	v = getJSON[ChainView](te.env, te.maintainer, repoChainURL("acme/payments"))
+	if v.ReadOnly || len(v.Choices) != 1 {
+		t.Errorf("as the owner team's maintainer = %+v", v)
+	}
+	// acme/widgets is Widgets': Payments' maintainer sees it read-only.
+	if v := getJSON[ChainView](te.env, te.maintainer, repoChainURL("acme/widgets")); !v.ReadOnly || v.Source != "global" {
+		t.Errorf("another team's repository = %+v", v)
+	}
+	wantCode(t, te.get(te.maintainer, repoChainURL("acme/none")), "unknown repository", http.StatusNotFound)
+}
+
+// A maintainer of the owner team gives the repository its own chain, from
+// the team's entries and the global ones teams may use; the chain is
+// team-saved and audited on the repository.
+func TestRepoChainCustomByOwnerMaintainer(t *testing.T) {
+	te := newTeamsEnv(t)
+	shared, private := te.sharedAndPrivate()
+	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
+	foreign := te.addTeamModel(te.otherMaintainer, te.widgets, "theirs", teamKeyTwo)
+	url := repoChainURL("acme/payments")
+	for name, tc := range map[string]struct {
+		body map[string]any
+		msg  string
+	}{
+		"not allowed": {entryBody("global/" + private.ID), msgNotTeamsMayUse},
+		"foreign":     {entryBody("team/" + foreign.ID), msgForeignTeamEntry},
+		"empty":       {entryBody(), msgEmptyRepoChain},
+		"config":      {entryBody("global/config"), msgUnknownEntry},
+	} {
+		rec := te.sendJSON(te.maintainer, "PUT", url, tc.body)
+		if rec.Code != http.StatusBadRequest || errorOf(t, rec) != tc.msg {
+			t.Errorf("%s = %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	v := decode[ChainView](t, te.sendJSON(te.maintainer, "PUT", url, entryBody("global/"+shared.ID, "team/"+own.ID)), "PUT", http.StatusOK)
+	if v.Source != "repository" || v.SavedByAdmin || !slices.Equal(chainRefs(v), []string{"global/" + shared.ID, "team/" + own.ID}) {
+		t.Errorf("saved = %+v", v)
+	}
+	c, found, err := te.st.Chain(ctx, store.ScopeRepo, 0, "main", "acme/payments")
+	if err != nil || !found || c.SavedByAdmin || len(c.Entries) != 2 {
+		t.Errorf("stored = %+v, %v, %v", c, found, err)
+	}
+	var got []string
+	for _, a := range te.auditEntries() {
+		if a.Action == "chain_changed" {
+			got = append(got, a.Instance+" "+a.Project+" "+a.Detail)
+		}
+	}
+	if !slices.Equal(got, []string{"main acme/payments repository: openai/gpt-shared, own"}) {
+		t.Errorf("chain_changed = %q", got)
+	}
+}
+
+// A repository with no owner team: only an admin gives it a chain, from
+// global entries only.
+func TestRepoChainNoOwnerAdminOnlyGlobal(t *testing.T) {
+	te := newTeamsEnv(t)
+	_, private := te.sharedAndPrivate()
+	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
+	te.dashboardRepo("main", "acme/gadgets", nil)
+	te.editTeam(te.payments, func(tm *store.Team) {
+		tm.Repos = append(tm.Repos, store.TeamRepo{Instance: "main", Project: "acme/gadgets"})
+	})
+	url := repoChainURL("acme/gadgets")
+	rec := te.sendJSON(te.maintainer, "PUT", url, entryBody("team/"+own.ID))
+	if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgRepoChainNoOwner {
+		t.Errorf("maintainer, no owner = %d %s", rec.Code, rec.Body)
+	}
+	rec = te.sendJSON(te.admin, "PUT", url, entryBody("team/"+own.ID))
+	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgForeignTeamEntry {
+		t.Errorf("admin, team entry, no owner = %d %s", rec.Code, rec.Body)
+	}
+	v := decode[ChainView](t, te.sendJSON(te.admin, "PUT", url, entryBody("global/"+private.ID)), "admin PUT", http.StatusOK)
+	if !v.SavedByAdmin || v.Entries[0].State != "ready" {
+		t.Errorf("admin's chain = %+v", v)
+	}
+}
+
+// [Access] A maintainer of a team that covers but doesn't own the repository,
+// and a viewer of the owner team, get 403 on a write; someone who doesn't
+// see the repository gets 404.
+func TestRepoChainOtherTeam403(t *testing.T) {
+	te := newTeamsEnv(t)
+	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
+	url := repoChainURL("acme/payments")
+	for name, c := range map[string]*http.Cookie{"other maintainer": te.otherMaintainer, "viewer": te.viewer} {
+		rec := te.sendJSON(c, "PUT", url, entryBody("team/"+own.ID))
+		if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgRepoChainWrite {
+			t.Errorf("PUT as %s = %d %s", name, rec.Code, rec.Body)
+		}
+		wantCode(t, te.send(c, "POST", url+"/reset", ""), "reset as "+name, http.StatusForbidden)
+	}
+	stranger := te.sessionFor(te.sso("stranger@example.com"))
+	te.team("elsewhere", []store.TeamMember{{AccountID: te.accountOf(stranger), Role: store.RoleMaintainer}}, store.TeamRepo{Instance: "gh"})
+	wantCode(t, te.sendJSON(stranger, "PUT", url, entryBody("team/"+own.ID)), "PUT as a stranger", http.StatusNotFound)
+	wantCode(t, te.get(stranger, url), "GET as a stranger", http.StatusNotFound)
+	if _, found, _ := te.st.Chain(ctx, store.ScopeRepo, 0, "main", "acme/payments"); found {
+		t.Error("a refused write saved a chain")
+	}
+}
+
+// Reset drops the repository's own chain: it inherits again.
+func TestRepoChainReset(t *testing.T) {
+	te := newTeamsEnv(t)
+	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
+	url := repoChainURL("acme/payments")
+	decode[ChainView](t, te.sendJSON(te.maintainer, "PUT", url, entryBody("team/"+own.ID)), "PUT", http.StatusOK)
+	v := decode[ChainView](t, te.send(te.maintainer, "POST", url+"/reset", ""), "reset", http.StatusOK)
+	if v.Source == "repository" {
+		t.Errorf("after the reset = %+v", v)
+	}
+	if _, found, _ := te.st.Chain(ctx, store.ScopeRepo, 0, "main", "acme/payments"); found {
+		t.Error("the repository chain is still stored")
+	}
+	if r, _ := te.storedRepo("main", "acme/payments"); r.ChainMode == "custom" {
+		t.Errorf("chain mode = %q", r.ChainMode)
+	}
+	if got := auditDetails(te.env, "chain_changed"); !slices.Equal(got, []string{"repository: own", "repository: inherit"}) {
+		t.Errorf("chain_changed = %q", got)
+	}
+}
+
+// [Ruling 2026-11-20] A repository chain an admin saved keeps a global entry
+// teams may not use ready on an owned repository; the owner team's
+// maintainer can't save it as it is, and a save of theirs is team-saved.
+func TestRepoChainAdminSavedKeepsGlobal(t *testing.T) {
+	te := newTeamsEnv(t)
+	shared, private := te.sharedAndPrivate()
+	url := repoChainURL("acme/payments")
+	v := decode[ChainView](t, te.sendJSON(te.admin, "PUT", url, entryBody("global/"+private.ID, "global/"+shared.ID)), "admin PUT", http.StatusOK)
+	if !v.SavedByAdmin || v.Entries[0].State != "ready" {
+		t.Errorf("admin-saved = %+v", v)
+	}
+	if v := getJSON[ChainView](te.env, te.maintainer, url); !v.SavedByAdmin || v.Entries[0].State != "ready" || v.ReadOnly {
+		t.Errorf("as the maintainer sees it = %+v", v)
+	}
+	rec := te.sendJSON(te.maintainer, "PUT", url, entryBody("global/"+private.ID, "global/"+shared.ID))
+	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgNotTeamsMayUse {
+		t.Errorf("maintainer keeps the admin's entry = %d %s", rec.Code, rec.Body)
+	}
+	v = decode[ChainView](t, te.sendJSON(te.maintainer, "PUT", url, entryBody("global/"+shared.ID)), "maintainer PUT", http.StatusOK)
+	if v.SavedByAdmin {
+		t.Errorf("after the maintainer's save = %+v", v)
+	}
+}
+
+// The model is the chain's now: the settings body refuses the key.
+func TestSettingsModelKeyRefused(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	m := e.addModel("openai", "gpt-x", "", llmKeyOne)
+	c := e.signInRole(store.RoleAdmin)
+	for _, body := range []string{`{"model":"` + m.ID + `"}`, `{"model":null}`, `{"approve":false,"model":null}`} {
+		rec := e.send(c, "PUT", gadgetsSettings, body)
+		if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgModelInChain {
+			t.Errorf("PUT %s = %d %s", body, rec.Code, rec.Body)
+		}
+	}
+	v := getJSON[RepositoryDetailView](e, c, gadgetsURL)
+	if _, ok := v.Settings["model"]; ok {
+		t.Errorf("settings still show model: %+v", v.Settings)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.ModelID != nil || r.Approve != nil {
+		t.Errorf("stored = %+v", r)
+	}
+}
+
+// The review page names the entry a run used, its place in the chain, and
+// every attempt of the review with why it fell back.
+func TestRunDetailAttempts(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.userOnMain(false, "acme/widgets")
+	now := e.clock.now()
+	first := e.addRun(runFix{project: "acme/widgets", number: 7, head: head('7'), state: store.Superseded, outcome: OutcomeFellBack,
+		reason: store.ClassQuota, at: now.Add(-2 * time.Hour)})
+	second := e.addRun(runFix{project: "acme/widgets", number: 7, head: head('7'), outcome: OutcomeApproved, approved: true,
+		at: now.Add(-time.Hour)})
+	e.exec(`UPDATE runs SET model_source = 'global', model_entry_id = 'm1', model_entry_name = 'main', chain_position = 1, chain_length = 2
+		WHERE id = $1::uuid`, first)
+	e.exec(`UPDATE runs SET attempt_of = $2::uuid, model_source = 'global', model_entry_id = 'm2', model_entry_name = 'backup',
+		chain_position = 2, chain_length = 2, fallback_class = 'quota' WHERE id = $1::uuid`, second, first)
+	v := getJSON[RunDetailView](e, c, "/api/runs/"+second)
+	if v.Entry == nil || *v.Entry != (RunEntryView{Name: "backup", Position: 2, Length: 2, Source: store.SourceGlobal}) {
+		t.Errorf("entry = %+v", v.Entry)
+	}
+	want := []AttemptView{{RunID: first, Name: "main", Position: 1, Outcome: OutcomeFellBack, Reason: store.ClassQuota},
+		{RunID: second, Name: "backup", Position: 2, Outcome: OutcomeApproved}}
+	if !slices.Equal(v.Attempts, want) {
+		t.Errorf("attempts = %+v\nwant %+v", v.Attempts, want)
+	}
+	if got := getJSON[RunDetailView](e, c, "/api/runs/"+first).Attempts; !slices.Equal(got, want) {
+		t.Errorf("the first attempt's attempts = %+v", got)
+	}
+	// A run of before chains has no entry and no attempts.
+	old := e.addRun(runFix{project: "acme/widgets", number: 8, head: head('8'), outcome: OutcomeApproved})
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+old); v.Entry != nil || len(v.Attempts) != 0 {
+		t.Errorf("old run = %+v, %+v", v.Entry, v.Attempts)
+	}
+}

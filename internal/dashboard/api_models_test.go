@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -244,148 +243,25 @@ func TestSetDefaultReportsFollowers(t *testing.T) {
 	}
 }
 
-// An admin of the repository names a model of the list, and null puts it
-// back to the default; the audit entry says which model.
-func TestAdminSetsAndClearsModel(t *testing.T) {
-	e := newEnv(t, nil)
-	e.dashboardRepo("main", "acme/gadgets", nil)
-	e.addModel("anthropic", "claude-sonnet-4", "", llmKeyOne)
-	two := e.addModel("openai", "gpt-x", modelBaseURL, llmKeyTwo)
-	c := e.signInRole(store.RoleAdmin)
-
-	v := getJSON[RepositoryDetailView](e, c, gadgetsURL)
-	if v.Model != "anthropic / claude-sonnet-4" || v.Settings["model"].Overridden || v.Settings["model"].Value != nil {
-		t.Errorf("before: model %q, setting %+v; want the default's, not overridden, null", v.Model, v.Settings["model"])
-	}
-
-	rec := e.send(c, "PUT", gadgetsSettings, `{"model":"`+two.ID+`"}`)
-	v = decode[RepositoryDetailView](t, rec, "PUT model", http.StatusOK)
-	if v.Model != "openai / gpt-x" || !v.Settings["model"].Overridden || v.Settings["model"].Value != two.ID {
-		t.Errorf("after naming it: model %q, setting %+v", v.Model, v.Settings["model"])
-	}
-	if r, _ := e.storedRepo("main", "acme/gadgets"); r.ModelID == nil || *r.ModelID != two.ID {
-		t.Errorf("stored model = %v, want %s", r.ModelID, two.ID)
-	}
-	// The first entry added is the default, and the choices say so.
-	if len(v.ModelChoices) != 2 || !v.ModelChoices[0].Default || v.ModelChoices[1] != (ModelChoiceView{ID: two.ID, Label: "openai / gpt-x"}) {
-		t.Errorf("choices = %+v", v.ModelChoices)
-	}
-
-	v = decode[RepositoryDetailView](t, e.send(c, "PUT", gadgetsSettings, `{"approve":false,"model":null}`), "PUT null", http.StatusOK)
-	if v.Model != "anthropic / claude-sonnet-4" || v.Settings["model"].Overridden {
-		t.Errorf("after clearing: model %q, setting %+v", v.Model, v.Settings["model"])
-	}
-	if r, _ := e.storedRepo("main", "acme/gadgets"); r.ModelID != nil {
-		t.Errorf("stored model = %v, want none", *r.ModelID)
-	}
-
-	if got := auditDetails(e, "settings_updated"); !slices.Equal(got, []string{"model (openai / gpt-x)", "approve, model (default)"}) {
-		t.Errorf("settings_updated details = %q", got)
-	}
-}
-
-// A maintainer can't give a repository a model, alone or with settings they
-// may change, and nothing of the request is saved.
-func TestMaintainerCannotSetModel(t *testing.T) {
-	e := newEnv(t, nil)
-	e.dashboardRepo("main", "acme/gadgets", nil)
-	m := e.addModel("anthropic", "claude-sonnet-4", "", llmKeyOne)
-	c := e.signInRole(store.RoleMaintainer)
-
-	for _, body := range []string{`{"model":"` + m.ID + `","approve":false}`, `{"model":null}`, `{"model":"` + m.ID + `"}`} {
-		rec := e.send(c, "PUT", gadgetsSettings, body)
-		if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgNeedsAdminModel {
-			t.Errorf("PUT %s = %d %s, want 403 %q", body, rec.Code, rec.Body, msgNeedsAdminModel)
-		}
-	}
-	r, _ := e.storedRepo("main", "acme/gadgets")
-	if r.ModelID != nil || r.Approve != nil {
-		t.Errorf("stored = model %v, approve %v; want nothing saved", r.ModelID, r.Approve)
-	}
-	if got := auditDetails(e, "settings_updated"); len(got) != 0 {
-		t.Errorf("a refused change was audited: %q", got)
-	}
-	// What they may change still works.
-	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"approve":false}`), "approve", http.StatusOK)
-}
-
-// A model that is not in the list, or is not an ID, is 400 and nothing
-// changes: the entry the config supplies counts only while the config has an
-// llm: block.
-func TestUnknownModelIs400(t *testing.T) {
-	e := newEnv(t, nil)
-	e.dashboardRepo("main", "acme/gadgets", nil)
-	e.addModel("anthropic", "claude-sonnet-4", "", llmKeyOne)
-	c := e.signInRole(store.RoleAdmin)
-
-	for _, body := range []string{
-		`{"model":"no-such-entry"}`,
-		`{"model":"config"}`,
-		`{"model":""}`,
-		`{"model":7}`,
-		`{"model":["a"]}`,
-		`{"model":"` + strings.Repeat("x", 300) + `"}`,
-		`{"approve":false,"model":"no-such-entry"}`,
-	} {
-		rec := e.send(c, "PUT", gadgetsSettings, body)
-		if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgUnknownModel {
-			t.Errorf("PUT %.60s = %d %s, want 400 %q", body, rec.Code, rec.Body, msgUnknownModel)
-		}
-	}
-	r, _ := e.storedRepo("main", "acme/gadgets")
-	if r.ModelID != nil || r.Approve != nil {
-		t.Errorf("stored = model %v, approve %v; want nothing saved", r.ModelID, r.Approve)
-	}
-	if !strings.Contains(msgBadSettings, "model") {
-		t.Errorf("msgBadSettings = %q, want it to name model", msgBadSettings)
-	}
-}
-
-// With an llm: block in the config its entry is there to name.
-func TestConfigModelCanBeNamed(t *testing.T) {
-	t.Setenv("PERGENT_TEST_LLM_KEY", llmKeyOne)
-	e := newEnv(t, func(cfg *config.Config) {
-		cfg.LLM = config.LLM{Provider: "anthropic", Model: "from-config", APIKeyEnv: "PERGENT_TEST_LLM_KEY"}
-	})
-	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInRole(store.RoleAdmin)
-	v := decode[RepositoryDetailView](t, e.send(c, "PUT", gadgetsSettings, `{"model":"config"}`), "PUT config", http.StatusOK)
-	if v.Model != "anthropic / from-config" || v.Settings["model"].Value != "config" {
-		t.Errorf("model %q, setting %+v", v.Model, v.Settings["model"])
-	}
-	if r, _ := e.storedRepo("main", "acme/gadgets"); r.ModelID == nil || *r.ModelID != "config" {
-		t.Errorf("stored model = %v", r.ModelID)
-	}
-}
-
-// A maintainer's reset leaves the model, as the caps and the trusted authors;
-// an admin's puts it back to the default and the audit entry says which it was.
-func TestResetByMaintainerKeepsModel(t *testing.T) {
+// A settings reset, by an admin too, leaves the model chain: it has its own
+// reset.
+func TestResetKeepsModelChain(t *testing.T) {
 	e := newEnv(t, nil)
 	m := e.addModel("openai", "gpt-x", "", llmKeyOne)
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.ModelID = &m.ID })
-	c := e.signInRole(store.RoleMaintainer)
-	wantCode(t, e.send(c, "POST", gadgetsSettings+"/reset", ""), "maintainer reset", http.StatusOK)
-	if r, _ := e.storedRepo("main", "acme/gadgets"); r.ModelID == nil || *r.ModelID != m.ID {
-		t.Errorf("after a maintainer's reset the model = %v, want %s kept", r.ModelID, m.ID)
-	}
-	if got := auditDetails(e, "settings_reset"); !slices.Equal(got, []string{""}) {
-		t.Errorf("settings_reset details = %q", got)
-	}
-
 	e.aliceOn("main", store.RoleAdmin)
 	admin := e.aliceSession()
 	wantCode(t, e.send(admin, "POST", gadgetsSettings+"/reset", ""), "admin reset", http.StatusOK)
-	if r, _ := e.storedRepo("main", "acme/gadgets"); r.ModelID != nil {
-		t.Errorf("after an admin's reset the model = %v, want none", *r.ModelID)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.ModelID == nil || *r.ModelID != m.ID || r.ChainMode != "custom" {
+		t.Errorf("after an admin's reset the model = %v, %s; want %s kept", r.ModelID, r.ChainMode, m.ID)
 	}
-	if got := auditDetails(e, "settings_reset"); !slices.Equal(got, []string{"", "model (default, was openai / gpt-x)"}) {
+	if got := auditDetails(e, "settings_reset"); !slices.Equal(got, []string{""}) {
 		t.Errorf("settings_reset details = %q", got)
 	}
 }
 
 // Anyone who sees a repository sees the name of its model, never the base URL
-// or key, and has no choices to make.
+// or key.
 func TestViewerSeesModelNameNotBaseURL(t *testing.T) {
 	e := newEnv(t, nil)
 	e.addModel("anthropic", "claude-sonnet-4", "", llmKeyOne)
@@ -399,9 +275,6 @@ func TestViewerSeesModelNameNotBaseURL(t *testing.T) {
 	if v.Role != "viewer" || v.Model != "openai / gpt-x" {
 		t.Errorf("role %q, model %q; want a viewer who sees the name", v.Role, v.Model)
 	}
-	if len(v.ModelChoices) != 0 || !strings.Contains(rec.Body.String(), `"modelChoices":[]`) {
-		t.Errorf("a viewer's choices = %+v in %s, want []", v.ModelChoices, rec.Body)
-	}
 	if got := getJSON[RepositoryDetailView](e, viewer, "/api/repositories/main/acme/gizmos").Model; got != "anthropic / claude-sonnet-4" {
 		t.Errorf("a repository that follows the default shows %q", got)
 	}
@@ -411,7 +284,7 @@ func TestViewerSeesModelNameNotBaseURL(t *testing.T) {
 		}
 	}
 
-	// An admin's choices are names too.
+	// An admin's view has no base URL or key either.
 	admin := e.signInRole(store.RoleAdmin)
 	rec = e.get(admin, gadgetsURL)
 	for _, secret := range []string{modelBaseURL, "llm-gateway", llmKeyOne, llmKeyTwo} {

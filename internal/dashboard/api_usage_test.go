@@ -452,3 +452,24 @@ func TestUsageOverviewClientsEmptyAndCapped(t *testing.T) {
 		t.Errorf("client = %+v, want every review counted and the busiest tenant first", got.Clients[0])
 	}
 }
+
+// Usage tells apart tokens spent on global keys and on teams' keys, per
+// repository.
+func TestUsageSplitsSource(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	team := e.team("Payments", nil)
+	now := e.clock.now()
+	global := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('1'), at: now.Add(-2 * time.Hour)})
+	teamRun := e.addRun(runFix{project: "acme/widgets", number: 2, head: head('2'), at: now.Add(-time.Hour)})
+	e.exec(`UPDATE runs SET model_source = 'team', model_team_id = $2 WHERE id = $1::uuid`, teamRun, team)
+	for id, n := range map[string]int64{global: 100, teamRun: 40} {
+		if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{usageSkill("security", "no_blocking_issues", n, n/10)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v := getJSON[UsageOverviewView](e, c, "/api/admin/usage")
+	if len(v.Repositories) != 1 || v.Repositories[0].GlobalTokens != 110 || v.Repositories[0].TeamTokens != 44 {
+		t.Errorf("repositories = %+v", v.Repositories)
+	}
+}

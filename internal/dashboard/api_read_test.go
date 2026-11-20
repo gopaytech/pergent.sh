@@ -1084,7 +1084,7 @@ func TestRepositoryDetail(t *testing.T) {
 		`"failureStatus":{"value":"failed","overridden":false},` +
 		`"incrementalReviews":{"value":true,"overridden":false},"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
 		`"learnFromDismissals":{"value":true,"overridden":false},"linkedRepos":{"value":[],"overridden":false},"linkedReposEnabled":{"value":false,"overridden":false},` +
-		`"maxTurns":{"value":40,"overridden":false},"model":{"value":null,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
+		`"maxTurns":{"value":40,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true},` +
 		`"trustedAuthors":{"value":[],"overridden":false},"trustedAuthorsOnly":{"value":"follow_visibility","overridden":false}}`

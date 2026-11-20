@@ -89,7 +89,8 @@ func (d *Dashboard) usageOverview(w http.ResponseWriter, r *http.Request) {
 	for _, u := range repos {
 		e, there := switchedOn[repoKey(u.Instance, u.ProjectPath)]
 		out.Repositories = append(out.Repositories, UsageRepositoryRowView{Instance: u.Instance, Project: u.ProjectPath,
-			SwitchedOn: there && !e.Paused, Paused: there && e.Paused, Tokens: usageTokens(u.Tokens), Reviews: u.Reviews})
+			SwitchedOn: there && !e.Paused, Paused: there && e.Paused, Tokens: usageTokens(u.Tokens), Reviews: u.Reviews,
+			GlobalTokens: u.GlobalTokens, TeamTokens: u.TeamTokens})
 		total.Add(u.Tokens)
 		// A run belongs to one repository, so the counts add up.
 		out.Reviews += u.Reviews

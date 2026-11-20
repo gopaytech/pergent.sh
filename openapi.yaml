@@ -1738,6 +1738,98 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/chain:
+    get:
+      operationId: getRepositoryChain
+      tags: [Repositories]
+      summary: A repository's model chain
+      description: |
+        Anyone who sees the repository. The chain in effect and where it comes
+        from: the repository's own (`repository`), its owner team's (`team`)
+        or the global one. Read-only unless the session is an admin or a
+        maintainer of the owner team.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The chain.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putRepositoryChain
+      tags: [Repositories]
+      summary: Give a repository its own model chain
+      description: |
+        Admins and maintainers of the repository's owner team; 403 for anyone
+        else who sees it (a viewer, a maintainer of another team; only admins
+        for a repository with no owner team), 404 for anyone who does not. It
+        replaces the owner team's chain for this repository. An admin picks any
+        global entry and the owner team's entries; a maintainer the team's
+        entries and the global entries teams may use. Another team's entry,
+        or an entry that is not one of those, is 400, and so is no entry. The
+        chain records whether an admin saved it: one an admin saved keeps
+        global entries teams may not use. Audited as `chain_changed`.
+      x-pergent-access: session
+      x-pergent-pattern: PUT /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChainRequest'}
+      responses:
+        '200':
+          description: The chain saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/chain/reset:
+    post:
+      operationId: resetRepositoryChain
+      tags: [Repositories]
+      summary: Drop a repository's own model chain
+      description: |
+        Who may save the chain. The repository inherits again: its owner
+        team's chain, else the global one. Audited as `chain_changed`
+        (`repository: inherit`).
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The chain in effect now.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/graph:
     put:
       operationId: putRepositoryGraph
@@ -5159,14 +5251,6 @@ components:
             The tokens (in plus out) the repository's reviews may use in a UTC
             calendar month. A whole number: a fraction, a string or a number
             above the maximum is 400. Null means no quota of its own.
-        model:
-          type: [string, 'null']
-          description: |
-            The ID of an entry of the list of models (`GET /api/admin/models`)
-            the repository runs on; null follows the default. Admins of the
-            repository only (403 for a maintainer). An ID that is not in the
-            list is 400, and so is `config` while the config file has no `llm:`
-            block.
     StartRequest:
       type: object
       required: [head]
@@ -5954,18 +6038,37 @@ components:
                 type: string
                 enum: [global, team]
               id: {type: string}
-    ModelChoiceView:
-      description: An entry of the list a repository can be given, never with its base URL or key.
+    RunEntryView:
+      description: The chain entry a run ran on, by the name it had then.
       type: object
-      required: [id, label, default]
+      required: [name, position, length, source, team]
       properties:
-        id: {type: string}
-        label:
+        name: {type: string}
+        position:
+          type: integer
+          description: Its place in the chain in effect, from 1. Above 1 the run is a backup.
+        length: {type: integer}
+        source:
           type: string
-          description: '`provider / model`.'
-        default:
-          type: boolean
-          description: True for the entry reviews use when a repository names none, which is what choosing the default gives.
+          enum: [global, team]
+        team:
+          type: string
+          description: The team of a team entry; empty for a global one, or a team since removed.
+    AttemptView:
+      description: One attempt of a review. An attempt the provider refused (quota, billing, auth) is dropped for the next entry.
+      type: object
+      required: [runId, name, position, outcome, reason]
+      properties:
+        runId: {type: string, format: uuid}
+        name: {type: string}
+        position: {type: integer}
+        outcome:
+          type: string
+          description: The run's outcome; `fell_back` for a dropped attempt, empty while it runs.
+        reason:
+          type: string
+          enum: ['', quota, billing, auth]
+          description: Why a dropped attempt fell back; empty otherwise.
     APILimitsView:
       description: The caps on a client's requests.
       type: object
@@ -6403,7 +6506,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, modelChoices, quota, graph]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, quota, graph]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -6413,9 +6516,9 @@ components:
             learnFromDismissals, quietReviews, checkDeleted, ciJobs (a CIJobsView), commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly (the mode in
             effect, follow_visibility, on or off), trustedAuthors (a list of TrustedAuthor)
-            model (the ID of the entry of the list of models the repository names, null
-            while it follows the default) and monthlyTokenQuota (the repository's token quota
-            per UTC month, null for none; left out for anyone but an admin).
+            and monthlyTokenQuota (the repository's token quota per UTC month, null for
+            none; left out for anyone but an admin). The model is the model chain's
+            (`GET .../chain`).
         attention:
           type: array
           items: {$ref: '#/components/schemas/AttentionView'}
@@ -6434,12 +6537,8 @@ components:
         model:
           type: string
           description: |
-            `provider / model` the repository's reviews run on: the entry it names, else the default.
-            Empty when there is none. Never the base URL or the key.
-        modelChoices:
-          type: array
-          items: {$ref: '#/components/schemas/ModelChoiceView'}
-          description: The entries of the list the repository can be given; empty unless the session is an admin of the repository.
+            `provider / model` of position 1 of the model chain in effect (`GET .../chain`).
+            Empty when the chain is empty or that entry was removed. Never the base URL or the key.
         quota:
           description: This month's tokens against the repository's and its instance's quotas. Null for anyone but an admin, and when the usage could not be read.
           oneOf:
@@ -6671,8 +6770,17 @@ components:
     RunDetailView:
       description: One run. A run without a usable result has no skills or files.
       type: object
-      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, provider, maxTurns, quiet, incrementalNote, ciJobs, ciDeadline, tokens, files, skills, latestDecided]
+      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, provider, maxTurns, quiet, incrementalNote, ciJobs, ciDeadline, tokens, files, skills, latestDecided, entry, attempts]
       properties:
+        entry:
+          description: The chain entry the run ran on; null for a run that recorded none.
+          oneOf:
+            - $ref: '#/components/schemas/RunEntryView'
+            - type: 'null'
+        attempts:
+          type: array
+          items: {$ref: '#/components/schemas/AttemptView'}
+          description: Every attempt of the review, oldest first, this run included; empty for a review of one attempt.
         run: {$ref: '#/components/schemas/RunSummary'}
         instance: {type: string}
         project: {type: string}
@@ -7199,8 +7307,16 @@ components:
     UsageRepositoryRowView:
       description: One repository in `GET /api/admin/usage`.
       type: object
-      required: [instance, project, switchedOn, paused, tokens, reviews]
+      required: [instance, project, switchedOn, paused, tokens, reviews, globalTokens, teamTokens]
       properties:
+        globalTokens:
+          type: integer
+          format: int64
+          description: Tokens (in plus out) on global keys. The instance quota counts these only.
+        teamTokens:
+          type: integer
+          format: int64
+          description: Tokens (in plus out) on teams' own keys.
         instance: {type: string}
         project:
           type: string
