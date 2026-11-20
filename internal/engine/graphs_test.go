@@ -470,3 +470,36 @@ func TestCompleteGraphConverterOutput(t *testing.T) {
 		t.Errorf("row = %+v", g)
 	}
 }
+
+// A paused repository keeps its graph: a build that ends while it is paused
+// still stores, a queued one is not started (and nothing is deleted), and no
+// head check reads the platform.
+func TestGraphWhilePaused(t *testing.T) {
+	env := graphEnv(t, true)
+	storeTestGraph(t, env, "main", sha('d'))
+	id, token := startedBuild(t, env, "main", sha('e'))
+	pause(t, env, testProjectPath, false)
+	if out, err := env.Engine.CompleteGraph(env.ctx, id, token, testGraphFile(t, sha('e'))); err != nil || out != codegraph.Stored {
+		t.Fatalf("CompleteGraph = %v, %v", out, err)
+	}
+	g, ok := repoGraph(t, env)
+	if !ok || g.Commit != sha('e') {
+		t.Fatalf("after a paused build = %+v, %v; want the new graph stored", g, ok)
+	}
+	if ok, err := env.Store.QueueGraphBuild(env.ctx, testInstance, testProjectPath, "main", sha('f'), env.Now()); err != nil || !ok {
+		t.Fatalf("QueueGraphBuild = %v, %v", ok, err)
+	}
+	env.Engine.launchGraphs(env.ctx)
+	g, ok = repoGraph(t, env)
+	if !ok || g.Commit != sha('e') || g.BuildState != store.GraphBuildNone {
+		t.Errorf("after a launch while paused = %+v, %v; want the graph kept, the build dropped", g, ok)
+	}
+	if _, err := os.Stat(env.Engine.graphPath(testInstance, testProjectPath)); err != nil {
+		t.Errorf("the file is gone: %v", err)
+	}
+	serveScanRepo(env, testProjectID, testProjectPath, sha('c'))
+	env.Engine.checkGraphHead(env.ctx, testInstance, testProjectPath)
+	if n := len(env.GitLab.Requests(http.MethodGet, "/projects/7/repository/commits/main")); n != 0 {
+		t.Errorf("a paused repository's head was read %d times", n)
+	}
+}

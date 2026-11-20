@@ -34,6 +34,7 @@ const (
 	MsgStart     = "couldn't start the graph build Job; see the pergent.sh log"
 	MsgTarget    = "couldn't read the repository's default branch or clone token; see the pergent.sh log"
 	MsgStore     = "couldn't store the graph; see the pergent.sh log"
+	MsgPaused    = "the repository was paused before the build started; it builds again after it is switched on"
 )
 
 // shown maps each message a Job may send to what the dashboard shows.

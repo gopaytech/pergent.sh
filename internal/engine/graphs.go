@@ -118,14 +118,16 @@ func (e *Engine) RunGraphs(ctx context.Context) {
 	}
 }
 
-// graphOn reports whether instance's repository project is switched on, not
-// paused, and has its Code graph switch on.
-func (e *Engine) graphOn(ctx context.Context, instance, project string) (bool, error) {
-	eff, ok, err := e.settings().Get(ctx, instance, project)
+// graphOn reports whether instance's repository project has its Code graph
+// switch on, paused or not (a paused repository keeps its graph), and whether
+// it is paused. A repository that is gone, or comes from the config file, is
+// off.
+func (e *Engine) graphOn(ctx context.Context, instance, project string) (on, paused bool, err error) {
+	eff, ok, err := e.settings().GetAny(ctx, instance, project)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return ok && eff.GraphContext, nil
+	return ok && eff.GraphContext, ok && eff.Paused, nil
 }
 
 // checkGraphHead reads the default branch head of a repository with the
@@ -134,7 +136,7 @@ func (e *Engine) graphOn(ctx context.Context, instance, project string) (bool, e
 // check after the gap tries again.
 func (e *Engine) checkGraphHead(ctx context.Context, instance, project string) {
 	log := e.log().With("instance", instance, "project", project)
-	if on, err := e.graphOn(ctx, instance, project); err != nil || !on {
+	if on, paused, err := e.graphOn(ctx, instance, project); err != nil || !on || paused {
 		if err != nil {
 			log.Info("code graph: couldn't read the repository's settings", "error", e.redact(err.Error()))
 		}
@@ -295,14 +297,18 @@ func (e *Engine) launchGraphs(ctx context.Context) {
 // the build.
 func (e *Engine) startGraph(ctx context.Context, g store.RepoGraph) {
 	log := e.log().With("build", g.BuildID, "instance", g.Instance, "project", g.Project)
-	on, err := e.graphOn(ctx, g.Instance, g.Project)
-	if err != nil {
+	on, paused, err := e.graphOn(ctx, g.Instance, g.Project)
+	switch {
+	case err != nil:
 		log.Error("code graph: couldn't read the repository's settings", "error", e.redact(err.Error()))
 		e.failGraph(ctx, g.BuildID, codegraph.MsgTarget)
 		return
-	}
-	if !on {
+	case !on:
 		e.DropGraph(ctx, g.Instance, g.Project)
+		return
+	case paused:
+		// Its graph stays; the next head check after the resume builds.
+		e.failGraph(ctx, g.BuildID, codegraph.MsgPaused)
 		return
 	}
 	pctx, cancel := context.WithTimeout(ctx, graphPodBudget)
@@ -415,9 +421,10 @@ func (e *Engine) CompleteGraph(ctx context.Context, id, token string, body []byt
 
 	e.graphMu.Lock()
 	defer e.graphMu.Unlock()
-	// Switched off since the build started: DropGraph has run, or will
-	// find nothing to delete; nothing is written.
-	if on, err := e.graphOn(ctx, g.Instance, g.Project); err != nil {
+	// Switched off since the build started (or removed): DropGraph has
+	// run, or will find nothing to delete; nothing is written. A paused
+	// repository keeps its graph, so its build is stored.
+	if on, _, err := e.graphOn(ctx, g.Instance, g.Project); err != nil {
 		return 0, err
 	} else if !on {
 		e.dropGraphLocked(ctx, g.Instance, g.Project)
@@ -543,7 +550,7 @@ func (e *Engine) RunGraph(ctx context.Context, runID, token string) (*os.File, e
 	if !ok {
 		return nil, codegraph.ErrNoGraph
 	}
-	if on, err := e.graphOn(ctx, r.Instance, r.Project); err != nil {
+	if on, _, err := e.graphOn(ctx, r.Instance, r.Project); err != nil {
 		return nil, err
 	} else if !on {
 		return nil, codegraph.ErrNoGraph
