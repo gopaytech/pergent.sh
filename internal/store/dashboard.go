@@ -302,15 +302,19 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return err
 	}
-	if err := lockModel(ctx, tx, r.ModelID); err != nil {
-		return err
-	}
 	var oldModel *string
 	err = tx.QueryRow(ctx, `SELECT model_id FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2) FOR UPDATE`,
 		r.Instance, r.Project).Scan(&oldModel)
 	existed := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
+	}
+	// Only a model the save gives must be in the list: one kept may have
+	// been removed since (its chain skips it).
+	if !existed || !samePtr(oldModel, r.ModelID) {
+		if err := lockModel(ctx, tx, r.ModelID); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
@@ -422,7 +426,7 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 // of the row stays. found is false, and nothing is created, when there is no
 // such row. Each library skill the new Skills names is locked until the
 // change is stored, so it can't be deleted meanwhile; one that is not in the
-// library is ErrSkillNotFound and nothing is written. The new ModelID is
+// library is ErrSkillNotFound and nothing is written. A changed ModelID is
 // locked the same way; one that is not in the list is ErrModelNotFound.
 func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project string, apply func(*DashboardRepo)) (found bool, err error) {
 	tx, err := s.pool.Begin(ctx)
@@ -460,8 +464,12 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return false, err
 	}
-	if err := lockModel(ctx, tx, r.ModelID); err != nil {
-		return false, err
+	// Only a new model must be in the list: one kept may have been removed
+	// since (its chain skips it).
+	if !samePtr(oldModel, r.ModelID) {
+		if err := lockModel(ctx, tx, r.ModelID); err != nil {
+			return false, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET approve = $3, review_drafts = $4, failure_status = $5,
 			skills = $6, repo_skills = $7, job_timeout_seconds = $8, max_turns = $9, job_memory = $10,

@@ -748,3 +748,28 @@ func TestLLMModelNameNullReadsProviderModel(t *testing.T) {
 		t.Errorf("created with no name = %+v; want openai/gpt-5", m)
 	}
 }
+
+// A repository whose model was removed (the removal is no longer refused)
+// still saves its other settings: only a new model must be in the list.
+func TestSaveRepoAfterItsModelWasRemoved(t *testing.T) {
+	s := newStore(t)
+	newModel(t, s, "anthropic", "sonnet", "", nil)
+	b := newModel(t, s, "openai", "gpt", "", nil)
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web", ModelID: &b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteLLMModel(ctx, b.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	if found, err := s.UpdateDashboardRepo(ctx, "lab", "acme/web", func(r *DashboardRepo) { r.Approve = &off }); err != nil || !found {
+		t.Fatalf("UpdateDashboardRepo of another setting = %v, %v; want saved", found, err)
+	}
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web", ModelID: &b.ID}); err != nil {
+		t.Fatalf("UpsertDashboardRepo keeping the removed model = %v; want saved", err)
+	}
+	other := "no-such-model"
+	if _, err := s.UpdateDashboardRepo(ctx, "lab", "acme/web", func(r *DashboardRepo) { r.ModelID = &other }); !errors.Is(err, ErrModelNotFound) {
+		t.Errorf("a new model not in the list = %v; want ErrModelNotFound", err)
+	}
+}
