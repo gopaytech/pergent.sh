@@ -40,6 +40,10 @@ type Result struct {
 	// skills' failures (a completed result only; nil from a pergent that
 	// doesn't classify them). It is what a fallback is decided from.
 	ProviderError *ProviderError `json:"provider_error,omitempty"`
+	// Rules is set by a pergent that runs with path rules: whether its
+	// built-ins were on and how many entries it used. nil from an older
+	// image, whose review page says it does not use rules.
+	Rules *RulesInfo `json:"rules,omitempty"`
 
 	// Merged is set by Merge on a result that carries kept skills of an
 	// earlier run: its comment covers only the skills that were re-run, so
@@ -168,6 +172,22 @@ type Files struct {
 	// --check-deleted and are absent from an older result.
 	Deleted []string  `json:"deleted,omitempty"`
 	Renamed []Renamed `json:"renamed,omitempty"`
+	// Rules is the path rule each reviewed file was checked with, for the
+	// files that had one; absent from an older result.
+	Rules []FileRule `json:"rules,omitempty"`
+}
+
+// FileRule is the rule a reviewed file was checked with: "repo:<glob>",
+// "dashboard:<set>:<glob>" or "built-in:<name>".
+type FileRule struct {
+	Path string `json:"path"`
+	Rule string `json:"rule"`
+}
+
+// RulesInfo is a result's top-level rules object.
+type RulesInfo struct {
+	BuiltIn bool `json:"built_in"`
+	Entries int  `json:"entries"`
 }
 
 // RedactedMarker is the text pergent writes in place of a credential when it
@@ -292,6 +312,9 @@ func ToRender(r *Result) []render.Skill {
 		rs.Deleted = s.Files.Deleted
 		for _, f := range s.Files.Renamed {
 			rs.Renamed = append(rs.Renamed, render.Rename{Path: f.Path, From: f.From})
+		}
+		for _, f := range s.Files.Rules {
+			rs.FileRules = append(rs.FileRules, render.FileRule{Path: f.Path, Rule: f.Rule})
 		}
 		for _, sum := range s.Summaries {
 			rs.Summaries = append(rs.Summaries, render.Summary{Batch: sum.Batch, Text: sum.Text})
@@ -767,6 +790,11 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 			return nil, err
 		}
 	}
+	if rules := carriedRules(fresh, earlier); len(rules) > len(fresh.Files.Rules) {
+		if files["rules"], err = json.Marshal(rules); err != nil {
+			return nil, err
+		}
+	}
 	if m["files"], err = json.Marshal(files); err != nil {
 		return nil, err
 	}
@@ -806,6 +834,24 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 		}
 	}
 	return json.Marshal(m)
+}
+
+// carriedRules is the files.rules of a merged skill: the new run's entries,
+// then the last review's for the files the merge carries. A carry happens
+// only when the rules did not change, so the old entries still hold.
+func carriedRules(fresh, earlier Skill) []FileRule {
+	rules := slices.Clone(fresh.Files.Rules)
+	for _, p := range fresh.Files.Carried {
+		if slices.Contains(fresh.Files.Reviewed, p) {
+			continue
+		}
+		for _, fr := range earlier.Files.Rules {
+			if fr.Path == p && !slices.ContainsFunc(rules, func(x FileRule) bool { return x.Path == p }) {
+				rules = append(rules, fr)
+			}
+		}
+	}
+	return rules
 }
 
 // carriedMarks is the files.deleted and files.renamed of a merged skill: the
