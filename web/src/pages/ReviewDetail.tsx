@@ -247,6 +247,10 @@ const droppedText: Record<string, string> = {
   auth: "key rejected",
 };
 
+// reasonText is a run's reason as people read it. A dropped attempt's reason
+// is the class it fell back on (quota, billing or auth), said in words.
+const reasonText = (outcome: string, reason: string) => (outcome === "fell_back" ? (droppedText[reason] ?? reason) : reason);
+
 // entryText is the chain entry a run ran on and its place in the chain.
 const entryText = (e: NonNullable<RunDetailView["entry"]>) =>
   `Model chain: ${e.name} · entry ${e.position} of ${e.length} · ${e.source === "team" ? `team ${e.team}` : "global"}`;
@@ -289,14 +293,14 @@ function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
     <>
       {run.run.outcome === "fell_back" && (
         <div>
-          <OutcomePill outcome="fell_back" /> The provider refused this model ({droppedText[run.run.reason] ?? run.run.reason}), so
+          <OutcomePill outcome="fell_back" /> The provider refused this model ({reasonText(run.run.outcome, run.run.reason)}), so
           the review started again on the next model of the chain.
         </div>
       )}
       <div>
         Status on {platform}: {run.status ? <Pill tone={statusTone[run.status] ?? "grey"}>{run.status}</Pill> : "none"}
       </div>
-      <div>{run.approved ? "Approved: yes" : `Approved: no — ${run.approvalReason || "not approved"}`}</div>
+      <div>{run.approved ? "Approved: yes" : `Approved: no — ${reasonText(run.run.outcome, run.approvalReason) || "not approved"}`}</div>
       <div>
         pergent <span className="mono">{run.pergentVersion || "not recorded"}</span> · model{" "}
         <span className="mono">{modelText(run.provider, run.model)}</span> · max steps{" "}
@@ -448,7 +452,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
       <section className="card" aria-label="Skills">
         <h2>Skills</h2>
         {view.skills.length === 0 && (
-          <div className="verdict prose">This run has no skill results: {view.approvalReason || view.run.reason || "no usable review."}</div>
+          <div className="verdict prose">This run has no skill results: {reasonText(view.run.outcome, view.approvalReason || view.run.reason) || "no usable review."}</div>
         )}
         {view.skills.map((s) => (
           <div className="verdict" key={s.name}>
