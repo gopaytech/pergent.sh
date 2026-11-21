@@ -57,6 +57,7 @@ func newPanelE2E(t *testing.T, a, b []string) *e2e {
 	t.Helper()
 	panelFloor(t, "v0.5.0")
 	e, _ := newFallbackE2E(t, a...)
+	e.env.Engine.ScanImage = testScanImage
 	savePanelChain(t, e.env, b...)
 	return e
 }
@@ -725,6 +726,23 @@ func TestE2EPanelMemberPostsNothing(t *testing.T) {
 		t.Errorf("member B = %s %q; want failed for the commit", got.State, got.FailureReason)
 	}
 	wantReleased(t, env, id, before)
+
+	// Job P starts: still nothing is posted, not even its running status
+	// (the first member set it). Only P's own publish posts.
+	dispatch(t, env)
+	if env.Job(id) == nil {
+		t.Fatalf("no Job P\n%s", env.Logs())
+	}
+	wantNothingPosted(t, env)
+	if code := e.postResult(t, id, string(env.Secret(id).Data["result-token"]), clean(t, head)); code != http.StatusOK {
+		t.Fatalf("P's result: status %d\n%s", code, env.Logs())
+	}
+	wantNothingPosted(t, env)
+	publish(t, env)
+	wantPublished(t, env, id)
+	if n := len(env.GitLab.Requests(http.MethodPost, notesPath(1))); n != 1 {
+		t.Errorf("%d comments after P's publish; want 1", n)
+	}
 }
 
 // wantReleased checks run id was released for Job P: queued again with no
@@ -1272,4 +1290,582 @@ func TestE2EPanelAFallsBack(t *testing.T) {
 		t.Errorf("member B = %s; want the same member, running", got.State)
 	}
 	wantWaiting(t, env, id)
+}
+
+// releasedPanel splits a review of head on merge request 1, starts both
+// member Jobs, posts bodyA and bodyB as their results (nil: none) and
+// publishes, which settles them and releases the run for Job P. It returns
+// the run and members A and B.
+func releasedPanel(t *testing.T, e *e2e, head string, bodyA, bodyB []byte) (string, store.PanelMember, store.PanelMember) {
+	t.Helper()
+	id, a, b := startMembers(t, e, head)
+	for _, c := range []struct {
+		m    store.PanelMember
+		body []byte
+	}{{a, bodyA}, {b, bodyB}} {
+		if c.body == nil {
+			continue
+		}
+		if code := e.postMember(t, id, c.m, c.body); code != http.StatusOK {
+			t.Fatalf("member %s's result: status %d\n%s", c.m.Role, code, e.env.Logs())
+		}
+	}
+	publish(t, e.env)
+	if r := e.env.Run(id); r.State != store.Queued || r.SkipReason != "" {
+		t.Fatalf("run = %s/%q; want released for Job P\n%s", r.State, r.SkipReason, e.env.Logs())
+	}
+	return id, a, b
+}
+
+// getPanel reads role's member result on run id's panel route with token,
+// and returns the status and the body.
+func (e *e2e) getPanel(t *testing.T, id, role, token string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, e.srv.URL+"/runs/"+id+"/panel/"+role, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := e.srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var b bytes.Buffer
+	_, _ = b.ReadFrom(resp.Body)
+	return resp.StatusCode, b.String()
+}
+
+// panelJudges is the judge entries of Job P run id, by role.
+func panelJudges(t *testing.T, env *testEnv, id string) map[string]store.RunEntry {
+	t.Helper()
+	js, err := env.Store.PanelJudges(env.ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return js
+}
+
+// secretKeys is the sorted keys of run or member id's Secret.
+func secretKeys(env *testEnv, id string) []string {
+	return slices.Sorted(maps.Keys(env.Secret(id).Data))
+}
+
+// hasEnv reports whether the pergent container of id's Job names the
+// variable name.
+func hasEnv(env *testEnv, id, name string) bool {
+	for _, v := range env.Job(id).Spec.Template.Spec.Containers[0].Env {
+		if v.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// withRoleError is body with a provider_error of class on the judge run of
+// role.
+func withRoleError(t *testing.T, body []byte, class, role string) []byte {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["provider_error"] = map[string]any{"class": class, "status": 429, "provider": "openai", "model": "gpt", "role": role}
+	out, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Both members are done: the run's next dispatch starts one Job P on the
+// run, with --panel and its own 10 minute timeout, model A's key as
+// llm-api-key and model B's as llm-api-key-b, model B in PERGENT_PANEL_B_*,
+// and the panel-inputs container fetching both results from the panel
+// route with P's own token. Each role's judge entry is recorded. No key is
+// in a label, an annotation, the ConfigMap or the log, and nothing is
+// posted. The route serves each done member's result to P's token alone.
+func TestE2EPanelJobP(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	bodyA, bodyB := clean(t, head), skillsResult(t, head, "security")
+	id, a, b := releasedPanel(t, e, head, bodyA, bodyB)
+	env.GitLab.Reset()
+
+	dispatch(t, env)
+	job := env.Job(id)
+	if job == nil {
+		t.Fatalf("no Job P\n%s", env.Logs())
+	}
+	merges := 0
+	for _, j := range env.Jobs() {
+		if j.Labels[kube.LabelPanelRole] == kube.PanelRoleMerge {
+			merges++
+		}
+	}
+	if merges != 1 || job.Labels[kube.LabelPanelRole] != kube.PanelRoleMerge || job.Labels["pergent.sh/run"] != id {
+		t.Errorf("%d merge Jobs, labels %v; want one Job P of the run", merges, job.Labels)
+	}
+	args := job.Spec.Template.Spec.Containers[0].Args
+	for _, want := range []string{"--panel", "--panel-a=" + kube.PanelAFile, "--panel-b=" + kube.PanelBFile,
+		"--timeout=10m0s", "--base=" + sha('b'), "--result-url=" + testCallbackURL + "/runs/" + id + "/result"} {
+		if !hasArg(args, want) {
+			t.Errorf("P's args %v lack %q", args, want)
+		}
+	}
+	for _, bad := range []string{"--panel-no-judge", "--no-skill-verify"} {
+		if hasArg(args, bad) {
+			t.Errorf("P's args %v hold %q", args, bad)
+		}
+	}
+	if got := secretKeys(env, id); !slices.Equal(got, []string{"git-token", "llm-api-key", "llm-api-key-b", "result-token"}) {
+		t.Errorf("P's Secret keys = %v; want both LLM keys", got)
+	}
+	sec := env.Secret(id)
+	if string(sec.Data["llm-api-key"]) != "key-team-a" || string(sec.Data["llm-api-key-b"]) != "key-team-b" {
+		t.Errorf("P's keys = %q, %q; want A's and B's", sec.Data["llm-api-key"], sec.Data["llm-api-key-b"])
+	}
+	vars := jobEnv(env, id)
+	for k, want := range map[string]string{"OPENCODE_PROVIDER": "openai", "OPENCODE_MODEL": "gpt-team-a",
+		"PERGENT_PANEL_B_PROVIDER": "openai", "PERGENT_PANEL_B_MODEL": "gpt-team-b"} {
+		if vars[k] != want {
+			t.Errorf("P's %s = %q, want %q", k, vars[k], want)
+		}
+	}
+	for _, k := range []string{"OPENCODE_API_KEY", "PERGENT_PANEL_B_API_KEY"} {
+		if !hasEnv(env, id, k) {
+			t.Errorf("P's env lacks %s", k)
+		}
+	}
+	var fetch *corev1.Container
+	for i, c := range job.Spec.Template.Spec.InitContainers {
+		if c.Name == "panel-inputs" {
+			fetch = &job.Spec.Template.Spec.InitContainers[i]
+		}
+	}
+	if fetch == nil || fetch.Image != testScanImage ||
+		!hasArg(fetch.Args, "--a-url="+testCallbackURL+"/runs/"+id+"/panel/a") ||
+		!hasArg(fetch.Args, "--b-url="+testCallbackURL+"/runs/"+id+"/panel/b") {
+		t.Errorf("panel-inputs container = %+v; want get-panel of both roles on pergent.sh's image", fetch)
+	}
+	wantDeadline := int64(kube.Deadline(kube.PanelTimeout+kube.PanelFetchTimeout, kube.CloneAllowance(0, 0)) / time.Second)
+	if got := jobDeadline(t, env, id); got != wantDeadline {
+		t.Errorf("P's deadline = %ds; want %ds (10 min, the fetch, a clone with no linked repository)", got, wantDeadline)
+	}
+	js := panelJudges(t, env, id)
+	if len(js) != 2 || js["a"].ID != a.Entry.ID || js["a"].Name != "team-a" || js["b"].ID != b.Entry.ID ||
+		js["b"].Name != "team-b" || js["b"].Length != 1 {
+		t.Errorf("judges = %+v; want A's and B's entries", js)
+	}
+	if r := env.Run(id); r.State != store.Running || r.JobName != kube.JobName(id) || r.BaseSHA != sha('b') {
+		t.Errorf("run = %s job %q base %q; want running with Job P on the split's base", r.State, r.JobName, r.BaseSHA)
+	}
+	meta := maps.Clone(job.Labels)
+	maps.Copy(meta, job.Annotations)
+	maps.Copy(meta, env.ConfigMap(id).Data)
+	for k, v := range meta {
+		for _, key := range []string{"key-team-a", "key-team-b"} {
+			if strings.Contains(k, key) || strings.Contains(v, key) || strings.Contains(env.Logs(), key) {
+				t.Errorf("a key is in P's label, annotation or ConfigMap %s, or the log", k)
+			}
+		}
+	}
+	wantNothingPosted(t, env)
+
+	token := string(sec.Data["result-token"])
+	for role, want := range map[string][]byte{"a": bodyA, "b": bodyB} {
+		if code, body := e.getPanel(t, id, role, token); code != http.StatusOK || !jsonEqual(t, body, want) {
+			t.Errorf("panel %s = %d %s; want the member's result", role, code, body)
+		}
+		if code, _ := e.getPanel(t, id, role, string(env.Secret(a.ID).Data["result-token"])); code != http.StatusNotFound {
+			t.Errorf("panel %s with a member's token = %d; want 404", role, code)
+		}
+	}
+	if code := e.postResult(t, id, token, clean(t, head)); code != http.StatusOK {
+		t.Fatalf("P's result: status %d\n%s", code, env.Logs())
+	}
+	publish(t, env)
+	wantPublished(t, env, id)
+}
+
+// jsonEqual reports whether got and want hold the same JSON value.
+func jsonEqual(t *testing.T, got string, want []byte) bool {
+	t.Helper()
+	var g, w any
+	if json.Unmarshal([]byte(got), &g) != nil || json.Unmarshal(want, &w) != nil {
+		return false
+	}
+	return reflect.DeepEqual(g, w)
+}
+
+// A failed, B passed: Job P runs B only. Its Secret holds B's key alone, as
+// llm-api-key-b; model A has no key and no judge entry. The route serves B's
+// result and not A's.
+func TestE2EPanelPBOnly(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, _, _ := releasedPanel(t, e, head, errorResult(t, head, "A broke"), clean(t, head))
+
+	dispatch(t, env)
+	if env.Job(id) == nil {
+		t.Fatalf("no Job P\n%s", env.Logs())
+	}
+	sec := env.Secret(id)
+	if string(sec.Data["llm-api-key-b"]) != "key-team-b" || len(sec.Data["llm-api-key"]) != 0 {
+		t.Errorf("P's keys = %q, %q; want B's alone", sec.Data["llm-api-key"], sec.Data["llm-api-key-b"])
+	}
+	for k, v := range sec.Data {
+		if strings.Contains(string(v), "key-team-a") {
+			t.Errorf("P's Secret %s holds A's key", k)
+		}
+	}
+	if hasArg(env.Job(id).Spec.Template.Spec.Containers[0].Args, "--panel-no-judge") {
+		t.Errorf("P runs with --panel-no-judge; want B's findings verified")
+	}
+	if v := jobEnv(env, id)["PERGENT_PANEL_B_MODEL"]; v != "gpt-team-b" {
+		t.Errorf("PERGENT_PANEL_B_MODEL = %q", v)
+	}
+	if js := panelJudges(t, env, id); len(js) != 1 || js["b"].Name != "team-b" {
+		t.Errorf("judges = %+v; want B's alone", js)
+	}
+	token := string(sec.Data["result-token"])
+	if code, _ := e.getPanel(t, id, "a", token); code != http.StatusNotFound {
+		t.Errorf("panel a = %d; want 404 for a failed member", code)
+	}
+	if code, _ := e.getPanel(t, id, "b", token); code != http.StatusOK {
+		t.Errorf("panel b = %d; want B's result", code)
+	}
+}
+
+// The instance quota is used up and both judge entries are global: Job P
+// merges with --panel-no-judge and gets no LLM key at all.
+func TestE2EPanelPQuotaNoJudge(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	e := newE2E(t)
+	env := e.env
+	env.SetNow(novemberMid)
+	env.Engine.ScanImage = testScanImage
+	globalChainB(t, env)
+	head := sha('a')
+	id := splitPanel(t, env, 1, head)
+	dispatch(t, env)
+	for _, role := range []string{"a", "b"} {
+		m := memberOfRole(t, env, id, role)
+		if code := e.postMember(t, id, m, clean(t, head)); code != http.StatusOK {
+			t.Fatalf("member %s's result: status %d\n%s", role, code, env.Logs())
+		}
+	}
+	q := int64(500)
+	env.Engine.Config.GitLab[0].MonthlyTokenQuota = &q
+	seedQuotaUsage(t, env, 500)
+	publish(t, env)
+	if r := env.Run(id); r.State != store.Queued {
+		t.Fatalf("run = %s; want released\n%s", r.State, env.Logs())
+	}
+
+	dispatch(t, env)
+	job := env.Job(id)
+	if job == nil {
+		t.Fatalf("no Job P\n%s", env.Logs())
+	}
+	if !hasArg(job.Spec.Template.Spec.Containers[0].Args, "--panel-no-judge") {
+		t.Errorf("P's args lack --panel-no-judge")
+	}
+	if got := secretKeys(env, id); !slices.Equal(got, []string{"git-token", "result-token"}) {
+		t.Errorf("P's Secret keys = %v; want no LLM key", got)
+	}
+	for _, k := range []string{"OPENCODE_API_KEY", "PERGENT_PANEL_B_API_KEY"} {
+		if hasEnv(env, id, k) {
+			t.Errorf("P's env names %s", k)
+		}
+	}
+	if js := panelJudges(t, env, id); len(js) != 0 {
+		t.Errorf("judges = %+v; want none", js)
+	}
+	if strings.Contains(env.Logs(), testLLMKey) || strings.Contains(env.Logs(), "key-b") {
+		t.Errorf("a key reached the log")
+	}
+}
+
+// Job P's judge run on role b is out of quota: B's judge entry is marked and
+// audited, the P run is dropped and its next attempt runs on B's next
+// entry, from the split's base, with A's judge as before. The members are
+// untouched and nothing is posted for the dropped attempt.
+func TestE2EPanelPFallsBackRoleB(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	e, _ := newFallbackE2E(t, "team-a")
+	env := e.env
+	env.Engine.ScanImage = testScanImage
+	refs := savePanelChain(t, env, "team-b", "team-c")
+	head := sha('a')
+	id, _, _ := releasedPanel(t, e, head, clean(t, head), clean(t, head))
+	dispatch(t, env)
+	if js := panelJudges(t, env, id); js["b"].ID != refs[0].ID || js["b"].Length != 2 {
+		t.Fatalf("B's judge = %+v; want team-b of 2", js["b"])
+	}
+	ms := members(t, env, id)
+	root := env.Run(id)
+	env.GitLab.Reset()
+
+	token := string(env.Secret(id).Data["result-token"])
+	if code := e.postResult(t, id, token, withRoleError(t, clean(t, head), "quota", "b")); code != http.StatusOK {
+		t.Fatalf("P's result: status %d\n%s", code, env.Logs())
+	}
+	publish(t, env)
+	wantFellBack(t, env, id, store.ClassQuota)
+	if m, ok := markOf(t, env, refs[0]); !ok || m.Class != store.ClassQuota {
+		t.Errorf("B's judge mark = %+v, %v; want quota", m, ok)
+	}
+	if _, ok := markOf(t, env, refs[1]); ok {
+		t.Errorf("B's next entry is marked")
+	}
+	if entries, err := env.Store.AuditLog(env.ctx, 0, 10); err != nil || len(entries) == 0 ||
+		entries[0].Action != "model_marked" || entries[0].Detail != "model=team-b class=quota" {
+		t.Errorf("audit = %+v, %v; want B's judge entry marked", entries, err)
+	}
+	wantNothingPosted(t, env)
+
+	dispatch(t, env)
+	next := e.newJob(t, id)
+	if r := env.Run(next); r.AttemptOf == nil || *r.AttemptOf != id || r.BaseSHA != root.BaseSHA ||
+		!maps.Equal(r.SkillSources, root.SkillSources) {
+		t.Fatalf("next attempt = %+v; want an attempt of the run with the split's base and skills", r)
+	}
+	sec := env.Secret(next)
+	if string(sec.Data["llm-api-key"]) != "key-team-a" || string(sec.Data["llm-api-key-b"]) != "key-team-c" {
+		t.Errorf("next P's keys = %q, %q; want A's and B's next entry's", sec.Data["llm-api-key"], sec.Data["llm-api-key-b"])
+	}
+	if v := jobEnv(env, next)["PERGENT_PANEL_B_MODEL"]; v != "gpt-team-c" {
+		t.Errorf("next P's PERGENT_PANEL_B_MODEL = %q, want gpt-team-c", v)
+	}
+	if js := panelJudges(t, env, next); js["a"].Name != "team-a" || js["b"].ID != refs[1].ID {
+		t.Errorf("next P's judges = %+v; want team-a and team-c", js)
+	}
+	if after := members(t, env, id); !reflect.DeepEqual(ms, after) {
+		t.Errorf("the members changed:\n before %+v\n after  %+v", ms, after)
+	}
+	token = string(sec.Data["result-token"])
+	if code, _ := e.getPanel(t, next, "a", token); code != http.StatusOK {
+		t.Errorf("the next attempt's panel a = %d; want the root's member", code)
+	}
+	if code := e.postResult(t, next, token, clean(t, head)); code != http.StatusOK {
+		t.Fatalf("next P's result: status %d\n%s", code, env.Logs())
+	}
+	publish(t, env)
+	wantPublished(t, env, next)
+}
+
+// Job P hits its deadline: the watcher fails the run as it fails any
+// review, and the review is published as failed, never success.
+func TestE2EPanelPTimeout(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, _, _ := releasedPanel(t, e, head, clean(t, head), clean(t, head))
+	dispatch(t, env)
+	if env.Job(id) == nil {
+		t.Fatalf("no Job P\n%s", env.Logs())
+	}
+	if err := env.Store.AdvanceCheckoutSeen(env.ctx, id, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Kube.BatchV1().Jobs(testNamespace).Delete(env.ctx, kube.JobName(id), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	putBareJob(t, env, id, env.Now().Add(-time.Hour), jobCond(batchv1.JobFailed, "DeadlineExceeded", env.Now().Add(-2*time.Minute)))
+
+	watch(t, env)
+	wantFailure(t, env, id, "the review didn't finish before the deadline (DeadlineExceeded)")
+	publish(t, env)
+	got := statusesOf(t, env, head)
+	if len(got) == 0 || !strings.HasPrefix(got[len(got)-1], "failed: ") {
+		t.Errorf("statuses = %v; want the failure status last", got)
+	}
+	for _, s := range got {
+		if strings.HasPrefix(s, "success") {
+			t.Errorf("statuses = %v; a timed-out Job P set success", got)
+		}
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 0 {
+		t.Errorf("%d approvals; want none", n)
+	}
+}
+
+// The checks the run passed before its split are not done again for Job P:
+// an author no longer trusted and a CI job still running hold neither the
+// members nor P.
+func TestE2EPanelPSkipsChecks(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id := splitPanel(t, env, 3, head)
+	env.Engine.Config.GitLab[0].TrustedAuthorsOnly = config.TrustOn
+	mr := openMR(3, head)
+	mr.Author = gitlab.User{ID: strangerID, Username: strangerName}
+	env.GitLab.SetMR(mr)
+	strangerMember(env, 0)
+	env.GitLab.Reply(http.MethodPost, notesPath(3), http.StatusCreated, `{"id": 900}`)
+	env.Engine.Config.Repositories[0].CIJobs = &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{
+		{Name: "test", Read: "log", BlocksApproval: true},
+	}}
+	serveCI(env, head, "running", "running")
+	dispatch(t, env)
+	for _, role := range []string{"a", "b"} {
+		m := memberOfRole(t, env, id, role)
+		if code := e.postMember(t, id, m, clean(t, head)); code != http.StatusOK {
+			t.Fatalf("member %s's result: status %d\n%s", role, code, env.Logs())
+		}
+	}
+	publish(t, env)
+
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Running || env.Job(id) == nil {
+		t.Fatalf("run = %s/%q; want Job P started\n%s", r.State, r.SkipReason, env.Logs())
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, notesPath(3))); n != 0 {
+		t.Errorf("%d notes; want none", n)
+	}
+	if got := statusesOf(t, env, head); len(got) != 1 || got[0] != "running: "+runningDescription {
+		t.Errorf("statuses = %v; want the members' running status alone", got)
+	}
+}
+
+// Job P starts from the base its run recorded at the split, which both
+// members reviewed, even when the merge request's base moved since: its
+// Job reviews that base, the run keeps it, and P's result for it is taken.
+func TestE2EPanelPKeepsSplitBase(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, _, _ := releasedPanel(t, e, head, clean(t, head), clean(t, head))
+	mr := openMR(1, head)
+	mr.DiffRefs.BaseSHA, mr.DiffRefs.StartSHA = sha('9'), sha('8')
+	env.GitLab.SetMR(mr)
+
+	dispatch(t, env)
+	job := env.Job(id)
+	if job == nil || !hasArg(job.Spec.Template.Spec.Containers[0].Args, "--base="+sha('b')) {
+		t.Fatalf("Job P does not review the split's base\n%s", env.Logs())
+	}
+	if r := env.Run(id); r.BaseSHA != sha('b') || r.StartSHA != sha('5') {
+		t.Errorf("run base %q start %q; want the split's", r.BaseSHA, r.StartSHA)
+	}
+	if code := e.postResult(t, id, string(env.Secret(id).Data["result-token"]), clean(t, head)); code != http.StatusOK {
+		t.Errorf("P's result for the split's base: status %d\n%s", code, env.Logs())
+	}
+}
+
+// Job P gets the review's rule list and built-in switch, as a review Job.
+func TestE2EPanelPRules(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	off := false
+	env.Engine.Config.Repositories[0].RuleSets = []string{"a"}
+	env.Engine.Config.Repositories[0].BuiltInRules = &off
+	addRuleSet(t, env, "a", setAYAML)
+	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
+	head := sha('a')
+	id, _, _ := releasedPanel(t, e, head, clean(t, head), clean(t, head))
+
+	dispatch(t, env)
+	var labels []string
+	for _, r := range jobRules(t, env, id) {
+		labels = append(labels, r.Label())
+	}
+	if want := []string{"repo:*.go", "dashboard:a:*.py"}; !slices.Equal(labels, want) {
+		t.Errorf("P's rules = %v, want %v", labels, want)
+	}
+	if v, ok := jobVar(t, env, id, "PERGENT_RULES"); !ok || v != "/in/rules.json" {
+		t.Errorf("P's PERGENT_RULES = %q, %v", v, ok)
+	}
+	if v, ok := jobVar(t, env, id, "PERGENT_NO_BUILT_IN_RULES"); !ok || v != "true" {
+		t.Errorf("P's PERGENT_NO_BUILT_IN_RULES = %q, %v", v, ok)
+	}
+}
+
+// Without pergent.sh's own image (PERGENT_SH_IMAGE) Job P can't fetch the
+// member results: the review fails with that reason, never a pass.
+func TestE2EPanelPNoImage(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, _, _ := releasedPanel(t, e, head, clean(t, head), clean(t, head))
+	env.Engine.ScanImage = ""
+
+	dispatch(t, env)
+	if env.Job(id) != nil {
+		t.Errorf("Job P started without pergent.sh's image")
+	}
+	if r := env.Run(id); r.State != store.Reported || r.FailureReason != reasonNoPanelImage {
+		t.Errorf("run = %s %q; want failed for the image", r.State, r.FailureReason)
+	}
+}
+
+// B's judge entry is refused and B's chain has no other usable entry (the
+// one left is the model A ran on): the next attempt of P runs without B's
+// judge, on A's key alone, and pergent's merge keeps what B's judge would
+// have checked. Its result is published, with no further fallback.
+func TestE2EPanelPJudgeNoneLeft(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	e, _ := newFallbackE2E(t, "team-a")
+	env := e.env
+	env.Engine.ScanImage = testScanImage
+	team := ownerTeam(t, env)
+	first := addTeamModel(t, env, team, "team-b", "gpt-b", "key-b")
+	same := addTeamModel(t, env, team, "team-same", "gpt-team-a", "key-same")
+	saveChainB(t, env, store.Chain{Scope: store.ScopeTeam, TeamID: team, Entries: []store.EntryRef{first, same}})
+	head := sha('a')
+	id := splitPanel(t, env, 1, head)
+	dispatch(t, env)
+	for _, role := range []string{"a", "b"} {
+		if code := e.postMember(t, id, memberOfRole(t, env, id, role), clean(t, head)); code != http.StatusOK {
+			t.Fatalf("member %s's result: status %d", role, code)
+		}
+	}
+	publish(t, env)
+	dispatch(t, env)
+	token := string(env.Secret(id).Data["result-token"])
+	if code := e.postResult(t, id, token, withRoleError(t, clean(t, head), "auth", "b")); code != http.StatusOK {
+		t.Fatalf("P's result: status %d", code)
+	}
+	publish(t, env)
+	wantFellBack(t, env, id, store.ClassAuth)
+
+	dispatch(t, env)
+	next := e.newJob(t, id)
+	sec := env.Secret(next)
+	if string(sec.Data["llm-api-key"]) != "key-team-a" || len(sec.Data["llm-api-key-b"]) != 0 {
+		t.Errorf("next P's keys = %q, %q; want A's alone", sec.Data["llm-api-key"], sec.Data["llm-api-key-b"])
+	}
+	if hasArg(env.Job(next).Spec.Template.Spec.Containers[0].Args, "--panel-no-judge") {
+		t.Errorf("next P runs with --panel-no-judge; want A's judge to run")
+	}
+	if js := panelJudges(t, env, next); len(js) != 1 || js["a"].Name != "team-a" {
+		t.Errorf("next P's judges = %+v; want A's alone", js)
+	}
+	// B's judge run fails for its missing key: there is no B judge entry to
+	// fall back from, so the result is published.
+	if code := e.postResult(t, next, string(sec.Data["result-token"]), withRoleError(t, clean(t, head), "auth", "b")); code != http.StatusOK {
+		t.Fatalf("next P's result: status %d", code)
+	}
+	publish(t, env)
+	wantPublished(t, env, next)
+}
+
+// A provider error with no role in Job P's result is not a judge's: the
+// review is published as it is, and the entry member A ran on (the run's)
+// is neither marked nor fallen back from.
+func TestE2EPanelPNoRoleNoFallBack(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a", "team-a2"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, a, _ := releasedPanel(t, e, head, clean(t, head), clean(t, head))
+	dispatch(t, env)
+	if code := e.postResult(t, id, string(env.Secret(id).Data["result-token"]), failedOn(t, head, "quota")); code != http.StatusOK {
+		t.Fatalf("P's result: status %d", code)
+	}
+	publish(t, env)
+	wantPublished(t, env, id)
+	if _, ok := markOf(t, env, store.EntryRef{Source: a.Entry.Source, ID: a.Entry.ID}); ok {
+		t.Errorf("A's entry is marked")
+	}
 }

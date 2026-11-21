@@ -59,8 +59,8 @@ type Deps struct {
 	// code graph (the engine). Nil, when the install keeps no graphs: the
 	// routes are absent.
 	Graphs callback.GraphResults
-	// Panel serves a panel's merge Job its member results. Nil until the
-	// engine supports panels: the route is absent.
+	// Panel serves a panel's merge Job (Job P) its done members' results:
+	// the store. Nil leaves the route absent.
 	Panel callback.PanelResults
 	// ReviewAPI serves /v1/, the review API. Nil, when the dashboard is off:
 	// the paths are absent.

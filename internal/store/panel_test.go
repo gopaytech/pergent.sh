@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -707,7 +709,7 @@ func TestReleasePanelWaitsForLive(t *testing.T) {
 		t.Errorf("ReleasePanel with both done = %v, %v; want released", released, err)
 	}
 	// MembersToSettle lists reported members of a waiting run only.
-	if ms, err := s.MembersToSettle(ctx); err != nil || len(ms) != 0 {
+	if ms, err := s.MembersToSettle(ctx, 20); err != nil || len(ms) != 0 {
 		t.Errorf("MembersToSettle = %+v, %v; want none", ms, err)
 	}
 }
@@ -762,7 +764,7 @@ func TestMembersToSettle(t *testing.T) {
 	if st, err := s.SettleMember(ctx, b.ID); err != nil || st != "" {
 		t.Errorf("SettleMember of a running member = %q, %v; want nothing", st, err)
 	}
-	ms, err := s.MembersToSettle(ctx)
+	ms, err := s.MembersToSettle(ctx, 20)
 	if err != nil || len(ms) != 1 || ms[0].ID != a.ID {
 		t.Fatalf("MembersToSettle = %+v, %v; want a", ms, err)
 	}
@@ -1514,4 +1516,140 @@ func rootOf(t *testing.T, s *Store, id string) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+// A member is settled, and its result turned into a failure, only while its
+// run still waits for it: one whose run a push took is left to the sweep.
+func TestSettleMemberNeedsWaitingRun(t *testing.T) {
+	s := newStore(t)
+	id := panelRun(t, s, mr1, "a1")
+	a, b := memberOf(t, s, id, "a"), memberOf(t, s, id, "b")
+	for _, m := range []PanelMember{a, b} {
+		dispatchMember(t, s, m.ID, "tok-"+m.Role)
+		if out, err := s.StoreMemberResult(ctx, id, m.ID, "tok-"+m.Role, []byte(`{}`), t0); err != nil || out != ResultStored {
+			t.Fatal(out, err)
+		}
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'superseded' WHERE id = $1::uuid`, id); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := s.SettleMember(ctx, a.ID); err != nil || st != "" {
+		t.Errorf("SettleMember = %q, %v; want nothing: the run no longer waits", st, err)
+	}
+	if err := s.ReplaceMemberWithFailure(ctx, b.ID, Failure{Reason: "bad"}); !errors.Is(err, ErrNotReported) {
+		t.Errorf("ReplaceMemberWithFailure = %v; want ErrNotReported: the run no longer waits", err)
+	}
+	for _, role := range []string{"a", "b"} {
+		if got := memberOf(t, s, id, role); got.State != MemberReported || got.Result == nil || got.FailureReason != "" {
+			t.Errorf("member %s = %s %q; want reported with its result", role, got.State, got.FailureReason)
+		}
+	}
+}
+
+// MembersToSettle takes at most limit members, the oldest reports first.
+func TestMembersToSettleLimit(t *testing.T) {
+	s := newStore(t)
+	var want []string
+	for i, mr := range []MRKey{mr1, mr2, mr3} {
+		id := panelRun(t, s, mr, "h"+strconv.Itoa(i))
+		a := memberOf(t, s, id, "a")
+		dispatchMember(t, s, a.ID, "tok-"+a.ID)
+		if ok, err := s.ReportMemberFailure(ctx, a.ID, Failure{Reason: "broke"}, t0.Add(time.Duration(i)*time.Minute)); err != nil || !ok {
+			t.Fatal(ok, err)
+		}
+		want = append(want, a.ID)
+	}
+	ms, err := s.MembersToSettle(ctx, 2)
+	if err != nil || len(ms) != 2 || ms[0].ID != want[0] || ms[1].ID != want[1] {
+		t.Fatalf("MembersToSettle(2) = %+v, %v; want the 2 oldest reports", ms, err)
+	}
+	if ms, err := s.MembersToSettle(ctx, 10); err != nil || len(ms) != 3 {
+		t.Errorf("MembersToSettle(10) = %d, %v; want 3", len(ms), err)
+	}
+}
+
+// A later attempt of Job P takes what its review's first run recorded at the
+// split and its dispatch: the base, the skills, the model and entry, the
+// rules, the layout and the links. An attempt that is not running, or a first
+// run, is refused.
+func TestInheritPanelSplit(t *testing.T) {
+	s := newStore(t)
+	root := panelRun(t, s, mr1, "a1")
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET quiet_reviews = true, comment_layout = '{checks:open}',
+		provider = 'openai', rules_hash = 'rh', model_source = 'team', model_entry_id = 'e1',
+		model_entry_name = 'Team A', model_team_id = 4, chain_position = 1, chain_length = 2, fallback_class = '',
+		linked_repos = '[{"target":"acme/api","can_block":true}]'::jsonb, incremental = true,
+		title = 'Add login', author = 'alice' WHERE id = $1::uuid`, root); err != nil {
+		t.Fatal(err)
+	}
+	doneMember(t, s, memberOf(t, s, root, "a").ID, `{}`)
+	doneMember(t, s, memberOf(t, s, root, "b").ID, `{}`)
+	if released, _, err := s.ReleasePanel(ctx, root, t0); err != nil || !released {
+		t.Fatal(released, err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InheritPanelSplit(ctx, root); err == nil {
+		t.Error("InheritPanelSplit of the first run succeeded")
+	}
+	if err := s.MarkDispatched(ctx, root, "job-p", "base-sha", "start-sha", hash("tok-p"), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.StoreResult(ctx, root, "tok-p", []byte(`{}`), t0); err != nil || out != ResultStored {
+		t.Fatal(out, err)
+	}
+	next, created, err := s.EnqueueAttempt(ctx, getRun(t, s, root), quotaMark("m1"))
+	if err != nil || !created {
+		t.Fatal(next, created, err)
+	}
+	if err := s.InheritPanelSplit(ctx, next); err == nil {
+		t.Error("InheritPanelSplit of a queued attempt succeeded")
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InheritPanelSplit(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	r, a := getRun(t, s, root), getRun(t, s, next)
+	got := Run{BaseSHA: a.BaseSHA, StartSHA: a.StartSHA, Model: a.Model, Provider: a.Provider, SkillSources: a.SkillSources,
+		SkillVersions: a.SkillVersions, SkillHashes: a.SkillHashes, MaxTurns: a.MaxTurns, Incremental: a.Incremental,
+		Quiet: a.Quiet, CommentLayout: a.CommentLayout, LinkedRepos: a.LinkedRepos, RulesHash: a.RulesHash, ModelSource: a.ModelSource,
+		ModelEntryID: a.ModelEntryID, ModelEntryName: a.ModelEntryName, ModelTeamID: a.ModelTeamID, ChainPosition: a.ChainPosition,
+		ChainLength: a.ChainLength, Title: a.Title, Author: a.Author}
+	want := Run{BaseSHA: r.BaseSHA, StartSHA: r.StartSHA, Model: r.Model, Provider: r.Provider, SkillSources: r.SkillSources,
+		SkillVersions: r.SkillVersions, SkillHashes: r.SkillHashes, MaxTurns: r.MaxTurns, Incremental: r.Incremental,
+		Quiet: r.Quiet, CommentLayout: r.CommentLayout, LinkedRepos: r.LinkedRepos, RulesHash: r.RulesHash, ModelSource: r.ModelSource,
+		ModelEntryID: r.ModelEntryID, ModelEntryName: r.ModelEntryName, ModelTeamID: r.ModelTeamID, ChainPosition: r.ChainPosition,
+		ChainLength: r.ChainLength, Title: r.Title, Author: r.Author}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("attempt = %+v\nwant the first run's %+v", got, want)
+	}
+	if a.BaseSHA != "base-sha" || !a.Quiet || a.ModelEntryID != "e1" || len(a.LinkedRepos) != 1 || a.SkillSources["security"] != "library" {
+		t.Errorf("attempt = %+v; want the split's fields", a)
+	}
+}
+
+// ClearPanelJudges drops a run's judge rows, and no other run's.
+func TestClearPanelJudges(t *testing.T) {
+	s := newStore(t)
+	id, other := enqueue(t, s, mr1, "a1"), enqueue(t, s, mr2, "b1")
+	for _, run := range []string{id, other} {
+		if err := s.SetPanelJudge(ctx, run, "a", RunEntry{Source: SourceGlobal, ID: "m1"}, "p", "m"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.ClearPanelJudges(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.PanelJudges(ctx, id); err != nil || len(got) != 0 {
+		t.Errorf("PanelJudges = %+v, %v; want none", got, err)
+	}
+	if got, err := s.PanelJudges(ctx, other); err != nil || len(got) != 1 {
+		t.Errorf("other run's PanelJudges = %+v, %v; want its row", got, err)
+	}
+	if err := s.ClearPanelJudges(ctx, "bad"); err != nil {
+		t.Errorf("ClearPanelJudges(bad) = %v", err)
+	}
 }

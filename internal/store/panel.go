@@ -493,7 +493,7 @@ func (s *Store) ReportMemberFailure(ctx context.Context, id string, f Failure, n
 
 // ReplaceMemberWithFailure turns the stored result of a reported member into
 // the failure f. It returns ErrNotReported when the member is not reported
-// with a result.
+// with a result, or its run no longer waits for it (the sweep takes it).
 func (s *Store) ReplaceMemberWithFailure(ctx context.Context, id string, f Failure) error {
 	if !validUUID(id) {
 		return ErrNotReported
@@ -501,9 +501,9 @@ func (s *Store) ReplaceMemberWithFailure(ctx context.Context, id string, f Failu
 	if f.Reason == "" {
 		f.Reason = "review failed"
 	}
-	tag, err := s.pool.Exec(ctx, `UPDATE panel_members SET result = NULL, failure_reason = $2,
+	tag, err := s.pool.Exec(ctx, `UPDATE panel_members m SET result = NULL, failure_reason = $2,
 		failure_step = $3, failure_detail = $4
-		WHERE id = $1::uuid AND state = 'reported' AND result IS NOT NULL`,
+		WHERE m.id = $1::uuid AND m.state = 'reported' AND m.result IS NOT NULL AND `+memberRunWaitsSQL,
 		id, f.Reason, f.Step, CleanText(f.Detail))
 	if err != nil {
 		return err
@@ -514,12 +514,16 @@ func (s *Store) ReplaceMemberWithFailure(ctx context.Context, id string, f Failu
 	return nil
 }
 
-// MembersToSettle returns the reported members whose run still waits for
-// them, oldest report first. Those of a run that is gone are left to
+// MembersToSettle returns up to limit reported members whose run still waits
+// for them, oldest report first. Those of a run that is gone are left to
 // SupersedeOrphanMembers.
-func (s *Store) MembersToSettle(ctx context.Context) ([]PanelMember, error) {
+func (s *Store) MembersToSettle(ctx context.Context, limit int) ([]PanelMember, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
 	ms, err := s.queryMembers(ctx, `SELECT `+memberColumns+` FROM panel_members m
-		WHERE state = 'reported' AND `+memberRunWaitsSQL)
+		WHERE state = 'reported' AND `+memberRunWaitsSQL+`
+		ORDER BY reported_at, created_at, id LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -552,16 +556,17 @@ func (s *Store) PanelsToRelease(ctx context.Context) ([]string, error) {
 }
 
 // SettleMember moves a reported member to done (it has a result) or failed,
-// and returns the new state. A member that is not reported, or an unknown id,
-// is left alone: the state is "".
+// and returns the new state. A member that is not reported, one whose run no
+// longer waits for it (the sweep takes it), or an unknown id, is left alone:
+// the state is "".
 func (s *Store) SettleMember(ctx context.Context, id string) (MemberState, error) {
 	if !validUUID(id) {
 		return "", nil
 	}
 	var state string
-	err := s.pool.QueryRow(ctx, `UPDATE panel_members
-		SET state = CASE WHEN result IS NOT NULL THEN 'done' ELSE 'failed' END
-		WHERE id = $1::uuid AND state = 'reported' RETURNING state`, id).Scan(&state)
+	err := s.pool.QueryRow(ctx, `UPDATE panel_members m
+		SET state = CASE WHEN m.result IS NOT NULL THEN 'done' ELSE 'failed' END
+		WHERE m.id = $1::uuid AND m.state = 'reported' AND `+memberRunWaitsSQL+` RETURNING m.state`, id).Scan(&state)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
@@ -974,4 +979,33 @@ func (s *Store) PanelJudges(ctx context.Context, runID string) (map[string]RunEn
 		out[role] = e
 	}
 	return out, rows.Err()
+}
+
+// ClearPanelJudges drops the judge rows of the Job P run runID, before its
+// dispatch records the roles that judge this time. A bad id is none.
+func (s *Store) ClearPanelJudges(ctx context.Context, runID string) error {
+	if !validUUID(runID) {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `DELETE FROM panel_judges WHERE run_id = $1::uuid`, runID)
+	return err
+}
+
+// InheritPanelSplit gives the running later attempt id of a panel's merge
+// (Job P) what its review's first run recorded at the split and its
+// dispatch: the base and start SHAs, the model and entry, the skills, the
+// step limit, the rules hash, whether it is quiet or incremental, the
+// layout, the links and the change's details. Job P writes none of them
+// itself, and its result is checked against them. Any other run is an error.
+func (s *Store) InheritPanelSplit(ctx context.Context, id string) error {
+	return s.mustUpdate(ctx, id, `UPDATE runs a SET base_sha = r.base_sha, start_sha = r.start_sha,
+			provider = r.provider, model = r.model, max_turns = r.max_turns,
+			skill_sources = r.skill_sources, skill_versions = r.skill_versions, skill_hashes = r.skill_hashes,
+			rules_hash = r.rules_hash, quiet_reviews = r.quiet_reviews, comment_layout = r.comment_layout,
+			incremental = r.incremental, base_run_id = r.base_run_id, linked_repos = r.linked_repos,
+			model_source = r.model_source, model_entry_id = r.model_entry_id, model_entry_name = r.model_entry_name,
+			model_team_id = r.model_team_id, chain_position = r.chain_position, chain_length = r.chain_length,
+			fallback_class = r.fallback_class,
+			title = r.title, web_url = r.web_url, source_branch = r.source_branch, author = r.author
+		FROM runs r WHERE a.id = $1::uuid AND a.state = 'running' AND r.id = a.attempt_of`, id)
 }

@@ -437,10 +437,11 @@ func TestPanelOffReason(t *testing.T) {
 
 // A run released once its members are done keeps its dispatched_at: its next
 // dispatch never splits it again or writes an off row, and it is not left
-// claimed with no Job (it gets today's Job until Job P, S3.8).
+// claimed with no Job: it gets Job P.
 func TestDispatchReleasedPanelNotSplitAgain(t *testing.T) {
 	panelFloor(t, "v0.5.0")
 	env := newTestEnv(t)
+	env.Engine.ScanImage = testScanImage
 	globalChainB(t, env)
 	head := sha('a')
 	id := dispatchMR(t, env, 3, head)
@@ -461,6 +462,9 @@ func TestDispatchReleasedPanelNotSplitAgain(t *testing.T) {
 	dispatch(t, env)
 	if r := env.Run(id); r.State != store.Running || r.JobName != kube.JobName(id) {
 		t.Errorf("run = %s job %q; want running with a Job\n%s", r.State, r.JobName, env.Logs())
+	}
+	if job := env.Job(id); job == nil || job.Labels[kube.LabelPanelRole] != kube.PanelRoleMerge {
+		t.Errorf("the run's Job is not Job P")
 	}
 	ms := members(t, env, id)
 	if len(ms) != 2 || ms[0].State != store.MemberDone || ms[1].State != store.MemberDone {

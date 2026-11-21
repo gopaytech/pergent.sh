@@ -39,8 +39,18 @@ func providerError(stored []byte) *result.ProviderError {
 // on an entry of a chain of at least 2 (a 1-entry chain never falls back),
 // and handled is true only then: the caller publishes the run otherwise. An
 // API review is marked but not retried, since its inputs are gone once its
-// Job has them; it is published as before.
+// Job has them; it is published as before. A review panel's merge (Job P)
+// falls back by its judges instead (fallBackJudge).
 func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) (handled bool, err error) {
+	if pe := providerError(run.Result); pe != nil && run.Kind == store.KindMR {
+		merge, err := e.isPanelMerge(ctx, run)
+		if err != nil {
+			return false, err
+		}
+		if merge {
+			return e.fallBackJudge(ctx, run, pe.Role, log)
+		}
+	}
 	m, ok := e.refusedMark(store.EntryRef{Source: run.ModelSource, ID: run.ModelEntryID}, run.ChainLength, run.Result)
 	if !ok {
 		return false, nil
@@ -87,6 +97,63 @@ func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) 
 			log.Warn("couldn't set the running commit status", "error", e.redact(err.Error()))
 		}
 	}
+	return true, nil
+}
+
+// isPanelMerge reports whether run is a review panel's merge (Job P): its
+// review has a member that is not off.
+func (e *Engine) isPanelMerge(ctx context.Context, run store.Run) (bool, error) {
+	ms, err := e.Store.PanelMembers(ctx, run.ID)
+	if err != nil {
+		return false, fmt.Errorf("read the review's panel members: %w", err)
+	}
+	for _, m := range ms {
+		if m.State != store.MemberOff {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// fallBackJudge moves the judge of role ("a" or "b") of Job P run to the
+// next entry of that role's chain when the provider refused its judge
+// entry, as fallBack does for a run: the entry is marked and audited, the
+// run closes as fell_back and the next attempt of P is queued, in one
+// transaction. That attempt picks the role's judge again (resolveMerge);
+// the members are not touched. It acts only on a role that judged with an
+// entry of a chain of at least 2. A provider error with no role is not a
+// judge's: the run is published as it is. When the role has no entry left,
+// the next attempt runs without that judge and pergent's merge keeps its
+// findings. Nothing is posted for the dropped attempt: the review's status
+// already says it runs.
+func (e *Engine) fallBackJudge(ctx context.Context, run store.Run, role string, log *slog.Logger) (handled bool, err error) {
+	if role == "" {
+		return false, nil
+	}
+	js, err := e.Store.PanelJudges(ctx, run.ID)
+	if err != nil {
+		return false, fmt.Errorf("read the review panel's judges: %w", err)
+	}
+	j, ok := js[role]
+	if !ok {
+		return false, nil
+	}
+	m, ok := e.refusedMark(store.EntryRef{Source: j.Source, ID: j.ID}, j.Length, run.Result)
+	if !ok {
+		return false, nil
+	}
+	log = log.With("role", role, "model_entry", j.ID, "class", m.Class)
+	next, created, err := e.Store.EnqueueAttempt(ctx, run, m)
+	if err != nil {
+		return false, fmt.Errorf("queue the next attempt: %w", err)
+	}
+	if !created {
+		log.Info("not falling back: the run is no longer waiting to be published")
+		return true, nil
+	}
+	log.Warn("the provider refused the review panel's judge entry; the merge runs again on the next entry of its chain", "next_run", next)
+	e.auditMark(ctx, run, j.Name, m.Class, log)
+	e.Wake()
 	return true, nil
 }
 
