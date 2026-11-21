@@ -68,3 +68,21 @@ func TestCarrySameRulesHashCarries(t *testing.T) {
 		t.Errorf("carried = %v, want it unchanged", got)
 	}
 }
+
+// A rules change reviews in full before the platform is asked anything, when
+// every skill has rules on; a run from before rules counts as a change.
+func TestPlanCarriedRulesChanged(t *testing.T) {
+	for name, edit := range map[string]func(f *planFixture){
+		"a new hash":     func(f *planFixture) { f.d.rulesHash = "h2" },
+		"no hash before": func(f *planFixture) { f.last.RulesHash = nil },
+	} {
+		f := newPlanFixture(t)
+		inline := &fakeInline{changed: []string{"other.go"}}
+		f.plat = Platform{Forge: forgeWithInline{Inline: inline}}
+		edit(f)
+		carried, reason := f.plan(t)
+		if len(carried) != 0 || reason != fullRules {
+			t.Errorf("%s: planCarried = %v, %q; want a full review: rules changed", name, carried, reason)
+		}
+	}
+}
