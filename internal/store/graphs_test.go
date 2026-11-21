@@ -120,7 +120,13 @@ func TestGraphBuildLifecycle(t *testing.T) {
 	if err := s.StartGraphJob(ctx, claimed.BuildID, "pergent-graph-1", hash[:], now.Add(20*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.StartGraphJob(ctx, first.BuildID[:35]+"0", "x", hash[:], now); err != ErrGraphBuildNotFound {
+	// Another build's ID: change the last character. The ID is random, so
+	// it can already end in "0"; then use "1".
+	other := first.BuildID[:35] + "0"
+	if other == first.BuildID {
+		other = first.BuildID[:35] + "1"
+	}
+	if err := s.StartGraphJob(ctx, other, "x", hash[:], now); err != ErrGraphBuildNotFound {
 		t.Fatalf("start of another build = %v", err)
 	}
 	wrong := sha256.Sum256([]byte("other"))
