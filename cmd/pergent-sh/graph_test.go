@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/codegraph"
 )
@@ -420,9 +422,9 @@ func TestParseGetPanel(t *testing.T) {
 // leaves no file and no temp file, after every try.
 func TestGetPanelCutOff(t *testing.T) {
 	noRetryWait(t)
-	var tries int
+	var tries atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tries++
+		tries.Add(1)
 		w.Header().Set("Content-Length", "1000")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, `{"skills":`)
@@ -433,30 +435,82 @@ func TestGetPanelCutOff(t *testing.T) {
 	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
 		t.Errorf("files left: %v", entries)
 	}
-	if tries != 2*3 {
-		t.Errorf("tries = %d; want 3 per member", tries)
+	if n := tries.Load(); n != 2*3 {
+		t.Errorf("tries = %d; want 3 per member", n)
 	}
 }
 
 // A redirect to another host is not followed and writes no file.
 func TestGetPanelNoRedirect(t *testing.T) {
 	noRetryWait(t)
-	var other bool
+	var other atomic.Bool
+	var tries atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		other = true
+		other.Store(true)
 		_, _ = io.WriteString(w, testMemberResult)
 	}))
 	t.Cleanup(target.Close)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tries.Add(1)
 		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusFound)
 	}))
 	t.Cleanup(srv.Close)
 	o := panelOpts(t, srv)
 	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
-	if other {
+	if other.Load() {
 		t.Error("the redirect was followed")
+	}
+	if n := tries.Load(); n != 2 {
+		t.Errorf("tries = %d; want 1 per member (a redirect is final)", n)
 	}
 	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
 		t.Errorf("files written: %v", entries)
+	}
+}
+
+// A 401 or a 403 is final, as a 404 is: tried once, no file.
+func TestGetPanelUnauthorizedNotRetried(t *testing.T) {
+	noRetryWait(t)
+	ps := &panelServer{statuses: map[string][]int{"a": {http.StatusUnauthorized, http.StatusOK}, "b": {http.StatusForbidden, http.StatusOK}}}
+	o := panelOpts(t, ps.start(t))
+	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
+	if ps.tries["a"] != 1 || ps.tries["b"] != 1 {
+		t.Errorf("tries = %v; want 1 each", ps.tries)
+	}
+	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
+		t.Errorf("files written: %v", entries)
+	}
+}
+
+// A hanging member A does not use up member B's time: B gets its tries and
+// its file while A waits for the budget to end.
+func TestGetPanelSlowADoesNotStopB(t *testing.T) {
+	noRetryWait(t)
+	var bTries atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/a") {
+			<-r.Context().Done()
+			return
+		}
+		if bTries.Add(1) < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = io.WriteString(w, testMemberResult)
+	}))
+	t.Cleanup(srv.Close)
+	o := panelOpts(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var stderr bytes.Buffer
+	getPanel(ctx, o, "run-token", newResultClient(), &stderr)
+	if got, err := os.ReadFile(filepath.Join(o.dir, "b.json")); err != nil || string(got) != testMemberResult {
+		t.Errorf("b.json = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(o.dir, "a.json")); !os.IsNotExist(err) {
+		t.Errorf("a.json is there: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "panel a: not downloaded") || !strings.Contains(stderr.String(), "panel b: downloaded") {
+		t.Errorf("log = %q", stderr.String())
 	}
 }

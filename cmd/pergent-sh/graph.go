@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gopaytech/pergent/graph"
@@ -37,9 +38,10 @@ import (
 // get-panel runs in the "panel-inputs" init container of a review panel's
 // merge Job (kube.BuildJob with a panel). It downloads member A's and member
 // B's results from --a-url and --b-url to <dir>/a.json and <dir>/b.json, with
-// the same code and token as get-graph. A member with no result (404), or one
-// that still fails after 3 tries, gets no file. It always exits 0: pergent
-// merges what it gets, and says so.
+// the same code and token as get-graph, both at the same time. A member with
+// no result (404), a refused token (401, 403), a redirect, or one that still
+// fails after 3 tries, gets no file. It always exits 0: pergent merges what it
+// gets, and says so.
 
 type postGraphOptions struct{ work, out, resultURL string }
 
@@ -258,16 +260,29 @@ func runGetPanel(ctx context.Context, o getPanelOptions, stderr io.Writer) int {
 // getPanel downloads each member's result, whole or not at all. Mode 0644,
 // as get-graph's: the pergent container runs as another user, and the file is
 // in the Job's own volume and holds no key.
-// A failure other than a 404 or a result over the limit is tried again, up to
-// panelTries times. Every outcome is one log line per member.
+// The 2 results download side by side under one budget, so a member that
+// hangs does not use up the other's tries. A failure other than a 404, a 401,
+// a 403, a redirect or a result over the limit is tried again, up to
+// panelTries times. Every outcome is one log line per member, A then B.
 func getPanel(ctx context.Context, o getPanelOptions, token string, client *http.Client, stderr io.Writer) {
 	ctx, cancel := context.WithTimeout(ctx, getPanelTimeout)
 	defer cancel()
-	for _, m := range []struct{ role, url string }{{"a", o.aURL}, {"b", o.bURL}} {
+	members := []struct{ role, url string }{{"a", o.aURL}, {"b", o.bURL}}
+	errs := make([]error, len(members))
+	var wg sync.WaitGroup
+	for i, m := range members {
 		d := download{url: m.url, out: filepath.Join(o.dir, m.role+".json"), token: token, max: maxPanelGet, mode: 0o644,
 			notFound: "no result for this member", tooLarge: "the result is over the size limit"}
-		if err := d.getWithRetry(ctx, client, panelTries, panelRetryWait); err != nil {
-			fmt.Fprintf(stderr, "panel %s: not downloaded: %v\n", m.role, err)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = d.getWithRetry(ctx, client, panelTries, panelRetryWait)
+		}()
+	}
+	wg.Wait()
+	for i, m := range members {
+		if errs[i] != nil {
+			fmt.Fprintf(stderr, "panel %s: not downloaded: %v\n", m.role, errs[i])
 			continue
 		}
 		fmt.Fprintf(stderr, "panel %s: downloaded\n", m.role)
@@ -324,6 +339,10 @@ func (d download) get(ctx context.Context, client *http.Client) error {
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
 		return finalError{d.notFound}
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden,
+		resp.StatusCode >= 300 && resp.StatusCode < 400:
+		// Another try would get the same answer (redirects are not followed).
+		return finalError{"pergent.sh answered " + resp.Status}
 	case resp.StatusCode != http.StatusOK:
 		return fmt.Errorf("pergent.sh answered %s", resp.Status)
 	}
