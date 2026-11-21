@@ -124,6 +124,17 @@ type JobParams struct {
 	// add the graph init container and PERGENT_GRAPH; either empty leaves the Job
 	// as it was before code graphs existed.
 	GraphURL, GraphImage string
+	// SkipSkillVerify makes the Job a review panel's member: pergent leaves
+	// out each skill's verification run (--no-skill-verify). False leaves the
+	// Job as it was before panels.
+	SkipSkillVerify bool
+	// PanelMemberID and PanelRole label a panel's Jobs: the member's ID and
+	// "a" or "b" for a member, "" and "p" for a merge. "" and "" for a review.
+	PanelMemberID, PanelRole string
+	// Panel makes the Job a review panel's merge (pergent agent --panel):
+	// its init container fetches the member results, and LLM is model A,
+	// Panel.B model B. Nil leaves the Job a review.
+	Panel *PanelParams
 }
 
 // LinkedClone is one linked repository to clone: Dir is its directory name
@@ -132,7 +143,9 @@ type JobParams struct {
 type LinkedClone struct{ Dir, CloneURL string }
 
 // Secrets are the per-Job credentials, stored in one Secret owned by the Job.
-type Secrets struct{ GitToken, LLMKey, ResultToken string }
+// LLMKeyB is model B's key; it is stored as "llm-api-key-b" only when the
+// Job is a panel's merge and the key is not empty.
+type Secrets struct{ GitToken, LLMKey, LLMKeyB, ResultToken string }
 
 // JobName is "pergent-review-" plus the first 12 hex characters of the run ID.
 func JobName(runID string) string {
@@ -205,6 +218,10 @@ func labels(p JobParams) map[string]string {
 	}
 	set(LabelHead, p.HeadSHA)
 	set(LabelAPIClient, p.APIClient)
+	if p.PanelRole != "" {
+		set(LabelPanelMember, p.PanelMemberID)
+		set(LabelPanelRole, p.PanelRole)
+	}
 	return l
 }
 
@@ -266,7 +283,9 @@ func lockedDown() *corev1.SecurityContext {
 }
 
 // BuildJob builds the (not yet suspended) review Job; Launch suspends it.
+// With p.Panel set it is a review panel's merge (forPanel).
 func BuildJob(p JobParams) *batchv1.Job {
+	p = forPanel(p)
 	secret := secretsName(p)
 	hasInstructions := p.Inputs != nil && len(p.Inputs.Instructions) > 0
 	hasPrevious := p.Inputs != nil && len(p.Inputs.Previous) > 0
@@ -292,6 +311,12 @@ func BuildJob(p JobParams) *batchv1.Job {
 	}
 	if hasCarried {
 		args = append(args, "--carried=/in/carried.json")
+	}
+	if p.SkipSkillVerify {
+		args = append(args, "--no-skill-verify")
+	}
+	if p.Panel != nil {
+		args = append(args, panelArgs(p.Panel)...)
 	}
 	args = append(args,
 		"--scrub-instructions",
@@ -335,10 +360,14 @@ func BuildJob(p JobParams) *batchv1.Job {
 		// An environment variable for the same reason.
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_CHECK_DELETED", Value: "true"})
 	}
-	mainEnv = append(mainEnv,
-		secretEnv("OPENCODE_API_KEY", secret, keyLLMKey),
-		secretEnv("PERGENT_RESULT_TOKEN", secret, keyResultToken),
-	)
+	if p.Panel != nil {
+		mainEnv = append(mainEnv, panelEnv(p)...)
+	}
+	if p.Panel == nil || !p.Panel.NoJudge {
+		// --panel-no-judge runs no model, so Job P then gets no LLM key.
+		mainEnv = append(mainEnv, secretEnv("OPENCODE_API_KEY", secret, keyLLMKey))
+	}
+	mainEnv = append(mainEnv, secretEnv("PERGENT_RESULT_TOKEN", secret, keyResultToken))
 
 	checkout := corev1.Container{
 		Name:    containerCheckout,
@@ -391,6 +420,10 @@ func BuildJob(p JobParams) *batchv1.Job {
 		initContainers = append(initContainers, graphContainer(p))
 		pergent.VolumeMounts = append(pergent.VolumeMounts, corev1.VolumeMount{Name: "graph", MountPath: graphMount, ReadOnly: true})
 	}
+	if p.Panel != nil {
+		initContainers = append(initContainers, panelInputsContainer(p))
+		pergent.VolumeMounts = append(pergent.VolumeMounts, corev1.VolumeMount{Name: "panel", MountPath: panelMount, ReadOnly: true})
+	}
 
 	// ConfigMap keys can't contain "/", so items put each skill under skills/.
 	var items []corev1.KeyToPath
@@ -429,6 +462,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 	}
 	if hasGraph {
 		volumes = append(volumes, graphVolume())
+	}
+	if p.Panel != nil {
+		volumes = append(volumes, panelVolume())
 	}
 	if p.Import != nil {
 		// 0444: readable by any user the image runs as. Only the checkout
@@ -482,9 +518,11 @@ func ownerRef(job *batchv1.Job) []metav1.OwnerReference {
 }
 
 // BuildConfigMap holds the skills, instructions, previous review, carried
-// files, past dismissals, the change's description and the CI results. owner
-// may be nil (tests); Launch always passes the created Job.
+// files, past dismissals, the change's description and the CI results (for
+// Job P only what --panel takes). owner may be nil (tests); Launch always
+// passes the created Job.
 func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
+	p = forPanel(p)
 	data := map[string]string{}
 	if p.Inputs != nil {
 		for i, n := range skillNames(p.Inputs) {
@@ -521,19 +559,30 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 	}
 }
 
-// BuildSecret holds the per-Job credentials, owned by the Job.
+// BuildSecret holds the per-Job credentials, owned by the Job. A panel's
+// merge (p.Panel) holds model B's key too when it is not empty, and no LLM key
+// at all with --panel-no-judge; any other Job holds its own entry's key only.
 func BuildSecret(p JobParams, owner *batchv1.Job, s Secrets) *corev1.Secret {
+	data := map[string][]byte{
+		keyGitToken:    []byte(s.GitToken),
+		keyLLMKey:      []byte(s.LLMKey),
+		keyResultToken: []byte(s.ResultToken),
+	}
+	if p.Panel != nil {
+		switch {
+		case p.Panel.NoJudge:
+			delete(data, keyLLMKey)
+		case s.LLMKeyB != "":
+			data[keyLLMKeyB] = []byte(s.LLMKeyB)
+		}
+	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: secretsName(p), Namespace: p.Namespace, Labels: labels(p),
 			OwnerReferences: ownerRef(owner),
 		},
 		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			keyGitToken:    []byte(s.GitToken),
-			keyLLMKey:      []byte(s.LLMKey),
-			keyResultToken: []byte(s.ResultToken),
-		},
+		Data: data,
 	}
 }
 

@@ -239,3 +239,178 @@ func TestParseGraphCommands(t *testing.T) {
 		t.Error("get-graph took an ftp URL")
 	}
 }
+
+const testMemberResult = `{"skills":{}}` + "\n"
+
+// panelServer serves /runs/r1/panel/a and /b with the statuses given per
+// role, one per try (the last one repeats), and counts the tries.
+type panelServer struct {
+	mu       sync.Mutex
+	statuses map[string][]int
+	tries    map[string]int
+	auth     string
+}
+
+func (ps *panelServer) start(t *testing.T) *httptest.Server {
+	t.Helper()
+	ps.tries = map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ps.mu.Lock()
+		defer ps.mu.Unlock()
+		role := strings.TrimPrefix(r.URL.Path, "/runs/r1/panel/")
+		if r.Method != http.MethodGet || (role != "a" && role != "b") {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		ps.auth = r.Header.Get("Authorization")
+		list := ps.statuses[role]
+		status := list[min(ps.tries[role], len(list)-1)]
+		ps.tries[role]++
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_, _ = io.WriteString(w, testMemberResult)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func panelOpts(t *testing.T, srv *httptest.Server) getPanelOptions {
+	t.Helper()
+	return getPanelOptions{aURL: srv.URL + "/runs/r1/panel/a", bURL: srv.URL + "/runs/r1/panel/b", dir: t.TempDir()}
+}
+
+func noRetryWait(t *testing.T) {
+	t.Helper()
+	old := panelRetryWait
+	panelRetryWait = 0
+	t.Cleanup(func() { panelRetryWait = old })
+}
+
+// A member with no result (404) gets no file, at once, and get-panel still
+// exits 0; the other member's file is written.
+func TestGetPanelNotFoundWritesNothing(t *testing.T) {
+	noRetryWait(t)
+	ps := &panelServer{statuses: map[string][]int{"a": {http.StatusOK}, "b": {http.StatusNotFound}}}
+	o := panelOpts(t, ps.start(t))
+	t.Setenv("PERGENT_RESULT_TOKEN", "run-token")
+	var stderr bytes.Buffer
+	if code := runGetPanel(context.Background(), o, &stderr); code != 0 {
+		t.Errorf("exit = %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(o.dir, "b.json")); !os.IsNotExist(err) {
+		t.Errorf("b.json is there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(o.dir, "b.json.tmp")); !os.IsNotExist(err) {
+		t.Errorf("the temp file is there: %v", err)
+	}
+	if ps.tries["b"] != 1 {
+		t.Errorf("a 404 was tried %d times", ps.tries["b"])
+	}
+	got, err := os.ReadFile(filepath.Join(o.dir, "a.json"))
+	if err != nil || string(got) != testMemberResult {
+		t.Errorf("a.json = %q, %v", got, err)
+	}
+	if strings.Contains(stderr.String(), "run-token") {
+		t.Error("the token is in the log")
+	}
+}
+
+// get-panel writes each result whole, mode 0600, with the run token as bearer.
+func TestGetPanel(t *testing.T) {
+	noRetryWait(t)
+	ps := &panelServer{statuses: map[string][]int{"a": {http.StatusOK}, "b": {http.StatusOK}}}
+	o := panelOpts(t, ps.start(t))
+	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
+	for _, f := range []string{"a.json", "b.json"} {
+		path := filepath.Join(o.dir, f)
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != testMemberResult {
+			t.Errorf("%s = %q, %v", f, got, err)
+			continue
+		}
+		if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode = %v, %v; want 0600", f, st.Mode().Perm(), err)
+		}
+	}
+	if ps.auth != "Bearer run-token" {
+		t.Errorf("auth = %q", ps.auth)
+	}
+}
+
+// A failure is tried 3 times; a success on the third try writes the file,
+// and 3 failures write none.
+func TestGetPanelRetries(t *testing.T) {
+	noRetryWait(t)
+	ps := &panelServer{statuses: map[string][]int{
+		"a": {http.StatusBadGateway, http.StatusInternalServerError, http.StatusOK},
+		"b": {http.StatusServiceUnavailable},
+	}}
+	o := panelOpts(t, ps.start(t))
+	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
+	if got, err := os.ReadFile(filepath.Join(o.dir, "a.json")); err != nil || string(got) != testMemberResult {
+		t.Errorf("a.json = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(o.dir, "b.json")); !os.IsNotExist(err) {
+		t.Errorf("b.json is there after 3 failures: %v", err)
+	}
+	if ps.tries["a"] != 3 || ps.tries["b"] != 3 {
+		t.Errorf("tries = %v; want 3 each", ps.tries)
+	}
+}
+
+// A result over 10 MiB is not written, and not tried again.
+func TestGetPanelTooLarge(t *testing.T) {
+	noRetryWait(t)
+	if maxPanelGet != 10<<20 {
+		t.Errorf("maxPanelGet = %d, want 10 MiB", maxPanelGet)
+	}
+	old := maxPanelGet
+	maxPanelGet = 5
+	t.Cleanup(func() { maxPanelGet = old })
+	ps := &panelServer{statuses: map[string][]int{"a": {http.StatusOK}, "b": {http.StatusOK}}}
+	o := panelOpts(t, ps.start(t))
+	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
+	for _, f := range []string{"a.json", "b.json", "a.json.tmp"} {
+		if _, err := os.Stat(filepath.Join(o.dir, f)); !os.IsNotExist(err) {
+			t.Errorf("%s is there: %v", f, err)
+		}
+	}
+	if ps.tries["a"] != 1 {
+		t.Errorf("a result over the limit was tried %d times", ps.tries["a"])
+	}
+}
+
+// With no token, or no server, get-panel still exits 0.
+func TestRunGetPanelNeverFails(t *testing.T) {
+	noRetryWait(t)
+	o := getPanelOptions{aURL: "http://127.0.0.1:1/runs/r/panel/a", bURL: "http://127.0.0.1:1/runs/r/panel/b", dir: t.TempDir()}
+	t.Setenv("PERGENT_RESULT_TOKEN", "")
+	if code := runGetPanel(context.Background(), o, io.Discard); code != 0 {
+		t.Errorf("exit = %d with no token", code)
+	}
+	t.Setenv("PERGENT_RESULT_TOKEN", "tok")
+	if code := runGetPanel(context.Background(), o, io.Discard); code != 0 {
+		t.Errorf("exit = %d with no server", code)
+	}
+	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
+		t.Errorf("files written: %v", entries)
+	}
+}
+
+// get-panel parses as Job P's panel-inputs container calls it.
+func TestParseGetPanel(t *testing.T) {
+	cmd, err := parseArgs([]string{"get-panel", "--a-url=http://h:8080/runs/r/panel/a", "--b-url=http://h:8080/runs/r/panel/b", "--dir=/panel"}, io.Discard)
+	if err != nil || cmd.name != "get-panel" || cmd.getPanel.dir != "/panel" || cmd.getPanel.bURL != "http://h:8080/runs/r/panel/b" {
+		t.Errorf("get-panel = %+v, %v", cmd, err)
+	}
+	for _, args := range [][]string{
+		{"get-panel", "--a-url=ftp://h/a", "--b-url=http://h/b", "--dir=/panel"},
+		{"get-panel", "--a-url=http://h/a", "--dir=/panel"},
+		{"get-panel", "--a-url=http://h/a", "--b-url=http://h/b"},
+		{"get-panel", "--a-url=http://h/a", "--b-url=http://h/b", "--dir=/panel", "extra"},
+	} {
+		if _, err := parseArgs(args, io.Discard); err == nil {
+			t.Errorf("%q parsed", args)
+		}
+	}
+}
