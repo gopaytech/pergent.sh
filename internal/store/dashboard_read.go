@@ -159,7 +159,8 @@ func reviewDigestsSQL(visible string) string {
 }
 
 // runStatsSQL counts the runs started since $1 that were reviewed or are
-// being (not superseded, skipped or waiting for a start), per project, by outcome, through
+// being (not superseded, skipped or waiting for a start; a panel waiting for
+// its members is being reviewed), per project, by outcome, through
 // runs_project_created_idx; visible is from visibleCond with n = 2.
 func runStatsSQL(visible string) string {
 	return `SELECT r.instance, lower(r.project_path), count(*),
@@ -167,7 +168,8 @@ func runStatsSQL(visible string) string {
 		count(*) FILTER (WHERE ` + outcomeSQL + ` = 'blocking'),
 		count(*) FILTER (WHERE ` + outcomeSQL + ` = 'failed')
 	FROM runs r
-	WHERE r.created_at >= $1 AND r.state NOT IN ('superseded', 'skipped', 'waiting')` + visible + `
+	WHERE r.created_at >= $1
+	  AND (r.state NOT IN ('superseded', 'skipped', 'waiting') OR (r.state = 'waiting' AND r.skip_reason = 'panel_members'))` + visible + `
 	GROUP BY r.instance, lower(r.project_path)`
 }
 
@@ -223,7 +225,8 @@ type RunCounts struct {
 }
 
 // RunStats counts the runs v lets be read started at or after since that
-// weren't superseded, skipped or waiting for a start, by project. Approved counts the runs the approve bot
+// weren't superseded, skipped or waiting for a start (a panel waiting for its
+// members counts), by project. Approved counts the runs the approve bot
 // approved, also when the approval was withdrawn later.
 func (s *Store) RunStats(ctx context.Context, v Visibility, since time.Time) (map[PathKey]RunCounts, error) {
 	out := map[PathKey]RunCounts{}

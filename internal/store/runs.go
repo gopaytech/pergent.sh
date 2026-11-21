@@ -458,8 +458,9 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 // limits the run to those skills (nil or empty: all of them) and baseRunID is
 // the run whose results the new one keeps.
 //
-// A run of this head and target that is queued, running or reported (its
-// review not yet published) is not replaced or duplicated: created is false
+// A run of this head and target that is queued, running, reported (its
+// review not yet published) or a panel waiting for its members is not
+// replaced or duplicated: created is false
 // and id is that run's, nothing is changed. Superseding a reported run would
 // leave its commit status for the cleanup to cancel while the new run
 // is running. The exception is replace (a full review asked for): it
@@ -905,7 +906,8 @@ const undispatchedPushRunSQL = `state IN ('queued', 'running') AND dispatched_at
 const onItsWaySQL = ` AND (quota_checked OR dispatched_at IS NOT NULL OR trigger = 'start')`
 
 // ReviewActiveForRerun reports whether EnqueueRerun (with replace) would find
-// the head's review already queued, running or reported and queue nothing,
+// the head's review already queued, running, reported or a panel waiting for
+// its members, and queue nothing,
 // and the dispatcher won't hold that review for the quota.
 func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, targetBranch string, replace bool) (bool, error) {
 	var id string
@@ -917,8 +919,9 @@ func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, tar
 }
 
 // ReviewActiveForStart reports whether StartRun would find the head's review
-// already queued, running or reported and start nothing: a waiting run, or a
-// push's queued run that hasn't been dispatched, is one it starts. A review
+// already queued, running, reported or a panel waiting for its members, and
+// start nothing: any other waiting run, or a push's queued run that hasn't
+// been dispatched, is one it starts. A review
 // the dispatcher will hold for the quota doesn't count.
 func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, targetBranch string) (bool, error) {
 	var id string
@@ -936,8 +939,9 @@ func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, tar
 // queued run with TriggerStart (started is true, id is that run's), and so
 // does a push's run of it not dispatched yet, queued or claimed (being
 // checked): the dispatcher's hold then leaves it alone, and so does its CI
-// hold (a start skips the CI wait, and the quota check). With none, a live (queued, running or reported) run of that head and target is
-// left as it is and returned, started false. Otherwise a new queued TriggerStart run is
+// hold (a start skips the CI wait, and the quota check). With none, a live
+// (queued, running, reported, or a panel waiting for its members) run of that
+// head and target is left as it is and returned, started false. Otherwise a new queued TriggerStart run is
 // created, superseding the live runs of other heads and targets and an older
 // finished run of this one, as EnqueueRerun does. The caller checks the
 // merge request's re-run cap first.
