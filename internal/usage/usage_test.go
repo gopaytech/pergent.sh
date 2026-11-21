@@ -122,3 +122,50 @@ func sameCount(a, b *int64) bool {
 	}
 	return *a == *b
 }
+
+func TestModelRows(t *testing.T) {
+	body := []byte(`{"merged":true,"skills":[
+	 {"name":"security","tokens_by_model":[
+	  {"role":"a","provider":"p1","model":"m1","tokens":{"input":10,"output":2,"reasoning":1,"cache_read":4,"cache_write":3}},
+	  {"role":"b","provider":"p2","model":"m2","tokens":{"input":7,"output":1}}]},
+	 {"name":"style","tokens_by_model":[
+	  {"role":"a","provider":"p1","model":"m1","tokens":{"input":5,"output":5}},
+	  {"role":"b","provider":"p2","model":"m2","tokens":{"input":6,"output":6}}]}]}`)
+	got, err := ModelRows(body, store.Run{Trigger: store.TriggerPush})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || got[0].Skill != "security" || got[0].Role != "a" || got[1].Role != "b" || got[2].Skill != "style" {
+		t.Fatalf("rows = %+v", got)
+	}
+	a, b := got[0], got[1]
+	if a.Provider != "p1" || a.Model != "m1" || a.In != 10 || a.Out != 2 ||
+		!sameCount(a.Reasoning, i64(1)) || !sameCount(a.CacheRead, i64(4)) || !sameCount(a.CacheWrite, i64(3)) {
+		t.Errorf("a = %+v", a)
+	}
+	if b.Reasoning != nil || b.CacheRead != nil || b.CacheWrite != nil {
+		t.Errorf("b = %+v, want unknown counts", b)
+	}
+	sub, _ := ModelRows(body, store.Run{Trigger: store.TriggerRerunFailed, SkillSubset: []string{"style"}})
+	if len(sub) != 2 || sub[0].Skill != "style" {
+		t.Errorf("subset rows = %+v", sub)
+	}
+}
+
+func TestModelRowsNone(t *testing.T) {
+	got, err := ModelRows([]byte(`{"skills":[{"name":"a","tokens":{"input":1,"output":1}}]}`), store.Run{})
+	if err != nil || got != nil {
+		t.Errorf("got %+v, %v; want nil", got, err)
+	}
+}
+
+func TestModelRowsNegativeDropped(t *testing.T) {
+	body := []byte(`{"skills":[{"name":"a","tokens_by_model":[
+	 {"role":"a","model":"m","tokens":{"input":-1,"output":0}},
+	 {"role":"b","model":"m","tokens":{"input":1,"output":0,"cache_read":-5}},
+	 {"role":"b","model":"n","tokens":{"input":2,"output":0}}]}]}`)
+	got, err := ModelRows(body, store.Run{})
+	if err != nil || len(got) != 1 || got[0].Model != "n" {
+		t.Errorf("got %+v, %v; want only the valid row", got, err)
+	}
+}
