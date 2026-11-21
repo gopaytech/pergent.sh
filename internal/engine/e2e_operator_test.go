@@ -260,7 +260,8 @@ func TestLLMEditable(t *testing.T) {
 	// one that replaces the model in use would be.
 	put := func(model, key string) {
 		t.Helper()
-		body := map[string]string{"provider": "anthropic", "model": model, "baseURL": "https://llm.example.com/v1", "apiKey": key}
+		// A name is required; the model's own is unique here.
+		body := map[string]string{"name": model, "provider": "anthropic", "model": model, "baseURL": "https://llm.example.com/v1", "apiKey": key}
 		status, out := e.write(t, ops, http.MethodPost, "/api/admin/models", body)
 		if status != http.StatusCreated {
 			t.Fatalf("POST /api/admin/models = %d: %s", status, out)
