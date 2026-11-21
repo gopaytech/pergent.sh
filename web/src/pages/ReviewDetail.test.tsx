@@ -338,6 +338,8 @@ describe("ReviewDetail", () => {
         body: {
           ...runDetail,
           run: { ...reviewDetail.runs[0], id: dropped, outcome: "fell_back", reason: "quota" },
+          approved: false,
+          approvalReason: "quota",
           latestDecided: false,
           skills: [],
           entry: { name: "Claude Sonnet", position: 1, length: 2, source: "global", team: "" },
@@ -349,6 +351,10 @@ describe("ReviewDetail", () => {
     expect(await within(run).findByText("Model chain: Claude Sonnet · entry 1 of 2 · global", { exact: false })).toBeInTheDocument();
     expect(fake.find("GET", `/api/runs/${dropped}`)).toHaveLength(1);
     expect(screen.getByText("Retried on backup")).toBeInTheDocument();
+    // The reason is the class the store keeps (quota), said in words.
+    expect(run).toHaveTextContent("Approved: no — out of quota");
+    expect(screen.getByRole("region", { name: "Skills" })).toHaveTextContent("This run has no skill results: out of quota");
+    expect(run).not.toHaveTextContent("— quota");
     // No run of the history is the one shown.
     const history = screen.getByRole("region", { name: "Review history" });
     expect(within(history).queryByRole("link", { current: "true" })).not.toBeInTheDocument();
