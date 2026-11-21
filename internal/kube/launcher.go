@@ -33,6 +33,12 @@ type Launcher struct {
 // deleted and the original error returned.
 func (l *Launcher) Launch(ctx context.Context, p JobParams, s Secrets) error {
 	p.Namespace = l.Namespace
+	if p.Panel != nil {
+		// The env names model B's key only when the Secret holds it.
+		pp := *p.Panel
+		pp.HasKeyB = s.LLMKeyB != ""
+		p.Panel = &pp
+	}
 	if err := checkLinkedClones(p.LinkedClones); err != nil {
 		return err
 	}

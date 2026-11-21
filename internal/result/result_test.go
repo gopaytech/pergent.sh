@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1221,5 +1222,111 @@ func TestParseProviderError(t *testing.T) {
 				t.Errorf("ProviderError = %+v, want %+v", r.ProviderError, tc.want)
 			}
 		})
+	}
+}
+
+const panelResultJSON = `{"schema_version":1,"status":"completed","base":"b","head":"h",
+ "panel":{"a":{"provider":"pa","model":"ma"},"b":{"provider":"pb","model":"mb"},"mode":"both","judged":true},
+ "provider_error":{"class":"quota","role":"b","provider":"pb","model":"mb"},
+ "skills":[{"name":"sec","verdict":"failed",
+  "panel":{"mode":"both","judges":[
+    {"role":"a","status":"ok"},
+    {"role":"b","status":"failed","cause":{"kind":"provider","message":"m","provider_error":{"class":"quota","role":"b"}}},
+    {"role":"a","status":"skipped"}]},
+  "tokens_by_model":[{"role":"a","provider":"pa","model":"ma","tokens":{"input":1,"output":2,"reasoning":3,"cache_read":4,"cache_write":5}}],
+  "findings":[{"id":"aaaaaa","fingerprint":"aaaaaa111111","file":"x.go","severity":"blocking","title":"T","explanation":"E",
+    "panel":{"found_by":"both","also":["cccccc333333"],"disagreed_by":"b","reason":"r","rated_suggestion_by":"a","unjudged_by":"b"}},
+   {"fingerprint":"bbbbbb222222","file":"y.go","severity":"suggestion","title":"S","explanation":"E2"}],
+  "files":{"reviewed":["x.go"]}}],
+ "comment":{"markdown":"x"}}`
+
+func TestParsePanelResult(t *testing.T) {
+	r, err := Parse([]byte(panelResultJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Panel == nil || r.Panel.A.Model != "ma" || r.Panel.B.Provider != "pb" || r.Panel.Mode != "both" || !r.Panel.Judged {
+		t.Errorf("panel = %+v", r.Panel)
+	}
+	if r.ProviderError == nil || r.ProviderError.Role != "b" {
+		t.Errorf("provider_error = %+v", r.ProviderError)
+	}
+	s := r.Skills[0]
+	if s.Panel == nil || s.Panel.Mode != "both" || len(s.Panel.Judges) != 3 || s.Panel.Judges[1].Cause == nil ||
+		s.Panel.Judges[1].Cause.ProviderError == nil || s.Panel.Judges[1].Cause.ProviderError.Role != "b" {
+		t.Errorf("skill panel = %+v", s.Panel)
+	}
+	if len(s.TokensByModel) != 1 || s.TokensByModel[0].Role != "a" || s.TokensByModel[0].Tokens.CacheWrite != 5 {
+		t.Errorf("tokens_by_model = %+v", s.TokensByModel)
+	}
+	fs := skillFindings(t, s)
+	want := &FindingPanel{FoundBy: "both", Also: []string{"cccccc333333"}, DisagreedBy: "b", Reason: "r", RatedSuggestionBy: "a", UnjudgedBy: "b"}
+	if !reflect.DeepEqual(fs[0].Panel, want) || fs[1].Panel != nil {
+		t.Errorf("finding panels = %+v, %+v", fs[0].Panel, fs[1].Panel)
+	}
+}
+
+func TestToRenderPanelFields(t *testing.T) {
+	r, err := Parse([]byte(panelResultJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ToRender(r)
+	// The failed judge b counts, and so does the skipped judge a (not exact).
+	if got[0].Panel == nil || !reflect.DeepEqual(*got[0].Panel, render.SkillPanel{Mode: "both", JudgeFailed: []string{"b", "a"}}) {
+		t.Errorf("skill panel = %+v", got[0].Panel)
+	}
+	want := &render.FindingPanel{FoundBy: "both", Also: []string{"cccccc333333"}, DisagreedBy: "b", Reason: "r", RatedSuggestionBy: "a", UnjudgedBy: "b"}
+	if !reflect.DeepEqual(got[0].Findings[0].Panel, want) || got[0].Findings[1].Panel != nil {
+		t.Errorf("finding panels = %+v, %+v", got[0].Findings[0].Panel, got[0].Findings[1].Panel)
+	}
+
+	// An exact merge: a skipped judge is not listed, a failed one is.
+	exact := strings.Replace(panelResultJSON, `"mode":"both","judges"`, `"mode":"both","exact_merge":true,"judges"`, 1)
+	r2, err := Parse([]byte(exact))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := ToRender(r2)[0].Panel; !reflect.DeepEqual(*p, render.SkillPanel{Mode: "both", JudgeFailed: []string{"b"}, Exact: true}) {
+		t.Errorf("exact skill panel = %+v", p)
+	}
+}
+
+func TestToRenderNoPanelUnchanged(t *testing.T) {
+	data := `{"schema_version":1,"status":"completed","skills":[
+	  {"name":"a","verdict":"no_blocking_issues",
+	   "findings":[{"id":"aaaaaa","fingerprint":"aaaaaa111111","file":"x.go","line":4,"severity":"blocking","title":"T","explanation":"E"}],
+	   "files":{"reviewed":["x.go"]},"batches":1,"batches_finished":1}],
+	  "comment":{"markdown":"x"}}`
+	r, err := Parse([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []render.Skill{{
+		Name: "a", Verdict: "no_blocking_issues", Reviewed: []string{"x.go"}, Batches: 1, BatchesFinished: 1,
+		Findings: []render.Finding{{ID: "aaaaaa", Fingerprint: "aaaaaa111111", File: "x.go", Line: 4, Severity: render.Blocking, Title: "T", Explanation: "E"}},
+	}}
+	if got := ToRender(r); !reflect.DeepEqual(got, want) {
+		t.Errorf("ToRender = %+v\nwant %+v", got, want)
+	}
+}
+
+func TestMergeKeepsPanelFields(t *testing.T) {
+	base := []byte(panelResultJSON)
+	partial := []byte(strings.Replace(panelResultJSON, `"fingerprint":"aaaaaa111111"`, `"fingerprint":"dddddd444444"`, 1))
+	merged, err := Merge(partial, base, []string{"sec"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := Parse(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Panel == nil || r.Skills[0].Panel == nil || len(r.Skills[0].TokensByModel) != 1 {
+		t.Errorf("merged lost panel fields: %+v", r.Skills[0])
+	}
+	fs := skillFindings(t, r.Skills[0])
+	if fs[0].Fingerprint != "dddddd444444" || fs[0].Panel == nil || fs[0].Panel.FoundBy != "both" || fs[0].Panel.Reason != "r" {
+		t.Errorf("merged finding = %+v", fs[0])
 	}
 }

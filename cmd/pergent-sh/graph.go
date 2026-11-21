@@ -12,11 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gopaytech/pergent/graph"
 
 	"github.com/gopaytech/pergent.sh/internal/codegraph"
+	"github.com/gopaytech/pergent.sh/internal/kube"
 )
 
 // post-graph runs in the "post" container of a graph build Job
@@ -32,20 +34,42 @@ import (
 // with the run's result token (PERGENT_RESULT_TOKEN) to --out, written whole
 // or not at all. It always exits 0: a review with no graph is a review as
 // before.
+//
+// get-panel runs in the "panel-inputs" init container of a review panel's
+// merge Job (kube.BuildJob with a panel). It downloads member A's and member
+// B's results from --a-url and --b-url to <dir>/a.json and <dir>/b.json, with
+// the same code and token as get-graph, both at the same time. A member with
+// no result (404), a refused token (401, 403), a redirect, or one that still
+// fails after 3 tries, gets no file. It always exits 0: pergent merges what it
+// gets, and says so.
 
 type postGraphOptions struct{ work, out, resultURL string }
 
 type getGraphOptions struct{ url, out string }
+
+type getPanelOptions struct{ aURL, bURL, dir string }
 
 var (
 	// maxGraphPost and maxGraphGet are graph.MaxBytes, as variables so the
 	// tests can lower them.
 	maxGraphPost int64 = graph.MaxBytes
 	maxGraphGet  int64 = graph.MaxBytes
+	// maxPanelGet bounds one member result (10 MiB), as a variable for the
+	// tests.
+	maxPanelGet int64 = 10 << 20
+	// panelRetryWait is the wait before the second try; it doubles before
+	// the third. A variable so the tests can drop it.
+	panelRetryWait = time.Second
 )
 
-// getGraphTimeout bounds the whole download.
-const getGraphTimeout = 2 * time.Minute
+const (
+	// getGraphTimeout bounds the whole download; getPanelTimeout bounds
+	// get-panel's, both results and every try (Job P's deadline counts it).
+	getGraphTimeout = 2 * time.Minute
+	getPanelTimeout = kube.PanelFetchTimeout
+	// panelTries is how many times get-panel asks for one result.
+	panelTries = 3
+)
 
 func parsePostGraphArgs(args []string, stderr io.Writer) (postGraphOptions, error) {
 	flags := flag.NewFlagSet("post-graph", flag.ContinueOnError)
@@ -84,10 +108,36 @@ func parseGetGraphArgs(args []string, stderr io.Writer) (getGraphOptions, error)
 	case o.url == "" || o.out == "":
 		return getGraphOptions{}, errors.New("get-graph needs --url and --out\n" + usage)
 	}
-	if u, err := url.Parse(o.url); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if !httpURL(o.url) {
 		return getGraphOptions{}, errors.New("--url must be an http or https URL")
 	}
 	return o, nil
+}
+
+func parseGetPanelArgs(args []string, stderr io.Writer) (getPanelOptions, error) {
+	flags := flag.NewFlagSet("get-panel", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var o getPanelOptions
+	flags.StringVar(&o.aURL, "a-url", "", "member A's result URL")
+	flags.StringVar(&o.bURL, "b-url", "", "member B's result URL")
+	flags.StringVar(&o.dir, "dir", "", "the folder to write a.json and b.json in")
+	if err := flags.Parse(args); err != nil {
+		return getPanelOptions{}, err
+	}
+	switch {
+	case flags.NArg() > 0:
+		return getPanelOptions{}, fmt.Errorf("unexpected argument %q\n%s", flags.Arg(0), usage)
+	case o.aURL == "" || o.bURL == "" || o.dir == "":
+		return getPanelOptions{}, errors.New("get-panel needs --a-url, --b-url and --dir\n" + usage)
+	case !httpURL(o.aURL) || !httpURL(o.bURL):
+		return getPanelOptions{}, errors.New("--a-url and --b-url must be http or https URLs")
+	}
+	return o, nil
+}
+
+func httpURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 // runPostGraph is the post-graph command. It exits 0 when pergent.sh took
@@ -185,21 +235,102 @@ func runGetGraph(ctx context.Context, o getGraphOptions, stderr io.Writer) int {
 // getGraph downloads the graph to o.out through a temp file beside it, so the
 // file is whole or not there. Every failure is one log line.
 func getGraph(ctx context.Context, o getGraphOptions, token string, client *http.Client, stderr io.Writer) {
-	if err := downloadGraph(ctx, o, token, client); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, getGraphTimeout)
+	defer cancel()
+	d := download{url: o.url, out: o.out, token: token, max: maxGraphGet, mode: 0o644,
+		notFound: "no graph for this review", tooLarge: "the graph is over the size limit"}
+	if err := d.get(ctx, client); err != nil {
 		fmt.Fprintln(stderr, "graph: not downloaded:", err)
 		return
 	}
 	fmt.Fprintln(stderr, "graph: downloaded")
 }
 
-func downloadGraph(ctx context.Context, o getGraphOptions, token string, client *http.Client) error {
-	ctx, cancel := context.WithTimeout(ctx, getGraphTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.url, nil)
-	if err != nil {
-		return errors.New("bad URL")
+// runGetPanel is the get-panel command. It always exits 0.
+func runGetPanel(ctx context.Context, o getPanelOptions, stderr io.Writer) int {
+	token := os.Getenv("PERGENT_RESULT_TOKEN")
+	if token == "" {
+		fmt.Fprintln(stderr, "panel: not downloaded: PERGENT_RESULT_TOKEN is not set")
+		return 0
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	getPanel(ctx, o, token, newResultClient(), stderr)
+	return 0
+}
+
+// getPanel downloads each member's result, whole or not at all. Mode 0644,
+// as get-graph's: the pergent container runs as another user, and the file is
+// in the Job's own volume and holds no key.
+// The 2 results download side by side under one budget, so a member that
+// hangs does not use up the other's tries. A failure other than a 404, a 401,
+// a 403, a redirect or a result over the limit is tried again, up to
+// panelTries times. Every outcome is one log line per member, A then B.
+func getPanel(ctx context.Context, o getPanelOptions, token string, client *http.Client, stderr io.Writer) {
+	ctx, cancel := context.WithTimeout(ctx, getPanelTimeout)
+	defer cancel()
+	members := []struct{ role, url string }{{"a", o.aURL}, {"b", o.bURL}}
+	errs := make([]error, len(members))
+	var wg sync.WaitGroup
+	for i, m := range members {
+		d := download{url: m.url, out: filepath.Join(o.dir, m.role+".json"), token: token, max: maxPanelGet, mode: 0o644,
+			notFound: "no result for this member", tooLarge: "the result is over the size limit"}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = d.getWithRetry(ctx, client, panelTries, panelRetryWait)
+		}()
+	}
+	wg.Wait()
+	for i, m := range members {
+		if errs[i] != nil {
+			fmt.Fprintf(stderr, "panel %s: not downloaded: %v\n", m.role, errs[i])
+			continue
+		}
+		fmt.Fprintf(stderr, "panel %s: downloaded\n", m.role)
+	}
+}
+
+// download is one file a Job's init container fetches from pergent.sh with
+// the run's result token: get-graph's and get-panel's shared code.
+type download struct {
+	url, out, token    string
+	max                int64
+	mode               os.FileMode
+	notFound, tooLarge string // the messages of a 404 and of a file over max
+}
+
+// finalError is a failure that another try would not change.
+type finalError struct{ msg string }
+
+func (e finalError) Error() string { return e.msg }
+
+// getWithRetry is get, tried up to tries times while the failure is not
+// final, waiting wait, then twice that, between tries.
+func (d download) getWithRetry(ctx context.Context, client *http.Client, tries int, wait time.Duration) error {
+	var err error
+	for i := 0; i < tries; i++ {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return err
+			case <-time.After(wait):
+			}
+			wait *= 2
+		}
+		if err = d.get(ctx, client); err == nil || errors.As(err, new(finalError)) {
+			return err
+		}
+	}
+	return err
+}
+
+// get writes the file to d.out through a temp file beside it, so the file is
+// whole or not there.
+func (d download) get(ctx context.Context, client *http.Client) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
+	if err != nil {
+		return finalError{"bad URL"}
+	}
+	req.Header.Set("Authorization", "Bearer "+d.token)
 	resp, err := client.Do(req)
 	if err != nil {
 		return errors.New("pergent.sh can't be reached")
@@ -207,16 +338,20 @@ func downloadGraph(ctx context.Context, o getGraphOptions, token string, client 
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
-		return errors.New("no graph for this review")
+		return finalError{d.notFound}
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden,
+		resp.StatusCode >= 300 && resp.StatusCode < 400:
+		// Another try would get the same answer (redirects are not followed).
+		return finalError{"pergent.sh answered " + resp.Status}
 	case resp.StatusCode != http.StatusOK:
 		return fmt.Errorf("pergent.sh answered %s", resp.Status)
 	}
-	tmp := o.out + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	tmp := d.out + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, d.mode)
 	if err != nil {
 		return fmt.Errorf("create the file: %w", err)
 	}
-	n, err := io.Copy(f, io.LimitReader(resp.Body, maxGraphGet+1))
+	n, err := io.Copy(f, io.LimitReader(resp.Body, d.max+1))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -224,11 +359,11 @@ func downloadGraph(ctx context.Context, o getGraphOptions, token string, client 
 	case err != nil:
 		_ = os.Remove(tmp)
 		return errors.New("the download broke off")
-	case n > maxGraphGet:
+	case n > d.max:
 		_ = os.Remove(tmp)
-		return errors.New("the graph is over the size limit")
+		return finalError{d.tooLarge}
 	}
-	if err := os.Rename(tmp, o.out); err != nil {
+	if err := os.Rename(tmp, d.out); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("write the file: %w", err)
 	}

@@ -508,6 +508,44 @@ paths:
             text/plain:
               schema: {type: string}
         '500': {$ref: '#/components/responses/PlainTextError'}
+  /runs/{id}/panel/{role}:
+    get:
+      operationId: getRunPanelMember
+      tags: [Job callbacks]
+      summary: Download a panel member's result
+      description: |
+        Called by a review panel's merge Job with the merge Job's result
+        token. Answers the agent result of member `a` or `b` of the panel, as
+        the member posted it. Every refusal, a missing or wrong token
+        included, is the same 404. Only registered when the install keeps
+        review panels; else 404.
+      x-pergent-access: none
+      security:
+        - runResultToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The merge run's id.
+          schema: {type: string}
+        - name: role
+          in: path
+          required: true
+          description: The panel member whose result to read.
+          schema: {type: string, enum: [a, b]}
+      responses:
+        '200':
+          description: The member's agent result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/result.Result'
+        '404':
+          description: No result for this run and member.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
   /healthz:
     get:
       operationId: getHealth
@@ -8377,6 +8415,8 @@ components:
         suggestion: {type: string}
         linked:
           $ref: '#/components/schemas/result.Linked'
+        panel:
+          $ref: '#/components/schemas/result.FindingPanel'
       additionalProperties: true
       required: [file, severity, title]
     result.Linked:
@@ -8449,6 +8489,8 @@ components:
           - $ref: '#/components/schemas/result.RulesInfo'
           - type: 'null'
           description: Set by a pergent that runs with path rules, even when no file had one. Absent from an older image.
+        panel:
+          $ref: '#/components/schemas/result.Panel'
       additionalProperties: true
       required: [schema_version, status, comment]
     result.Skill:
@@ -8482,6 +8524,12 @@ components:
           type: integer
           description: The model's own score, 1 to 5 (0 when it gave none).
         confidence_reason: {type: string}
+        panel:
+          $ref: '#/components/schemas/result.SkillPanel'
+        tokens_by_model:
+          type: array
+          items: {$ref: '#/components/schemas/result.ModelTokens'}
+          description: The tokens of the skill's runs, one entry per panel model. Only in a review panel's merge result.
       additionalProperties: true
     result.ProviderError:
       description: What pergent read from the provider's error. The provider's response body is never in it.
@@ -8496,8 +8544,115 @@ components:
           description: The HTTP status; absent when opencode gave none.
         provider: {type: string}
         model: {type: string}
+        role:
+          type: string
+          enum: [a, b]
+          description: The panel model of a judge run's error. Only in a review panel's merge result.
       additionalProperties: true
       required: [class]
+    result.Panel:
+      description: The two models of a review panel and how their results were merged. Only in a review panel's merge result.
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/result.PanelMember'}
+        b: {$ref: '#/components/schemas/result.PanelMember'}
+        mode:
+          type: string
+          enum: [both, a_only, b_only, none]
+          description: Which members gave a result to merge.
+        judged:
+          type: boolean
+          description: False when no judge run was allowed.
+      additionalProperties: true
+      required: [a, b, mode, judged]
+    result.PanelMember:
+      description: The model of one panel member.
+      type: object
+      properties:
+        provider: {type: string}
+        model: {type: string}
+      additionalProperties: true
+      required: [provider, model]
+    result.SkillPanel:
+      description: How one skill's results were merged. Only in a review panel's merge result.
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [both, a_only, b_only, none]
+        judges:
+          type: array
+          items: {$ref: '#/components/schemas/result.PanelJudge'}
+        exact_merge:
+          type: boolean
+          description: True when the merge was exact and needed no judge.
+      additionalProperties: true
+      required: [mode]
+    result.PanelJudge:
+      description: One judge run of a review panel.
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [a, b]
+          description: The model that judged.
+        status:
+          type: string
+          enum: [ok, failed, not_run, skipped]
+        cause: {$ref: '#/components/schemas/result.Cause'}
+      additionalProperties: true
+      required: [role, status]
+    result.Cause:
+      description: Why a judge run failed.
+      type: object
+      properties:
+        kind: {type: string}
+        message: {type: string}
+        provider_error: {$ref: '#/components/schemas/result.ProviderError'}
+      additionalProperties: true
+      required: [kind, message]
+    result.FindingPanel:
+      description: What a review panel's merge says about one finding. Only in a review panel's merge result.
+      type: object
+      properties:
+        found_by:
+          type: string
+          enum: [a, b, both]
+        also:
+          type: array
+          items: {type: string}
+          description: Fingerprints of the other findings merged into this one. A dismissal of any of them dismisses this finding.
+        disagreed_by:
+          type: string
+          description: The member that did not agree.
+        reason: {type: string}
+        rated_suggestion_by: {type: string}
+        unjudged_by: {type: string}
+      additionalProperties: true
+      required: [found_by]
+    result.ModelTokens:
+      description: The tokens of a skill's runs on one panel model.
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [a, b]
+        provider: {type: string}
+        model: {type: string}
+        tokens: {$ref: '#/components/schemas/result.Tokens'}
+      additionalProperties: true
+      required: [role, provider, model, tokens]
+    result.Tokens:
+      description: Model usage of runs.
+      type: object
+      properties:
+        input: {type: integer}
+        output: {type: integer}
+        reasoning: {type: integer}
+        cache_read: {type: integer}
+        cache_write: {type: integer}
+      additionalProperties: true
+      required: [input, output, reasoning, cache_read, cache_write]
     result.Renamed:
       description: A reviewed file the change renamed. `path` is its new path, which `reviewed` also lists.
       type: object

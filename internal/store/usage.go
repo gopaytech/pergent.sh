@@ -891,3 +891,11 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 // notFellBack keeps the run_usage rows of runs not dropped for the next entry
 // of their chain.
 const notFellBack = `NOT EXISTS (SELECT 1 FROM runs fb WHERE fb.id = run_usage.run_id AND fb.outcome = 'fell_back')`
+
+// ModelUsage is what one skill used on one model of a panel. CacheRead,
+// CacheWrite and Reasoning are nil when the result didn't report them.
+type ModelUsage struct {
+	Skill, Role, Provider, Model     string
+	In, Out                          int64
+	CacheRead, CacheWrite, Reasoning *int64
+}

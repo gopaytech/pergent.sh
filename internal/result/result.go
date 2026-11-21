@@ -45,6 +45,9 @@ type Result struct {
 	// image, whose review page says it does not use rules.
 	Rules *RulesInfo `json:"rules,omitempty"`
 
+	// Panel names the review panel's two models; absent without a panel.
+	Panel *Panel `json:"panel,omitempty"`
+
 	// Merged is set by Merge on a result that carries kept skills of an
 	// earlier run: its comment covers only the skills that were re-run, so
 	// the comment is always rendered again from the skills. MergeNote is set
@@ -91,6 +94,10 @@ type Skill struct {
 	// render applies the caps.
 	Confidence       int    `json:"confidence,omitempty"`
 	ConfidenceReason string `json:"confidence_reason,omitempty"`
+
+	// Panel and TokensByModel are set only for a review panel's skill.
+	Panel         *SkillPanel   `json:"panel,omitempty"`
+	TokensByModel []ModelTokens `json:"tokens_by_model,omitempty"`
 }
 
 // Finding is one finding of a skill, as the result stores it.
@@ -105,6 +112,9 @@ type Finding struct {
 	Explanation  string `json:"explanation"`
 	SuggestedFix string `json:"suggested_fix,omitempty"`
 	Suggestion   string `json:"suggestion,omitempty"`
+
+	// Panel is what a review panel's merge says about the finding.
+	Panel *FindingPanel `json:"panel,omitempty"`
 
 	// Linked is the caller, in a linked repository, that a finding of the
 	// impact skill says the change breaks. It is nil on every other finding.
@@ -223,6 +233,73 @@ type ProviderError struct {
 	Status   int    `json:"status,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
+	// Role is the panel model ("a" or "b") of a judge run's error; empty
+	// for every other provider error.
+	Role string `json:"role,omitempty"`
+}
+
+// Panel is what a review panel's merge says about its members: Mode is
+// "both", "a_only" or "b_only"; Judged is false when no judge run was allowed.
+type Panel struct {
+	A      PanelMember `json:"a"`
+	B      PanelMember `json:"b"`
+	Mode   string      `json:"mode"`
+	Judged bool        `json:"judged"`
+}
+
+// PanelMember names a member's model.
+type PanelMember struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// SkillPanel is how a skill was merged.
+type SkillPanel struct {
+	Mode       string       `json:"mode"`
+	Judges     []PanelJudge `json:"judges,omitempty"`
+	ExactMerge bool         `json:"exact_merge,omitempty"`
+}
+
+// PanelJudge is one judge run: Role is the model that judged. Status is
+// "ok", "failed" or "skipped" (pergent's text, kept as it came).
+type PanelJudge struct {
+	Role   string `json:"role"`
+	Status string `json:"status"`
+	Cause  *Cause `json:"cause,omitempty"`
+}
+
+// Cause is why a judge run failed.
+type Cause struct {
+	Kind          string         `json:"kind"`
+	Message       string         `json:"message"`
+	ProviderError *ProviderError `json:"provider_error,omitempty"`
+}
+
+// FindingPanel is what the merge says about a finding.
+type FindingPanel struct {
+	FoundBy           string   `json:"found_by"`
+	Also              []string `json:"also,omitempty"`
+	DisagreedBy       string   `json:"disagreed_by,omitempty"`
+	Reason            string   `json:"reason,omitempty"`
+	RatedSuggestionBy string   `json:"rated_suggestion_by,omitempty"`
+	UnjudgedBy        string   `json:"unjudged_by,omitempty"`
+}
+
+// ModelTokens is the tokens of a skill's runs on one model.
+type ModelTokens struct {
+	Role     string `json:"role"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Tokens   Tokens `json:"tokens"`
+}
+
+// Tokens is the model usage of runs.
+type Tokens struct {
+	Input      int `json:"input"`
+	Output     int `json:"output"`
+	Reasoning  int `json:"reasoning"`
+	CacheRead  int `json:"cache_read"`
+	CacheWrite int `json:"cache_write"`
 }
 
 // Comment is the rendered comment, ready to post.
@@ -292,6 +369,7 @@ func ToRender(r *Result) []render.Skill {
 			Confidence: s.Confidence, ConfidenceReason: s.ConfidenceReason,
 			Findings: []render.Finding{},
 		}
+		rs.Panel = renderSkillPanel(s.Panel)
 		for _, f := range findings[i] {
 			id := f.ID
 			if id == "" {
@@ -301,6 +379,7 @@ func ToRender(r *Result) []render.Skill {
 				ID: id, Fingerprint: f.Fingerprint, File: f.File, Line: f.Line, EndLine: f.EndLine,
 				Severity: render.Severity(f.Severity), Title: f.Title,
 				Explanation: f.Explanation, SuggestedFix: f.SuggestedFix, Suggestion: f.Suggestion,
+				Panel: renderFindingPanel(f.Panel),
 			})
 		}
 		for _, f := range s.Failures {
@@ -329,6 +408,32 @@ func ToRender(r *Result) []render.Skill {
 		out[i] = rs
 	}
 	return out
+}
+
+// renderSkillPanel is the skill's panel for render: JudgeFailed lists the
+// judges that failed, and the skipped ones unless the merge was exact (an
+// exact merge has its own note). It is pergent's own rule.
+func renderSkillPanel(p *SkillPanel) *render.SkillPanel {
+	if p == nil {
+		return nil
+	}
+	rp := &render.SkillPanel{Mode: p.Mode, Exact: p.ExactMerge}
+	for _, j := range p.Judges {
+		if j.Status == "failed" || (j.Status == "skipped" && !p.ExactMerge) {
+			rp.JudgeFailed = append(rp.JudgeFailed, j.Role)
+		}
+	}
+	return rp
+}
+
+func renderFindingPanel(p *FindingPanel) *render.FindingPanel {
+	if p == nil {
+		return nil
+	}
+	return &render.FindingPanel{
+		FoundBy: p.FoundBy, Also: p.Also, DisagreedBy: p.DisagreedBy, Reason: p.Reason,
+		RatedSuggestionBy: p.RatedSuggestionBy, UnjudgedBy: p.UnjudgedBy,
+	}
 }
 
 // ChangedFiles is the paths of every file any skill reviewed, skipped or
