@@ -14,6 +14,7 @@ import (
 
 	"github.com/gopaytech/pergent/rule"
 
+	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -402,5 +403,67 @@ func TestDispatchPanelChainBUnreadable(t *testing.T) {
 	wantOnlyA(t, env, id, "chain B could not be read")
 	if !strings.Contains(env.Logs(), "chain B") {
 		t.Errorf("the error was not logged:\n%s", env.Logs())
+	}
+}
+
+// Why B can't run: the quota when only it and A's model stopped the
+// entries, A's model when only it did, else no usable entry.
+func TestPanelOffReason(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		reasons []string
+		want    string
+	}{
+		{"no entry", nil, panelOffNone},
+		{"quota only", []string{chain.ReasonInstanceQuota, chain.ReasonInstanceQuota}, panelOffQuota},
+		{"same model only", []string{chain.ReasonSameModel}, panelOffSame},
+		{"same model and quota", []string{chain.ReasonSameModel, chain.ReasonInstanceQuota}, panelOffQuota},
+		{"quota and same model", []string{chain.ReasonInstanceQuota, chain.ReasonSameModel}, panelOffQuota},
+		{"same model and a removed entry", []string{chain.ReasonSameModel, chain.ReasonRemoved}, panelOffNone},
+		{"quota and a mark", []string{chain.ReasonInstanceQuota, store.ClassQuota}, panelOffNone},
+		{"no key", []string{chain.ReasonKeyUnusable}, panelOffNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var dec chain.Decision
+			for _, r := range tc.reasons {
+				dec.Skips = append(dec.Skips, chain.Skip{Reason: r})
+			}
+			if got := panelOffReason(dec); got != tc.want {
+				t.Errorf("panelOffReason(%v) = %q, want %q", tc.reasons, got, tc.want)
+			}
+		})
+	}
+}
+
+// A run released once its members are done keeps its dispatched_at: its next
+// dispatch never splits it again or writes an off row, and it is not left
+// claimed with no Job (it gets today's Job until Job P, S3.8).
+func TestDispatchReleasedPanelNotSplitAgain(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	env := newTestEnv(t)
+	globalChainB(t, env)
+	head := sha('a')
+	id := dispatchMR(t, env, 3, head)
+	dispatch(t, env)
+	for _, m := range members(t, env, id) {
+		token := string(env.Secret(m.ID).Data["result-token"])
+		if out, err := env.Store.StoreMemberResult(env.ctx, m.ID, token, resultFor(t, head, reviewed("no_blocking_issues", "a.go")), env.Now()); err != nil || out != store.ResultStored {
+			t.Fatalf("StoreMemberResult = %v, %v", out, err)
+		}
+		if st, err := env.Store.SettleMember(env.ctx, m.ID); err != nil || st != store.MemberDone {
+			t.Fatalf("SettleMember = %q, %v", st, err)
+		}
+	}
+	if released, _, err := env.Store.ReleasePanel(env.ctx, id, env.Now()); err != nil || !released {
+		t.Fatalf("ReleasePanel = %v, %v", released, err)
+	}
+
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Running || r.JobName != kube.JobName(id) {
+		t.Errorf("run = %s job %q; want running with a Job\n%s", r.State, r.JobName, env.Logs())
+	}
+	ms := members(t, env, id)
+	if len(ms) != 2 || ms[0].State != store.MemberDone || ms[1].State != store.MemberDone {
+		t.Errorf("members = %+v; want the 2 done ones and no off row", ms)
 	}
 }

@@ -60,6 +60,10 @@ func (d *dispatcher) failExhausted(ctx context.Context, dec chain.Decision) erro
 	}
 	ref := dec.Skips[0].Ref
 	d.log.Warn("the model chosen for this repository can't be used", "model_id", ref.ID, "reason", dec.Skips[0].Reason)
+	if d.isMember() {
+		// A member writes nothing to its run.
+		return d.fail(ctx, reasonModelUnusable)
+	}
 	for _, m := range d.e.registry().AllModels() {
 		if entryRef(m) == ref {
 			if err := d.e.Store.SetRunModel(ctx, d.run.ID, m.LLM.Provider, m.LLM.Model); err != nil {

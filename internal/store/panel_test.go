@@ -749,6 +749,37 @@ func TestSupersedePanelSupersedesMembers(t *testing.T) {
 	}
 }
 
+func TestPanelRun(t *testing.T) {
+	s := newStore(t)
+	id := panelRun(t, s, mr1, "a1")
+	if r, found, err := s.PanelRun(ctx, id); err != nil || !found || r.ID != id || r.State != Waiting {
+		t.Fatalf("PanelRun = %s %s %v, %v; want the waiting run", r.ID, r.State, found, err)
+	}
+	// A later attempt that waits is found through the review's first run.
+	later := enqueue(t, s, mr2, "b1")
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'superseded' WHERE id = $1::uuid`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := s.PanelRun(ctx, id); err != nil || found {
+		t.Fatalf("PanelRun of a superseded panel = %v, %v; want none", found, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET attempt_of = $2::uuid, state = 'waiting', skip_reason = 'panel_members'
+		WHERE id = $1::uuid`, later, id); err != nil {
+		t.Fatal(err)
+	}
+	if r, found, err := s.PanelRun(ctx, id); err != nil || !found || r.ID != later {
+		t.Errorf("PanelRun = %s %v, %v; want the later attempt", r.ID, found, err)
+	}
+	// A run that waits for something else is not a panel's.
+	held := heldRun(t, s, mr1, "a3", WaitUntrusted)
+	if _, found, err := s.PanelRun(ctx, held); err != nil || found {
+		t.Errorf("PanelRun of a held run = %v, %v; want none", found, err)
+	}
+	if _, found, err := s.PanelRun(ctx, "bad"); err != nil || found {
+		t.Errorf("PanelRun of a bad id = %v, %v; want none", found, err)
+	}
+}
+
 func TestSupersedeOrphanMembers(t *testing.T) {
 	s := newStore(t)
 	id := panelRun(t, s, mr1, "a1")

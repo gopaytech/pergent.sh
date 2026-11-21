@@ -255,6 +255,23 @@ func (s *Store) ClaimQueuedMembers(ctx context.Context, limit int, now time.Time
 		RETURNING `+memberColumns, limit, now, skip)
 }
 
+// PanelRun returns the run waiting for the members of review root (the
+// review's first run, a member's RunID): root itself or a later attempt of
+// it. found is false when no run waits for them.
+func (s *Store) PanelRun(ctx context.Context, root string) (Run, bool, error) {
+	if !validUUID(root) {
+		return Run{}, false, nil
+	}
+	r, err := scanRun(s.pool.QueryRow(ctx, `SELECT `+runColumns+` FROM runs WHERE `+panelWaitsSQL, root))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Run{}, false, nil
+	}
+	if err != nil {
+		return Run{}, false, err
+	}
+	return r, true, nil
+}
+
 // SetMemberEntry records the entry, provider and model of a member being
 // dispatched (queued or running), before its Job starts. Any other member is
 // an error.
