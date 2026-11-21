@@ -294,13 +294,15 @@ func (s *Store) ClaimQueuedMembers(ctx context.Context, limit int, now time.Time
 	}
 	// The rows are picked in a CTE, which runs once. As a subquery of the
 	// UPDATE it can be scanned again, and SKIP LOCKED then skips a row this
-	// statement already took, so LIMIT picks one more.
+	// statement already took, so LIMIT picks one more. The lock is NO KEY
+	// UPDATE, as ClaimQueued's: a row that only holds the member's key does
+	// not make the claim skip it.
 	return s.queryMembers(ctx, `WITH picked AS (
 			SELECT m.id AS picked_id FROM panel_members m
 			WHERE m.state = 'queued' AND (m.not_before IS NULL OR m.not_before <= $2)
 			  AND EXISTS (SELECT 1 FROM runs r WHERE (r.id = m.run_id OR r.attempt_of = m.run_id)
 				AND r.state = 'waiting' AND r.skip_reason = 'panel_members' AND r.instance <> ALL($3::text[]))
-			ORDER BY m.created_at, m.id LIMIT $1 FOR UPDATE OF m SKIP LOCKED)
+			ORDER BY m.created_at, m.id LIMIT $1 FOR NO KEY UPDATE OF m SKIP LOCKED)
 		UPDATE panel_members SET state = 'running', claimed_at = $2
 		FROM picked WHERE id = picked_id AND state = 'queued'
 		RETURNING `+memberColumns, limit, now, skip)
