@@ -57,6 +57,8 @@ const (
 	KeyTrustedAuthorsOnly               = "trusted_authors_only"
 	KeyTrustedAuthors                   = "trusted_authors"
 	KeyMonthlyTokenQuota                = "monthly_token_quota"
+	KeyRuleSets                         = "rule_sets"
+	KeyBuiltInRules                     = "built_in_rules"
 )
 
 // The re-run caps when nothing sets them: per merge request and per
@@ -112,7 +114,13 @@ type Effective struct {
 	Skills []string
 	// RepoSkills are the detected repository skills turned on; nil is none.
 	RepoSkills []string
-	JobTimeout time.Duration
+	// RuleSets are the library rule sets the repository uses, in match
+	// order; nil means the default list.
+	RuleSets []string
+	// BuiltInRules is whether pergent's built-in path rules come after the
+	// repository's and the sets'. The default is true.
+	BuiltInRules bool
+	JobTimeout   time.Duration
 	// MaxTurns is the step limit of each opencode run, from
 	// config.MinMaxTurns to config.MaxMaxTurns.
 	MaxTurns int
@@ -323,6 +331,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		CommandsAuthorAndMaintainersOnly: true,
 		IncrementalReviews:               true,
 		LearnFromDismissals:              true,
+		BuiltInRules:                     true,
 		JobTimeout:                       r.Config.Jobs.Timeout,
 		MaxTurns:                         r.Config.Jobs.MaxTurns,
 		JobMemory:                        r.jobsMemory(r.Config.Jobs.Resources.Limits),
@@ -337,6 +346,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false, KeyModel: false,
 			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCheckDeleted: false, KeyCIJobs: false, KeyCommentLayout: false, KeyLinkedReposEnabled: false,
+			KeyRuleSets: false, KeyBuiltInRules: false,
 		},
 	}
 	if source != SourceDashboard {
@@ -368,6 +378,9 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 	}
 	if stored.LinkedReposEnabled != nil {
 		eff.LinkedReposEnabled = *stored.LinkedReposEnabled
+	}
+	if stored.BuiltInRules != nil {
+		eff.BuiltInRules = *stored.BuiltInRules
 	}
 	if stored.FailureStatus != nil {
 		if fs, ok := failureStatus(*stored.FailureStatus); ok {
@@ -548,6 +561,12 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if len(repo.RepoSkills) > 0 {
 		eff.RepoSkills, eff.Overridden[KeyRepoSkills] = slices.Clone(repo.RepoSkills), true
 	}
+	if len(repo.RuleSets) > 0 {
+		eff.RuleSets, eff.Overridden[KeyRuleSets] = slices.Clone(repo.RuleSets), true
+	}
+	if repo.BuiltInRules != nil {
+		eff.BuiltInRules, eff.Overridden[KeyBuiltInRules] = *repo.BuiltInRules, true
+	}
 	if repo.JobTimeout != nil {
 		eff.JobTimeout, eff.Overridden[KeyJobTimeout] = *repo.JobTimeout, true
 	}
@@ -632,6 +651,12 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if len(row.RepoSkills) > 0 {
 		eff.RepoSkills, eff.Overridden[KeyRepoSkills] = slices.Clone(row.RepoSkills), true
+	}
+	if len(row.RuleSets) > 0 {
+		eff.RuleSets, eff.Overridden[KeyRuleSets] = slices.Clone(row.RuleSets), true
+	}
+	if row.BuiltInRules != nil {
+		eff.BuiltInRules, eff.Overridden[KeyBuiltInRules] = *row.BuiltInRules, true
 	}
 	if row.JobTimeoutSeconds != nil && *row.JobTimeoutSeconds > 0 {
 		eff.JobTimeout, eff.Overridden[KeyJobTimeout] = time.Duration(*row.JobTimeoutSeconds)*time.Second, true

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent/render"
+	"github.com/gopaytech/pergent/rule"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -70,6 +71,26 @@ type Config struct {
 	Fallback     Fallback
 	Jobs         Jobs      `yaml:"jobs"`
 	Dashboard    Dashboard `yaml:"dashboard"`
+	// RuleSets are the rule sets the file defines (rule_sets:). They are
+	// read-only in the dashboard and win over a stored set of the same name.
+	RuleSets []ConfigRuleSet
+}
+
+// ConfigRuleSet is a rule set of the config file: Content is its rule file,
+// Entries what rule.Load read from it (source dashboard:<name>).
+type ConfigRuleSet struct {
+	Name, Content string
+	Entries       []rule.Entry
+}
+
+// RuleSet returns the config file's rule set called name.
+func (c *Config) RuleSet(name string) (ConfigRuleSet, bool) {
+	for _, s := range c.RuleSets {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return ConfigRuleSet{}, false
 }
 
 // Fallback sets how a chain falls back to its next entry.
@@ -244,7 +265,12 @@ type Repository struct {
 	// Skills names library skills (nil: the default list). RepoSkills names
 	// the detected repository skills to turn on (nil: none).
 	Skills, RepoSkills []string
-	FailureStatus      FailureStatus
+	// RuleSets names the rule sets the repository uses, in match order (nil:
+	// the default list). BuiltInRules is the Built-in rules switch (nil: the
+	// default).
+	RuleSets      []string
+	BuiltInRules  *bool
+	FailureStatus FailureStatus
 	// Approve is whether a clean review is approved (default true).
 	Approve *bool
 	// ReviewDrafts is whether a draft is reviewed (default true).
@@ -338,6 +364,14 @@ type fileConfig struct {
 	// SkillsDir is kept only to refuse it: the skill library lives in the
 	// dashboard now, not in a directory.
 	SkillsDir yaml.Node `yaml:"skills_dir"`
+
+	RuleSets []fileRuleSet `yaml:"rule_sets"`
+}
+
+// fileRuleSet is one entry of rule_sets: a name and the rule file's text.
+type fileRuleSet struct {
+	Name    string `yaml:"name"`
+	Content string `yaml:"content"`
 }
 
 // fileLLM is llm: the main entry and its fallbacks.
@@ -356,6 +390,8 @@ type fileRepository struct {
 	Project        string        `yaml:"project"`
 	Skills         []string      `yaml:"skills"`
 	RepoSkills     []string      `yaml:"repo_skills"`
+	RuleSets       []string      `yaml:"rule_sets"`
+	BuiltInRules   *bool         `yaml:"built_in_rules"`
 	FailureStatus  FailureStatus `yaml:"failure_status"`
 	Approve        *bool         `yaml:"approve"`
 	ReviewDrafts   *bool         `yaml:"review_drafts"`
@@ -414,6 +450,7 @@ type fileCIReport struct {
 func (f fileRepository) repository() Repository {
 	r := Repository{
 		GitLab: f.GitLab, GitHub: f.GitHub, Project: f.Project, Skills: f.Skills, RepoSkills: f.RepoSkills,
+		RuleSets: f.RuleSets, BuiltInRules: f.BuiltInRules,
 		FailureStatus: f.FailureStatus, Approve: f.Approve, ReviewDrafts: f.ReviewDrafts,
 		InlineFindings:  f.InlineFindings,
 		RerunLimitPerMR: f.RerunLimitPerMR, RerunLimitPerRepo: f.RerunLimitPerRepo,
@@ -626,6 +663,9 @@ func Load(path string) (*Config, error) {
 	for _, repo := range raw.Repositories {
 		cfg.Repositories = append(cfg.Repositories, repo.repository())
 	}
+	for _, rs := range raw.RuleSets {
+		cfg.RuleSets = append(cfg.RuleSets, ConfigRuleSet{Name: rs.Name, Content: rs.Content})
+	}
 	if raw.Jobs.WorkSize != nil {
 		cfg.Jobs.WorkSize = raw.Jobs.WorkSize.Quantity
 	}
@@ -704,6 +744,28 @@ var (
 func (c *Config) Validate() error {
 	var errs []error
 	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+
+	// Each rule set is checked with pergent's own loader, and its entries
+	// kept for dispatch.
+	setNames := make(map[string]bool, len(c.RuleSets))
+	for i := range c.RuleSets {
+		rs := &c.RuleSets[i]
+		switch {
+		case !skillNameRE.MatchString(rs.Name):
+			add("rule_sets[%d]: name %q must match %s", i, rs.Name, skillNameRE)
+			continue
+		case setNames[rs.Name]:
+			add("rule_sets[%d]: duplicate rule set %q", i, rs.Name)
+			continue
+		}
+		setNames[rs.Name] = true
+		entries, err := rule.Load([]byte(rs.Content), rule.DashboardSource(rs.Name))
+		if err != nil {
+			add("rule_sets[%d] (%s): %v", i, rs.Name, err)
+			continue
+		}
+		rs.Entries = entries
+	}
 
 	if err := checkURL("public_url", c.PublicURL, true); err != nil {
 		errs = append(errs, err)
@@ -813,6 +875,14 @@ func (c *Config) Validate() error {
 		// empty list would silently mean the default list too.
 		if repo.Skills != nil && len(repo.Skills) == 0 {
 			add("repositories[%d] (%s): skills must be a list of skill names, or left out for the default list", i, repo.Project)
+		}
+		if repo.RuleSets != nil && len(repo.RuleSets) == 0 {
+			add("repositories[%d] (%s): rule_sets must be a list of rule-set names, or left out for the default list", i, repo.Project)
+		}
+		for _, name := range repo.RuleSets {
+			if !skillNameRE.MatchString(name) {
+				add("repositories[%d] (%s): rule_sets name %q must match %s", i, repo.Project, name, skillNameRE)
+			}
 		}
 		if m := repo.TrustedAuthorsOnly; m != nil && *m != TrustOn && *m != TrustOff {
 			add("repositories[%d] (%s): trusted_authors_only must be on or off, got %q", i, repo.Project, *m)
