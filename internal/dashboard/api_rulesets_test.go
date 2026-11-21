@@ -181,8 +181,12 @@ func TestRuleSetAudit(t *testing.T) {
 func TestRuleSetReadAccess(t *testing.T) {
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
-	user := e.userOnMain(false, "acme/widgets")
 	e.sendJSON(admin, "POST", "/api/admin/rule-sets", map[string]any{"name": "go", "content": goRuleSet})
+	// Another account than alice's, on a team: userOnMain always signs alice
+	// in, and alice is an admin by now.
+	bob := e.sso("bob@example.com")
+	e.team("bob team", []store.TeamMember{{AccountID: bob, Role: store.RoleViewer}}, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+	user := e.sessionFor(bob)
 	if got := getJSON[RuleSetDetailView](e, user, "/api/rule-sets/go"); got.Content != goRuleSet || got.Version != 1 {
 		t.Errorf("a user reads %+v", got)
 	}

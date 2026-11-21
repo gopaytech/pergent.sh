@@ -82,7 +82,11 @@ func TestDefaultsRuleSets(t *testing.T) {
 }
 
 func TestInputsViewRules(t *testing.T) {
-	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[0].RuleSets = []string{"a"} })
+	e := newEnv(t, func(cfg *config.Config) {
+		cfg.Repositories[0].RuleSets = []string{"a"}
+		cfg.Repositories[0].Skills = []string{"style"}
+	})
+	e.skill("style", "Style text.")
 	if err := e.st.CreateRuleSet(ctx, "a", tsRuleSet, e.d.now()); err != nil {
 		t.Fatal(err)
 	}
