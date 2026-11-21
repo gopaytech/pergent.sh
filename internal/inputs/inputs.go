@@ -72,6 +72,10 @@ type Inputs struct {
 	// status, log tail or report of each); nil when none is chosen. It is not
 	// part of any skill's hash.
 	CIResults []byte
+	// Rules is the path rule list the review gets, as pergent's
+	// rule.EncodeList JSON (rules.json); nil when the list is empty. Fit never
+	// drops it: a review without its rules is never run.
+	Rules []byte
 }
 
 // LibraryEntry is one skill of the library as ResolveSkills receives it.
@@ -306,7 +310,7 @@ func (in *Inputs) AddDescription(title, description string) {
 
 // Size is the total number of bytes the inputs put into a ConfigMap.
 func (in *Inputs) Size() int {
-	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals) + len(in.Description) + len(in.Linked) + len(in.CIResults)
+	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals) + len(in.Description) + len(in.Linked) + len(in.CIResults) + len(in.Rules)
 	for _, c := range in.Skills {
 		n += len(c)
 	}
@@ -317,8 +321,8 @@ func (in *Inputs) Size() int {
 // dropped first, since the review still runs without them; then the dismissals
 // and the change's description, so neither ever turns an incremental review
 // into a full one; then the previous result, together with the carried files
-// (the review is then a full one). If they are still over, it returns
-// ErrTooLarge.
+// (the review is then a full one). The rules are never dropped. If they are
+// still over, it returns ErrTooLarge.
 func (in *Inputs) Fit(limit int) error {
 	if in.Size() <= limit {
 		return nil
@@ -338,7 +342,7 @@ func (in *Inputs) Fit(limit int) error {
 	in.Previous = nil
 	in.Carried = nil
 	if size := in.Size(); size > limit {
-		return fmt.Errorf("%w: skills and instructions are %d bytes, the limit is %d", ErrTooLarge, size, limit)
+		return fmt.Errorf("%w: skills, instructions and rules are %d bytes, the limit is %d", ErrTooLarge, size, limit)
 	}
 	return nil
 }
