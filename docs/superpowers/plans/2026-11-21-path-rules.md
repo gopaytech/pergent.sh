@@ -31,21 +31,24 @@
 | API reviews | `dispatchAPI` uses the client's library skills, builds `Inputs` by hand and "calls no forge". It reads no repository file at any ref. | `internal/engine/apireview.go:40-180` |
 | Review panel | Not built: no code and no plan. | `git grep -i panel` |
 
-## Conflict with the spec (owner decides before Task 12)
+## Owner decisions (2026-11-21)
 
-The spec says "Review API runs do the same, reading the repository file at the ref their skills use." An API review has no repository ref: its files come from the client's import stream, its skills from the client's library list, and it never calls a forge (`apireview.go:40-47`). Task 12 is held until the owner picks one:
+The owner settled 3 points the spec left open or that the code did not allow:
 
-- **A (recommended):** an API review gets the admin default rule-set list and the default **Built-in rules** switch (it already takes the dashboard's defaults for timeout and memory, `apireview.go:124-129`), no repository file, and a stored `rules_hash`.
-- B: an API client gets its own `rule_sets` and `built_in_rules` fields.
-- C: no rules for API reviews in PR 1 (the Job still applies built-ins unless switched off).
+1. **API reviews use the admin defaults.** An API review has no repository ref: its files come from the client's import stream, its skills from the client's library list, and it never calls a forge (`apireview.go:40-47`). So it gets the admin default rule-set list and the default **Built-in rules** switch (it already takes the dashboard's defaults for timeout and memory, `apireview.go:124-129`), no repository file, and a stored `rules_hash`. Task 12.
+2. **The result shape is `files.rules: [{path, rule}]`** next to `files.reviewed`, for the files that had a rule. `schema_version` stays 1. Task 9.
+3. **PR 1 hashes the rule list and the built-in switch only.** `jobs.image` joins the hash in PR 2, when the built-in texts ship inside the image. See "PR 2 follow-ups".
 
-## Smaller judgement calls in this plan (the owner can change them in review)
+Task 15 amends the spec so it says what PR 1 builds.
+
+## Judgement calls the owner accepted
 
 - Config-file sets are read-only in the dashboard. A dashboard create or rename to a name a config set holds is 409. At dispatch a config set wins over a stored one of the same name.
 - The config file holds a set's text as `content:` (the same YAML a dashboard set holds), so there is one format and one loader.
 - An empty rule list adds nothing to the Job (no `PERGENT_RULES`), so the Job of a repository with no rules is byte for byte today's.
-- A run with no recorded `rules_hash` (before this change) counts as a changed hash. Because the image is part of the hash, every image change makes the next push a full review for skills with rules on. This is the spec's decision; the docs say it.
-- The result shape for "the rule per file" is pergent's `files.rules` list (see the pergent plan): `files.reviewed` is a list of strings.
+- A run with no recorded `rules_hash` (before this change) counts as a changed hash.
+- A verification run whose `file-rules.md` cannot be written fails verification and keeps every finding (pergent plan, Task 7).
+- `rules: yes` and other non-bool values are refused.
 
 ## Global Constraints
 
@@ -56,7 +59,7 @@ The spec says "Review API runs do the same, reading the repository file at the r
 - Order: repository file, then each set the repository uses, in its order, then built-ins. Settings: `rule_sets` (ordered names; `null` = the admin default list), `built_in_rules` (bool, default `true`).
 - The repository file is read at `mr.StartSHA`, the same ref as repository skills. Never the change's head.
 - A malformed repository file, a missing set and a stored set that no longer loads each fail the run with the problem named, and set attention `rules_invalid`. Nothing is posted as clean.
-- The hash covers the list, the built-in switch and `jobs.image`.
+- The hash covers the list and the built-in switch. Not `jobs.image` in PR 1 (owner decision 3).
 - Rule sets get the skill library's secret check on save (`inputs.ContainsSecret` with `heldSecrets`). An answer never quotes a secret or the rule text.
 - Permissions: everyone with a team reads rule sets and the built-in list; admins write (`adminRoute`, 404 for a non-admin). `openapi.yaml` gets every route, schema and `x-pergent-access` tag.
 - Not in this PR: built-in texts, `LICENSE`/`NOTICE`, the built-ins upgrade note (PR 2).
@@ -158,14 +161,14 @@ ALTER TABLE runs ADD COLUMN rules_hash text;
   - `func SkillRules(content []byte) (bool, error)`: false only for `rules: false`
   - `func LoadRules(ctx context.Context, src Source, projectID int64, ref string) ([]rule.Entry, error)`: no file → `nil, nil`; malformed → `*ProblemError{Name: "rules", Path: ".pergent/rules.yaml", Problem: <loader text without the path prefix>}`; a source error passes through
   - `type NamedRuleSet struct{ Name, Content string }`; `func RuleList(repo []rule.Entry, sets []NamedRuleSet) ([]rule.Entry, error)`: appends each set's `rule.Load(content, rule.DashboardSource(name))`; a set that no longer loads → `*ProblemError{Name: name, Path: "rule set " + name, ...}`
-  - `func RulesHash(list []rule.Entry, builtIn bool, image string) string`: hex SHA-256 over `rule.Hash(list)`, the switch and the image
+  - `func RulesHash(list []rule.Entry, builtIn bool) string`: hex SHA-256 over `rule.Hash(list)` and the switch
   - `Inputs.Rules []byte` (the `rule.EncodeList` JSON; nil when the list is empty), counted in `Size`, never dropped by `Fit`
 
 - [ ] **Step 1: Write the failing tests:**
   - `TestCheckSkillRulesField` (`rules: true`/`false` pass; `rules: yes`, `rules: "false"`, `rules: 1` → `rules must be true or false`); `TestSkillRules`.
   - `TestLoadRulesMissing`, `TestLoadRulesMalformed` (error text `.pergent/rules.yaml: entry 2: ...`), `TestLoadRulesReadsRef` (the fake source records the ref it was asked for).
   - `TestRuleListOrder` (repo entries, then set A, then set B, each in its own order); `TestRuleListBadStoredSet`.
-  - `TestRulesHash` (stable; changes with an entry, the order, the switch, the image).
+  - `TestRulesHash` (stable; changes with an entry, the order and the switch).
   - `TestFitNeverDropsRules` (inputs over the limit with rules: CI results, dismissals, description and previous drop first; still over → `ErrTooLarge`, and `Rules` is never nil before that); `TestSizeCountsRules`.
 - [ ] **Step 2: Run** — `go test ./internal/inputs/ -count=1`. Expected: FAIL.
 - [ ] **Step 3: Implement.** In `decodeFrontmatter`, check `rules` like `cross_batch`; add `Rules *bool` to `frontmatter`; add "`rules` a boolean" to the `CheckSkill` doc. `Fit`'s error text becomes `skills, instructions and rules are %d bytes, the limit is %d`.
@@ -206,7 +209,7 @@ ALTER TABLE runs ADD COLUMN rules_hash text;
   - `TestDispatchStoredSetNoLongerLoads`: a row edited by SQL to bad content fails the run naming the set.
   - `TestDispatchConfigSetWins`: a config set and a stored set with the same name → the config set's entries.
   - `TestDispatchBuiltInSwitch`: setting off → `PERGENT_NO_BUILT_IN_RULES=true`.
-  - `TestDispatchRulesHashStored`: `runs.rules_hash` equals `inputs.RulesHash(list, builtIn, jobs.image)` before the Job starts; an empty list still stores a hash.
+  - `TestDispatchRulesHashStored`: `runs.rules_hash` equals `inputs.RulesHash(list, builtIn)` before the Job starts; an empty list still stores a hash; a change of `jobs.image` alone does not change it.
   - `TestDispatchRulesAttentionCleared`: a later run that starts a Job clears `rules_invalid`.
 - [ ] **Step 2: Run** — `PERGENT_SH_TEST_DATABASE_URL=... go test ./internal/engine/ -run 'DispatchRule|DispatchBroken|DispatchMissingRule|DispatchStoredSet|DispatchConfigSet|DispatchBuiltIn' -count=1 -timeout 30m`. Expected: FAIL.
 - [ ] **Step 3: Implement.** After `subset` (`dispatch.go:432`), resolve sets (config first, then `ResolveRuleSets`), read the file at `mr.StartSHA`, build the list, set `in.Rules` and `d.rulesHash`, all before `planCarried`. A source error retries, as `ResolveSkills` does. Store the hash next to `SetRunModel`; clear `attRulesInvalid` at 678; pass `NoBuiltInRules: !repo.BuiltInRules`.
@@ -294,11 +297,11 @@ ALTER TABLE runs ADD COLUMN rules_hash text;
 - [ ] **Step 4: Run** — Expected: PASS, including `openapi_test.go`.
 - [ ] **Step 5: Commit** — `git commit -m "feat(dashboard): rule-set settings and the rule per file"`
 
-### Task 12: API reviews (HELD: owner decides A, B or C above)
+### Task 12: API reviews use the admin defaults
 
-**Files (option A):** Modify `internal/engine/apireview.go:124-180`. Test: `internal/engine/apireview_rules_test.go`.
+**Files:** Modify `internal/engine/apireview.go:124-180`. Test: `internal/engine/apireview_rules_test.go`.
 
-- [ ] **Step 1 (A):** `TestAPIReviewRules`: the Job gets the default sets' list and the default built-in switch, no repository file is read (the fake forge gets no call), and `rules_hash` is stored. `TestAPIReviewMissingDefaultSet`: the review fails with `rule set "x" is not in the rule library` and sets no attention item (API reviews set none).
+- [ ] **Step 1:** `TestAPIReviewRules`: the Job gets the default sets' list and the default built-in switch, no repository file is read (the fake forge gets no call), and `rules_hash` is stored. `TestAPIReviewMissingDefaultSet`: the review fails with `rule set "x" is not in the rule library` and sets no attention item (API reviews set none).
 - [ ] **Step 2-5:** run, implement after `BrowserDefaults`, run, commit `feat(engine): give API reviews the default rule list`.
 
 ### Task 13: Web
@@ -317,13 +320,27 @@ ALTER TABLE runs ADD COLUMN rules_hash text;
 
 **Files:**
 - Create: `docs/concepts/rules.md`
-- Modify: `docs/README.md` (index line), `docs/concepts/skills.md` (the `rules` field), `docs/concepts/dashboard.md` (Rules page, settings, the audit actions `rule_set_created`, `rule_set_updated`, `rule_set_deleted`), `docs/concepts/incremental-reviews.md` (the full-review reason `rules changed`, and that an image change counts), `docs/reference/configuration.md` (`rule_sets`, `repositories[].rule_sets`, `repositories[].built_in_rules`), `docs/upgrading.md` under `## Unreleased` (migration `0047` runs at startup; the 3 new config keys break rollback, since an older release refuses unknown keys, per CLAUDE.md), README only where it points at docs
+- Modify: `docs/README.md` (index line), `docs/concepts/skills.md` (the `rules` field), `docs/concepts/dashboard.md` (Rules page, settings, the audit actions `rule_set_created`, `rule_set_updated`, `rule_set_deleted`), `docs/concepts/incremental-reviews.md` (the full-review reason `rules changed`), `docs/reference/configuration.md` (`rule_sets`, `repositories[].rule_sets`, `repositories[].built_in_rules`), `docs/upgrading.md` under `## Unreleased` (migration `0047` runs at startup; the 3 new config keys break rollback, since an older release refuses unknown keys, per CLAUDE.md), README only where it points at docs
 
-- [ ] **Step 1:** `rules.md`: what a rule is (extra checks, never blocking), the file format and limits, the order, `off`, rule sets and their settings, config sets, the built-in switch and `rules: false`, that the built-in list is empty for now, that an older pergent image ignores rules and the review page says so (no version number: the release names it), the `rules_invalid` attention item, and the full review after a rules or image change.
+- [ ] **Step 1:** `rules.md`: what a rule is (extra checks, never blocking), the file format and limits, the order, `off`, rule sets and their settings, config sets, the built-in switch and `rules: false`, that the built-in list is empty for now, that an older pergent image ignores rules and the review page says so (no version number: the release names it), the `rules_invalid` attention item, that API reviews use the admin defaults, and the full review after a rules change.
 - [ ] **Step 2:** Read each changed page once for easy English and for any version number (there must be none).
 - [ ] **Step 3: Commit** — `git commit -m "docs: describe path rules"`
 
-### Task 15: Verify gate and private-name scan
+### Task 15: Amend the spec
+
+**Files:** Modify `docs/superpowers/specs/2026-11-20-path-rules-design.md`.
+
+- [ ] **Step 1:** Change the spec so it matches PR 1, and add one line under its Status that says it was amended on the date of the change, after the plans:
+  - `rule/` (public, `github.com/gopaytech/pergent/rule`) and `rule/builtin/` replace `internal/rule` and `internal/rule/builtin/`, because pergent.sh imports the loader.
+  - The migration is `0047_rule_sets.sql`; "Checked on 2026-11-20" keeps its old line and gains `0046` as taken.
+  - "Review API runs ..." becomes: API reviews read no repository file; they get the admin default rule-set list and the default built-in switch.
+  - "Result": each skill's `files.rules: [{path, rule}]`, files with a rule only, `schema_version` 1.
+  - "Dispatch" step 4: the hash covers the list and the built-in switch; `jobs.image` joins it in PR 2 with the built-in texts.
+  - "Verification run": if `file-rules.md` cannot be written, verification fails with a note and keeps every blocking finding.
+- [ ] **Step 2:** Read the Decisions table again: no row may contradict the amended text.
+- [ ] **Step 3: Commit** — `git commit -m "docs(spec): amend path rules to what PR 1 builds"`
+
+### Task 16: Verify gate and private-name scan
 
 - [ ] **Step 1:** `nc -z localhost 55432` — if it fails, Postgres is down: say so, and do not count any store, engine or dashboard test as run.
 - [ ] **Step 2:** `PERGENT_SH_TEST_DATABASE_URL='postgres://postgres:postgres@localhost:55432/pergent_test?sslmode=disable' go test -count=1 -timeout 30m ./...` — every package `ok`; read the `internal/store`, `internal/engine` and `internal/dashboard` timings (minutes, not a fast fake `ok`).
@@ -332,6 +349,11 @@ ALTER TABLE runs ADD COLUMN rules_hash text;
 - [ ] **Step 5:** `GITHUB_ACTIONS=true GITHUB_EVENT_PATH=<file> TMPDIR=/tmp go test ./internal/config/... -count=1` — PASS.
 - [ ] **Step 6:** Private-name scan, must print nothing: `git grep -niE 'golabs|gojek|gopay[^t]|goto\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'`, then `git diff --name-only origin/main | xargs grep -nE '@gmail\.com|/Users/|/private/tmp/'`, and the same `grep` over untracked files before `git add`.
 - [ ] **Step 7:** Final review (`superpowers:requesting-code-review`) against `origin/main`. Before a PR, `git rev-list --count HEAD..origin/main`; if `main` moved, merge it and run the gate again. Push and the PR only when the owner asks.
+
+## PR 2 follow-ups
+
+- `inputs.RulesHash` gains `jobs.image`, because the built-in texts then ship inside the image and a new image can change them. Every image change then makes the next push a full review for skills with rules on; the docs say so in that PR.
+- The Built-in tab shows the real texts; the built-ins upgrade note goes under `## Unreleased`.
 
 ## Review panel
 
