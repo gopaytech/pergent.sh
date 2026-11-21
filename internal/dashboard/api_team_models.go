@@ -419,7 +419,12 @@ func (d *Dashboard) deleteTeamModel(w http.ResponseWriter, r *http.Request) {
 			detail += ", removed from chain B: " + labels(changedB)
 		}
 	}
-	d.Log.Info("dashboard: team model removed", "team", t.ID, "model_id", id, "chains", len(changed), "panel_chains", len(changedB), "by", se.Username)
+	args := []any{"team", t.ID, "model_id", id, "chains", len(changed)}
+	// Only when a chain B changed, so the line is as before otherwise.
+	if len(changedB) > 0 {
+		args = append(args, "panel_chains", len(changedB))
+	}
+	d.Log.Info("dashboard: team model removed", append(args, "by", se.Username)...)
 	d.audit(ctx, se, "team_model_removed", "", "", detail)
 	w.WriteHeader(http.StatusNoContent)
 }

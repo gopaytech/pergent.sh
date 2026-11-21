@@ -6,17 +6,17 @@ A review panel runs each review on two model chains and puts the two results tog
 
 ## Chain B
 
-Chain B is a list of models, like chain A. Its first entry is the second model of the panel. It has its own page on each level and its own audit action, `panel_chain_changed`.
+Chain B is a list of models, like chain A. Its first entry is the second model of the panel. On each level it is one more card on a page that is already there. It has its own audit action, `panel_chain_changed`.
 
 | Where | Page | Who changes it |
 | --- | --- | --- |
 | Instance | **Admin → Settings**, card **Global chain B (review panel)** | Admins |
-| Team | The team's models page, card **Team chain B (review panel)** | Admins and maintainers of the team |
-| Repository | The repository's chain page, card **Chain B (review panel)** | Admins and maintainers of the owner team |
+| Team | The team's page under **Teams** (`/teams/<id>`), card **Team chain B (review panel)** | Admins and maintainers of the team |
+| Repository | The repository's **Settings** tab (for a viewer, **Skills & instructions**), card **Chain B (review panel)** | Admins and maintainers of the owner team |
 
 - The rights are chain A's. Everyone who sees a repository sees its chain B. Nobody sees a key.
 - The global chain B is only a stored one. It has no config-file entries and no default entry.
-- An empty chain B is no chain B. Save it with no entries to clear it.
+- An empty chain B is no chain B. Save the global or a team chain B with no entries to clear it. A repository's chain B can't be saved empty: use **Inherit** or **Off**.
 
 ## The 3 modes of a repository
 

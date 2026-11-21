@@ -29,6 +29,7 @@ const (
 	msgUnknownEntry     = "every entry must be an entry of the list"
 	msgGlobalOnly       = "the global chain holds global entries only"
 	msgConfigFirst      = "the config file's entries stay at the front of the global chain, in their order"
+	msgGlobalBOnly      = "the global chain B holds dashboard entries only"
 	msgForeignTeamEntry = "a team's entry can be in its own team's chain and in the chains of repositories the team owns, nowhere else"
 	msgNotTeamsMayUse   = "teams may not use this global entry: an admin can turn on teams may use"
 	msgNoPanelImage     = "no review image supports a review panel yet"
@@ -423,7 +424,12 @@ func (d *Dashboard) putGlobalChainOf(w http.ResponseWriter, r *http.Request, set
 			return
 		}
 		if m, ok := cur.in.Entries[ref]; ok && m.Source == instances.SourceConfig {
-			writeError(w, http.StatusBadRequest, msgConfigFirst)
+			// Chain B has no config entries in front to keep.
+			msg := msgConfigFirst
+			if set == store.ChainB {
+				msg = msgGlobalBOnly
+			}
+			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
 	}
@@ -492,6 +498,7 @@ const (
 	msgRepoChainWrite   = "only admins and maintainers of the repository's owner team change its model chain"
 	msgRepoChainNoOwner = "only admins change the model chain of a repository with no owner team"
 	msgEmptyRepoChain   = "a repository's chain needs an entry: reset it to inherit its owner team's or the global chain"
+	msgEmptyRepoPanel   = "a repository's chain B needs an entry: reset it to inherit, or turn it off"
 )
 
 // repoShown is the chain of set in effect for repo, as the resolver reads it
@@ -683,7 +690,11 @@ func (d *Dashboard) putRepoChainOf(w http.ResponseWriter, r *http.Request, set s
 		return
 	}
 	if len(refs) == 0 {
-		writeError(w, http.StatusBadRequest, msgEmptyRepoChain)
+		msg := msgEmptyRepoChain
+		if set == store.ChainB {
+			msg = msgEmptyRepoPanel
+		}
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	in, err := d.chainEntries(ctx)

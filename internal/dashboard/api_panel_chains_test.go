@@ -4,6 +4,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/chain"
@@ -235,6 +236,49 @@ func TestPanelChainForeignEntry(t *testing.T) {
 	}
 }
 
+// A config file entry in the global chain B gets chain B's own 400, not
+// chain A's "stay at the front", which no chain B body can meet.
+func TestPanelChainGlobalConfigEntry(t *testing.T) {
+	t.Setenv("PERGENT_TEST_LLM_KEY", llmKeyThree)
+	e := newEnv(t, func(cfg *config.Config) {
+		cfg.LLM = config.LLM{Provider: "anthropic", Model: "from-config", APIKeyEnv: "PERGENT_TEST_LLM_KEY"}
+	})
+	setPanelFloor(t, e, panelFloor, panelImageOK)
+	c := e.operator()
+	a := e.addModel("openai", "gpt", "", llmKeyTwo)
+	for name, body := range map[string]map[string]any{
+		"alone":    entryBody("global/config"),
+		"in front": entryBody("global/config", "global/"+a.ID),
+		"behind":   entryBody("global/"+a.ID, "global/config"),
+	} {
+		rec := e.sendJSON(c, "PUT", adminPanelURL, body)
+		if rec.Code != http.StatusBadRequest || errorOf(t, rec) != "the global chain B holds dashboard entries only" {
+			t.Errorf("%s = %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	if b, _ := e.st.ChainsOf(ctx, store.ChainB); len(b) != 0 {
+		t.Errorf("chain B stored = %+v", b)
+	}
+}
+
+// An empty repository chain B save is 400 with chain B's ways out: inherit
+// or off. Chain A's message is unchanged.
+func TestPanelChainEmptyRepo(t *testing.T) {
+	te := newTeamsEnv(t)
+	setPanelFloor(t, te.env, panelFloor, panelImageOK)
+	rec := te.sendJSON(te.maintainer, "PUT", repoPanelURL("acme/payments"), entryBody())
+	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != "a repository's chain B needs an entry: reset it to inherit, or turn it off" {
+		t.Errorf("chain B = %d %s", rec.Code, rec.Body)
+	}
+	rec = te.sendJSON(te.maintainer, "PUT", repoChainURL("acme/payments"), entryBody())
+	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgEmptyRepoChain {
+		t.Errorf("chain A = %d %s", rec.Code, rec.Body)
+	}
+	if b, _ := te.st.ChainsOf(ctx, store.ChainB); len(b) != 0 {
+		t.Errorf("chain B stored = %+v", b)
+	}
+}
+
 // A maintainer of the owner team turns the panel off with the floor unset
 // (no image check): no entries, mode off, audited; a reset inherits again.
 func TestPanelChainOff(t *testing.T) {
@@ -410,5 +454,17 @@ func TestTeamModelRemovedNamesChainB(t *testing.T) {
 		"Payments: two (openai / gpt-two), removed from team Payments",
 	}; !slices.Equal(got, want) {
 		t.Errorf("team_model_removed = %q; want %q", got, want)
+	}
+	// The log line names chain B only when a chain B changed, so it is as
+	// before otherwise.
+	var lines []string
+	for _, l := range strings.Split(te.logs.String(), "\n") {
+		if strings.Contains(l, `msg="dashboard: team model removed"`) {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != 2 || !strings.Contains(lines[0], " chains=1 panel_chains=2 by=") ||
+		!strings.Contains(lines[1], " chains=1 by=") || strings.Contains(lines[1], "panel_chains") {
+		t.Errorf("team model removed lines = %q", lines)
 	}
 }
