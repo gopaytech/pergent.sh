@@ -1,6 +1,6 @@
 # Review panel
 
-Status: agreed with the owner on 2026-11-20, section by section, in a design session. The owner answered all 16 open questions the same day. It builds on `2026-11-19-team-models-and-fallback-design.md` (chains and fallback).
+Status: agreed with the owner on 2026-11-20, section by section, in a design session. The owner answered all 16 open questions the same day, and ruled on 3 more points on 2026-11-21 (the Decisions rows Member rows, API files and Repository off). It builds on `2026-11-19-team-models-and-fallback-design.md` (chains and fallback).
 
 ## Why
 
@@ -54,6 +54,9 @@ These are the owner's.
 | API and re-runs | A review API request and a re-run command both run as a panel (all 3 Jobs) when the repository has chain B. |
 | Cost and time | About 2 reviews and 2 small judge runs. Each attempt of A or B gets the full review timeout, as in team models (each attempt is a new Job). P waits for each member's final attempt, then has its own timeout of 10 min. At worst a panel takes 2 review timeouts, the same as a single review that falls back. |
 | Quota | The token quota counts all 3 runs. If the quota would stop B from starting, A runs alone and the comment says so. |
+| Member rows | Members A and B are rows of a new table, `panel_members`, not of `runs`. Only Job P is a row in `runs`, and it is the review's run. `runs_live_idx` (one live run per head and target) does not change. |
+| API files | An API review keeps its stored files until Job P has started, because Jobs A, B and P each build their checkout from them. The clean-up pass (`DropSpentAPIInputs`) still drops any it finds left behind. |
+| Repository off | A repository's chain B mode is `inherit`, `custom` or `off`. `off` turns the panel off for that repository, even when its team or the global level has a chain B. |
 | Older image | Chain B is refused on save unless `jobs.image` has a version tag at or above the first pergent with `--panel`. A tag that is not a version (for example `:main`) is refused too. If `jobs.image` later moves to an older or unknown tag, dispatch runs A only with the note `panel off: the review image does not support it`. It never fails the review. |
 
 Why on save: pergent.sh cannot ask an image what it supports. It reads the version from a finished result or from the image tag (`CarriedSupport` in `internal/result/result.go`). An older P exits 2 on the unknown `--panel` flag.
@@ -98,14 +101,15 @@ Why on save: pergent.sh cannot ask an image what it supports. It reads the versi
 
 | Change | Holds |
 |---|---|
-| `runs.panel_of` | Groups the 3 runs of one panel review. |
-| `runs.panel_role` | `a`, `b` or `p`. |
-| `panel_chains`, `panel_chain_entries` | Chain B. New tables with the same shape as `model_chains` and `model_chain_entries`, read and written by the same Go code. Chain B has its own inherit or custom mode at each level. `model_chains` is unchanged. |
-| `run_usage_models` | New table: run, skill, model and tokens. P writes one row per model, so the dashboard splits P's cost between the 2 models. |
-| `run_usage` | Unchanged: one row per run and skill, the total. Its key stays. |
-| Fallback | A member that falls back uses `attempt_of`, as in team models. Job P waits for the member's final attempt. |
+| `runs` | P's row is the review's run, as a single review's row is today. No new column. |
+| `panel_members` | New table: one row per attempt of member A or B, with the run it belongs to (P's), its role (`a` or `b`), its Job, token, state, result or failure, and the entry it ran on. |
+| `panel_chains`, `panel_chain_entries` | Chain B. New tables with the same shape as `model_chains` and `model_chain_entries`, read and written by the same Go code. `model_chains` is unchanged. |
+| `dashboard_repos.panel_chain_mode` | A repository's chain B mode: `inherit`, `custom` or `off`. |
+| `run_usage_models` | New table: run, skill, role, part (`member` or `merge`) and tokens. Each member writes its own rows, and P writes one row per model, so the dashboard splits the cost by model. |
+| `run_usage` | Unchanged shape and key: one row per run and skill. For a panel review the run is P, and the row is the total of A, B and P. |
+| Fallback | A member that falls back gets a new `panel_members` row that points at its first attempt, as `attempt_of` does in team models. Job P waits for each member's final attempt. |
 
-Migrations only add, so the previous release still runs. No existing unique key changes.
+Migrations only add, so the previous release still runs. No existing unique key changes. The previous release ignores `panel_members`: a panel review waiting for its members looks like a run held for a reason it does not know, and it never claims it.
 
 ## Who can edit
 
@@ -144,7 +148,7 @@ pergent.sh then moves its `go.mod` pin and `defaultImage` together, as for any c
 
 - **Run page**: the 3 runs show as one review, with the cost of each model and the total.
 - **Repository page**: `Panel: on (A: <model>, B: <model>)`.
-- **Repository settings**: chain B, edited like chain A, with its own inherit or custom mode.
+- **Repository settings**: chain B, edited like chain A, with its own mode: inherit, custom or off.
 
 ## Security
 
@@ -161,7 +165,7 @@ In Job P each key reaches only the environment of its own opencode run.
 |---|---|
 | pergent | Unit tests with fake answers: grouping, every verdict row, every failure case, usage per model, and a golden comment with the tags. |
 | pergent.sh, chain B off | The review Job and dispatch are unchanged, byte for byte (golden). |
-| pergent.sh, chain B on | With fake Job results: the 3-Job flow, `panel_of`, publish, A fails, B fails, B falls back to A's model, an API review, a re-run, the image check on save and at dispatch, `run_usage_models`. |
+| pergent.sh, chain B on | With fake Job results: the 3-Job flow, the `panel_members` rows, publish, A fails, B fails, B falls back to A's model, a repository set to `off`, an API review, a re-run, the image check on save and at dispatch, `run_usage_models`. |
 
 ## Measurement
 
