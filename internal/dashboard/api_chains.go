@@ -12,6 +12,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -43,8 +44,11 @@ func (d *Dashboard) panelImageRefusal() string {
 		return msgNoPanelImage
 	}
 	tag := config.ImageTag(d.cfg.Jobs.Image)
-	if tag == "" {
+	switch _, known := result.VersionAtLeast(tag, config.PanelMinVersion); {
+	case tag == "":
 		tag = "not a version"
+	case !known:
+		tag += " (not a version)"
 	}
 	return "chain B needs a review image with pergent " + config.PanelMinVersion + " or later; jobs.image is " + tag
 }
@@ -308,7 +312,11 @@ func (d *Dashboard) saveChain(ctx context.Context, w http.ResponseWriter, set st
 	case errors.Is(err, store.ErrModelNotFound):
 		writeError(w, http.StatusBadRequest, msgUnknownEntry)
 	case err != nil:
-		d.Log.Error("dashboard: saving a model chain failed", "scope", c.Scope, "panel", set == store.ChainB, "error", d.registry.Redact(err.Error()))
+		if set == store.ChainB {
+			d.Log.Error("dashboard: saving a panel chain failed", "scope", c.Scope, "error", d.registry.Redact(err.Error()))
+		} else {
+			d.Log.Error("dashboard: saving a model chain failed", "scope", c.Scope, "error", d.registry.Redact(err.Error()))
+		}
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 	default:
 		return true
@@ -720,17 +728,16 @@ func (d *Dashboard) resetRepoChainOf(w http.ResponseWriter, r *http.Request, set
 	if !ok {
 		return
 	}
+	what, detail := "model", "repository: inherit"
+	if set == store.ChainB {
+		what, detail = "panel", "scope=repo mode="+store.PanelInherit
+	}
 	if err := d.Store.ResetRepoChainOf(ctx, set, repo.Instance, repo.Project); err != nil {
-		d.Log.Error("dashboard: resetting a model chain failed", "instance", repo.Instance, "project", repo.Project,
-			"panel", set == store.ChainB, "error", err.Error())
+		d.Log.Error("dashboard: resetting a "+what+" chain failed", "instance", repo.Instance, "project", repo.Project, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return
 	}
-	detail := "repository: inherit"
-	if set == store.ChainB {
-		detail = "scope=repo mode=" + store.PanelInherit
-	}
-	d.Log.Info(chainLog(set), "chain", "repository", "instance", repo.Instance, "project", repo.Project, "mode", "inherit", "by", se.Username)
+	d.Log.Info("dashboard: "+what+" chain reset", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
 	d.audit(ctx, se, chainAudit(set), repo.Instance, repo.Project, detail)
 	d.writeRepoChain(w, r, se, repo, set)
 }
@@ -739,21 +746,15 @@ func (d *Dashboard) resetRepoChainOf(w http.ResponseWriter, r *http.Request, set
 
 // offRepoPanelChain turns the review panel off for the repository, whatever
 // its owner team's or the global chain B: its own chain B goes. Who may is
-// who may save it; it needs no image check, so it always works. A
-// repository with no dashboard row (the config file switches it on) has no
-// mode to keep: 404, as for a repository the session doesn't see.
+// who may save it; it needs no image check, so it always works, on a
+// repository the config file switches on too (store.SetRepoPanelOff).
 func (d *Dashboard) offRepoPanelChain(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	repo, _, ok := d.repoChainTarget(w, r, "/panel-chain/off")
 	if !ok {
 		return
 	}
-	err := d.Store.SetRepoPanelOff(ctx, repo.Instance, repo.Project, d.now())
-	if errors.Is(err, store.ErrRepoNotFound) {
-		notFound(w)
-		return
-	}
-	if err != nil {
+	if err := d.Store.SetRepoPanelOff(ctx, repo.Instance, repo.Project, d.now()); err != nil {
 		d.Log.Error("dashboard: turning a review panel off failed", "instance", repo.Instance, "project", repo.Project, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return

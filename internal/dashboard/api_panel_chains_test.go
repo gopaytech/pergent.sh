@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -150,13 +151,13 @@ func TestPanelChainImageTooOld(t *testing.T) {
 	}
 }
 
-// A tag that is not a version is refused with the tag; no tag at all reads
-// "not a version".
+// A tag that is not a version is refused with the tag, marked "(not a
+// version)"; no tag at all reads "not a version".
 func TestPanelChainImageNotVersion(t *testing.T) {
 	te := newTeamsEnv(t)
 	shared, _ := te.sharedAndPrivate()
 	for image, want := range map[string]string{
-		"ghcr.io/x/pergent:main": msgPanelNeedsA + "main",
+		"ghcr.io/x/pergent:main": msgPanelNeedsA + "main (not a version)",
 		"ghcr.io/x/pergent":      msgPanelNeedsA + "not a version",
 	} {
 		setPanelFloor(t, te.env, panelFloor, image)
@@ -264,15 +265,56 @@ func TestPanelChainOff(t *testing.T) {
 	}; !slices.Equal(got, want) {
 		t.Errorf("panel_chain_changed = %q; want %q", got, want)
 	}
-	// [Ruling 3b] A repository with no dashboard row (the config file's) has
-	// no mode to store: off is 404, and nothing changes.
-	rec := te.send(te.maintainer, "POST", repoPanelURL("acme/payments")+"/off", "")
-	wantCode(t, rec, "off with no dashboard row", http.StatusNotFound)
-	if mode, err := te.st.RepoPanelMode(ctx, "main", "acme/payments"); err != nil || mode != store.PanelInherit {
-		t.Errorf("mode = %q, %v", mode, err)
+}
+
+// [Ruling 4] Off works on a repository the config file switches on (no
+// dashboard row) too, over its owner team's chain B; a reset brings the team
+// chain B back.
+func TestPanelChainOffConfigRepository(t *testing.T) {
+	te := newTeamsEnv(t)
+	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
+	te.saveB(store.Chain{Scope: store.ScopeTeam, TeamID: te.payments, Entries: []store.EntryRef{{Source: store.SourceTeam, ID: own.ID}}})
+	url := repoPanelURL("acme/payments")
+	if _, found := te.storedRepo("main", "acme/payments"); found {
+		t.Fatal("acme/payments has a dashboard row; the test needs a config-file repository")
 	}
-	if got := te.panelAudit(); len(got) != 2 {
-		t.Errorf("panel_chain_changed after a refused off = %q", got)
+	loadB := func() chain.Input {
+		t.Helper()
+		repo, found, err := te.d.Repos.Get(ctx, "main", "acme/payments")
+		if err != nil || !found {
+			t.Fatal(found, err)
+		}
+		in, err := chain.LoadSet(ctx, te.st, te.reg, te.clock.now(), store.Run{}, repo, store.ChainB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return in
+	}
+	if in := loadB(); in.Scope != store.ScopeTeam {
+		t.Fatalf("before off: chain B scope = %q", in.Scope)
+	}
+	v := decode[ChainView](t, te.send(te.maintainer, "POST", url+"/off", ""), "off", http.StatusOK)
+	if v.Mode != store.PanelOff || len(v.Entries) != 0 || v.Source != "repository" {
+		t.Errorf("after off = %+v", v)
+	}
+	if v := getJSON[ChainView](te.env, te.viewer, url); v.Mode != store.PanelOff || len(v.Entries) != 0 {
+		t.Errorf("GET after off = %+v", v)
+	}
+	if in := loadB(); in.Refs != nil || in.Scope != "" {
+		t.Errorf("LoadSet(ChainB) after off = %+v %q; want no chain", in.Refs, in.Scope)
+	}
+	v = decode[ChainView](t, te.send(te.maintainer, "POST", url+"/reset", ""), "reset", http.StatusOK)
+	if v.Mode != store.PanelInherit || v.Source != "team" || !slices.Equal(chainRefs(v), []string{"team/" + own.ID}) {
+		t.Errorf("after reset = %+v", v)
+	}
+	if in := loadB(); in.Scope != store.ScopeTeam {
+		t.Errorf("after reset: chain B scope = %q; want the team's", in.Scope)
+	}
+	if got, want := te.panelAudit(), []string{
+		"main acme/payments scope=repo mode=off",
+		"main acme/payments scope=repo mode=inherit",
+	}; !slices.Equal(got, want) {
+		t.Errorf("panel_chain_changed = %q; want %q", got, want)
 	}
 }
 

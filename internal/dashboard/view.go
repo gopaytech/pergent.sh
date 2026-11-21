@@ -1006,8 +1006,8 @@ type LLMView struct {
 //   - GET, PUT .../panel-chain, POST .../panel-chain/reset and POST
 //     .../panel-chain/off: the same for chain B, the review panel's second
 //     chain, with the same rights. A save with entries needs a review image
-//     with a panel (400 otherwise); off and reset need none. Off on a
-//     repository the config file switches on is 404.
+//     with a panel (400 otherwise); off and reset need none, and off works
+//     on a repository the config file switches on too.
 //   - GET /api/admin/linkable?instance=&repo=&search= (admins only): LinkableView,
 //     the repositories the instance's review App reaches (at most 200, by name),
 //     each with whether `repo` (a repository switched on, GitHub only; 400 for

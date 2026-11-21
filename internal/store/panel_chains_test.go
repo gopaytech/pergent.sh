@@ -545,9 +545,9 @@ func TestResetRepoChainOfUnknownSet(t *testing.T) {
 	}
 }
 
-// [Ruling 3b] Off on a repository with no dashboard row stores nothing, so it
-// is ErrRepoNotFound and a chain B row saved for it stays. A reset there
-// still drops the row, as chain A's does.
+// [Ruling 4] Off on a repository with no dashboard row (the config file's)
+// keeps its chain B row with no entries, which reads as off; a save then
+// gives it entries again (custom) and a reset drops the row (inherit).
 func TestSetRepoPanelOffNoRow(t *testing.T) {
 	s := newStore(t)
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -555,17 +555,70 @@ func TestSetRepoPanelOffNoRow(t *testing.T) {
 	if err := s.SaveChainOf(ctx, ChainB, repoB, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetRepoPanelOff(ctx, "main", "acme/config", t0); !errors.Is(err, ErrRepoNotFound) {
-		t.Errorf("off with no row = %v; want ErrRepoNotFound", err)
+	if mode := mustPanelMode(t, s, "acme/config"); mode != PanelInherit {
+		t.Errorf("mode with entries and no dashboard row = %q; want inherit (its column)", mode)
 	}
-	if _, found := mustChainB(t, s, ScopeRepo, 0, "main", "acme/config"); !found {
-		t.Error("a refused off dropped the chain B row")
+	if err := s.SetRepoPanelOff(ctx, "main", "ACME/config", t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	c, found := mustChainB(t, s, ScopeRepo, 0, "main", "acme/config")
+	if !found || len(c.Entries) != 0 || !c.UpdatedAt.Equal(t0.Add(time.Hour)) {
+		t.Errorf("chain B after off = %+v, %v; want the row with no entries", c, found)
+	}
+	if mode := mustPanelMode(t, s, "acme/config"); mode != PanelOff {
+		t.Errorf("mode after off = %q; want off", mode)
+	}
+	// Off twice is one row, still off.
+	if err := s.SetRepoPanelOff(ctx, "main", "acme/config", t0); err != nil || mustPanelMode(t, s, "acme/config") != PanelOff {
+		t.Errorf("off twice: %v", err)
+	}
+	if all, _ := s.ChainsOf(ctx, ChainB); len(all) != 1 {
+		t.Errorf("chain B rows = %+v; want 1", all)
+	}
+	if err := s.SaveChainOf(ctx, ChainB, repoB, t0); err != nil {
+		t.Fatal(err)
+	}
+	if mode := mustPanelMode(t, s, "acme/config"); mode != PanelInherit {
+		t.Errorf("mode after a save from off = %q; want not off", mode)
+	}
+	if err := s.SetRepoPanelOff(ctx, "main", "acme/config", t0); err != nil {
+		t.Fatal(err)
 	}
 	if err := s.ResetRepoChainOf(ctx, ChainB, "main", "acme/config"); err != nil {
 		t.Fatal(err)
 	}
 	if _, found := mustChainB(t, s, ScopeRepo, 0, "main", "acme/config"); found {
 		t.Error("the reset kept the chain B row")
+	}
+	if mode := mustPanelMode(t, s, "acme/config"); mode != PanelInherit {
+		t.Errorf("mode after reset = %q; want inherit", mode)
+	}
+}
+
+// [Ruling 4] An empty repository chain B means off, so a repository chain B
+// that loses its last entry to a removed team entry goes: the repository
+// inherits, it is not turned off.
+func TestDeleteTeamModelEmptiesNoRepoChainB(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	tm := newTeamModel(t, s, team, "One", nil)
+	addRepos(t, s, "acme/api")
+	for _, project := range []string{"acme/api", "acme/config"} {
+		if err := s.SaveChainOf(ctx, ChainB, Chain{Scope: ScopeRepo, Instance: "main", Project: project, Entries: []EntryRef{{SourceTeam, tm.ID}}}, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, changedB, err := s.DeleteTeamModel(ctx, team, tm.ID)
+	if err != nil || len(changedB) != 2 {
+		t.Fatalf("DeleteTeamModel chain B = %+v, %v; want both repositories", changedB, err)
+	}
+	for _, project := range []string{"acme/api", "acme/config"} {
+		if _, found := mustChainB(t, s, ScopeRepo, 0, "main", project); found {
+			t.Errorf("%s: the emptied chain B row is still there", project)
+		}
+		if mode := mustPanelMode(t, s, project); mode == PanelOff {
+			t.Errorf("%s: mode = off after its last entry went", project)
+		}
 	}
 }
 

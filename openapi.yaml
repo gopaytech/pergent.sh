@@ -2792,7 +2792,8 @@ paths:
         The rights and the entries of `PUT .../chain`, for chain B; the mode
         becomes `custom`. Then the review image is checked: 400 `chain B needs
         a review image with pergent <version> or later; jobs.image is <tag>`
-        (`not a version` for an image with no tag), and while no pergent
+        (`<tag> (not a version)` for a tag that is not a version, `not a
+        version` for an image with no tag), and while no pergent
         release has a review panel `no review image supports a review panel
         yet`. Audited as `panel_chain_changed` (`scope=repo entries=<names>`).
       x-pergent-access: session
@@ -2854,9 +2855,9 @@ paths:
       description: |
         Who may save its chain B. Its own chain B goes and the mode becomes
         `off`: no panel, whatever its owner team's or the global chain B. No
-        image check, so it always works. 404 for a repository the config file
-        switches on, which has no mode to keep. Audited as
-        `panel_chain_changed` (`scope=repo mode=off`).
+        image check, so it always works, on a repository the config file
+        switches on too (it keeps a chain B with no entries, which means off).
+        Audited as `panel_chain_changed` (`scope=repo mode=off`).
       x-pergent-access: session
       x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
       security:
