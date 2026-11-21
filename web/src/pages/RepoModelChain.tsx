@@ -217,8 +217,9 @@ function RepoPanelChain({ instance, project }: { instance: string; project: stri
     if (!c || to === mode) return;
     setNote("");
     if (to === "custom") setStarting(true);
+    // Back to the mode it started from: nothing to send.
+    else if (starting && c.mode === to) setStarting(false);
     else if (to === "off") off.mutate();
-    else if (starting && c.mode === "inherit") setStarting(false);
     else if (c.mode !== "custom" || window.confirm("Drop this repository's own chain B? Its panel then uses its owner team's chain B, or the global one.")) {
       reset.mutate();
     }

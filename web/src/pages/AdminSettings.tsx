@@ -673,10 +673,6 @@ function Models({ v }: { v: ModelsAdminView }) {
           // The first entry is the default: the list says which.
           client.invalidateQueries({ queryKey: modelsKey });
           client.invalidateQueries({ queryKey: chainKey });
-      client.invalidateQueries({ queryKey: panelKey });
-    client.invalidateQueries({ queryKey: panelKey });
-    client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
-    client.invalidateQueries({ queryKey: ["team-panel-chain"] });
           client.invalidateQueries({ queryKey: panelKey });
           client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
           client.invalidateQueries({ queryKey: ["team-panel-chain"] });
@@ -707,9 +703,8 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
       client.setQueryData(modelsKey, list);
       client.invalidateQueries({ queryKey: chainKey });
       client.invalidateQueries({ queryKey: panelKey });
-    client.invalidateQueries({ queryKey: panelKey });
-    client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
-    client.invalidateQueries({ queryKey: ["team-panel-chain"] });
+      client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
+      client.invalidateQueries({ queryKey: ["team-panel-chain"] });
       client.invalidateQueries({ queryKey: ["repo"] });
     },
   });
@@ -832,9 +827,8 @@ function GlobalChain() {
     onSuccess: () => {
       client.invalidateQueries({ queryKey: chainKey });
       client.invalidateQueries({ queryKey: panelKey });
-    client.invalidateQueries({ queryKey: panelKey });
-    client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
-    client.invalidateQueries({ queryKey: ["team-panel-chain"] });
+      client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
+      client.invalidateQueries({ queryKey: ["team-panel-chain"] });
       changed();
     },
   });

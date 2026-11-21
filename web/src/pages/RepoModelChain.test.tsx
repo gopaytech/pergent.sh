@@ -57,6 +57,19 @@ describe("RepoModelChain: Chain B (review panel)", () => {
     expect(within(box).getByRole("button", { name: "Off" })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("goes back to off from a started Custom with no request", async () => {
+    const fake = fakeApi({ ...routes(panelRepoOff), [`POST ${panelPath}/off`]: { body: panelRepoOff } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await card();
+    expect(await within(box).findByText("Panel: off for this repository")).toBeInTheDocument();
+    await userEvent.click(within(box).getByRole("button", { name: "Custom" }));
+    expect(within(box).getByText("Choose the entries of its own chain B.")).toBeInTheDocument();
+    await userEvent.click(within(box).getByRole("button", { name: "Off" }));
+    expect(within(box).getByText("Panel: off for this repository")).toBeInTheDocument();
+    expect(within(box).getByRole("button", { name: "Off" })).toHaveAttribute("aria-pressed", "true");
+    expect(fake.find("POST", `${panelPath}/off`)).toHaveLength(0);
+  });
+
   it("gives the repository its own chain B with a PUT of the entries", async () => {
     const fake = fakeApi({ ...routes(), [`PUT ${panelPath}`]: { body: panelRepoCustom } });
     renderApp("/repos/main/acme/payments?tab=settings");
