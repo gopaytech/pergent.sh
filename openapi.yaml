@@ -2176,7 +2176,10 @@ paths:
       operationId: listBuiltInRules
       tags: [Rules]
       summary: The built-in path rules of the pergent pergent.sh is built with
-      description: Read-only, in match order. Empty until the built-in texts ship.
+      description: |
+        Read-only, one row per rule, in the order each first matches. These
+        are the rules of the pergent version pergent.sh is built with, which
+        can differ from the one in jobs.image: the Job uses its own.
       x-pergent-access: session
       security:
         - sessionCookie: []
@@ -5557,13 +5560,21 @@ components:
           type: array
           items: {type: string}
     BuiltInRuleView:
-      description: One of pergent's built-in path rules.
+      description: |
+        One of pergent's built-in path rules, with every glob it is for. A
+        {a,b} glob in pergent is one glob per choice here, so ts_js has 8.
       type: object
-      required: [name, path, off, rule]
+      required: [name, paths, rule]
       properties:
-        name: {type: string}
-        path: {type: string}
-        off: {type: boolean}
+        name:
+          type: string
+          description: The rule's name; results call it built-in:<name>.
+        paths:
+          type: array
+          items: {type: string}
+          description: |
+            The globs, in match order. A file takes the first built-in that
+            matches, across all rows.
         rule: {type: string}
     UpdateSkillRequest:
       type: object

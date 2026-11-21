@@ -5,7 +5,7 @@ import { Link } from "react-router";
 import { ApiError, api, paths, type BuiltInRule, type RuleSet, type SkillInUse } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Pill, Tabs, ago } from "../ui";
+import { ErrorBox, ExternalLink, Loading, Pill, Tabs, ago } from "../ui";
 
 // Rules lists the rule library: named rule sets of path rules, which a
 // repository chooses and orders on its Settings tab, and pergent's built-in
@@ -106,17 +106,31 @@ function BuiltInList() {
   return (
     <section className="card" aria-label="Built-in rules">
       <div className="row meta">
-        pergent's own rules, after the repository's and the rule sets'. Copy one into a rule set to change it. Turn them off with
-        Built-in rules on a repository's Settings, or with rules: false in a skill.
+        pergent's own rules, after the repository's and the rule sets'. A file gets the first rule with a glob that matches it, in
+        this order. Copy one into a rule set to change it. Turn them off with Built-in rules on a repository's Settings, or with
+        rules: false in a skill. This list comes with the pergent version this pergent.sh is built with. A review uses the rules of
+        the pergent in jobs.image, which can be a different version.
       </div>
       {rules.data.length === 0 && <div className="row empty-row">No built-in rules yet.</div>}
-      {rules.data.map((r) => (
-        <div className="row" key={`${r.path}|${r.name}`} data-built-in={r.name}>
-          <div>
-            <code>{r.path}</code> {r.off ? <span className="meta">off: no rule</span> : <strong>{r.name}</strong>}
-          </div>
-          {!r.off && <pre className="skill-text">{r.rule}</pre>}
+      {rules.data.length > 0 && (
+        <div className="row meta">
+          The texts are adapted from{" "}
+          <ExternalLink href="https://github.com/alibaba/open-code-review">alibaba/open-code-review</ExternalLink> and keep its
+          license, Apache-2.0.
         </div>
+      )}
+      {rules.data.map((r) => (
+        <details className="skill-doc" key={r.name} data-built-in={r.name}>
+          <summary className="skill">
+            <b>{r.name}</b>
+            <span className="grow built-in-paths">
+              {r.paths.map((p) => (
+                <code key={p}>{p}</code>
+              ))}
+            </span>
+          </summary>
+          <pre className="doc">{r.rule}</pre>
+        </details>
       ))}
     </section>
   );

@@ -31,11 +31,97 @@ func TestRuleSetNotes(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("notes = %q, want %q", got, want)
 	}
-	if got := (&Dashboard{builtInRules: rule.Builtin}).ruleSetNotes("s", goRuleSet); len(got) != 0 {
-		t.Errorf("with the shipped (empty) built-in list, notes = %q", got)
+	if got, want := (&Dashboard{builtInRules: rule.Builtin}).ruleSetNotes("s", goRuleSet),
+		[]string{"entry 1: This entry hides the built-in rule go for matching files."}; !slices.Equal(got, want) {
+		t.Errorf("with the shipped built-in list, notes = %q, want %q", got, want)
 	}
 	if got := d.ruleSetNotes("s", "not: [yaml"); got == nil || len(got) != 0 {
 		t.Errorf("text that doesn't load: notes = %#v, want an empty list", got)
+	}
+}
+
+// A built-in with a {a,b} glob is one entry per choice, all with one name:
+// the note names it once per set entry, not once per glob.
+func TestRuleSetNotesNameEachBuiltInOnce(t *testing.T) {
+	d := &Dashboard{builtInRules: func() []rule.Entry {
+		return []rule.Entry{
+			{Path: "**/*.ts", Rule: "ts", Source: rule.SourceBuiltIn, Name: "ts_js"},
+			{Path: "**/*.go", Rule: "go", Source: rule.SourceBuiltIn, Name: "go"},
+			{Path: "**/*.js", Rule: "ts", Source: rule.SourceBuiltIn, Name: "ts_js"},
+		}
+	}}
+	got := d.ruleSetNotes("s", "rules:\n  - path: \"src/**\"\n    rule: x\n  - path: \"**/*.js\"\n    rule: y\n")
+	want := []string{
+		"entry 1: This entry hides the built-in rule ts_js for matching files.",
+		"entry 1: This entry hides the built-in rule go for matching files.",
+		"entry 2: This entry hides the built-in rule ts_js for matching files.",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("notes = %q, want %q", got, want)
+	}
+	// The shipped list: ts_js has 8 globs, and an entry for every file
+	// still names it once.
+	notes := (&Dashboard{builtInRules: rule.Builtin}).ruleSetNotes("s", "rules:\n  - path: \"**/*\"\n    rule: x\n")
+	seen := map[string]bool{}
+	for _, n := range notes {
+		if seen[n] {
+			t.Errorf("note %q twice", n)
+		}
+		seen[n] = true
+	}
+	if !seen["entry 1: This entry hides the built-in rule ts_js for matching files."] {
+		t.Errorf("notes = %q, want one for ts_js", notes)
+	}
+}
+
+// The Built-in tab is one row per rule, not per glob: a {a,b} glob is one
+// entry per choice, all with the same name and text, and the text is sent
+// once. Rows keep the order each name first matches in.
+func TestBuiltInRuleViews(t *testing.T) {
+	got := builtInRuleViews([]rule.Entry{
+		{Path: "**/*.ts", Rule: "ts", Source: rule.SourceBuiltIn, Name: "ts_js"},
+		{Path: "**/*.go", Rule: "go", Source: rule.SourceBuiltIn, Name: "go"},
+		{Path: "**/*.js", Rule: "ts", Source: rule.SourceBuiltIn, Name: "ts_js"},
+	})
+	want := []BuiltInRuleView{{Name: "ts_js", Paths: []string{"**/*.ts", "**/*.js"}, Rule: "ts"}, {Name: "go", Paths: []string{"**/*.go"}, Rule: "go"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("views = %v, want %v", got, want)
+	}
+	if got := builtInRuleViews(nil); got == nil || len(got) != 0 {
+		t.Errorf("no built-ins: views = %#v, want an empty list", got)
+	}
+
+	// The shipped list: one row per name, every glob kept once, in order.
+	shipped := rule.Builtin()
+	views := builtInRuleViews(shipped)
+	var paths []string
+	names := map[string]bool{}
+	for _, v := range views {
+		if names[v.Name] {
+			t.Errorf("%s: two rows", v.Name)
+		}
+		names[v.Name] = true
+		paths = append(paths, v.Paths...)
+		if v.Name == "ts_js" && len(v.Paths) != 8 {
+			t.Errorf("ts_js paths = %q, want 8", v.Paths)
+		}
+	}
+	var wantPaths []string
+	for _, e := range shipped {
+		wantPaths = append(wantPaths, e.Path)
+	}
+	if !slices.Equal(paths, wantPaths) || len(views) >= len(shipped) {
+		t.Errorf("%d rows for %d entries; paths in row order = %q, want %q", len(views), len(shipped), paths, wantPaths)
+	}
+}
+
+// The view leaves off "off": no shipped built-in is off. If a pinned pergent
+// ships one, this fails, and the Built-in tab must learn to show it.
+func TestBuiltInRulesNoneOff(t *testing.T) {
+	for _, e := range rule.Builtin() {
+		if e.Off || e.Name == "" || e.Rule == "" {
+			t.Errorf("built-in %q (%s): off %t, rule %d characters", e.Name, e.Path, e.Off, len(e.Rule))
+		}
 	}
 }
 
@@ -190,8 +276,9 @@ func TestRuleSetReadAccess(t *testing.T) {
 	if got := getJSON[RuleSetDetailView](e, user, "/api/rule-sets/go"); got.Content != goRuleSet || got.Version != 1 {
 		t.Errorf("a user reads %+v", got)
 	}
-	if got := getJSON[[]BuiltInRuleView](e, user, "/api/built-in-rules"); got == nil || len(got) != len(rule.Builtin()) {
-		t.Errorf("built-in rules = %#v", got)
+	got, want := getJSON[[]BuiltInRuleView](e, user, "/api/built-in-rules"), builtInRuleViews(rule.Builtin())
+	if len(got) == 0 || fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("built-in rules = %d rows, want %d, one per name", len(got), len(want))
 	}
 	wantCode(t, e.sendJSON(user, "POST", "/api/admin/rule-sets", map[string]any{"name": "x", "content": goRuleSet}), "user POST", http.StatusNotFound)
 	wantCode(t, e.sendJSON(user, "DELETE", "/api/admin/rule-sets/go", nil), "user DELETE", http.StatusNotFound)

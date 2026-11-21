@@ -35,7 +35,13 @@ For each changed file in a skill's batch, pergent walks one ordered list and tak
 
 A file that matches nothing, or matches an `off` entry, gets no rule. The skill still reviews it with its own text.
 
-**The built-in list is empty for now.** The first built-in texts come in a later change, once the quality harness shows they help. The **Built-in** tab of the Rules page lists them.
+## Built-in rules
+
+pergent ships built-in rules for 67 file types, adapted from [alibaba/open-code-review](https://github.com/alibaba/open-code-review) (Apache-2.0). They cover common languages, config files, schemas and templates. pergent's [Path rules](https://github.com/gopaytech/pergent/blob/master/docs/concepts/rules.md) page says which file types they cover, the order they match in and what was changed from open-code-review. The texts are in pergent's `rule/builtin/` folder. An entry of the repository or of a rule set for the same file wins over a built-in.
+
+- **A review uses the built-in rules of the pergent in `jobs.image`**, because the review Job runs that pergent. The default `jobs.image`, pergent v0.10.0, reads no rules at all. Until `jobs.image` is a pergent release with rule support, a review gets no rule, built-in or from a team. The release notes name the first pergent release with it.
+- The **Built-in** tab of the **Rules** page shows one row per rule: its name, its globs in match order and its text. It shows the rules of the pergent version this pergent.sh is built with. That can differ from the one in `jobs.image`. Copy a text from it into a rule set to change it.
+- Each rule adds its text to every batch run with a matching file, and rule text counts in batch sizing. So built-in rules make each run longer and can split a change into more batches.
 
 ## Rule sets
 
@@ -50,8 +56,8 @@ Rule sets are on the **Rules** page. Everyone signed in reads them; admins creat
 
 | Setting | Where | Default |
 |---|---|---|
-| **Rule sets used for this repository** | A repository's **Settings**, or `repositories[].rule_sets` | The default list: **Default rule sets** under **Admin → Settings** |
-| **Built-in rules** | A repository's **Settings**, the default under **Admin → Settings**, or `repositories[].built_in_rules` | On |
+| **Rule sets used for this repository** | A repository's **Settings**, or `repositories[].rule_sets` | The default list: **Default rule sets** on the admin **Settings** page |
+| **Built-in rules** | A repository's **Settings**, the default on the admin **Settings** page, or `repositories[].built_in_rules` | On |
 
 A skill with `rules: false` in its frontmatter gets no rules in any run ([Skills and instructions](skills.md)).
 

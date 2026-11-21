@@ -133,17 +133,33 @@ func (d *Dashboard) ruleSet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Dashboard) builtInRulesView(w http.ResponseWriter, _ *http.Request) {
-	out := []BuiltInRuleView{}
-	for _, e := range d.builtInRules() {
-		out = append(out, BuiltInRuleView{Name: e.Name, Path: e.Path, Off: e.Off, Rule: e.Rule})
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, builtInRuleViews(d.builtInRules()))
 }
 
-// ruleSetNotes is the editor's notes on a set's text: one for each entry that
-// comes before a built-in rule its files may also match, so that built-in no
-// longer applies to them. Allowed, but worth knowing. None for text that
-// doesn't load.
+// builtInRuleViews groups the built-in entries by rule name, in the order
+// each name first comes, with its globs in match order and its text once:
+// pergent splits a {a,b} glob into one entry per choice, all with the same
+// name and text (ts_js has 8), and one row each would send the text 8 times.
+func builtInRuleViews(entries []rule.Entry) []BuiltInRuleView {
+	out := []BuiltInRuleView{}
+	row := map[string]int{}
+	for _, e := range entries {
+		i, ok := row[e.Name]
+		if !ok {
+			i = len(out)
+			row[e.Name] = i
+			out = append(out, BuiltInRuleView{Name: e.Name, Paths: []string{}, Rule: e.Rule})
+		}
+		out[i].Paths = append(out[i].Paths, e.Path)
+	}
+	return out
+}
+
+// ruleSetNotes is the editor's notes on a set's text: one for each entry and
+// built-in rule its files may also match, so that built-in no longer applies
+// to them. Allowed, but worth knowing. A built-in with a {a,b} glob is one
+// entry per choice under one name, so each name is noted once per entry.
+// None for text that doesn't load.
 func (d *Dashboard) ruleSetNotes(name, content string) []string {
 	notes := []string{}
 	entries, err := rule.Load([]byte(content), rule.DashboardSource(name))
@@ -152,7 +168,12 @@ func (d *Dashboard) ruleSetNotes(name, content string) []string {
 	}
 	builtins := d.builtInRules()
 	for i, e := range entries {
+		seen := map[string]bool{}
 		for _, b := range rule.Hides(e, builtins) {
+			if seen[b] {
+				continue
+			}
+			seen[b] = true
 			notes = append(notes, fmt.Sprintf("entry %d: This entry hides the built-in rule %s for matching files.", i+1, b))
 		}
 	}

@@ -1106,6 +1106,13 @@ details.skill-doc[open] summary::before {
   content: "▾";
 }
 
+/* A built-in rule's globs, one per {a,b} choice, wrapped on the summary line. */
+.built-in-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
 /* --- tables --- */
 
 .table {
