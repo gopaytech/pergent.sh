@@ -52,6 +52,9 @@ const (
 	// WaitCIPending: the CI jobs the repository chose are still running;
 	// Run.CIDeadline is when the run stops waiting for them.
 	WaitCIPending = "ci_pending"
+	// WaitPanel: a panel review's run waits while its members A and B
+	// review (panel_members). The previous release never claims it.
+	WaitPanel = "panel_members"
 )
 
 var (
@@ -658,10 +661,12 @@ func (s *Store) supersede(ctx context.Context, id, reason string) error {
 	return err
 }
 
-// CountRunning returns the number of runs in state running.
+// CountRunning returns the number of runs and panel members in state
+// running: each holds a jobs.max_running slot.
 func (s *Store) CountRunning(ctx context.Context) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM runs WHERE state = 'running'`).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM runs WHERE state = 'running')
+		+ (SELECT count(*) FROM panel_members WHERE state = 'running')`).Scan(&n)
 	return n, err
 }
 
