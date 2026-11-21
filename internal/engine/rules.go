@@ -2,8 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	"github.com/gopaytech/pergent/rule"
 
@@ -30,39 +28,30 @@ type ruleSetReader func(ctx context.Context, names []string) (store.ResolvedRule
 // which is retried.
 func ruleList(ctx context.Context, src inputs.Source, projectID int64, ref string, names []string,
 	cfg *config.Config, read ruleSetReader, withRepo bool) (list []rule.Entry, problem string, err error) {
-	var repo []rule.Entry
-	if withRepo {
-		repo, err = inputs.LoadRules(ctx, src, projectID, ref)
-		var pe *inputs.ProblemError
-		switch {
-		case errors.As(err, &pe):
-			return nil, pe.Error(), nil
-		case err != nil:
-			return nil, "", err
+	return inputs.BuildRules(ctx, src, projectID, ref, names, withRepo, configRuleSet(cfg), storedRuleSets(read))
+}
+
+// configRuleSet finds a rule set of the config file.
+func configRuleSet(cfg *config.Config) func(string) (string, bool) {
+	return func(name string) (string, bool) {
+		cs, ok := cfg.RuleSet(name)
+		return cs.Content, ok
+	}
+}
+
+// storedRuleSets adapts a ruleSetReader to inputs.RuleSetLookup.
+func storedRuleSets(read ruleSetReader) inputs.RuleSetLookup {
+	return func(ctx context.Context, names []string) ([]string, map[string]string, error) {
+		resolved, err := read(ctx, names)
+		if err != nil {
+			return nil, nil, err
 		}
-	}
-	resolved, err := read(ctx, names)
-	if err != nil {
-		return nil, "", fmt.Errorf("read the rule library: %w", err)
-	}
-	sets := make([]inputs.NamedRuleSet, 0, len(resolved.Names))
-	for _, n := range resolved.Names {
-		if cs, ok := cfg.RuleSet(n); ok {
-			sets = append(sets, inputs.NamedRuleSet{Name: n, Content: cs.Content})
-			continue
+		stored := make(map[string]string, len(resolved.Sets))
+		for n, rs := range resolved.Sets {
+			stored[n] = rs.Content
 		}
-		stored, ok := resolved.Sets[n]
-		if !ok {
-			return nil, fmt.Sprintf("rule set %q is not in the rule library", n), nil
-		}
-		sets = append(sets, inputs.NamedRuleSet{Name: n, Content: stored.Content})
+		return resolved.Names, stored, nil
 	}
-	list, err = inputs.RuleList(repo, sets)
-	var pe *inputs.ProblemError
-	if errors.As(err, &pe) {
-		return nil, pe.Error(), nil
-	}
-	return list, "", err
 }
 
 // failRules ends a run whose rules can't be used and lists the repository

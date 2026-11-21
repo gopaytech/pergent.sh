@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/gopaytech/pergent/rule"
 
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -316,4 +318,33 @@ func ruleSetInUseView(e *store.RuleSetInUseError) SkillInUseView {
 	v := skillInUseView(&store.SkillInUseError{Repos: e.Repos, InDefaults: e.InDefaults})
 	v.Error = msgRuleSetInUse
 	return v
+}
+
+// rulesView is the rule list a review of ref would get, as the engine builds
+// it (inputs.BuildRules). Rules that would fail a review show as Problem.
+func (d *Dashboard) rulesView(ctx context.Context, src inputs.Source, projectID int64, ref string, repo settings.Effective) (RulesView, error) {
+	configSet := func(name string) (string, bool) {
+		cs, ok := d.cfg.RuleSet(name)
+		return cs.Content, ok
+	}
+	lookup := func(ctx context.Context, names []string) ([]string, map[string]string, error) {
+		resolved, err := d.Store.ResolveRuleSets(ctx, names)
+		if err != nil {
+			return nil, nil, err
+		}
+		stored := make(map[string]string, len(resolved.Sets))
+		for n, rs := range resolved.Sets {
+			stored[n] = rs.Content
+		}
+		return resolved.Names, stored, nil
+	}
+	list, problem, err := inputs.BuildRules(ctx, src, projectID, ref, repo.RuleSets, true, configSet, lookup)
+	if err != nil {
+		return RulesView{}, err
+	}
+	v := RulesView{BuiltIn: repo.BuiltInRules, Entries: []RuleEntryView{}, Problem: problem}
+	for _, e := range list {
+		v.Entries = append(v.Entries, RuleEntryView{Source: e.Source, Path: e.Path, Off: e.Off, Rule: e.Rule})
+	}
+	return v, nil
 }

@@ -1078,7 +1078,7 @@ func TestRepositoryDetail(t *testing.T) {
 		t.Errorf("repo = %+v", v.Repo)
 	}
 	settings, _ := json.Marshal(v.Settings)
-	want := `{"approve":{"value":false,"overridden":true},"checkDeleted":{"value":false,"overridden":false},"ciJobs":{"value":{"jobs":[],"wait":"30m"},"overridden":false},` +
+	want := `{"approve":{"value":false,"overridden":true},"builtInRules":{"value":true,"overridden":false},"checkDeleted":{"value":false,"overridden":false},"ciJobs":{"value":{"jobs":[],"wait":"30m"},"overridden":false},` +
 		`"commandsAuthorAndMaintainersOnly":{"value":true,"overridden":false},` +
 		`"commentLayout":{"value":["summary:open","findings:collapsed","dismissed:collapsed","checks:open","files:collapsed"],"overridden":false},` +
 		`"failureStatus":{"value":"failed","overridden":false},` +
@@ -1086,7 +1086,7 @@ func TestRepositoryDetail(t *testing.T) {
 		`"learnFromDismissals":{"value":true,"overridden":false},"linkedRepos":{"value":[],"overridden":false},"linkedReposEnabled":{"value":false,"overridden":false},` +
 		`"maxTurns":{"value":40,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
-		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true},` +
+		`"reviewDrafts":{"value":true,"overridden":false},"ruleSets":{"value":null,"overridden":false},"skills":{"value":["code-review"],"overridden":true},` +
 		`"trustedAuthors":{"value":[],"overridden":false},"trustedAuthorsOnly":{"value":"follow_visibility","overridden":false}}`
 	if string(settings) != want {
 		t.Errorf("settings = %s\nwant %s", settings, want)
@@ -1260,12 +1260,12 @@ func TestAdminSettings(t *testing.T) {
 	want := AdminSettingsView{
 		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, CommentLayout: layout, FailureStatus: "failed",
 			JobTimeoutSeconds: 600, MaxTurns: 40,
-			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{},
+			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{}, RuleSets: []string{}, BuiltInRules: true,
 			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, CommentLayout: layout, FailureStatus: "failed",
-				JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
+				JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50, BuiltInRules: true},
 			Pinned: map[string]bool{"approve": false, "reviewDrafts": false, "inlineFindings": false, "commandsAuthorAndMaintainersOnly": false,
 				"incrementalReviews": false, "learnFromDismissals": false, "quietReviews": false, "commentLayout": false, "linkedReposEnabled": false, "failureStatus": false, "jobTimeoutSeconds": false,
-				"maxTurns": false, "jobMemory": false, "rerunLimitPerMR": false, "rerunLimitPerRepo": false}},
+				"maxTurns": false, "jobMemory": false, "rerunLimitPerMR": false, "rerunLimitPerRepo": false, "builtInRules": false}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
 	wantJSON, _ := json.Marshal(want)

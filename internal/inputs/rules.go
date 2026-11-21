@@ -70,3 +70,50 @@ func EncodeRules(list []rule.Entry) ([]byte, error) {
 	}
 	return data, nil
 }
+
+// RuleSetLookup finds the rule sets a list names: Names is the list read
+// (the default list for nil names), Stored the text of each stored set found.
+type RuleSetLookup func(ctx context.Context, names []string) (resolved []string, stored map[string]string, err error)
+
+// BuildRules is the rule list a review gets, the one place it is built: the
+// repository's .pergent/rules.yaml at ref (only withRepo), then each rule set
+// names lists (nil: the default list), in order, a config-file set
+// (configSet) winning over a stored one of the same name. problem is why a
+// review must fail (the file or a set can't be used, a set is in neither
+// place); err is a source or store error, which is retried.
+func BuildRules(ctx context.Context, src Source, projectID int64, ref string, names []string, withRepo bool,
+	configSet func(name string) (content string, ok bool), lookup RuleSetLookup) (list []rule.Entry, problem string, err error) {
+	var repo []rule.Entry
+	if withRepo {
+		repo, err = LoadRules(ctx, src, projectID, ref)
+		var pe *ProblemError
+		switch {
+		case errors.As(err, &pe):
+			return nil, pe.Error(), nil
+		case err != nil:
+			return nil, "", err
+		}
+	}
+	resolved, stored, err := lookup(ctx, names)
+	if err != nil {
+		return nil, "", fmt.Errorf("read the rule library: %w", err)
+	}
+	sets := make([]NamedRuleSet, 0, len(resolved))
+	for _, n := range resolved {
+		if content, ok := configSet(n); ok {
+			sets = append(sets, NamedRuleSet{Name: n, Content: content})
+			continue
+		}
+		content, ok := stored[n]
+		if !ok {
+			return nil, fmt.Sprintf("rule set %q is not in the rule library", n), nil
+		}
+		sets = append(sets, NamedRuleSet{Name: n, Content: content})
+	}
+	list, err = RuleList(repo, sets)
+	var pe *ProblemError
+	if errors.As(err, &pe) {
+		return nil, pe.Error(), nil
+	}
+	return list, "", err
+}

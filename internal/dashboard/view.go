@@ -224,6 +224,9 @@ type RunDetailView struct {
 	Tokens     TokensView  `json:"tokens"`
 	Files      FilesView   `json:"files"`
 	Skills     []SkillView `json:"skills"`
+	// RulesUsed is whether the image that reviewed knows path rules (its
+	// result has a rules object); false for an older image or no result.
+	RulesUsed bool `json:"rulesUsed"`
 	// LatestDecided is true for the one run of the change that dismiss and
 	// restore act on: its newest published review, or reported one with an
 	// outcome. Only that run shows dismissals; false when the change has no
@@ -286,6 +289,16 @@ type FilesView struct {
 	Reviewed    []string          `json:"reviewed"`
 	Skipped     []SkippedFile     `json:"skipped"`
 	NotReviewed []NotReviewedFile `json:"notReviewed"`
+	// Rules is the path rule each reviewed file was checked with, for the
+	// files that had one.
+	Rules []FileRuleView `json:"rules"`
+}
+
+// FileRuleView is the rule a reviewed file was checked with:
+// "repo:<glob>", "dashboard:<set>:<glob>" or "built-in:<name>".
+type FileRuleView struct {
+	Path string `json:"path"`
+	Rule string `json:"rule"`
 }
 
 // SkippedFile is a file no skill reviewed, and the rule that left it out.
@@ -521,6 +534,26 @@ type InputsView struct {
 	// the order of precedence, each with whether it is on.
 	Detected     []DetectedSkillView `json:"detected"`
 	Instructions string              `json:"instructions"`
+	// Rules is the path rule list a review of the default branch would get.
+	Rules RulesView `json:"rules"`
+}
+
+// RulesView is a review's rule list: the repository's .pergent/rules.yaml,
+// then its rule sets, then the built-in rules when BuiltIn. Problem is why a
+// review would fail on its rules (Entries is then empty).
+type RulesView struct {
+	BuiltIn bool            `json:"builtIn"`
+	Entries []RuleEntryView `json:"entries"`
+	Problem string          `json:"problem"`
+}
+
+// RuleEntryView is one entry of a rule list. Source is "repo" or
+// "dashboard:<set>"; Rule is empty for an off entry.
+type RuleEntryView struct {
+	Source string `json:"source"`
+	Path   string `json:"path"`
+	Off    bool   `json:"off"`
+	Rule   string `json:"rule"`
 }
 
 // InputSkill is one skill of the final set.
@@ -865,6 +898,12 @@ type DefaultsView struct {
 	// Skills is the default list: the library skills a repository reviews
 	// when its own skills setting is null. Empty means none.
 	Skills []string `json:"skills"`
+	// RuleSets is the default rule-set list, in match order, for a
+	// repository whose own ruleSets is null. Empty means none.
+	RuleSets []string `json:"ruleSets"`
+	// BuiltInRules is whether a repository that sets none gets pergent's
+	// built-in path rules.
+	BuiltInRules bool `json:"builtInRules"`
 	// Config holds the values the config gives (jobs.* and the built-in
 	// defaults), before anything saved here. Skills has no config value.
 	Config DefaultValues `json:"config"`
@@ -902,6 +941,8 @@ type DefaultValues struct {
 	JobMemory         string `json:"jobMemory"`
 	RerunLimitPerMR   int    `json:"rerunLimitPerMR"`
 	RerunLimitPerRepo int    `json:"rerunLimitPerRepo"`
+	// BuiltInRules: see DefaultsView.
+	BuiltInRules bool `json:"builtInRules"`
 }
 
 // LLMView is the model reviews use.

@@ -640,7 +640,7 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		Run: runSummary(digest, prev, j), Instance: run.MR.Instance, Project: run.ProjectPath, Number: run.MR.IID,
 		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model, Provider: run.Provider, MaxTurns: run.MaxTurns, Quiet: run.Quiet,
 		CIJobs: ciResultViews(run.CIJobs),
-		Files:  FilesView{Reviewed: []string{}, Skipped: []SkippedFile{}, NotReviewed: []NotReviewedFile{}},
+		Files:  FilesView{Reviewed: []string{}, Skipped: []SkippedFile{}, NotReviewed: []NotReviewedFile{}, Rules: []FileRuleView{}},
 		Skills: []SkillView{},
 	}
 	if run.Approved {
@@ -690,6 +690,7 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 			// lists no files.
 			view.IncrementalNote = notMergedNote
 		}
+		view.RulesUsed = res.Rules != nil
 		fillSkills(&view, res, run.Result, run.SkillSources, run.SkillVersions, dismissals)
 		// A re-run of failed skills stores the other skills' results with its
 		// own, so the sum of the result counts their tokens a second time.
@@ -744,7 +745,7 @@ func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map
 	for _, dm := range dismissals {
 		at[dm.Fingerprint] = dm.CreatedAt
 	}
-	reviewed, skipped, notReviewed := map[string]bool{}, map[SkippedFile]bool{}, map[string]bool{}
+	reviewed, skipped, notReviewed, ruled := map[string]bool{}, map[SkippedFile]bool{}, map[string]bool{}, map[string]bool{}
 	for i, s := range res.Skills {
 		sv := SkillView{Name: s.Name, Verdict: decided[i].Verdict, Findings: []FindingView{}, Dismissed: []FindingView{},
 			Checks: []CheckView{}}
@@ -777,6 +778,13 @@ func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map
 			if !reviewed[p] {
 				reviewed[p] = true
 				view.Files.Reviewed = append(view.Files.Reviewed, p)
+			}
+		}
+		// A file's rule is the same in every skill that had rules on.
+		for _, fr := range s.Files.Rules {
+			if !ruled[fr.Path] {
+				ruled[fr.Path] = true
+				view.Files.Rules = append(view.Files.Rules, FileRuleView{Path: fr.Path, Rule: fr.Rule})
 			}
 		}
 		for _, sk := range s.Files.Skipped {
@@ -1105,6 +1113,8 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"trustedAuthorsOnly":               {repo.TrustedAuthorsOnly, ov[settings.KeyTrustedAuthorsOnly]},
 		"trustedAuthors":                   {nonNilAuthors(repo.TrustedAuthors), ov[settings.KeyTrustedAuthors]},
 		"monthlyTokenQuota":                {repo.MonthlyTokenQuota, ov[settings.KeyMonthlyTokenQuota]},
+		"ruleSets":                         {repo.RuleSets, ov[settings.KeyRuleSets]},
+		"builtInRules":                     {repo.BuiltInRules, ov[settings.KeyBuiltInRules]},
 	}
 }
 
@@ -1357,6 +1367,9 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, 
 	for _, f := range detected {
 		v.Detected = append(v.Detected, DetectedSkillView{Name: f.Name, Folder: f.Folder, Problem: f.Problem,
 			On: slices.Contains(repo.RepoSkills, f.Name)})
+	}
+	if v.Rules, err = d.rulesView(ctx, src, p.ProjectID, branch, repo); err != nil {
+		return InputsView{}, err
 	}
 	return v, nil
 }
