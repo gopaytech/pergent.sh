@@ -315,7 +315,8 @@ func TestGetPanelNotFoundWritesNothing(t *testing.T) {
 	}
 }
 
-// get-panel writes each result whole, mode 0600, with the run token as bearer.
+// get-panel writes each result whole, mode 0644 (the pergent container runs
+// as another user), with the run token as bearer.
 func TestGetPanel(t *testing.T) {
 	noRetryWait(t)
 	ps := &panelServer{statuses: map[string][]int{"a": {http.StatusOK}, "b": {http.StatusOK}}}
@@ -328,8 +329,8 @@ func TestGetPanel(t *testing.T) {
 			t.Errorf("%s = %q, %v", f, got, err)
 			continue
 		}
-		if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
-			t.Errorf("%s mode = %v, %v; want 0600", f, st.Mode().Perm(), err)
+		if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o644 {
+			t.Errorf("%s mode = %v, %v; want 0644", f, st.Mode().Perm(), err)
 		}
 	}
 	if ps.auth != "Bearer run-token" {

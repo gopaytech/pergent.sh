@@ -393,6 +393,19 @@ func TestBuildPanelJobNoJudge(t *testing.T) {
 	if countOf(args, "--panel-no-judge") != 1 || countOf(args, "--panel") != 1 {
 		t.Errorf("args = %q", args)
 	}
+	// pergent refuses --panel without model B, also with --panel-no-judge.
+	env := containerByName(t, job.Spec.Template.Spec.Containers, "pergent").Env
+	for name, want := range map[string]string{
+		"PERGENT_PANEL_B_PROVIDER": "openai",
+		"PERGENT_PANEL_B_MODEL":    "gpt-5",
+		"PERGENT_PANEL_B_BASE_URL": "https://b.example.com/v1",
+		"OPENCODE_PROVIDER":        "anthropic",
+		"OPENCODE_MODEL":           "claude-sonnet-4",
+	} {
+		if got, ok := envValue(env, name); !ok || got != want {
+			t.Errorf("%s = %q, %v; want %q", name, got, ok, want)
+		}
+	}
 	sec := BuildSecret(p, job, panelSecrets)
 	if got := slices.Sorted(maps.Keys(sec.Data)); !slices.Equal(got, []string{"git-token", "result-token"}) {
 		t.Errorf("secret keys = %v", got)

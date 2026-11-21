@@ -254,14 +254,16 @@ func runGetPanel(ctx context.Context, o getPanelOptions, stderr io.Writer) int {
 	return 0
 }
 
-// getPanel downloads each member's result, mode 0600, whole or not at all.
+// getPanel downloads each member's result, whole or not at all. Mode 0644,
+// as get-graph's: the pergent container runs as another user, and the file is
+// in the Job's own volume and holds no key.
 // A failure other than a 404 or a result over the limit is tried again, up to
 // panelTries times. Every outcome is one log line per member.
 func getPanel(ctx context.Context, o getPanelOptions, token string, client *http.Client, stderr io.Writer) {
 	ctx, cancel := context.WithTimeout(ctx, getPanelTimeout)
 	defer cancel()
 	for _, m := range []struct{ role, url string }{{"a", o.aURL}, {"b", o.bURL}} {
-		d := download{url: m.url, out: filepath.Join(o.dir, m.role+".json"), token: token, max: maxPanelGet, mode: 0o600,
+		d := download{url: m.url, out: filepath.Join(o.dir, m.role+".json"), token: token, max: maxPanelGet, mode: 0o644,
 			notFound: "no result for this member", tooLarge: "the result is over the size limit"}
 		if err := d.getWithRetry(ctx, client, panelTries, panelRetryWait); err != nil {
 			fmt.Fprintf(stderr, "panel %s: not downloaded: %v\n", m.role, err)
