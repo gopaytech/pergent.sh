@@ -616,9 +616,103 @@ func TestDeleteTeamModelEmptiesNoRepoChainB(t *testing.T) {
 		if _, found := mustChainB(t, s, ScopeRepo, 0, "main", project); found {
 			t.Errorf("%s: the emptied chain B row is still there", project)
 		}
-		if mode := mustPanelMode(t, s, project); mode == PanelOff {
-			t.Errorf("%s: mode = off after its last entry went", project)
+		if mode := mustPanelMode(t, s, project); mode != PanelInherit {
+			t.Errorf("%s: mode = %q after its last entry went; want inherit", project, mode)
 		}
+	}
+	if r := mustRepo(t, s, "acme/api"); r.PanelChainMode != PanelInherit {
+		t.Errorf("acme/api's row = %q; want inherit, not custom with no chain", r.PanelChainMode)
+	}
+}
+
+// A team entry's removal locks the repository's row before its chain B, as
+// a save does, so a save that holds the row and then writes the chain
+// does not deadlock with it.
+func TestDeleteTeamModelLocksTheRepoFirst(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	tm := newTeamModel(t, s, team, "One", nil)
+	addRepos(t, s, "acme/api")
+	if err := s.SaveChainOf(ctx, ChainB, Chain{Scope: ScopeRepo, Instance: "main", Project: "acme/api", Entries: []EntryRef{{SourceTeam, tm.ID}}}, t0); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx) //nolint:errcheck // committed below
+	var holderPID int32
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM dashboard_repos WHERE instance = 'main' AND project = 'acme/api' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	deleted := make(chan error, 1)
+	go func() {
+		_, _, err := s.DeleteTeamModel(ctx, team, tm.ID)
+		deleted <- err
+	}()
+	waitBlocked(t, s, 0, holderPID)
+	if _, err := holder.Exec(ctx, `UPDATE `+ChainB.chains+` SET updated_at = now()
+		WHERE scope = 'repo' AND instance = 'main' AND project = 'acme/api'`); err != nil {
+		t.Fatalf("the save's chain write: %v", err)
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("DeleteTeamModel: %v", err)
+	}
+	if mode := mustPanelMode(t, s, "acme/api"); mode != PanelInherit {
+		t.Errorf("mode = %q; want inherit", mode)
+	}
+}
+
+// waitBlocked waits until a backend other than skip is blocked by one of
+// pids, and returns it.
+func waitBlocked(t *testing.T, s *Store, skip int32, pids ...int32) int32 {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var pid int32
+		err := s.pool.QueryRow(ctx, `SELECT pid FROM pg_stat_activity
+			WHERE pid <> $1 AND pg_blocking_pids(pid) && $2::int[] LIMIT 1`, skip, pids).Scan(&pid)
+		if err == nil {
+			return pid
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("no backend waited on the repository's row")
+	return 0
+}
+
+// Only SetRepoPanelOff makes the empty repository chain B that means off: a
+// repository save with no entries is refused, and stores nothing. A global
+// or team chain B may be saved empty.
+func TestChainBEmptyRepoSaveRefused(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	addRepos(t, s, "acme/api")
+	for _, project := range []string{"acme/api", "acme/config"} {
+		err := s.SaveChainOf(ctx, ChainB, Chain{Scope: ScopeRepo, Instance: "main", Project: project}, t0)
+		if !errors.Is(err, ErrEmptyRepoPanelChain) {
+			t.Errorf("%s: empty save = %v; want ErrEmptyRepoPanelChain", project, err)
+		}
+		if _, found := mustChainB(t, s, ScopeRepo, 0, "main", project); found {
+			t.Errorf("%s: a refused save stored a row", project)
+		}
+		if mode := mustPanelMode(t, s, project); mode != PanelInherit {
+			t.Errorf("%s: mode = %q; want inherit", project, mode)
+		}
+	}
+	for _, c := range []Chain{{Scope: ScopeGlobal}, {Scope: ScopeTeam, TeamID: team}} {
+		if err := s.SaveChainOf(ctx, ChainB, c, t0); err != nil {
+			t.Errorf("empty %s chain B = %v", c.Scope, err)
+		}
+	}
+	if err := s.SaveChain(ctx, Chain{Scope: ScopeRepo, Instance: "main", Project: "acme/api"}, t0); err != nil {
+		t.Errorf("empty repository chain A = %v; chain A is unchanged", err)
 	}
 }
 
@@ -641,23 +735,7 @@ func TestChainBSaveThenOffLocksTheRepoFirst(t *testing.T) {
 	if _, err := holder.Exec(ctx, `SELECT 1 FROM dashboard_repos WHERE instance = 'main' AND project = 'acme/api' FOR UPDATE`); err != nil {
 		t.Fatal(err)
 	}
-	// blockedBy waits until a backend other than skip is blocked by one of
-	// pids, and returns it.
-	blockedBy := func(skip int32, pids ...int32) int32 {
-		t.Helper()
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
-			var pid int32
-			err := s.pool.QueryRow(ctx, `SELECT pid FROM pg_stat_activity
-				WHERE pid <> $1 AND pg_blocking_pids(pid) && $2::int[] LIMIT 1`, skip, pids).Scan(&pid)
-			if err == nil {
-				return pid
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		t.Fatal("no backend waited on the repository's row")
-		return 0
-	}
+	blockedBy := func(skip int32, pids ...int32) int32 { return waitBlocked(t, s, skip, pids...) }
 	saved, off := make(chan error, 1), make(chan error, 1)
 	go func() {
 		saved <- s.SaveChainOf(ctx, ChainB, Chain{Scope: ScopeRepo, Instance: "main", Project: "acme/api",

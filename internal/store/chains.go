@@ -141,6 +141,16 @@ func removeFromChains(ctx context.Context, tx pgx.Tx, set ChainSet, source strin
 		return nil, nil
 	}
 	naming := `id IN (SELECT chain_id FROM ` + set.entries + ` WHERE source = $1 AND model_id = ANY($2))`
+	// A chain B write locks the repository's row before its chain
+	// (lockRepoRow), so this does too: an emptied repository chain B
+	// changes the row's mode below.
+	if set == ChainB {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM dashboard_repos d WHERE EXISTS (SELECT 1 FROM `+set.chains+` c
+			WHERE c.scope = 'repo' AND c.instance = d.instance AND lower(c.project) = lower(d.project) AND c.`+naming+`)
+			ORDER BY d.instance, lower(d.project) FOR UPDATE OF d`, source, ids); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `SELECT id FROM `+set.chains+` WHERE `+naming+` ORDER BY id FOR UPDATE`, source, ids); err != nil {
 		return nil, err
 	}
@@ -163,9 +173,13 @@ func removeFromChains(ctx context.Context, tx pgx.Tx, set ChainSet, source strin
 		c.Entries, c.UpdatedAt = kept, at
 		// An empty repository chain B means off (RepoPanelMode), so one
 		// that loses its last entry goes: the repository inherits, as an
-		// empty chain A does.
+		// empty chain A does, its mode too.
 		if set == ChainB && c.Scope == ScopeRepo && len(kept) == 0 {
 			if _, err := tx.Exec(ctx, `DELETE FROM `+set.chains+` WHERE id = $1`, c.ID); err != nil {
+				return nil, err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET `+set.mode+` = 'inherit'
+				WHERE instance = $1 AND lower(project) = lower($2) AND `+set.mode+` = 'custom'`, c.Instance, c.Project); err != nil {
 				return nil, err
 			}
 			continue
@@ -197,6 +211,10 @@ const (
 
 // ErrChainTooLong is returned when a chain has more than MaxChain entries.
 var ErrChainTooLong = errors.New("store: the chain has more than 5 entries")
+
+// ErrEmptyRepoPanelChain is returned for a repository chain B with no
+// entries: an empty one means off, which only SetRepoPanelOff writes.
+var ErrEmptyRepoPanelChain = errors.New("store: a repository's chain B needs an entry")
 
 // errUnknownChainSet is returned for a ChainSet that is neither ChainA nor
 // ChainB.
@@ -251,7 +269,8 @@ func (s *Store) SaveChain(ctx context.Context, c Chain, at time.Time) error {
 // SaveChainOf stores c's entries in place of the ones its scope target had
 // in set, creating the chain when there is none; at is its updated_at, and
 // c.SavedByAdmin replaces what the chain had. More than MaxChain entries is
-// ErrChainTooLong; a team entry that is not there is ErrModelNotFound (it is
+// ErrChainTooLong; a repository chain B with none is ErrEmptyRepoPanelChain;
+// a team entry that is not there is ErrModelNotFound (it is
 // locked, so it can't be removed meanwhile). Nothing else is checked here:
 // who may name which entry is the caller's. A repository save makes the
 // set's mode of the repository custom.
@@ -264,6 +283,9 @@ func (s *Store) SaveChain(ctx context.Context, c Chain, at time.Time) error {
 func (s *Store) SaveChainOf(ctx context.Context, set ChainSet, c Chain, at time.Time) error {
 	if len(c.Entries) > MaxChain {
 		return ErrChainTooLong
+	}
+	if set == ChainB && c.Scope == ScopeRepo && len(c.Entries) == 0 {
+		return ErrEmptyRepoPanelChain
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
