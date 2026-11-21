@@ -164,7 +164,8 @@ type Outcome struct {
 	// names): the meta line and the findings' panel lines use them. Nil is a
 	// review with no panel, whose comment is today's. With a panel, Hide also
 	// reaches the model text of the findings, the summaries, the checks and
-	// the confidence reason (never a path or a rule).
+	// the confidence reason (never a path or a rule); a suggestion it would
+	// change is not shown.
 	Panel   *render.PanelNames
 	FileURL func(path string, line, endLine int) string
 
@@ -536,13 +537,18 @@ func hideInFailures(skills []render.Skill, hide func(string) string) []render.Sk
 
 // hideInPanelText is skills with hide applied to the model text of a
 // panel's comment that hideInFailures leaves: each finding's title,
-// explanation, fixes and panel reason (dismissed ones too), the summaries,
-// the checks and the confidence reason. Paths and rules are left as they
-// are. skills is not modified.
+// explanation, suggested fix and panel reason (dismissed ones too), the
+// summaries, the checks and the confidence reason. A suggestion (code) that
+// hiding would change is dropped, never changed. Paths and rules are left as
+// they are. skills is not modified.
 func hideInPanelText(skills []render.Skill, hide func(string) string) []render.Skill {
 	finding := func(f render.Finding) render.Finding {
 		f.Title, f.Explanation, f.SuggestedFix = hide(f.Title), hide(f.Explanation), hide(f.SuggestedFix)
-		f.Suggestion = hide(f.Suggestion)
+		if hide(f.Suggestion) != f.Suggestion {
+			// Changed code is wrong code: no suggestion is shown, as in
+			// an inline thread.
+			f.Suggestion = ""
+		}
 		if f.Panel != nil {
 			fp := *f.Panel
 			fp.Reason = hide(fp.Reason)

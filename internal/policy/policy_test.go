@@ -2179,3 +2179,19 @@ func TestHideModels(t *testing.T) {
 		}
 	}
 }
+
+// In a panel's comment a suggestion that hiding would change is not shown:
+// changed code would be wrong code. One that names no model is kept as is.
+func TestDecidePanelDropsChangedSuggestion(t *testing.T) {
+	const name = "omega-model-b"
+	hide := func(s string) string { return HideModels(s, []ModelRef{{"zeta-provider-b", name}}, nil) }
+	o := Outcome{Result: panelResult(name), Hide: hide, Panel: &render.PanelNames{A: "team-a", B: "team-b"}}
+	d := Decide(o, config.FailureStatusFailed)
+	if strings.Contains(d.Comment, "x := the model") || strings.Contains(d.Comment, "x := "+name) {
+		t.Errorf("comment shows the changed suggestion:\n%s", d.Comment)
+	}
+	o.Result = panelResult("plain")
+	if d := Decide(o, config.FailureStatusFailed); !strings.Contains(d.Comment, "x := plain") {
+		t.Errorf("comment lost a suggestion that names no model:\n%s", d.Comment)
+	}
+}

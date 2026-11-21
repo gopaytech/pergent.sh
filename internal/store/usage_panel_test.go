@@ -88,9 +88,9 @@ func TestRecordMemberUsage(t *testing.T) {
 	if !ok || u.in != 150 || u.out != 15 || u.verdict != "" || u.findings != 0 || u.blocks != 0 {
 		t.Errorf("run_usage = %+v, %v; want A + B's tokens, no verdict or counts yet", u, ok)
 	}
-	// B did not report its cache counts: the sum is unknown.
-	if u.cache != nil {
-		t.Errorf("cache_read = %d; want unknown", *u.cache)
+	// B did not report its cache counts: A's are kept.
+	if u.cache == nil || *u.cache != 3 {
+		t.Errorf("cache_read = %v; want A's 3", u.cache)
 	}
 	team := int64(4)
 	want := []modelRow{
@@ -332,5 +332,140 @@ func TestPanelJudgeModels(t *testing.T) {
 	}
 	if got, err := s.PanelJudgeModels(ctx, "bad"); err != nil || len(got) != 0 {
 		t.Errorf("PanelJudgeModels of a bad id = %+v, %v; want none", got, err)
+	}
+}
+
+// A count is added when both sides report it, kept when one side does, and
+// stays unknown only when neither does.
+func TestRecordUsageCacheKeepsKnownSide(t *testing.T) {
+	s := newStore(t)
+	id, a, b := panelMembersWithEntries(t, s, "a1")
+	two, five := int64(2), int64(5)
+	if err := s.RecordMemberUsage(ctx, a.ID, []SkillUsage{{Skill: "both", CacheRead: &two}, {Skill: "one", CacheRead: &two}, {Skill: "none"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordMemberUsage(ctx, b.ID, []SkillUsage{{Skill: "both", CacheRead: &five}, {Skill: "one"}, {Skill: "none"}}); err != nil {
+		t.Fatal(err)
+	}
+	for skill, want := range map[string]*int64{"both": ptr(int64(7)), "one": ptr(int64(2)), "none": nil} {
+		u, ok := usageOf(t, s, id, skill)
+		if !ok || (u.cache == nil) != (want == nil) || (want != nil && *u.cache != *want) {
+			t.Errorf("%s cache_read = %v, %v; want %v", skill, u.cache, ok, want)
+		}
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// A review that fell back on chain A before its split: the split run (a
+// later attempt, the one published) holds the members' and P's tokens, the
+// dropped first attempt only its own, the member rows too. A member filled
+// after the release goes to the split run as well.
+func TestMemberUsageOnSplitRun(t *testing.T) {
+	s := newStore(t)
+	first := reported(t, s, mr1, "a1", `{}`)
+	if err := s.RecordUsage(ctx, first, []SkillUsage{{Skill: "security", Verdict: "failed", In: 9}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	split, _, err := s.EnqueueAttempt(ctx, getRun(t, s, first), quotaMark("m1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if started, err := s.StartPanel(ctx, split, testSplit, t0); err != nil || !started {
+		t.Fatalf("StartPanel = %v, %v", started, err)
+	}
+	a, b := memberOf(t, s, first, "a"), memberOf(t, s, first, "b")
+	doneMember(t, s, a.ID, `{"status":"completed"}`)
+	doneMember(t, s, b.ID, `{"status":"completed"}`)
+	// A's write while the run waits.
+	if err := s.RecordMemberUsage(ctx, a.ID, []SkillUsage{{Skill: "security", In: 100}}); err != nil {
+		t.Fatal(err)
+	}
+	if released, _, err := s.ReleasePanel(ctx, first, t0); err != nil || !released {
+		t.Fatalf("ReleasePanel = %v, %v", released, err)
+	}
+	// B's from the fill, after the release.
+	if err := s.RecordMemberUsage(ctx, b.ID, []SkillUsage{{Skill: "security", In: 50}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkDispatched(ctx, split, "job-p", "base-sha", "start-sha", hash("p"), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.StoreResult(ctx, split, "p", []byte(`{}`), t0.Add(2*time.Minute)); err != nil || out != ResultStored {
+		t.Fatal(out, err)
+	}
+	if err := s.RecordUsage(ctx, split, []SkillUsage{{Skill: "security", Verdict: "no_blocking_issues", In: 20}}, []ModelUsage{}); err != nil {
+		t.Fatal(err)
+	}
+	if u, ok := usageOf(t, s, split, "security"); !ok || u.in != 170 || u.verdict != "no_blocking_issues" {
+		t.Errorf("split run usage = %+v, %v; want A + B + P with P's verdict", u, ok)
+	}
+	if u, ok := usageOf(t, s, first, "security"); !ok || u.in != 9 || u.verdict != "failed" {
+		t.Errorf("dropped attempt usage = %+v, %v; want its own 9 tokens only", u, ok)
+	}
+	if in, _, _, err := s.RunUsage(ctx, split); err != nil || in != 170 {
+		t.Errorf("RunUsage(split) = %d, %v; want 170", in, err)
+	}
+	if rows := modelRowsOf(t, s, split); len(rows) != 2 {
+		t.Errorf("member rows on the split run = %+v; want A's and B's", rows)
+	}
+	if rows := modelRowsOf(t, s, first); len(rows) != 0 {
+		t.Errorf("member rows on the dropped attempt = %+v; want none", rows)
+	}
+}
+
+// A panel whose merge left no result (Job P timed out): the review counts
+// once, as a review with no result, and its members' tokens are wasted.
+func TestUsagePanelNoResult(t *testing.T) {
+	s := newStore(t)
+	mr := usageMR(7, 1)
+	id := enqueue(t, s, mr, "a1")
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if started, err := s.StartPanel(ctx, id, testSplit, t0); err != nil || !started {
+		t.Fatalf("StartPanel = %v, %v", started, err)
+	}
+	a := memberOf(t, s, id, "a")
+	doneMember(t, s, a.ID, `{"status":"completed"}`)
+	if err := s.RecordMemberUsage(ctx, a.ID, []SkillUsage{{Skill: "security", In: 100, Out: 10}}); err != nil {
+		t.Fatal(err)
+	}
+	// P ran and left no result.
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'reported', skip_reason = '', failure_reason = 'the Job timed out',
+		failure_step = 'review', reported_at = $2 WHERE id = $1::uuid`, id, usageAt(5, 10, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE run_usage SET reported_at = $2 WHERE run_id = $1::uuid`, id, usageAt(5, 10, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET created_at = $2 WHERE id = $1::uuid`, id, usageAt(5, 9, 0)); err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.UsageWasted(ctx, mr.Instance, 7, usageSince)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Failed.In != 100 || w.Failed.Out != 10 || w.NoResult != 1 {
+		t.Errorf("wasted = %+v; want the members' tokens as failed and one review with no result", w)
+	}
+	m, err := s.MetricsTotals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Reviews) != 0 || len(m.SkillRuns) != 0 {
+		t.Errorf("reviews %+v, skill runs %+v; want none: the review has no result", m.Reviews, m.SkillRuns)
+	}
+	if len(m.NoResult) != 1 || m.NoResult[0].Reviews != 1 {
+		t.Errorf("no result = %+v; want the review once", m.NoResult)
+	}
+	if len(m.Tokens) != 1 || m.Tokens[0].Tokens.In != 100 {
+		t.Errorf("tokens = %+v; want the members' 100 kept", m.Tokens)
 	}
 }

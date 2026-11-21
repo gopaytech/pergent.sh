@@ -62,7 +62,9 @@ func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage,
 // usageInsertSQL inserts what skill $2 of run $1 used into run_usage, with
 // the run's repository, merge request, trigger, provider, model and whose key
 // paid. The verdict, the time and the counts are $3, $4 and $10, $11; the
-// tokens $5 to $9. What a conflict does follows it.
+// tokens $5 to $9. On a conflict the tokens are added; a count one side
+// reported is kept when the other side's is unknown, and stays unknown only
+// when both are. What else a conflict does follows it.
 //
 // A panel's members and its Job P add to the row of the run they count on:
 // its source is that run's entry, not each model's own (run_usage_models
@@ -80,14 +82,13 @@ const usageInsertSQL = `INSERT INTO run_usage (run_id, skill, instance, project_
 	FROM runs r WHERE r.id = $1::uuid
 	ON CONFLICT (run_id, skill) DO UPDATE SET tokens_in = run_usage.tokens_in + EXCLUDED.tokens_in,
 		tokens_out = run_usage.tokens_out + EXCLUDED.tokens_out,
-		cache_read = run_usage.cache_read + EXCLUDED.cache_read,
-		cache_write = run_usage.cache_write + EXCLUDED.cache_write,
-		reasoning = run_usage.reasoning + EXCLUDED.reasoning`
+		cache_read = COALESCE(run_usage.cache_read + EXCLUDED.cache_read, run_usage.cache_read, EXCLUDED.cache_read),
+		cache_write = COALESCE(run_usage.cache_write + EXCLUDED.cache_write, run_usage.cache_write, EXCLUDED.cache_write),
+		reasoning = COALESCE(run_usage.reasoning + EXCLUDED.reasoning, run_usage.reasoning, EXCLUDED.reasoning)`
 
 // recordMergeUsage is RecordUsage of Job P's run id: each skill's tokens are
-// added to the run's row (a member of the review may have made it, when the
-// run is the review's first), with P's verdict, counts and time; a count one
-// side did not report stays unknown. models are stored as merge rows, each
+// added to the run's row (the members made it when P runs on the run that
+// was split), with P's verdict, counts and time. models are stored as merge rows, each
 // with the judge entry of its role (panel_judges). The run's usage_recorded,
 // read under the row's lock in the same transaction, stops a second count.
 func (s *Store) recordMergeUsage(ctx context.Context, id string, skills []SkillUsage, models []ModelUsage) error {
@@ -149,8 +150,8 @@ func byName(skills []SkillUsage) []SkillUsage {
 
 // RecordMemberUsage stores what each skill of member id used: one
 // run_usage_models row per skill (part member, the member's entry, provider,
-// model, source and team), and the tokens added to run_usage of the member's
-// run (the review's first), then marks the member recorded, in one
+// model, source and team), and the tokens added to run_usage of the run that
+// was split (memberUsageRunSQL), then marks the member recorded, in one
 // transaction; a member already recorded changes nothing. A row the member
 // makes has no verdict and no counts: Job P's record sets them. A member
 // that failed records the tokens it reported all the same. An unknown or off
@@ -164,8 +165,8 @@ func (s *Store) RecordMemberUsage(ctx context.Context, id string, skills []Skill
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	var root string
-	err = tx.QueryRow(ctx, `SELECT run_id::text FROM panel_members WHERE id = $1::uuid AND state <> 'off'`, id).Scan(&root)
+	var target string
+	err = tx.QueryRow(ctx, memberUsageRunSQL, id).Scan(&target)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -175,7 +176,7 @@ func (s *Store) RecordMemberUsage(ctx context.Context, id string, skills []Skill
 	// The run's row before the member's, the panel's lock order: the rows
 	// added below hold the run's key, and a run is only ever deleted with
 	// its row locked first.
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1::uuid FOR KEY SHARE`, root); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1::uuid FOR KEY SHARE`, target); err != nil {
 		return err
 	}
 	var (
@@ -183,8 +184,8 @@ func (s *Store) RecordMemberUsage(ctx context.Context, id string, skills []Skill
 		at       time.Time
 	)
 	err = tx.QueryRow(ctx, `SELECT m.usage_recorded, COALESCE(r.reported_at, m.reported_at, r.created_at)
-		FROM panel_members m JOIN runs r ON r.id = m.run_id
-		WHERE m.id = $1::uuid FOR UPDATE OF m`, id).Scan(&recorded, &at)
+		FROM panel_members m, runs r
+		WHERE m.id = $1::uuid AND r.id = $2::uuid FOR UPDATE OF m`, id, target).Scan(&recorded, &at)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && recorded) {
 		return nil
 	}
@@ -192,18 +193,18 @@ func (s *Store) RecordMemberUsage(ctx context.Context, id string, skills []Skill
 		return err
 	}
 	for _, u := range byName(skills) {
-		if _, err := tx.Exec(ctx, usageInsertSQL, root, u.Skill, "", at, u.In, u.Out, u.CacheRead, u.CacheWrite, u.Reasoning, 0, 0); err != nil {
+		if _, err := tx.Exec(ctx, usageInsertSQL, target, u.Skill, "", at, u.In, u.Out, u.CacheRead, u.CacheWrite, u.Reasoning, 0, 0); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO run_usage_models (run_id, member_id, part, role, skill, provider, model,
 				entry_name, source, team_id, reported_at, tokens_in, tokens_out, cache_read, cache_write, reasoning)
-			SELECT m.run_id, m.id, 'member', m.role, $2::text, m.provider, m.model, m.model_entry_name,
+			SELECT $9::uuid, m.id, 'member', m.role, $2::text, m.provider, m.model, m.model_entry_name,
 				CASE WHEN m.model_source = 'team' THEN 'team' ELSE 'global' END,
 				CASE WHEN m.model_source = 'team' THEN m.model_team_id END,
 				COALESCE(m.reported_at, $3::timestamptz), $4::bigint, $5::bigint, $6::bigint, $7::bigint, $8::bigint
 			FROM panel_members m WHERE m.id = $1::uuid
 			ON CONFLICT (member_id, skill) WHERE part = 'member' DO NOTHING`,
-			id, u.Skill, at, u.In, u.Out, u.CacheRead, u.CacheWrite, u.Reasoning); err != nil {
+			id, u.Skill, at, u.In, u.Out, u.CacheRead, u.CacheWrite, u.Reasoning, target); err != nil {
 			return err
 		}
 	}
@@ -212,6 +213,21 @@ func (s *Store) RecordMemberUsage(ctx context.Context, id string, skills []Skill
 	}
 	return tx.Commit(ctx)
 }
+
+// memberUsageRunSQL is the run member $1's tokens count on: the run that was
+// split. That is the run waiting for the members while they run; after the
+// release (the fill at start) it is the newest run of the review created
+// before the role's first attempt, as a review can fall back on chain A
+// before its split, and the split run is then a later attempt, not the
+// review's first run. Job P's later attempts are created after the members,
+// so they are never it. An off member has none.
+const memberUsageRunSQL = `SELECT x.id::text FROM panel_members m
+	JOIN panel_members f ON f.id = COALESCE(m.attempt_of, m.id)
+	JOIN runs x ON x.id = m.run_id OR x.attempt_of = m.run_id
+	WHERE m.id = $1::uuid AND m.state <> 'off'
+	  AND ((x.state = 'waiting' AND x.skip_reason = 'panel_members') OR x.created_at < f.created_at)
+	ORDER BY (x.state = 'waiting' AND x.skip_reason = 'panel_members') DESC, x.created_at DESC, x.id DESC
+	LIMIT 1`
 
 // MembersWithoutUsage returns up to limit panel members with a stored
 // result and no usage recorded, oldest first: the fill at start records
@@ -562,13 +578,16 @@ func (s *Store) UsageByMR(ctx context.Context, instance string, projectID int64,
 // no result, whose tokens are unknown.
 func (s *Store) UsageWasted(ctx context.Context, instance string, projectID int64, since time.Time) (WastedUsage, error) {
 	var w WastedUsage
+	// A failed skill, or a panel's member tokens when its merge left no
+	// result (panelNoResult): both are wasted.
+	failed := `(verdict = 'failed' OR ` + panelNoResult + `)`
 	err := s.pool.QueryRow(ctx, `SELECT
-			COALESCE(sum(tokens_in)  FILTER (WHERE verdict = 'failed'), 0),
-			COALESCE(sum(tokens_out) FILTER (WHERE verdict = 'failed'), 0),
-			COALESCE(sum(cache_read) FILTER (WHERE verdict = 'failed'), 0),
-			COALESCE(sum(cache_write) FILTER (WHERE verdict = 'failed'), 0),
-			COALESCE(sum(reasoning)  FILTER (WHERE verdict = 'failed'), 0),
-			count(*) FILTER (WHERE verdict = 'failed' AND (cache_read IS NULL OR cache_write IS NULL OR reasoning IS NULL)),
+			COALESCE(sum(tokens_in)  FILTER (WHERE `+failed+`), 0),
+			COALESCE(sum(tokens_out) FILTER (WHERE `+failed+`), 0),
+			COALESCE(sum(cache_read) FILTER (WHERE `+failed+`), 0),
+			COALESCE(sum(cache_write) FILTER (WHERE `+failed+`), 0),
+			COALESCE(sum(reasoning)  FILTER (WHERE `+failed+`), 0),
+			count(*) FILTER (WHERE `+failed+` AND (cache_read IS NULL OR cache_write IS NULL OR reasoning IS NULL)),
 			COALESCE(sum(tokens_in)  FILTER (WHERE trigger IN ('rerun', 'rerun_failed')), 0),
 			COALESCE(sum(tokens_out) FILTER (WHERE trigger IN ('rerun', 'rerun_failed')), 0),
 			COALESCE(sum(cache_read) FILTER (WHERE trigger IN ('rerun', 'rerun_failed')), 0),
@@ -581,8 +600,9 @@ func (s *Store) UsageWasted(ctx context.Context, instance string, projectID int6
 	if err != nil {
 		return WastedUsage{}, err
 	}
-	// A review with no result has no usage rows, so these two come from runs.
-	// The failure reason tells them apart in any state: a review that failed
+	// A review with no result has no usage rows of its own (a panel's has
+	// its members', counted as wasted above, never as a review), so these
+	// two come from runs. The failure reason tells them apart in any state: a review that failed
 	// keeps its reason when a later re-run supersedes it, and a run stopped
 	// by a newer push has none. A superseded run that kept its result is
 	// counted in neither: its skills are in run_usage like any other.
@@ -890,7 +910,8 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	// A dropped attempt (fell_back) is not a review: the next attempt is. Its
 	// tokens were spent, so Tokens keeps them.
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, trigger, incremental, count(DISTINCT run_id)
-		FROM run_usage WHERE instance <> '' AND `+notFellBack+` GROUP BY instance, project_path, trigger, incremental`); err != nil {
+		FROM run_usage WHERE instance <> '' AND `+notFellBack+` AND NOT `+panelNoResult+`
+		GROUP BY instance, project_path, trigger, incremental`); err != nil {
 		return MetricsTotals{}, err
 	}
 	if t.Reviews, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ReviewTotal, error) {
@@ -901,8 +922,9 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 		return MetricsTotals{}, err
 	}
 
-	// Reviews with no result have no usage rows, so these two come from runs,
-	// told apart as UsageWasted does.
+	// Reviews with no result have no usage rows of their own (a panel's
+	// members' rows are left out of the review and skill counts), so these
+	// two come from runs, told apart as UsageWasted does.
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, failure_step, count(*)
 		FROM runs WHERE instance <> '' AND result IS NULL AND failure_reason <> '' AND dispatched_at IS NOT NULL
 		  AND outcome <> 'fell_back'
@@ -931,7 +953,8 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	}
 
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, skill, verdict, count(*)
-		FROM run_usage WHERE instance <> '' AND `+notFellBack+` GROUP BY instance, project_path, skill, verdict`); err != nil {
+		FROM run_usage WHERE instance <> '' AND `+notFellBack+` AND NOT `+panelNoResult+`
+		GROUP BY instance, project_path, skill, verdict`); err != nil {
 		return MetricsTotals{}, err
 	}
 	if t.SkillRuns, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (SkillRunTotal, error) {
@@ -1061,6 +1084,15 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	}
 	return t, nil
 }
+
+// panelNoResult is a run_usage row of a review panel whose merge (Job P)
+// left no result: only its members' tokens are there, with no verdict. Such
+// a review is a review with no result, as a single review with none is, so
+// the review counts leave it out (runs count it as no result) and its tokens
+// are wasted.
+const panelNoResult = `EXISTS (SELECT 1 FROM runs nr WHERE nr.id = run_usage.run_id AND nr.result IS NULL
+	AND nr.failure_reason <> '' AND EXISTS (SELECT 1 FROM panel_members pm
+		WHERE pm.run_id = COALESCE(nr.attempt_of, nr.id) AND pm.state <> 'off'))`
 
 // notFellBack keeps the run_usage rows of runs not dropped for the next entry
 // of their chain.
