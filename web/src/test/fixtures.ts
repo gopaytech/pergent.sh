@@ -87,6 +87,7 @@ export const reviewApproved: ReviewSummary = {
   reason: "",
   updatedAt: minutesAgo(4),
   webURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/128",
+  attempts: 1,
 };
 
 export const reviewBlocking: ReviewSummary = {
@@ -99,6 +100,7 @@ export const reviewBlocking: ReviewSummary = {
   reason: "security-review found blocking issues.",
   updatedAt: minutesAgo(12),
   webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/77",
+  attempts: 1,
 };
 
 export const overview: OverviewView = {
@@ -776,7 +778,7 @@ export const usageOverview: UsageOverviewView = {
     { day: "2026-11-07", tokens: tok(455_000, 111_000) },
   ],
   repositories: [
-    { instance: "main", project: "acme/payments", switchedOn: true, paused: false, tokens: tok(900_000, 200_000), reviews: 30, globalTokens: 1_100_000, teamTokens: 0 },
+    { instance: "main", project: "acme/payments", switchedOn: true, paused: false, tokens: tok(900_000, 200_000), reviews: 30, globalTokens: 800_000, teamTokens: 300_000 },
     { instance: "main", project: "acme/widgets", switchedOn: true, paused: false, tokens: tok(200_000, 80_000), reviews: 8, globalTokens: 280_000, teamTokens: 0 },
     { instance: "main", project: "acme/old", switchedOn: false, paused: false, tokens: tok(100_000, 20_000), reviews: 2, globalTokens: 120_000, teamTokens: 0 },
   ],
@@ -817,6 +819,8 @@ export const usageRepository: UsageRepositoryView = {
   fullMedian: 120_000,
   incrementalMedian: null,
   outliers: [{ runID: "run-9", iid: 77, incremental: false, total: 450_000, at: "2026-11-06T10:15:00Z" }],
+  globalTokens: 800_000,
+  teamTokens: 300_000,
 };
 
 // What the Skill results tab reads for admins: tokens per skill on the same changes.

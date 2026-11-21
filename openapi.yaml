@@ -3064,7 +3064,9 @@ paths:
         run was reported under), `merge_request` (its number), `trigger`,
         `incremental`, `model`, `skill`, `verdict`, `tokens_in`, `tokens_out`,
         `cache_read`, `cache_write`, `reasoning` (empty when pergent did not
-        report them), `findings` and `blocking`. There are no titles and no
+        report them), `findings`, `blocking`, `provider` (empty for a review
+        from before providers were recorded) and `source` (`global` or `team`:
+        whose key paid). There are no titles and no
         text a person wrote, and no dismissals. A text cell that starts with
         `=`, `+`, `-`, `@`, a tab or a carriage return gets a `'` in front, so
         that a spreadsheet does not read it as a formula. The rows are streamed
@@ -6921,8 +6923,12 @@ components:
     ReviewSummary:
       description: One merge request or pull request, as its newest run left it.
       type: object
-      required: [instance, project, platform, number, title, outcome, reason, updatedAt, webURL]
+      required: [instance, project, platform, number, title, outcome, reason, updatedAt, webURL, attempts]
       properties:
+        attempts:
+          type: integer
+          minimum: 1
+          description: How many attempts the newest review took. More than 1 when it fell back to a backup model.
         instance: {type: string}
         project: {type: string}
         platform:
@@ -7716,8 +7722,16 @@ components:
     UsageRepositoryView:
       description: Body of `GET /api/repositories/{instance}/{project}/usage`.
       type: object
-      required: [days, daily, skills, models, mergeRequests, wasted, fullMedian, incrementalMedian, outliers]
+      required: [days, daily, skills, models, mergeRequests, wasted, fullMedian, incrementalMedian, outliers, globalTokens, teamTokens]
       properties:
+        globalTokens:
+          type: integer
+          format: int64
+          description: Tokens (in plus out) on global keys. The instance quota counts these only.
+        teamTokens:
+          type: integer
+          format: int64
+          description: Tokens (in plus out) on teams' own keys.
         days: {type: integer}
         daily:
           type: array

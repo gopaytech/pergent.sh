@@ -81,6 +81,17 @@ describe("Reviews", () => {
     expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 
+  it("says how many attempts a review took when it fell back, and nothing for one attempt", async () => {
+    const fellBack = { ...reviewBlocking, attempts: 2 };
+    fakeApi({ ...base, "GET /api/reviews?days=90": { body: { items: [reviewApproved, fellBack], nextCursor: "" } } });
+    renderApp("/reviews");
+    const list = await screen.findByRole("region", { name: "Review list" });
+    const row = within(list).getByRole("link", { name: /acme\/payments !77/ }).closest(".row") as HTMLElement;
+    expect(within(row).getByText(/security-review found blocking issues\. · 2 attempts · /)).toBeInTheDocument();
+    const one = within(list).getByRole("link", { name: /acme\/widgets !128/ }).closest(".row") as HTMLElement;
+    expect(one).not.toHaveTextContent(/attempt/);
+  });
+
   it("writes a GitHub pull request with #", async () => {
     fakeApi({
       ...base,

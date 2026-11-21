@@ -79,6 +79,9 @@ export type ReviewSummary = {
   reason: string;
   updatedAt: string;
   webURL: string;
+  // attempts is how many attempts the newest review took: more than 1 when
+  // it fell back to a backup model.
+  attempts: number;
 };
 
 export type AttentionView = {
@@ -600,6 +603,10 @@ export type UsageRepositoryView = {
   fullMedian: number | null;
   incrementalMedian: number | null;
   outliers: UsageOutlierView[];
+  // globalTokens and teamTokens split its tokens (in plus out) by whose key
+  // paid, as on the overview's row.
+  globalTokens: number;
+  teamTokens: number;
 };
 
 // SettingsUpdate is the body of PUT .../settings: only the keys to change;

@@ -7,8 +7,8 @@ import { ErrorBox, Loading, Pill, count } from "../ui";
 import { apartText, CsvLink, DailyTable, EmptyRow, PeriodSelect, total, UsageCells, UsageHead, UsageNotes } from "./usageParts";
 
 // Usage is where the model tokens went across every repository and API client,
-// for admins: the totals, each repository, each client with its tenants and
-// each day. The numbers are text only.
+// for admins: the totals, each repository with what global and team keys
+// paid, each client with its tenants and each day. The numbers are text only.
 export default function Usage() {
   const [days, setDays] = useState(30);
   const data = useQuery({
@@ -53,7 +53,15 @@ function Body({ view, days }: { view: UsageOverviewView; days: number }) {
         ) : (
           <table className="table">
             <thead>
-              <UsageHead first="Repository">
+              <UsageHead
+                first="Repository"
+                after={
+                  <>
+                    <th className="num">On global keys</th>
+                    <th className="num">On team keys</th>
+                  </>
+                }
+              >
                 <th className="num">Reviews</th>
               </UsageHead>
             </thead>
@@ -81,6 +89,8 @@ function Body({ view, days }: { view: UsageOverviewView; days: number }) {
                   </td>
                   <td className="num">{r.reviews}</td>
                   <UsageCells tokens={r.tokens} />
+                  <td className="num">{count(r.globalTokens)}</td>
+                  <td className="num">{count(r.teamTokens)}</td>
                 </tr>
               ))}
             </tbody>

@@ -114,6 +114,9 @@ type ReviewSummary struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// WebURL is the change's page on the platform; "" when unknown.
 	WebURL string `json:"webURL"`
+	// Attempts is how many attempts the newest review took: more than 1
+	// when it fell back to a backup model.
+	Attempts int `json:"attempts"`
 }
 
 // ReviewListView is GET
@@ -1612,6 +1615,10 @@ type UsageRepositoryView struct {
 	FullMedian        *float64           `json:"fullMedian"`
 	IncrementalMedian *float64           `json:"incrementalMedian"`
 	Outliers          []UsageOutlierView `json:"outliers"`
+	// GlobalTokens and TeamTokens split its tokens (in plus out) by whose key
+	// paid, as UsageRepositoryRowView does.
+	GlobalTokens int64 `json:"globalTokens"`
+	TeamTokens   int64 `json:"teamTokens"`
 }
 
 // --- API clients (admins) ---

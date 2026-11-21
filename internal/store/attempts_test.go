@@ -362,3 +362,81 @@ func TestRunDigestOfDroppedAttempt(t *testing.T) {
 		t.Errorf("RunDigest of a bad id = %v, %v", found, err)
 	}
 }
+
+// Each digest counts the attempts of the review it is one of: the review
+// list's row of a review that fell back, the review page's row of it and the
+// dropped attempt read on its own all say 2, and a review that never fell
+// back says 1.
+func TestDigestsCountAttempts(t *testing.T) {
+	s := newStore(t)
+	from := reported(t, s, mr1, "a1", `{}`)
+	next, _, err := s.EnqueueAttempt(ctx, getRun(t, s, from), quotaMark("m1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := reported(t, s, mr2, "b1", `{}`)
+	all := Visibility{All: true}
+	list, err := s.ReviewDigests(ctx, ReviewFilter{Visible: all, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, d := range list {
+		got[d.ID] = d.Attempts
+	}
+	if len(got) != 2 || got[next] != 2 || got[plain] != 1 {
+		t.Errorf("ReviewDigests attempts = %v; want %s: 2, %s: 1", got, next, plain)
+	}
+	if mrRuns, err := s.MRRunDigests(ctx, mr1, all); err != nil || len(mrRuns) != 1 || mrRuns[0].Attempts != 2 {
+		t.Errorf("MRRunDigests = %+v, %v; want one run of 2 attempts", mrRuns, err)
+	}
+	if d, found, err := s.RunDigest(ctx, from); err != nil || !found || d.Attempts != 2 {
+		t.Errorf("RunDigest(dropped) = %+v, %v, %v; want 2 attempts", d, found, err)
+	}
+}
+
+// UsageBySource splits one repository's tokens (input plus output) by whose
+// key paid, in the period only.
+func TestUsageBySource(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	at := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+	mr := MRKey{Instance: "main", ProjectID: 1, IID: 1}
+	seedUsage(t, s, mr, at, TriggerPush, false, "m", skillRow("a", "v", 100, 50))
+	paid := seedUsage(t, s, MRKey{Instance: "main", ProjectID: 1, IID: 2}, at, TriggerPush, false, "m", skillRow("a", "v", 1000, 7))
+	if _, err := s.pool.Exec(ctx, `UPDATE run_usage SET source = 'team', team_id = $2 WHERE run_id = $1::uuid`, paid, team); err != nil {
+		t.Fatal(err)
+	}
+	// Another repository, and this one before the period: not counted.
+	seedUsage(t, s, MRKey{Instance: "main", ProjectID: 2, IID: 1}, at, TriggerPush, false, "m", skillRow("a", "v", 9, 0))
+	seedUsage(t, s, MRKey{Instance: "main", ProjectID: 1, IID: 3}, at.Add(-48*time.Hour), TriggerPush, false, "m", skillRow("a", "v", 5, 0))
+	since := at.Add(-time.Hour)
+	if global, teamTokens, err := s.UsageBySource(ctx, "main", 1, since); err != nil || global != 150 || teamTokens != 1007 {
+		t.Errorf("UsageBySource = %d, %d, %v; want 150 and 1007", global, teamTokens, err)
+	}
+	if global, teamTokens, err := s.UsageBySource(ctx, "main", 3, since); err != nil || global != 0 || teamTokens != 0 {
+		t.Errorf("UsageBySource(no usage) = %d, %d, %v; want 0 and 0", global, teamTokens, err)
+	}
+}
+
+// Each usage row says whose key paid for it.
+func TestUsageRowsSource(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	at := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+	seedUsage(t, s, MRKey{Instance: "main", ProjectID: 1, IID: 1}, at, TriggerPush, false, "m", skillRow("a", "v", 1, 0))
+	paid := seedUsage(t, s, MRKey{Instance: "main", ProjectID: 1, IID: 2}, at.Add(time.Minute), TriggerPush, false, "m", skillRow("a", "v", 1, 0))
+	if _, err := s.pool.Exec(ctx, `UPDATE run_usage SET source = 'team', team_id = $2 WHERE run_id = $1::uuid`, paid, team); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := s.UsageRows(ctx, at.Add(-time.Hour), "", 0, 10, func(u UsageRow) error {
+		got = append(got, u.Source)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{SourceGlobal, SourceTeam}) {
+		t.Errorf("sources = %v; want global, then team", got)
+	}
+}

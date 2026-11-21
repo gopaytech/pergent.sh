@@ -195,6 +195,7 @@ func (d *Dashboard) summary(r store.RunDigest, j judged) ReviewSummary {
 	return ReviewSummary{
 		Instance: r.MR.Instance, Project: r.ProjectPath, Platform: platform, Number: r.MR.IID,
 		Title: r.Title, Outcome: j.outcome, Reason: j.reason, UpdatedAt: r.UpdatedAt.UTC(), WebURL: safeURL(r.WebURL),
+		Attempts: r.Attempts,
 	}
 }
 

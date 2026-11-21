@@ -6,13 +6,14 @@ See where the model tokens went on the admin **Usage** page (`/admin/usage`). It
 
 **All repositories** (`/admin/usage`), for the last 7, 30 or 90 days:
 
-- Each repository, busiest first, with its tokens and reviews.
+- Each repository, busiest first, with its tokens and reviews. **On global keys** and **On team keys** split its tokens (input plus output) by whose key paid: the global entries' or a team's own ([Models](models.md)).
 - Each API client, busiest first, with its tokens and reviews and a line for each of its tenants (the first 100, then `and N more tenants`). A tenant is whatever the caller sent, shown as text; reviews with none are `(no tenant)`. The client's name opens its page. The total at the top is the repositories plus the clients, which is what the daily chart adds up to. The CSV is repositories only.
 - A client's **Monthly token budget** is not this page's window: it is the tokens of the reviews asked for in the UTC month ([Limits](../setup/review-api.md#limits)). `GET /v1/client` shows what is used and left. Prometheus has the same numbers per client: [Metrics](metrics.md).
 - The tokens of each day. Days are cut at midnight UTC.
 
 **One repository** (`/admin/usage/<instance>/<project>`):
 
+- The same split, as `Tokens on global keys: 800k · on team keys: 300k`.
 - Tokens per skill and per model, with the model's provider.
 - The 50 merge requests that used the most, with the models each used.
 - The tokens of each day.
@@ -47,10 +48,10 @@ Both pages have a **Download CSV** link: `GET /api/admin/usage.csv?days=N`, with
 
 There's one row per skill per review, oldest first:
 
-`reported_at`, `instance`, `repository`, `merge_request`, `trigger`, `incremental`, `model`, `skill`, `verdict`, `tokens_in`, `tokens_out`, `cache_read`, `cache_write`, `reasoning`, `findings`, `blocking`, `provider`
+`reported_at`, `instance`, `repository`, `merge_request`, `trigger`, `incremental`, `model`, `skill`, `verdict`, `tokens_in`, `tokens_out`, `cache_read`, `cache_write`, `reasoning`, `findings`, `blocking`, `provider`, `source`
 
 - Cache and reasoning cells are empty when the Job didn't report them.
-- `provider` is the last column, so the others keep their places. It is empty for a review from before providers were recorded. See [Models](models.md).
+- `provider` and `source` were added last, so the others keep their places. `provider` is empty for a review from before providers were recorded. `source` is `global` or `team`: whose key paid. See [Models](models.md).
 - There are no titles, no other text a person wrote, and no dismissals. Dismissals are on [Skill results](skill-results.md).
 - A cell a spreadsheet would read as a formula starts with `'`.
 - The file stops at **200,000 rows**, with no mark that it was cut.
@@ -61,5 +62,5 @@ There's one row per skill per review, oldest first:
 - **Switched-off repositories** keep their usage, marked "switched off". They have no page of their own, but their row links to a CSV.
 - **The review page** still shows a review's own tokens to anyone who can see that review. A `review failed` re-run shows only the skills it ran.
 - **Backup models.** A review attempt dropped for the next entry of its [model chain](models.md#attempts) keeps its tokens here, on the entry that used them. On these pages each attempt counts as a review of its own.
-- **Global and team keys.** `GET /api/admin/usage` gives each repository's tokens (input plus output) on global keys as `globalTokens` and on teams' own keys as `teamTokens`. The page does not show the split yet. The instance's [token quota](token-quota.md) counts `globalTokens` only.
+- **Global and team keys.** `GET /api/admin/usage` gives each repository's tokens (input plus output) on global keys as `globalTokens` and on teams' own keys as `teamTokens`, and a repository's usage route gives the same two. The instance's [token quota](token-quota.md) counts `globalTokens` only. The API clients have no split: their reviews always run on global keys.
 - **Usage is never pruned.**
