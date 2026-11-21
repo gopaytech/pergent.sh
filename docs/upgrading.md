@@ -26,6 +26,12 @@
   - saving a team in the previous release clears that team's owner ticks;
   - the instance quota counts tokens on team keys again.
 
+**Repositories, teams and the instance can save a chain B.** It is the second model chain of a review panel: [Review panel](concepts/review-panel.md). It is experimental and off by default. Reviews do not use it yet, so nothing changes in a review.
+
+- **Migration `0048`** runs at startup. It adds two tables (`panel_chains`, `panel_chain_entries`) and one column with a default (`dashboard_repos.panel_chain_mode`), dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them.
+- Saving a chain B with entries is refused with `no review image supports a review panel yet`, until a release supports it. Clearing it and `off` always work.
+- The audit log has `panel_chain_changed`. There is no config and no chart change.
+
 **Repositories can turn on a code graph.** It is off by default, per repository, and nothing changes until both the install and a repository turn it on: [Code graph](concepts/code-graph.md). It is experimental: in our tests it did not lower the cost and did not find more bugs, so keep it off unless you are measuring it.
 
 - **Migration `0044`** runs at startup. It adds one column with a default (`dashboard_repos.graph_context`, `false`) and one table (`repo_graphs`), dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores both.

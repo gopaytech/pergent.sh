@@ -344,6 +344,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   waiting: [],
   instanceTrustedAuthorsOnly: "follow_visibility",
   model: "anthropic / claude-sonnet",
+  panel: { on: false, mode: "inherit" },
   // Only an admin is given the usage against the quotas.
   quota: null,
   graph: {
@@ -1103,4 +1104,28 @@ export const chainRepoCustom: ChainView = {
   team: "",
   savedByAdmin: true,
   entries: [{ ...entryOpus, position: 1 }],
+};
+
+// Chain B of acme/payments while nothing is set anywhere: no entries.
+export const panelRepoInherit: ChainView = {
+  ...chainRepoInherit,
+  source: "global",
+  team: "",
+  mode: "inherit",
+  entries: [],
+};
+
+// Its own chain B: Opus.
+export const panelRepoCustom: ChainView = {
+  ...chainRepoCustom,
+  mode: "custom",
+};
+
+// The panel switched off for the repository.
+export const panelRepoOff: ChainView = {
+  ...chainRepoInherit,
+  source: "repository",
+  team: "",
+  mode: "off",
+  entries: [],
 };

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi } from "../test/fakeApi";
 import {
   chainRepoInherit,
+  panelRepoInherit,
   librarySkills,
   linkable,
   pastDismissals,
@@ -40,6 +41,8 @@ const base = {
   "GET /api/repositories/main/acme/widgets/teams": { body: repoTeams },
   "GET /api/repositories/main/acme/payments/chain": { body: chainRepoInherit },
   "GET /api/repositories/main/acme/widgets/chain": { body: chainRepoInherit },
+  "GET /api/repositories/main/acme/payments/panel-chain": { body: panelRepoInherit },
+  "GET /api/repositories/main/acme/widgets/panel-chain": { body: panelRepoInherit },
   "GET /api/repositories/main/acme/payments/skill-results/tokens": { body: [] },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
 };
@@ -1051,6 +1054,7 @@ describe("RepositorySettings: Linked repositories", () => {
     "GET /api/repositories/hub/acme/gadgets/inputs": { body: noInputs },
     "GET /api/repositories/hub/acme/gadgets/teams": { body: repoTeams },
     "GET /api/repositories/hub/acme/gadgets/chain": { body: chainRepoInherit },
+    "GET /api/repositories/hub/acme/gadgets/panel-chain": { body: panelRepoInherit },
     [`GET ${linkablePath}`]: { body: linkable },
   };
   const withLinks = (enabled: boolean) => ({

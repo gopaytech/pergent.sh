@@ -39,15 +39,32 @@ type Chain struct {
 	UpdatedAt         time.Time
 }
 
+// ChainSet is which chain a chain row belongs to: ChainA, the review's model
+// chain, or ChainB, a review panel's second chain. Its table and column names
+// are fixed here and never come from input; the chain SQL is built from them.
+type ChainSet struct{ chains, entries, mode string }
+
+var (
+	ChainA = ChainSet{chains: "model_chains", entries: "model_chain_entries", mode: "chain_mode"}
+	ChainB = ChainSet{chains: "panel_chains", entries: "panel_chain_entries", mode: "panel_chain_mode"}
+)
+
+// A repository's chain B mode (DashboardRepo.PanelChainMode).
+const (
+	PanelInherit = "inherit"
+	PanelCustom  = "custom"
+	PanelOff     = "off"
+)
+
 type rowsQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// loadChains reads the chains matching where (on model_chains c, with args),
-// by ID, with their entries in position order.
-func loadChains(ctx context.Context, q rowsQuerier, where string, args ...any) ([]Chain, error) {
+// loadChains reads the chains of set matching where (on the set's chains
+// table as c, with args), by ID, with their entries in position order.
+func loadChains(ctx context.Context, q rowsQuerier, set ChainSet, where string, args ...any) ([]Chain, error) {
 	rows, err := q.Query(ctx, `SELECT c.id, c.scope, COALESCE(c.team_id, 0), c.instance, c.project, c.saved_by_admin, c.updated_at
-		FROM model_chains c `+where+` ORDER BY c.id`, args...)
+		FROM `+set.chains+` c `+where+` ORDER BY c.id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +82,7 @@ func loadChains(ctx context.Context, q rowsQuerier, where string, args ...any) (
 		ids[i] = chains[i].ID
 		byID[chains[i].ID] = &chains[i]
 	}
-	rows, err = q.Query(ctx, `SELECT chain_id, source, model_id FROM model_chain_entries
+	rows, err = q.Query(ctx, `SELECT chain_id, source, model_id FROM `+set.entries+`
 		WHERE chain_id = ANY($1) ORDER BY chain_id, position`, ids)
 	if err != nil {
 		return nil, err
@@ -85,8 +102,8 @@ func loadChains(ctx context.Context, q rowsQuerier, where string, args ...any) (
 // writeChainEntries replaces a chain's entries with entries, numbered from 1.
 // It deletes and inserts rather than moving positions, which the primary key
 // would refuse one row at a time.
-func writeChainEntries(ctx context.Context, tx pgx.Tx, chainID int64, entries []EntryRef) error {
-	if _, err := tx.Exec(ctx, `DELETE FROM model_chain_entries WHERE chain_id = $1`, chainID); err != nil {
+func writeChainEntries(ctx context.Context, tx pgx.Tx, set ChainSet, chainID int64, entries []EntryRef) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM `+set.entries+` WHERE chain_id = $1`, chainID); err != nil {
 		return err
 	}
 	if len(entries) == 0 {
@@ -96,7 +113,7 @@ func writeChainEntries(ctx context.Context, tx pgx.Tx, chainID int64, entries []
 	for i, e := range entries {
 		sources[i], ids[i] = e.Source, e.ID
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO model_chain_entries (chain_id, position, source, model_id)
+	_, err := tx.Exec(ctx, `INSERT INTO `+set.entries+` (chain_id, position, source, model_id)
 		SELECT $1::bigint, u.n, u.source, u.id FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS u(source, id, n)`,
 		chainID, sources, ids)
 	return err
@@ -116,18 +133,28 @@ func syncRepoModelID(ctx context.Context, tx pgx.Tx, c Chain) error {
 }
 
 // removeFromChains takes the entries of source with the given IDs out of
-// every chain that names them, the later entries moved up, and returns those
-// chains as they are now. The chains are locked first.
-func removeFromChains(ctx context.Context, tx pgx.Tx, source string, ids []string, at time.Time) ([]Chain, error) {
+// every chain of set that names them, the later entries moved up, and
+// returns those chains as they are now. The chains are locked first. A caller
+// runs it once per set, ChainA first.
+func removeFromChains(ctx context.Context, tx pgx.Tx, set ChainSet, source string, ids []string, at time.Time) ([]Chain, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	if _, err := tx.Exec(ctx, `SELECT id FROM model_chains WHERE id IN (SELECT chain_id FROM model_chain_entries
-		WHERE source = $1 AND model_id = ANY($2)) ORDER BY id FOR UPDATE`, source, ids); err != nil {
+	naming := `id IN (SELECT chain_id FROM ` + set.entries + ` WHERE source = $1 AND model_id = ANY($2))`
+	// A chain B write locks the repository's row before its chain
+	// (lockRepoRow), so this does too: an emptied repository chain B
+	// changes the row's mode below.
+	if set == ChainB {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM dashboard_repos d WHERE EXISTS (SELECT 1 FROM `+set.chains+` c
+			WHERE c.scope = 'repo' AND c.instance = d.instance AND lower(c.project) = lower(d.project) AND c.`+naming+`)
+			ORDER BY d.instance, lower(d.project) FOR UPDATE OF d`, source, ids); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `SELECT id FROM `+set.chains+` WHERE `+naming+` ORDER BY id FOR UPDATE`, source, ids); err != nil {
 		return nil, err
 	}
-	chains, err := loadChains(ctx, tx, `WHERE c.id IN (SELECT chain_id FROM model_chain_entries
-		WHERE source = $1 AND model_id = ANY($2))`, source, ids)
+	chains, err := loadChains(ctx, tx, set, `WHERE c.`+naming, source, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -144,13 +171,26 @@ func removeFromChains(ctx context.Context, tx pgx.Tx, source string, ids []strin
 			}
 		}
 		c.Entries, c.UpdatedAt = kept, at
-		if err := writeChainEntries(ctx, tx, c.ID, kept); err != nil {
+		// An empty repository chain B means off (RepoPanelMode), so one
+		// that loses its last entry goes: the repository inherits, as an
+		// empty chain A does, its mode too.
+		if set == ChainB && c.Scope == ScopeRepo && len(kept) == 0 {
+			if _, err := tx.Exec(ctx, `DELETE FROM `+set.chains+` WHERE id = $1`, c.ID); err != nil {
+				return nil, err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET `+set.mode+` = 'inherit'
+				WHERE instance = $1 AND lower(project) = lower($2) AND `+set.mode+` = 'custom'`, c.Instance, c.Project); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := writeChainEntries(ctx, tx, set, c.ID, kept); err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE model_chains SET updated_at = $2 WHERE id = $1`, c.ID, at); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE `+set.chains+` SET updated_at = $2 WHERE id = $1`, c.ID, at); err != nil {
 			return nil, err
 		}
-		if c.Scope == ScopeRepo {
+		if set == ChainA && c.Scope == ScopeRepo {
 			if err := syncRepoModelID(ctx, tx, *c); err != nil {
 				return nil, err
 			}
@@ -172,47 +212,80 @@ const (
 // ErrChainTooLong is returned when a chain has more than MaxChain entries.
 var ErrChainTooLong = errors.New("store: the chain has more than 5 entries")
 
+// ErrEmptyRepoPanelChain is returned for a repository chain B with no
+// entries: an empty one means off, which only SetRepoPanelOff writes.
+var ErrEmptyRepoPanelChain = errors.New("store: a repository's chain B needs an entry")
+
+// errUnknownChainSet is returned for a ChainSet that is neither ChainA nor
+// ChainB.
+var errUnknownChainSet = errors.New("store: unknown chain set")
+
 // chainWhere matches the chain of one scope target, the project ignoring
 // case.
 const chainWhere = `WHERE c.scope = $1 AND COALESCE(c.team_id, 0) = $2 AND c.instance = $3 AND lower(c.project) = lower($4)`
 
-// Chain returns the chain of scope (teamID for ScopeTeam, instance and
-// project for ScopeRepo, zero values otherwise); found is false when none is
-// stored.
+// Chain is ChainOf for ChainA.
 func (s *Store) Chain(ctx context.Context, scope string, teamID int64, instance, project string) (Chain, bool, error) {
-	chains, err := loadChains(ctx, s.pool, chainWhere, scope, teamID, instance, project)
+	return s.ChainOf(ctx, ChainA, scope, teamID, instance, project)
+}
+
+// ChainOf returns the chain of set at scope (teamID for ScopeTeam, instance
+// and project for ScopeRepo, zero values otherwise); found is false when
+// none is stored.
+func (s *Store) ChainOf(ctx context.Context, set ChainSet, scope string, teamID int64, instance, project string) (Chain, bool, error) {
+	chains, err := loadChains(ctx, s.pool, set, chainWhere, scope, teamID, instance, project)
 	if err != nil || len(chains) == 0 {
 		return Chain{}, false, err
 	}
 	return chains[0], true, nil
 }
 
-// Chains returns every chain, by ID.
+// Chains is ChainsOf for ChainA.
 func (s *Store) Chains(ctx context.Context) ([]Chain, error) {
-	return loadChains(ctx, s.pool, ``)
+	return s.ChainsOf(ctx, ChainA)
 }
 
-// ChainsNaming returns every chain that names ref, by ID.
+// ChainsOf returns every chain of set, by ID.
+func (s *Store) ChainsOf(ctx context.Context, set ChainSet) ([]Chain, error) {
+	return loadChains(ctx, s.pool, set, ``)
+}
+
+// ChainsNaming is ChainsNamingOf for ChainA.
 func (s *Store) ChainsNaming(ctx context.Context, ref EntryRef) ([]Chain, error) {
-	return loadChains(ctx, s.pool, `WHERE c.id IN (SELECT chain_id FROM model_chain_entries
+	return s.ChainsNamingOf(ctx, ChainA, ref)
+}
+
+// ChainsNamingOf returns every chain of set that names ref, by ID.
+func (s *Store) ChainsNamingOf(ctx context.Context, set ChainSet, ref EntryRef) ([]Chain, error) {
+	return loadChains(ctx, s.pool, set, `WHERE c.id IN (SELECT chain_id FROM `+set.entries+`
 		WHERE source = $1 AND model_id = $2)`, ref.Source, ref.ID)
 }
 
-// SaveChain stores c's entries in place of the ones its scope target had,
-// creating the chain when there is none; at is its updated_at, and
-// c.SavedByAdmin replaces what the chain had. More than
-// MaxChain entries is ErrChainTooLong; a team entry that is not there is
-// ErrModelNotFound (it is locked, so it can't be removed meanwhile). Nothing
-// else is checked here: who may name which entry is the caller's.
-//
-// The previous release reads the default and model_id, so they follow the
-// chain. Global: a stored entry at position 1 becomes the default and is
-// written to llm_settings (ConfigModelID or a removed entry changes nothing).
-// Repo: the repository becomes custom, and model_id is position 1 when it is
-// global, NULL otherwise.
+// SaveChain is SaveChainOf for ChainA.
 func (s *Store) SaveChain(ctx context.Context, c Chain, at time.Time) error {
+	return s.SaveChainOf(ctx, ChainA, c, at)
+}
+
+// SaveChainOf stores c's entries in place of the ones its scope target had
+// in set, creating the chain when there is none; at is its updated_at, and
+// c.SavedByAdmin replaces what the chain had. More than MaxChain entries is
+// ErrChainTooLong; a repository chain B with none is ErrEmptyRepoPanelChain;
+// a team entry that is not there is ErrModelNotFound (it is
+// locked, so it can't be removed meanwhile). Nothing else is checked here:
+// who may name which entry is the caller's. A repository save makes the
+// set's mode of the repository custom.
+//
+// The previous release reads the default and model_id, so for ChainA they
+// follow the chain. Global: a stored entry at position 1 becomes the default
+// and is written to llm_settings (ConfigModelID or a removed entry changes
+// nothing). Repo: model_id is position 1 when it is global, NULL otherwise.
+// ChainB writes neither: the previous release has no panel.
+func (s *Store) SaveChainOf(ctx context.Context, set ChainSet, c Chain, at time.Time) error {
 	if len(c.Entries) > MaxChain {
 		return ErrChainTooLong
+	}
+	if set == ChainB && c.Scope == ScopeRepo && len(c.Entries) == 0 {
+		return ErrEmptyRepoPanelChain
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -220,7 +293,7 @@ func (s *Store) SaveChain(ctx context.Context, c Chain, at time.Time) error {
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
-	if c.Scope == ScopeGlobal {
+	if set == ChainA && c.Scope == ScopeGlobal {
 		if err := lockModelList(ctx, tx); err != nil {
 			return err
 		}
@@ -239,48 +312,159 @@ func (s *Store) SaveChain(ctx context.Context, c Chain, at time.Time) error {
 			return err
 		}
 	}
+	// A chain B repository save locks the repository's row before the chain,
+	// as an off does (setRepoPanelMode). A repository with no row (one the
+	// config file switches on) is saved all the same: the resolver reads it.
+	if set == ChainB && c.Scope == ScopeRepo {
+		if _, err := lockRepoRow(ctx, tx, c.Instance, c.Project); err != nil {
+			return err
+		}
+	}
 	var id int64
-	if err := tx.QueryRow(ctx, `INSERT INTO model_chains (scope, team_id, instance, project, saved_by_admin, updated_at)
+	if err := tx.QueryRow(ctx, `INSERT INTO `+set.chains+` (scope, team_id, instance, project, saved_by_admin, updated_at)
 		VALUES ($1, NULLIF($2::bigint, 0), $3, $4, $5, $6)
 		ON CONFLICT (scope, COALESCE(team_id, 0), instance, lower(project))
 		DO UPDATE SET saved_by_admin = EXCLUDED.saved_by_admin, updated_at = EXCLUDED.updated_at
 		RETURNING id`, c.Scope, c.TeamID, c.Instance, c.Project, c.SavedByAdmin, at).Scan(&id); err != nil {
 		return err
 	}
-	if err := writeChainEntries(ctx, tx, id, c.Entries); err != nil {
+	if err := writeChainEntries(ctx, tx, set, id, c.Entries); err != nil {
 		return err
 	}
 	switch c.Scope {
 	case ScopeGlobal:
-		if len(c.Entries) > 0 && c.Entries[0].Source == SourceGlobal && c.Entries[0].ID != ConfigModelID {
+		if set == ChainA && len(c.Entries) > 0 && c.Entries[0].Source == SourceGlobal && c.Entries[0].ID != ConfigModelID {
 			if _, err := setDefault(ctx, tx, c.Entries[0].ID, at); err != nil {
 				return err
 			}
 		}
 	case ScopeRepo:
-		if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET chain_mode = 'custom'
+		if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET `+set.mode+` = 'custom'
 			WHERE instance = $1 AND lower(project) = lower($2)`, c.Instance, c.Project); err != nil {
 			return err
 		}
-		if err := syncRepoModelID(ctx, tx, c); err != nil {
+		if set == ChainA {
+			if err := syncRepoModelID(ctx, tx, c); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// ResetRepoChain is ResetRepoChainOf for ChainA.
+func (s *Store) ResetRepoChain(ctx context.Context, instance, project string) error {
+	return s.ResetRepoChainOf(ctx, ChainA, instance, project)
+}
+
+// ResetRepoChainOf drops a repository's own chain of set: it inherits
+// again. For ChainA its model_id is NULL (the default, for the previous
+// release); for ChainB the mode is inherit from custom or off.
+func (s *Store) ResetRepoChainOf(ctx context.Context, set ChainSet, instance, project string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	switch set {
+	case ChainA:
+		err = setRepoModelChain(ctx, tx, instance, project, nil)
+	case ChainB:
+		_, err = setRepoPanelMode(ctx, tx, instance, project, PanelInherit)
+	default:
+		return errUnknownChainSet
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// RepoPanelMode is the repository's chain B mode: its dashboard row's,
+// PanelInherit with no row. PanelOff too when the repository has a chain B
+// row with no entries, which is how a repository with no dashboard row (the
+// config file switches it on) is off: a save with no entries is refused, so
+// an empty row means off and nothing else.
+func (s *Store) RepoPanelMode(ctx context.Context, instance, project string) (string, error) {
+	var mode string
+	var empty bool
+	err := s.pool.QueryRow(ctx, `SELECT
+		COALESCE((SELECT panel_chain_mode FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2)), 'inherit'),
+		EXISTS (SELECT 1 FROM `+ChainB.chains+` c WHERE c.scope = 'repo' AND c.instance = $1 AND lower(c.project) = lower($2)
+			AND NOT EXISTS (SELECT 1 FROM `+ChainB.entries+` e WHERE e.chain_id = c.id))`,
+		instance, project).Scan(&mode, &empty)
+	if err != nil {
+		return "", err
+	}
+	if empty {
+		return PanelOff, nil
+	}
+	return mode, nil
+}
+
+// SetRepoPanelOff turns the panel off for the repository, in one
+// transaction. With a dashboard row its chain B row goes and its mode is
+// PanelOff. With none (the config file switches it on) its chain B row is
+// kept with no entries, which RepoPanelMode reads as PanelOff; at dates it.
+func (s *Store) SetRepoPanelOff(ctx context.Context, instance, project string, at time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	found, err := setRepoPanelMode(ctx, tx, instance, project, PanelOff)
+	if err != nil {
+		return err
+	}
+	if !found {
+		// The upsert waits for a save of the same row, so the two can't mix.
+		var id int64
+		if err := tx.QueryRow(ctx, `INSERT INTO `+ChainB.chains+` (scope, instance, project, saved_by_admin, updated_at)
+			VALUES ('repo', $1, $2, false, $3)
+			ON CONFLICT (scope, COALESCE(team_id, 0), instance, lower(project)) DO UPDATE SET updated_at = EXCLUDED.updated_at
+			RETURNING id`, instance, project, at).Scan(&id); err != nil {
+			return err
+		}
+		if err := writeChainEntries(ctx, tx, ChainB, id, nil); err != nil {
 			return err
 		}
 	}
 	return tx.Commit(ctx)
 }
 
-// ResetRepoChain drops a repository's own chain: it inherits again, and its
-// model_id is NULL (the default, for the previous release).
-func (s *Store) ResetRepoChain(ctx context.Context, instance, project string) error {
-	tx, err := s.pool.Begin(ctx)
+// lockRepoRow locks the repository's dashboard row, the first thing a chain
+// B write to the repository does, so a save and an off one after the other
+// never leave mode off with a chain B row. found is false with no row.
+func lockRepoRow(ctx context.Context, tx pgx.Tx, instance, project string) (found bool, err error) {
+	rows, err := tx.Query(ctx, `SELECT 1 FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2) FOR UPDATE`,
+		instance, project)
 	if err != nil {
-		return err
+		return false, err
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	if err := setRepoModelChain(ctx, tx, instance, project, nil); err != nil {
-		return err
+	defer rows.Close()
+	found = rows.Next()
+	rows.Close()
+	return found, rows.Err()
+}
+
+// setRepoPanelMode locks the repository's row, drops its chain B row (an
+// empty one too) and sets its chain B mode to mode (PanelInherit or
+// PanelOff, neither of which keeps a row). found is false when it has no
+// dashboard row: the chain B row is dropped all the same.
+func setRepoPanelMode(ctx context.Context, tx pgx.Tx, instance, project, mode string) (found bool, err error) {
+	if found, err = lockRepoRow(ctx, tx, instance, project); err != nil {
+		return false, err
 	}
-	return tx.Commit(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM `+ChainB.chains+` WHERE scope = 'repo' AND instance = $1 AND lower(project) = lower($2)`,
+		instance, project); err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	_, err = tx.Exec(ctx, `UPDATE dashboard_repos SET `+ChainB.mode+` = $3
+		WHERE instance = $1 AND lower(project) = lower($2)`, instance, project, mode)
+	return true, err
 }
 
 // setRepoModelChain writes the repository chain the old model setting means:
@@ -300,7 +484,7 @@ func setRepoModelChain(ctx context.Context, tx pgx.Tx, instance, project string,
 			VALUES ('repo', $1, $2, true, now()) RETURNING id`, instance, project).Scan(&id); err != nil {
 			return err
 		}
-		if err := writeChainEntries(ctx, tx, id, []EntryRef{{SourceGlobal, *modelID}}); err != nil {
+		if err := writeChainEntries(ctx, tx, ChainA, id, []EntryRef{{SourceGlobal, *modelID}}); err != nil {
 			return err
 		}
 	}

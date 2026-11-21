@@ -213,6 +213,10 @@ Jobs reach only the addresses in `jobEgress.cidrs`. Before you add a model from 
 
 pergent.sh can't check this for you. A review that can't connect fails, and its log shows the connection error.
 
+## Chain B
+
+A second chain, chain B, is for the [review panel](review-panel.md). It is experimental, and reviews do not use it yet. Its settings are separate from chain A and follow the same rights.
+
 ## Rolling back
 
 See [Upgrading](../upgrading.md). Under the previous release, a repository whose chain starts with a team entry, and every repository that follows a team chain, runs on the global default.

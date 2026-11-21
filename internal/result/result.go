@@ -998,19 +998,43 @@ func (r *Result) SupportsCarried() bool {
 // can tell: known is false unless it is exactly three numbers, major.minor.patch
 // (a pre-release such as 0.5.0-rc1 is not).
 func CarriedSupport(version string) (supports, known bool) {
-	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
-	if len(parts) != 3 {
+	return VersionAtLeast(version, "0.5.0")
+}
+
+// VersionAtLeast says whether version is min or later, with or without a
+// leading "v" on either, and whether both are versions it can tell: known is
+// false unless each is exactly three numbers, major.minor.patch (a pre-release
+// such as 0.5.0-rc1 is not).
+func VersionAtLeast(version, min string) (atLeast, known bool) {
+	v, ok := parseVersion(version)
+	if !ok {
 		return false, false
 	}
-	var n [3]int
+	m, ok := parseVersion(min)
+	if !ok {
+		return false, false
+	}
+	for i := range v {
+		if v[i] != m[i] {
+			return v[i] > m[i], true
+		}
+	}
+	return true, true
+}
+
+func parseVersion(version string) (n [3]int, ok bool) {
+	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
+	if len(parts) != 3 {
+		return n, false
+	}
 	for i, p := range parts {
 		if p == "" || strings.Trim(p, "0123456789") != "" {
-			return false, false
+			return n, false
 		}
 		var err error
 		if n[i], err = strconv.Atoi(p); err != nil {
-			return false, false
+			return n, false
 		}
 	}
-	return n[0] > 0 || n[1] >= 5, true
+	return n, true
 }

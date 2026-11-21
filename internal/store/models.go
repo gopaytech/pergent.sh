@@ -241,7 +241,7 @@ func (s *Store) SetDefaultLLMModel(ctx context.Context, id string, at time.Time)
 // is dropped to make room. tx holds the list lock, which SaveChain takes for
 // the global chain too.
 func moveToGlobalChainTop(ctx context.Context, tx pgx.Tx, ref EntryRef, at time.Time) error {
-	chains, err := loadChains(ctx, tx, chainWhere, ScopeGlobal, int64(0), "", "")
+	chains, err := loadChains(ctx, tx, ChainA, chainWhere, ScopeGlobal, int64(0), "", "")
 	if err != nil || len(chains) == 0 || len(chains[0].Entries) == 0 {
 		return err
 	}
@@ -258,7 +258,7 @@ func moveToGlobalChainTop(ctx context.Context, tx pgx.Tx, ref EntryRef, at time.
 	if len(entries) > MaxChain {
 		return ErrChainTooLong
 	}
-	if err := writeChainEntries(ctx, tx, c.ID, entries); err != nil {
+	if err := writeChainEntries(ctx, tx, ChainA, c.ID, entries); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE model_chains SET updated_at = $2 WHERE id = $1`, c.ID, at)

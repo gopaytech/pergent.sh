@@ -19,6 +19,17 @@ import (
 // InstanceQuotaUsedUp. The dispatcher and the requests that start a review
 // (re-run, start) read it here, so they apply the same rules.
 func Load(ctx context.Context, st *store.Store, reg *instances.Registry, now time.Time, run store.Run, repo settings.Effective) (Input, error) {
+	return LoadSet(ctx, st, reg, now, run, repo, store.ChainA)
+}
+
+// LoadSet is Load for one chain set. ChainA is Load. ChainB is a review
+// panel's second chain: a repository in mode off has none, before its team or
+// the global level is read; the global level is the stored chain B only (no
+// config entries, no default entry); and no chain at all is Refs nil with
+// Scope "", which means no panel. An API review has no repository, so it
+// gets the global chain B whatever a repository's mode is. For chain B the
+// caller sets Tried (the panel member's earlier attempts), not run.AttemptOf.
+func LoadSet(ctx context.Context, st *store.Store, reg *instances.Registry, now time.Time, run store.Run, repo settings.Effective, set store.ChainSet) (Input, error) {
 	in := Input{Entries: map[store.EntryRef]instances.Model{}, Now: now}
 	for _, m := range reg.AllModels() {
 		in.Entries[RefOf(m)] = m
@@ -33,7 +44,7 @@ func Load(ctx context.Context, st *store.Store, reg *instances.Registry, now tim
 			in.Marks[m.Ref] = m
 		}
 	}
-	if run.AttemptOf != nil {
+	if run.AttemptOf != nil && set == store.ChainA {
 		attempts, err := st.Attempts(ctx, *run.AttemptOf)
 		if err != nil {
 			return Input{}, fmt.Errorf("read the review's attempts: %w", err)
@@ -46,11 +57,30 @@ func Load(ctx context.Context, st *store.Store, reg *instances.Registry, now tim
 		}
 	}
 	if run.Kind != store.KindAPI {
-		if err := repoChain(ctx, st, repo, &in); err != nil {
+		if set == store.ChainB {
+			mode, err := st.RepoPanelMode(ctx, repo.Instance, repo.Project)
+			if err != nil {
+				return Input{}, fmt.Errorf("read the repository's panel mode: %w", err)
+			}
+			if mode == store.PanelOff {
+				return in, nil
+			}
+		}
+		if err := repoChain(ctx, st, repo, set, &in); err != nil {
 			return Input{}, err
 		}
 	}
 	if in.Refs == nil {
+		if set == store.ChainB {
+			c, found, err := st.ChainOf(ctx, set, store.ScopeGlobal, 0, "", "")
+			if err != nil {
+				return Input{}, fmt.Errorf("read the global chain B: %w", err)
+			}
+			if found && len(c.Entries) > 0 {
+				in.Scope, in.Refs = store.ScopeGlobal, c.Entries
+			}
+			return in, nil
+		}
 		in.Scope = store.ScopeGlobal
 		if in.Refs, err = GlobalChain(ctx, st, reg); err != nil {
 			return Input{}, err
@@ -62,7 +92,7 @@ func Load(ctx context.Context, st *store.Store, reg *instances.Registry, now tim
 // repoChain sets in's owner team and, when the repository has its own chain
 // or its owner team has one, the chain. A chain saved with no entries counts
 // as none, so the next level is used.
-func repoChain(ctx context.Context, st *store.Store, repo settings.Effective, in *Input) error {
+func repoChain(ctx context.Context, st *store.Store, repo settings.Effective, set store.ChainSet, in *Input) error {
 	owner, owned, err := st.OwnerTeam(ctx, repo.Instance, repo.Project)
 	if err != nil {
 		return fmt.Errorf("read the owner team: %w", err)
@@ -70,7 +100,7 @@ func repoChain(ctx context.Context, st *store.Store, repo settings.Effective, in
 	if owned {
 		in.OwnerTeam = owner
 	}
-	c, found, err := st.Chain(ctx, store.ScopeRepo, 0, repo.Instance, repo.Project)
+	c, found, err := st.ChainOf(ctx, set, store.ScopeRepo, 0, repo.Instance, repo.Project)
 	if err != nil {
 		return fmt.Errorf("read the repository's chain: %w", err)
 	}
@@ -78,7 +108,7 @@ func repoChain(ctx context.Context, st *store.Store, repo settings.Effective, in
 	case found && len(c.Entries) > 0:
 		in.Scope, in.Refs, in.SavedByAdmin = store.ScopeRepo, c.Entries, c.SavedByAdmin
 		return nil
-	case !found && repo.ModelID != "":
+	case set == store.ChainA && !found && repo.ModelID != "":
 		// A model set with no chain row: written by the previous release
 		// after a rollback. It is the 1-entry chain the upgrade would have
 		// made, so the repository keeps the model it asked for; only an admin
@@ -89,7 +119,7 @@ func repoChain(ctx context.Context, st *store.Store, repo settings.Effective, in
 	if !owned {
 		return nil
 	}
-	c, found, err = st.Chain(ctx, store.ScopeTeam, owner, "", "")
+	c, found, err = st.ChainOf(ctx, set, store.ScopeTeam, owner, "", "")
 	if err != nil {
 		return fmt.Errorf("read the owner team's chain: %w", err)
 	}

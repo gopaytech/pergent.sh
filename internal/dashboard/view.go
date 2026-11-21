@@ -443,6 +443,9 @@ type RepositoryDetailView struct {
 	// chain is empty or that entry was removed. Anyone who sees the
 	// repository sees it; the base URL and the key are never in it.
 	Model string `json:"model"`
+	// Panel is the repository's review panel: whether a chain B is in
+	// effect, its mode and the entry names at position 1 of each chain.
+	Panel PanelView `json:"panel"`
 	// Quota is this month's tokens against the repository's and its
 	// instance's quotas, for an admin; null for anyone else, and when the
 	// usage can't be read.
@@ -450,6 +453,19 @@ type RepositoryDetailView struct {
 	// Graph is the repository's Code graph: the switch and the stored
 	// graph's status, never its contents.
 	Graph GraphView `json:"graph"`
+}
+
+// PanelView is a repository's review panel. On is whether a chain B is in
+// effect for it (its own, its owner team's or the global one). Mode is its
+// chain B mode: "inherit", "custom" (its own) or "off" (no panel, whatever
+// its team or the global chain B). A and B are the names of the entries at
+// position 1 of chain A and chain B, while On; empty when that entry was
+// removed. Never a model, a base URL or a key.
+type PanelView struct {
+	On   bool   `json:"on"`
+	Mode string `json:"mode"`
+	A    string `json:"a,omitempty"`
+	B    string `json:"b,omitempty"`
 }
 
 // GraphView is a repository's Code graph switch and status. Available is
@@ -990,6 +1006,11 @@ type LLMView struct {
 //     sees the repository. PUT .../chain {"entries"} and POST
 //     .../chain/reset: admins and maintainers of the owner team (403 for
 //     anyone else who sees it); see api_chains.go.
+//   - GET, PUT .../panel-chain, POST .../panel-chain/reset and POST
+//     .../panel-chain/off: the same for chain B, the review panel's second
+//     chain, with the same rights. A save with entries needs a review image
+//     with a panel (400 otherwise); off and reset need none, and off works
+//     on a repository the config file switches on too.
 //   - GET /api/admin/linkable?instance=&repo=&search= (admins only): LinkableView,
 //     the repositories the instance's review App reaches (at most 200, by name),
 //     each with whether `repo` (a repository switched on, GitHub only; 400 for
@@ -1425,13 +1446,17 @@ type MarkView struct {
 // naming it) or "global". ReadOnly is true when the session may not change
 // it. SavedByAdmin is whether an admin saved the chain shown (a repository
 // chain an admin saved may name global entries teams may not use). Choices
-// are the entries the session may put in it, empty when ReadOnly.
+// are the entries the session may put in it, empty when ReadOnly. Mode is
+// set on a repository's chain B (GET .../panel-chain) only: "inherit",
+// "custom" or "off" (no entries, Source "repository"). The same view serves
+// chain B, at the same 3 levels.
 type ChainView struct {
 	Scope        string           `json:"scope"`
 	Source       string           `json:"source"`
 	Team         string           `json:"team"`
 	ReadOnly     bool             `json:"readOnly"`
 	SavedByAdmin bool             `json:"savedByAdmin"`
+	Mode         string           `json:"mode,omitempty"`
 	Entries      []ChainEntryView `json:"entries"`
 	Choices      []ChainEntryView `json:"choices"`
 }
