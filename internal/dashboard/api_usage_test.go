@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -238,7 +239,7 @@ func TestCSVCell(t *testing.T) {
 }
 
 const csvHeader = "reported_at,instance,repository,merge_request,trigger,incremental,model,skill,verdict," +
-	"tokens_in,tokens_out,cache_read,cache_write,reasoning,findings,blocking,provider"
+	"tokens_in,tokens_out,cache_read,cache_write,reasoning,findings,blocking,provider,source"
 
 func csvRows(t *testing.T, rec *httptest.ResponseRecorder) [][]string {
 	t.Helper()
@@ -276,8 +277,8 @@ func TestUsageCSV(t *testing.T) {
 		t.Fatalf("%d rows, want the header and 5: %v", len(rows), rows)
 	}
 	for _, r := range rows[1:] {
-		if len(r) != 17 {
-			t.Errorf("row %v has %d cells, want 17", r, len(r))
+		if len(r) != 18 || r[17] != store.SourceGlobal {
+			t.Errorf("row %v has %d cells, want 18 and source global", r, len(r))
 		}
 	}
 	// Oldest first: the first review of acme/widgets, two days ago.
@@ -304,14 +305,14 @@ func TestUsageCSV(t *testing.T) {
 	}
 }
 
-// The provider is the last column, so a script reading the others by position
-// keeps working.
-func TestUsageCSVHasProviderLast(t *testing.T) {
+// A new column goes last, provider and then source, so a script reading the
+// others by position keeps working.
+func TestUsageCSVAddsColumnsLast(t *testing.T) {
 	old := []string{"reported_at", "instance", "repository", "merge_request", "trigger", "incremental", "model",
 		"skill", "verdict", "tokens_in", "tokens_out", "cache_read", "cache_write", "reasoning", "findings", "blocking"}
-	if len(usageCSVHeader) != len(old)+1 || usageCSVHeader[len(old)] != "provider" ||
-		strings.Join(usageCSVHeader[:len(old)], ",") != strings.Join(old, ",") {
-		t.Errorf("header = %v; want %v and provider last", usageCSVHeader, old)
+	want := append(slices.Clone(old), "provider", "source")
+	if !slices.Equal(usageCSVHeader, want) {
+		t.Errorf("header = %v; want %v", usageCSVHeader, want)
 	}
 }
 
@@ -471,5 +472,13 @@ func TestUsageSplitsSource(t *testing.T) {
 	v := getJSON[UsageOverviewView](e, c, "/api/admin/usage")
 	if len(v.Repositories) != 1 || v.Repositories[0].GlobalTokens != 110 || v.Repositories[0].TeamTokens != 44 {
 		t.Errorf("repositories = %+v", v.Repositories)
+	}
+	// The repository's page has the same split, and each CSV row its source.
+	if r := getJSON[UsageRepositoryView](e, c, "/api/repositories/main/acme/widgets/usage"); r.GlobalTokens != 110 || r.TeamTokens != 44 {
+		t.Errorf("repository usage = %d global, %d team; want 110 and 44", r.GlobalTokens, r.TeamTokens)
+	}
+	rows := csvRows(t, e.get(c, "/api/admin/usage.csv"))
+	if len(rows) != 3 || rows[1][17] != store.SourceGlobal || rows[2][17] != store.SourceTeam {
+		t.Errorf("CSV = %v; want the global row, then the team row", rows)
 	}
 }

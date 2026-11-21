@@ -63,8 +63,8 @@ export function UsageNotes() {
 }
 
 // UsageHead is the column heads UsageCells fills; first is the head of the
-// column before them.
-export function UsageHead({ first, children }: { first: string; children?: ReactNode }) {
+// column before them, children the heads between, after those after them.
+export function UsageHead({ first, children, after }: { first: string; children?: ReactNode; after?: ReactNode }) {
   return (
     <tr>
       <th>{first}</th>
@@ -73,9 +73,13 @@ export function UsageHead({ first, children }: { first: string; children?: React
       <th className="num">Output</th>
       <th className="num">Tokens</th>
       <th>Cache and reasoning</th>
+      {after}
     </tr>
   );
 }
+
+// sourceText is a usage's tokens split by whose key paid.
+export const sourceText = (global: number, team: number) => `Tokens on global keys: ${count(global)} · on team keys: ${count(team)}`;
 
 // UsageCells is one usage as the cells under UsageHead.
 export function UsageCells({ tokens }: { tokens: UsageTokensView }) {

@@ -24,6 +24,20 @@ describe("Usage", () => {
     expect(within(rows[0]).getAllByRole("cell").slice(0, 5).map((c) => c.textContent)).toEqual(["main/acme/payments", "30", "900k", "200k", "1.1M"]);
   });
 
+  it("splits each repository's tokens by global and team keys", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, [`GET ${overviewPath}`]: { body: usageOverview } });
+    renderApp("/admin/usage");
+    const repos = (await screen.findByRole("region", { name: "Repositories" })) as HTMLElement;
+    const heads = within(repos).getAllByRole("columnheader").map((h) => h.textContent);
+    expect(heads.slice(-2)).toEqual(["On global keys", "On team keys"]);
+    const rows = within(repos).getAllByRole("row").slice(1);
+    expect(within(rows[0]).getAllByRole("cell").slice(-2).map((c) => c.textContent)).toEqual(["800k", "300k"]);
+    expect(within(rows[1]).getAllByRole("cell").slice(-2).map((c) => c.textContent)).toEqual(["280k", "0"]);
+    // An API client has no team: its table has no split.
+    const clients = screen.getByRole("region", { name: "API clients" });
+    expect(within(clients).queryByRole("columnheader", { name: "On team keys" })).toBeNull();
+  });
+
   it("lists the API clients with their tenants under each", async () => {
     fakeApi({ "GET /api/me": { body: operator }, [`GET ${overviewPath}`]: { body: usageOverview } });
     renderApp("/admin/usage");
@@ -69,7 +83,7 @@ describe("Usage", () => {
   });
 
   it("says paused, linked to its page, for a paused repository", async () => {
-    const paused = { instance: "main", project: "acme/tools", switchedOn: false, paused: true, tokens: usageOverview.repositories[0].tokens, reviews: 1 };
+    const paused = { ...usageOverview.repositories[0], project: "acme/tools", switchedOn: false, paused: true, reviews: 1 };
     fakeApi({
       "GET /api/me": { body: operator },
       [`GET ${overviewPath}`]: { body: { ...usageOverview, repositories: [...usageOverview.repositories, paused] } },
@@ -161,6 +175,12 @@ describe("Usage of a repository", () => {
     for (const name of ["Skills", "Merge requests", "Models", "Daily", "Wasted", "Cost per review"]) {
       expect(await screen.findByRole("heading", { level: 2, name })).toBeInTheDocument();
     }
+  });
+
+  it("splits the tokens by global and team keys", async () => {
+    fakeApi(routes());
+    renderApp("/admin/usage/main/acme/payments");
+    expect(await screen.findByText("Tokens on global keys: 800k · on team keys: 300k")).toBeInTheDocument();
   });
 
   it("shows a merge request title as text and links to the merge request", async () => {

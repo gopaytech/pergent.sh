@@ -169,6 +169,7 @@ Each attempt is a run of its own, with its own Job, result, log and tokens.
 - An attempt that is dropped for the next entry ends as `fell_back`, shown as **Retried on backup**. It posts nothing: no comment, no threads, no approval and no final status.
 - All attempts of a review share one `pergent` status. While a backup runs, its text is `retrying on backup model (2 of 3)`. On GitHub the same Check Run is changed.
 - The review page shows the entry of the run, `Model chain: <name> · entry 2 of 3 · team <team>` (or `global`), and an **Attempts** list. It links each attempt and says why an earlier one was dropped, such as `out of quota, so the review started again on the next model`.
+- The **Reviews** list and the overview's recent reviews show one row per change, for its newest review. When that review fell back, the row says how many attempts it took, such as `2 attempts`.
 - The tokens of a dropped attempt count in [Usage](usage.md) and in the [token quotas](token-quota.md), on the entry that used them. Dropped attempts are left out of the review counts in [Metrics](metrics.md).
 - An attempt doesn't count against the re-run caps. A push during a fallback replaces it as usual, and the new head starts again at the first entry. **Re-run** starts a new review from the first entry, and marks still apply.
 

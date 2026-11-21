@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -558,6 +559,34 @@ func TestRunDetailAttempts(t *testing.T) {
 	old := e.addRun(runFix{project: "acme/widgets", number: 8, head: head('8'), outcome: OutcomeApproved})
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+old); v.Entry != nil || len(v.Attempts) != 0 {
 		t.Errorf("old run = %+v, %+v", v.Entry, v.Attempts)
+	}
+}
+
+// The review list and the overview's recent reviews say how many attempts the
+// newest review of a change took: 2 for one that fell back, 1 otherwise.
+func TestReviewsListCountsAttempts(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.userOnMain(false, "acme/widgets")
+	now := e.clock.now()
+	first := e.addRun(runFix{project: "acme/widgets", number: 7, head: head('7'), state: store.Superseded, outcome: OutcomeFellBack,
+		reason: store.ClassQuota, at: now.Add(-3 * time.Hour)})
+	second := e.addRun(runFix{project: "acme/widgets", number: 7, head: head('7'), outcome: OutcomeApproved, approved: true,
+		at: now.Add(-2 * time.Hour)})
+	e.exec(`UPDATE runs SET attempt_of = $2::uuid WHERE id = $1::uuid`, second, first)
+	e.addRun(runFix{project: "acme/widgets", number: 8, head: head('8'), outcome: OutcomeApproved, approved: true, at: now.Add(-time.Hour)})
+	attempts := func(items []ReviewSummary) map[int64]int {
+		out := map[int64]int{}
+		for _, r := range items {
+			out[r.Number] = r.Attempts
+		}
+		return out
+	}
+	want := map[int64]int{7: 2, 8: 1}
+	if got := attempts(getJSON[ReviewListView](e, c, "/api/reviews").Items); !maps.Equal(got, want) {
+		t.Errorf("reviews attempts = %v; want %v", got, want)
+	}
+	if got := attempts(getJSON[OverviewView](e, c, "/api/overview").Recent); !maps.Equal(got, want) {
+		t.Errorf("recent attempts = %v; want %v", got, want)
 	}
 }
 
