@@ -65,10 +65,12 @@ jobs:
         run: git diff --exit-code
       - name: Vet
         run: go vet ./...
+      # The database tests are slow: internal/engine alone takes about 7.5
+      # minutes, too close to go test's default limit of 10 minutes per package.
       - name: Test
         env:
           PERGENT_SH_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/pergent_test?sslmode=disable
-        run: go test -count=1 ./...
+        run: go test -count=1 -timeout 30m ./...
       - name: Build
         run: make build
 
