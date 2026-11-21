@@ -16,6 +16,7 @@ import type {
   Me,
   ModelAdminView,
   ModelsAdminView,
+  MyTeamView,
   OverviewView,
   PastDismissalView,
   RepositoryDetailView,
@@ -30,6 +31,8 @@ import type {
   SignInAdminView,
   SkillResultView,
   SkillTokensView,
+  TeamModelsView,
+  TeamModelView,
   TeamView,
   UsageOverviewView,
   UsageRepositoryView,
@@ -1048,4 +1051,43 @@ export const chainGlobal: ChainView = {
   savedByAdmin: true,
   entries: [entryConfig, entrySonnet],
   choices: [choice(entrySonnet), choice(entryOpus)],
+};
+
+// The teams of GET /api/me/teams for a maintainer of Payments.
+export const myTeams: MyTeamView[] = [
+  { id: 2, name: "Payments", role: "maintainer", repos: [{ instance: "main", project: "acme/payments", owner: true }] },
+  { id: 3, name: "Platform", role: "viewer", repos: [{ instance: "main", project: "", owner: false }] },
+];
+
+// Payments' own entry, as a maintainer sees it (a viewer gets no base URL).
+export const teamModelQwen: TeamModelView = {
+  id: "t-qwen",
+  name: "qwen3.5",
+  provider: "openrouter",
+  model: "qwen/qwen3.5",
+  baseURL: "https://router.example.com/v1",
+  key: { set: true, updatedAt: minutesAgo(60) },
+  usedIn: ["team Payments", "main/acme/payments"],
+  mark: null,
+};
+
+export const teamModelsPayments: TeamModelsView = {
+  team: { id: 2, name: "Payments" },
+  role: "maintainer",
+  canEdit: true,
+  models: [teamModelQwen],
+};
+
+// Payments' own chain: its entry, then a global entry teams may use.
+export const chainTeam: ChainView = {
+  scope: "team",
+  source: "team",
+  team: "Payments",
+  readOnly: false,
+  savedByAdmin: false,
+  entries: [
+    { ...entryTeamQwen, position: 1 },
+    { ...entrySonnet, position: 2 },
+  ],
+  choices: [choice(entryTeamQwen), choice(entrySonnet)],
 };
