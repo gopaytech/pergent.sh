@@ -17,6 +17,7 @@ import (
 	"github.com/gopaytech/pergent/graph"
 
 	"github.com/gopaytech/pergent.sh/internal/codegraph"
+	"github.com/gopaytech/pergent.sh/internal/kube"
 )
 
 // post-graph runs in the "post" container of a graph build Job
@@ -61,9 +62,9 @@ var (
 
 const (
 	// getGraphTimeout bounds the whole download; getPanelTimeout bounds
-	// get-panel's, both results and every try.
+	// get-panel's, both results and every try (Job P's deadline counts it).
 	getGraphTimeout = 2 * time.Minute
-	getPanelTimeout = 2 * time.Minute
+	getPanelTimeout = kube.PanelFetchTimeout
 	// panelTries is how many times get-panel asks for one result.
 	panelTries = 3
 )

@@ -480,7 +480,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 		ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace, Labels: labels(p), Annotations: annotations(p)},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            ptr(int32(0)),
-			ActiveDeadlineSeconds:   ptr(int64(Deadline(p.Timeout, p.CloneAllowance) / time.Second)),
+			ActiveDeadlineSeconds:   ptr(int64(deadline(p) / time.Second)),
 			TTLSecondsAfterFinished: ptr(int32(3600)),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels(p), Annotations: annotations(p)},

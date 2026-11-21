@@ -30,6 +30,9 @@ const (
 	// PanelTimeout is Job P's --timeout. Its deadline adds the clone and
 	// deliver allowances (Deadline).
 	PanelTimeout = 10 * time.Minute
+	// PanelFetchTimeout bounds get-panel in the panel-inputs container, both
+	// results and every try. Job P's deadline adds it to PanelTimeout.
+	PanelFetchTimeout = 2 * time.Minute
 
 	keyLLMKeyB = "llm-api-key-b"
 
@@ -72,6 +75,15 @@ func forPanel(p JobParams) JobParams {
 	p.SkipSkillVerify = false
 	p.Timeout = PanelTimeout
 	return p
+}
+
+// deadline is the Job's activeDeadlineSeconds. Job P's counts the
+// panel-inputs fetch too.
+func deadline(p JobParams) time.Duration {
+	if p.Panel != nil {
+		return Deadline(p.Timeout+PanelFetchTimeout, p.CloneAllowance)
+	}
+	return Deadline(p.Timeout, p.CloneAllowance)
 }
 
 // panelArgs are Job P's own flags.

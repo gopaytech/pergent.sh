@@ -160,8 +160,12 @@ func TestBuildPanelJob(t *testing.T) {
 	if !slices.Equal(pergent.Args, wantArgs) {
 		t.Errorf("args:\n got %q\nwant %q", pergent.Args, wantArgs)
 	}
-	if got, want := *job.Spec.ActiveDeadlineSeconds, int64(Deadline(10*time.Minute, p.CloneAllowance)/time.Second); got != want {
+	if got, want := *job.Spec.ActiveDeadlineSeconds, int64(Deadline(10*time.Minute+PanelFetchTimeout, p.CloneAllowance)/time.Second); got != want {
 		t.Errorf("activeDeadlineSeconds = %d, want %d", got, want)
+	}
+	// 10m merge + 2m fetch + 2m clone + 2m deliver.
+	if got := *job.Spec.ActiveDeadlineSeconds; got != 16*60 {
+		t.Errorf("activeDeadlineSeconds = %d, want 960", got)
 	}
 
 	env := map[string]string{}

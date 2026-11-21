@@ -415,3 +415,48 @@ func TestParseGetPanel(t *testing.T) {
 		}
 	}
 }
+
+// A download cut off in the body (Content-Length larger than what is sent)
+// leaves no file and no temp file, after every try.
+func TestGetPanelCutOff(t *testing.T) {
+	noRetryWait(t)
+	var tries int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tries++
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"skills":`)
+	}))
+	t.Cleanup(srv.Close)
+	o := panelOpts(t, srv)
+	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
+	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
+		t.Errorf("files left: %v", entries)
+	}
+	if tries != 2*3 {
+		t.Errorf("tries = %d; want 3 per member", tries)
+	}
+}
+
+// A redirect to another host is not followed and writes no file.
+func TestGetPanelNoRedirect(t *testing.T) {
+	noRetryWait(t)
+	var other bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		other = true
+		_, _ = io.WriteString(w, testMemberResult)
+	}))
+	t.Cleanup(target.Close)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	o := panelOpts(t, srv)
+	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
+	if other {
+		t.Error("the redirect was followed")
+	}
+	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
+		t.Errorf("files written: %v", entries)
+	}
+}
