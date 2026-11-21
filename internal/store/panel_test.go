@@ -1711,3 +1711,43 @@ func TestInheritPanelSplitFromTheSplitRun(t *testing.T) {
 		t.Errorf("P's next attempt = base %q start %q quiet %v skills %v; want the split run's", a.BaseSHA, a.StartSHA, a.Quiet, a.SkillSources)
 	}
 }
+
+// A panel run that an older release's StartRun queued, then claimed, goes
+// back to wait for its members, which are untouched. A run that is not
+// claimed, or has a Job, is left alone.
+func TestWaitForPanel(t *testing.T) {
+	s := newStore(t)
+	id := panelRun(t, s, mr1, "a1")
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'queued', skip_reason = '', not_before = NULL WHERE id = $1::uuid`, id); err != nil {
+		t.Fatal(err)
+	}
+	if back, err := s.WaitForPanel(ctx, id); err != nil || back {
+		t.Errorf("WaitForPanel(queued) = %v, %v; want left alone", back, err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if back, err := s.WaitForPanel(ctx, id); err != nil || !back {
+		t.Fatalf("WaitForPanel(claimed) = %v, %v; want back to wait", back, err)
+	}
+	if r := getRun(t, s, id); r.State != Waiting || r.SkipReason != WaitPanel {
+		t.Errorf("run = %s %q; want waiting for its members", r.State, r.SkipReason)
+	}
+	if got := memberStates(t, s, id); !slices.Equal(got["a"], []MemberState{MemberQueued}) ||
+		!slices.Equal(got["b"], []MemberState{MemberQueued}) {
+		t.Errorf("members = %v; want both still queued", got)
+	}
+	if back, err := s.WaitForPanel(ctx, id); err != nil || back {
+		t.Errorf("WaitForPanel(waiting) = %v, %v; want left alone", back, err)
+	}
+	other := dispatched(t, s, mr2, "b1", "tok")
+	if back, err := s.WaitForPanel(ctx, other); err != nil || back {
+		t.Errorf("WaitForPanel(with a Job) = %v, %v; want left alone", back, err)
+	}
+	if r := getRun(t, s, other); r.State != Running {
+		t.Errorf("run with a Job = %s; want running", r.State)
+	}
+	if back, err := s.WaitForPanel(ctx, "nope"); err != nil || back {
+		t.Errorf("WaitForPanel(unknown) = %v, %v", back, err)
+	}
+}

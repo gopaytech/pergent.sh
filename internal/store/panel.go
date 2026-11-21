@@ -746,6 +746,21 @@ func (s *Store) ReleasePanel(ctx context.Context, root string, now time.Time) (r
 	return false, true, tx.Commit(ctx)
 }
 
+// WaitForPanel puts the claimed run id, which has no Job yet, back to wait
+// for its panel members, so ReleasePanel decides it. It reports whether it
+// changed the run; any other run, or an unknown id, is left alone.
+func (s *Store) WaitForPanel(ctx context.Context, id string) (bool, error) {
+	if !validUUID(id) {
+		return false, nil
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'waiting', skip_reason = 'panel_members'
+		WHERE id = $1::uuid AND state = 'running' AND job_name = ''`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // SupersedePanel supersedes a waiting panel run and its live members, setting
 // the run's outcome reason to reason unless it is "". Any other run, or an
 // unknown id, is left alone and is not an error.

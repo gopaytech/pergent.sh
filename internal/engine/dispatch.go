@@ -239,21 +239,21 @@ type dispatcher struct {
 
 // dispatchRun starts the claimed merge request run: today's review, or the
 // merge (Job P) of a review panel, which is a run whose review has a member
-// that is not off (its members are final: the run was released). The run
-// that was split is dispatched at its split and has what it recorded then.
-// A later attempt of Job P (not dispatched yet) first takes those values
-// from the run it fell back from (InheritPanelSplit), since Job P writes
-// nothing of them.
+// that is not off and whose members are final (the run was released). A
+// run with a live member goes back to wait for them (waitForMembers). The
+// run that was split is dispatched at its split and has what it recorded
+// then. A later attempt of Job P (not dispatched yet) first takes those
+// values from the run it fell back from (InheritPanelSplit), since Job P
+// writes nothing of them.
 func (d *dispatcher) dispatchRun(ctx context.Context) error {
 	ms, err := d.e.Store.PanelMembers(ctx, d.run.ID)
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("read the review's panel members: %w", err))
 	}
-	for _, m := range ms {
-		if m.State != store.MemberOff {
-			d.stage, d.members = stageMerge, ms
-			break
-		}
+	if merge, live := panelStage(ms); live {
+		return d.waitForMembers(ctx)
+	} else if merge {
+		d.stage, d.members = stageMerge, ms
 	}
 	if d.stage == stageMerge && d.run.AttemptOf != nil && d.run.DispatchedAt.IsZero() {
 		if err := d.e.Store.InheritPanelSplit(ctx, d.run.ID); err != nil {
@@ -269,6 +269,40 @@ func (d *dispatcher) dispatchRun(ctx context.Context) error {
 		d.run = run
 	}
 	return d.dispatch(ctx)
+}
+
+// panelStage reads the members ms of a claimed run's review: merge is true
+// when one is not off (the run is a panel's), live when one is queued,
+// running or reported (it is not final yet).
+func panelStage(ms []store.PanelMember) (merge, live bool) {
+	for _, m := range ms {
+		switch m.State {
+		case store.MemberOff:
+			continue
+		case store.MemberQueued, store.MemberRunning, store.MemberReported:
+			live = true
+		}
+		merge = true
+	}
+	return merge, live
+}
+
+// waitForMembers puts the claimed run back to wait for its panel members,
+// which are not all final: ReleasePanel queues it once they are. Only an
+// older release queues such a run (its StartRun, during a rolling deploy);
+// merging now would merge what is done so far, and the sweep would
+// supersede the live members.
+func (d *dispatcher) waitForMembers(ctx context.Context) error {
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	back, err := d.e.Store.WaitForPanel(sctx, d.run.ID)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("put the run back to wait for its panel members: %w", err))
+	}
+	if back {
+		d.log.Warn("not merging: a review panel member is not final yet; the run waits for its members again")
+	}
+	return nil
 }
 
 // keepsRun reports whether the dispatch writes nothing to its run: a

@@ -65,12 +65,11 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 		if err != nil {
 			return d.retry(ctx, fmt.Errorf("read the review's panel members: %w", err))
 		}
-		for _, m := range ms {
-			if m.State != store.MemberOff {
-				// Released: its members are final.
-				d.stage, d.members = stageMerge, ms
-				break
-			}
+		if merge, live := panelStage(ms); live {
+			return d.waitForMembers(ctx)
+		} else if merge {
+			// Released: its members are final.
+			d.stage, d.members = stageMerge, ms
 		}
 	}
 
