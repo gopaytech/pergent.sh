@@ -179,9 +179,10 @@ func (h *Handler) check(ctx context.Context, id string, body []byte) (string, er
 	if err != nil {
 		return err.Error(), nil
 	}
-	if res.Merged || res.MergeNote != "" {
-		// Only pergent.sh marks a result as merged, after it merged it.
-		return "the result carries merge fields, which only pergent.sh sets", nil
+	// Before the run is read, as it always was: a result with merge fields
+	// fails even when its run is gone.
+	if reason := checkMerge(res); reason != "" {
+		return reason, nil
 	}
 	run, found, err := h.Results.Run(ctx, id)
 	if err != nil {
@@ -190,10 +191,30 @@ func (h *Handler) check(ctx context.Context, id string, body []byte) (string, er
 	if !found {
 		return "", fmt.Errorf("run %s vanished after its result was stored", id)
 	}
-	if res.Base != run.BaseSHA || res.Head != run.HeadSHA {
-		return "the result is for a different commit than the one this run reviews", nil
+	return checkResult(res, run), nil
+}
+
+// checkResult returns why the parsed result res of a Job of run cannot be
+// used, or "": it carries merge fields, it is for another commit, or its
+// skills are not those the Job was started with. A review Job and a panel
+// member's Job are checked the same way.
+func checkResult(res *result.Result, run store.Run) string {
+	if reason := checkMerge(res); reason != "" {
+		return reason
 	}
-	return checkSkills(res, run), nil
+	if res.Base != run.BaseSHA || res.Head != run.HeadSHA {
+		return "the result is for a different commit than the one this run reviews"
+	}
+	return checkSkills(res, run)
+}
+
+// checkMerge returns why res carries merge fields, or "".
+func checkMerge(res *result.Result) string {
+	if res.Merged || res.MergeNote != "" {
+		// Only pergent.sh marks a result as merged, after it merged it.
+		return "the result carries merge fields, which only pergent.sh sets"
+	}
+	return ""
 }
 
 // checkSkills returns why the skills of a completed result are not those the

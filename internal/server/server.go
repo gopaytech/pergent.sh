@@ -74,6 +74,7 @@ type Deps struct {
 //   - POST /webhooks/github/{instance}: GitHub pull_request, issue_comment and
 //     pull_request_review_comment webhooks;
 //   - POST /runs/{id}/result: a review Job's result;
+//   - POST /runs/{id}/members/{member}/result: a panel member Job's result;
 //   - POST /skill-fetches/{id}/result: the skills a fetch Job read, when
 //     SkillFetches is set;
 //   - POST /readiness-scans/{id}/result: what a readiness scan Job found,
@@ -108,6 +109,9 @@ func Routes(d Deps) *http.ServeMux {
 	})
 	mux.Handle("POST /runs/{id}/result", &callback.Handler{
 		Results: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,
+	})
+	mux.Handle("POST /runs/{id}/members/{member}/result", &callback.MemberHandler{
+		Members: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,
 	})
 	if d.SkillFetches != nil {
 		mux.Handle("POST /skill-fetches/{id}/result", &callback.FetchHandler{Fetches: d.SkillFetches, Log: d.Log})

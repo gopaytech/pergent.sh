@@ -9,6 +9,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -45,7 +46,7 @@ const reasonAPIPanel = "an API review has no review panel yet"
 // quotas (quota.Check); a run under a used-up repository quota is here only
 // because somebody asked for it, and B does not start then. err is a store
 // error; the caller retries.
-func (d *dispatcher) panel(ctx context.Context, repo settings.Effective, repoUsedUp, instanceUsedUp bool) (split bool, err error) {
+func (d *dispatcher) panel(ctx context.Context, mr forge.Change, repo settings.Effective, repoUsedUp, instanceUsedUp bool) (split bool, err error) {
 	e := d.e
 	if !d.run.DispatchedAt.IsZero() {
 		// Split before, and released: its members are done. It is never
@@ -71,7 +72,8 @@ func (d *dispatcher) panel(ctx context.Context, repo settings.Effective, repoUse
 	if dec := d.resolveB(in, instanceUsedUp); !dec.Runs() {
 		return false, d.panelOff(ctx, panelOffReason(dec))
 	}
-	started, err := e.Store.StartPanel(ctx, d.run.ID, e.now())
+	// The run keeps the merge request's base: both members review it.
+	started, err := e.Store.StartPanel(ctx, d.run.ID, mr.BaseSHA, mr.StartSHA, e.now())
 	if err != nil {
 		return false, err
 	}

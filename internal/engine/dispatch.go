@@ -410,6 +410,12 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		d.log.Info("merge request diff is not ready; waiting", "delay", diffRefsDelay)
 		return d.postpone(ctx, e.now().Add(diffRefsDelay))
 	}
+	if d.isMember() && run.BaseSHA != "" {
+		// Both members review the base their run recorded at the split, not
+		// the merge request's base now (GitHub's follows the base branch),
+		// and their results are checked against it.
+		mr.BaseSHA, mr.StartSHA = run.BaseSHA, run.StartSHA
+	}
 
 	project, found, err := e.Store.Project(ctx, run.MR.Instance, run.MR.ProjectID)
 	if err != nil {
@@ -686,7 +692,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	// A repository with chain B in effect gets a review panel: the run waits
 	// for its members, whose Jobs start apart. With no chain B this writes
 	// nothing and the review goes on as before.
-	split, err := d.panel(ctx, repo, repoUsedUp, instanceUsedUp)
+	split, err := d.panel(ctx, mr, repo, repoUsedUp, instanceUsedUp)
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("start the review panel: %w", err))
 	}

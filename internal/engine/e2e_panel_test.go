@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"errors"
 	"maps"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -479,5 +482,318 @@ func TestE2EPanelMemberNoGraph(t *testing.T) {
 	}
 	if strings.Contains(logs, "/graph") {
 		t.Errorf("a graph URL reached the log:\n%s", logs)
+	}
+}
+
+// postMember posts body as member m's result on its route, with its token,
+// and returns the status.
+func (e *e2e) postMember(t *testing.T, run string, m store.PanelMember, body []byte) int {
+	t.Helper()
+	token := string(e.env.Secret(m.ID).Data["result-token"])
+	req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/runs/"+run+"/members/"+m.ID+"/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := e.srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// startMembers splits a review of head on merge request 1 and starts both
+// member Jobs. It returns the run and members A and B.
+func startMembers(t *testing.T, e *e2e, head string) (string, store.PanelMember, store.PanelMember) {
+	t.Helper()
+	id := splitPanel(t, e.env, 1, head)
+	dispatch(t, e.env)
+	a, b := memberOfRole(t, e.env, id, "a"), memberOfRole(t, e.env, id, "b")
+	wantMemberKey(t, e.env, a, "key-team-a")
+	wantMemberKey(t, e.env, b, "key-team-b")
+	return id, a, b
+}
+
+// replaceJob puts member or run id's Job back with the given pod and
+// conditions (putJob), in place of the one dispatch created. The Secret
+// stays.
+func replaceJob(t *testing.T, env *testEnv, id string, podCreated time.Time, init, main []corev1.ContainerStatus, conds ...batchv1.JobCondition) {
+	t.Helper()
+	if err := env.Kube.BatchV1().Jobs(testNamespace).Delete(env.ctx, kube.JobName(id), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	putJob(t, env, id, podCreated, init, main, conds...)
+}
+
+// wantWaiting checks run id still waits for its members, with no failure.
+func wantWaiting(t *testing.T, env *testEnv, id string) {
+	t.Helper()
+	if r := env.Run(id); r.State != store.Waiting || r.SkipReason != store.WaitPanel || r.FailureReason != "" {
+		t.Errorf("run = %s/%q %q; want still waiting for its members", r.State, r.SkipReason, r.FailureReason)
+	}
+}
+
+// wantMemberFailure checks member m was reported with reason at step.
+func wantMemberFailure(t *testing.T, env *testEnv, run string, m store.PanelMember, reason, step string) {
+	t.Helper()
+	got := memberOfRole(t, env, run, m.Role)
+	if got.ID != m.ID || got.State != store.MemberReported || got.FailureReason != reason || got.FailureStep != step {
+		t.Errorf("member %s = %s %q at %q; want reported with %q at %q", m.Role, got.State, got.FailureReason, got.FailureStep, reason, step)
+	}
+}
+
+// Member A's Job vanishes: after the grace A fails with reasonDisappeared,
+// the run still waits, B runs on, and nothing is posted.
+func TestE2EPanelMemberGone(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, a, b := startMembers(t, e, head)
+	before := env.Run(id)
+	if err := env.Kube.BatchV1().Jobs(testNamespace).Delete(env.ctx, kube.JobName(a.ID), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	woken(env)
+
+	env.SetNow(env.Now().Add(30 * time.Second))
+	watch(t, env)
+	if got := memberOfRole(t, env, id, "a"); got.State != store.MemberRunning {
+		t.Errorf("member A = %s inside the grace; want running", got.State)
+	}
+
+	env.SetNow(env.Now().Add(31 * time.Second))
+	env.GitLab.Reset()
+	watch(t, env)
+	wantMemberFailure(t, env, id, a, reasonDisappeared, kube.StepUnknown)
+	if got := memberOfRole(t, env, id, "b"); got.ID != b.ID || got.State != store.MemberRunning {
+		t.Errorf("member B = %s; want running", got.State)
+	}
+	if !woken(env) {
+		t.Errorf("the engine was not woken after the member's report")
+	}
+	wantWaiting(t, env, id)
+	if after := env.Run(id); !reflect.DeepEqual(before, after) {
+		t.Errorf("the member's failure wrote the run:\n before %+v\n after  %+v", before, after)
+	}
+	if reqs := env.GitLab.Requests(http.MethodPost, ""); len(reqs) != 0 {
+		t.Errorf("%d posts to the forge; want none", len(reqs))
+	}
+}
+
+// Member B's Job hits its deadline: B fails with the deadline's reason once
+// the grace is over; the run still waits.
+func TestE2EPanelMemberDeadline(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	id, _, b := startMembers(t, e, sha('a'))
+	if err := env.Store.AdvanceMemberCheckoutSeen(env.ctx, b.ID, 2); err != nil {
+		t.Fatal(err)
+	}
+	finished := env.Now()
+	if err := env.Kube.BatchV1().Jobs(testNamespace).Delete(env.ctx, kube.JobName(b.ID), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	putBareJob(t, env, b.ID, finished.Add(-time.Hour), jobCond(batchv1.JobFailed, "DeadlineExceeded", finished))
+
+	env.SetNow(finished.Add(30 * time.Second))
+	watch(t, env)
+	if got := memberOfRole(t, env, id, "b"); got.State != store.MemberRunning {
+		t.Errorf("member B = %s inside the grace; want running", got.State)
+	}
+	env.SetNow(finished.Add(61 * time.Second))
+	watch(t, env)
+	wantMemberFailure(t, env, id, b, "the review didn't finish before the deadline (DeadlineExceeded)", kube.StepReview)
+	if got := memberOfRole(t, env, id, "a"); got.State != store.MemberRunning {
+		t.Errorf("member A = %s; want running", got.State)
+	}
+	wantWaiting(t, env, id)
+}
+
+// Member A's Job is stuck on an image pull: it is deleted and A fails at the
+// start step; the run still waits and no "Needs attention" item is raised.
+func TestE2EPanelMemberStuck(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	id, a, _ := startMembers(t, e, sha('a'))
+	replaceJob(t, env, a.ID, env.Now().Add(-6*time.Minute),
+		[]corev1.ContainerStatus{waitingStatus("checkout", "ImagePullBackOff")}, nil)
+
+	watch(t, env)
+	if env.Job(a.ID) != nil {
+		t.Errorf("the stuck member Job was not deleted")
+	}
+	got := memberOfRole(t, env, id, "a")
+	if got.State != store.MemberReported || got.FailureReason != "the review couldn't start (ImagePullBackOff)" {
+		t.Errorf("member A = %s %q; want reported as stuck", got.State, got.FailureReason)
+	}
+	wantWaiting(t, env, id)
+	if items, err := env.Store.Attention(env.ctx); err != nil || len(items) != 0 {
+		t.Errorf("attention = %+v, %v; want none", items, err)
+	}
+}
+
+// A member's log and diagnostics go to its own tables, redacted with its
+// Job's secrets, never to the run's. A's result comes on its route; its Job
+// then finishes. B's Job runs out of memory.
+func TestE2EPanelMemberLog(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, a, b := startMembers(t, e, head)
+	tokenA := string(env.Secret(a.ID).Data["result-token"])
+	serveContainerLogs(env, map[string]string{
+		"pergent":  "member log with key-team-a and key-team-b and " + tokenA + "\n",
+		"checkout": "cloning\n",
+	})
+
+	if code := e.postMember(t, id, a, clean(t, head)); code != http.StatusOK {
+		t.Fatalf("member A's result: status %d\n%s", code, env.Logs())
+	}
+	now := env.Now()
+	replaceJob(t, env, a.ID, now.Add(-time.Minute), nil, nil, jobCond(batchv1.JobComplete, "", now))
+	replaceJob(t, env, b.ID, now.Add(-5*time.Minute), nil,
+		[]corev1.ContainerStatus{terminatedStatus("pergent", 137, "OOMKilled", now.Add(-4*time.Minute), now.Add(-2*time.Minute))},
+		jobCond(batchv1.JobFailed, "BackoffLimitExceeded", now.Add(-2*time.Minute)))
+	watch(t, env)
+	watch(t, env)
+
+	// Each log hides its own Job's secrets and every model key the engine
+	// knows, as a run's does. A's result token is not B's secret.
+	for _, c := range []struct {
+		m    store.PanelMember
+		want string
+	}{
+		{a, "member log with [REDACTED] and [REDACTED] and [REDACTED]\n"},
+		{b, "member log with [REDACTED] and [REDACTED] and " + tokenA + "\n"},
+	} {
+		m, want := c.m, c.want
+		if text, found, err := env.Store.MemberLog(env.ctx, m.ID); err != nil || !found || text != want {
+			t.Errorf("member %s's log = %q, %v, %v; want %q", m.Role, text, found, err, want)
+		}
+	}
+	if _, found, _ := env.Store.MemberDiagnostics(env.ctx, a.ID); found {
+		t.Errorf("member A completed: it has diagnostics")
+	}
+	if d, found, _ := env.Store.MemberDiagnostics(env.ctx, b.ID); !found || d.CloneLog != "cloning\n" || d.PodState == "" {
+		t.Errorf("member B's diagnostics = %+v, %v; want the clone log and pod state", d, found)
+	}
+	wantMemberFailure(t, env, id, b, "the review job ran out of memory (OOMKilled)", kube.StepReview)
+	if _, found := storedLog(t, env, id); found {
+		t.Errorf("a member's log went to the run")
+	}
+	if _, found := storedDiagnostics(t, env, id); found {
+		t.Errorf("a member's diagnostics went to the run")
+	}
+	wantWaiting(t, env, id)
+}
+
+// Between the members' results and Job P nothing is posted for a member: no
+// comment, note, thread, approval or status. The run is not written.
+func TestE2EPanelMemberPostsNothing(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, a, b := startMembers(t, e, head)
+	before := env.Run(id)
+	env.GitLab.Reset()
+
+	if code := e.postMember(t, id, a, clean(t, head)); code != http.StatusOK {
+		t.Fatalf("member A's result: status %d\n%s", code, env.Logs())
+	}
+	// B's result is for another commit: B fails, the run does not.
+	if code := e.postMember(t, id, b, clean(t, sha('f'))); code != http.StatusBadRequest {
+		t.Fatalf("member B's result: status %d; want 400", code)
+	}
+	for i := 0; i < 2; i++ {
+		watch(t, env)
+		publish(t, env)
+		cleanup(t, env)
+		dispatch(t, env)
+	}
+	for _, r := range env.GitLab.Requests("", "") {
+		if r.Method != http.MethodGet {
+			t.Errorf("%s %s reached the forge; want nothing posted for a member", r.Method, r.Path)
+		}
+	}
+	if got := memberOfRole(t, env, id, "a"); got.State != store.MemberReported || got.Result == nil {
+		t.Errorf("member A = %s; want reported with its result", got.State)
+	}
+	if got := memberOfRole(t, env, id, "b"); !strings.Contains(got.FailureReason, "the result is for a different commit than the one this run reviews") {
+		t.Errorf("member B's failure = %q", got.FailureReason)
+	}
+	if after := env.Run(id); !reflect.DeepEqual(before, after) {
+		t.Errorf("the members wrote the run:\n before %+v\n after  %+v", before, after)
+	}
+}
+
+// A push while the members run: the run is superseded, then the sweep
+// supersedes the members, deletes their Jobs (keeping their logs) and
+// cleans them up. The canceled status is set once, by the run.
+func TestE2EPanelCleanup(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head, moved := sha('a'), sha('c')
+	id, a, b := startMembers(t, e, head)
+	serveLog(env, "member log\n")
+	for _, m := range []store.PanelMember{a, b} {
+		replaceJob(t, env, m.ID, env.Now().Add(-time.Minute), nil, []corev1.ContainerStatus{runningStatus("pergent")})
+	}
+	servePublish(env, 1, moved)
+	e.hook(t, "update", 1, moved, head)
+	if r := env.Run(id); r.State != store.Superseded {
+		t.Fatalf("run = %s after the push; want superseded", r.State)
+	}
+
+	cleanup(t, env)
+	cleanup(t, env)
+	for _, m := range []store.PanelMember{a, b} {
+		if env.Job(m.ID) != nil {
+			t.Errorf("member %s's Job still exists", m.Role)
+		}
+		if text, found, err := env.Store.MemberLog(env.ctx, m.ID); err != nil || !found || text != "member log\n" {
+			t.Errorf("member %s's log = %q, %v, %v; want kept before the deletion", m.Role, text, found, err)
+		}
+	}
+	for _, m := range members(t, env, id) {
+		if m.State != store.MemberSuperseded {
+			t.Errorf("member %s = %s; want superseded", m.Role, m.State)
+		}
+	}
+	if left, err := env.Store.MembersToCleanUp(env.ctx); err != nil || len(left) != 0 {
+		t.Errorf("members to clean up = %d, %v; want none", len(left), err)
+	}
+	if got := statusesOf(t, env, head); len(got) != 2 || got[0] != "running: "+runningDescription || !strings.HasPrefix(got[1], "canceled: ") {
+		t.Errorf("statuses = %v; want running, then canceled once", got)
+	}
+	if _, found := storedLog(t, env, id); found {
+		t.Errorf("a member's log went to the run")
+	}
+}
+
+// The merge request's base moves after the split (on GitHub the base SHA
+// follows the base branch): both members still review the base the run
+// recorded at the split, and their results for it are accepted.
+func TestE2EPanelMemberSplitBase(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id := splitPanel(t, env, 1, head)
+	if r := env.Run(id); r.BaseSHA != sha('b') || r.StartSHA != sha('5') {
+		t.Fatalf("run base %q start %q; want the split's", r.BaseSHA, r.StartSHA)
+	}
+	mr := openMR(1, head)
+	mr.DiffRefs.BaseSHA, mr.DiffRefs.StartSHA = sha('9'), sha('8')
+	env.GitLab.SetMR(mr)
+
+	dispatch(t, env)
+	for _, role := range []string{"a", "b"} {
+		m := memberOfRole(t, env, id, role)
+		if job := env.Job(m.ID); job == nil || !hasArg(job.Spec.Template.Spec.Containers[0].Args, "--base="+sha('b')) {
+			t.Fatalf("member %s's Job does not review the split's base\n%s", role, env.Logs())
+		}
+		if code := e.postMember(t, id, m, clean(t, head)); code != http.StatusOK {
+			t.Errorf("member %s's result for the split's base: status %d\n%s", role, code, env.Logs())
+		}
+		if got := memberOfRole(t, env, id, role); got.State != store.MemberReported || got.Result == nil || got.FailureReason != "" {
+			t.Errorf("member %s = %s %q; want reported with its result", role, got.State, got.FailureReason)
+		}
 	}
 }

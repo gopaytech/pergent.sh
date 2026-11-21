@@ -360,3 +360,22 @@ func TestRoutesPanelOnlyWhenSet(t *testing.T) {
 		t.Errorf("with Panel = %d; want 200", code)
 	}
 }
+
+// The member result route is on the public mux beside the run's: a post
+// without a token reaches the handler (401) before it touches the store,
+// which is nil here, and a GET is refused.
+func TestServerMemberRouteOnPublicMux(t *testing.T) {
+	cfg := &config.Config{}
+	mux := Routes(Deps{Config: cfg, Instances: instances.New(cfg, nil, nil)})
+	for _, r := range []struct {
+		method string
+		want   int
+	}{{http.MethodPost, http.StatusUnauthorized}, {http.MethodGet, http.StatusMethodNotAllowed}} {
+		req := httptest.NewRequest(r.method, "/runs/r1/members/m1/result", strings.NewReader("{}"))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != r.want {
+			t.Errorf("%s = %d; want %d", r.method, rec.Code, r.want)
+		}
+	}
+}

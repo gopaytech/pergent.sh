@@ -339,6 +339,73 @@ paths:
             text/plain:
               schema: {type: string}
         '500': {$ref: '#/components/responses/PlainTextError'}
+  /runs/{id}/members/{member}/result:
+    post:
+      operationId: postRunMemberResult
+      tags: [Job callbacks]
+      summary: Deliver a review panel member's result
+      description: |
+        A review panel member's Job posts its result here, with the
+        member's own one-time bearer token. The body and its checks are
+        those of `POST /runs/{id}/result`: pergent's result schema version 1,
+        for the run's `base` and `head`, with the skills the Job was started
+        with.
+
+        An unusable result makes **the member fail**, never the run, and is
+        answered 400. Nothing is posted to the merge request from here.
+
+        A member that is not the run's, an unknown member and a missing or
+        wrong token all get the same 401, so the answer never tells whether
+        a member exists. A 200 also answers a result for a member that was
+        superseded; the result is dropped.
+      x-pergent-access: none
+      security:
+        - runResultToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The review's first run's id.
+          schema:
+            type: string
+            format: uuid
+        - name: member
+          in: path
+          required: true
+          description: The panel member's id.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        description: The result. At most 11 MiB (pergent caps its own at 10 MB).
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/result.Result'}
+      responses:
+        '200':
+          description: The result was recorded (or dropped, for a superseded member). No body.
+        '400':
+          description: The body could not be read, is not JSON, or is not a usable result. The member is recorded as failed.
+          content:
+            text/plain:
+              schema: {type: string}
+        '401':
+          description: The bearer token is missing or not this member's, it expired, or the member is not this run's.
+          content:
+            text/plain:
+              schema: {type: string}
+        '409':
+          description: A result for this member was received already.
+          content:
+            text/plain:
+              schema: {type: string}
+        '413':
+          description: The body is over 11 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
   /skill-fetches/{id}/result:
     post:
       operationId: postSkillFetchResult

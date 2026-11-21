@@ -158,13 +158,14 @@ func reviewOf(ctx context.Context, tx pgx.Tx, id string) (mr MRKey, root string,
 }
 
 // StartPanel makes the claimed, not dispatched run runID a panel review: it
-// waits (WaitPanel) with dispatched_at now, and one queued member per role is
-// added, in one transaction. started is false when the run is no longer
+// waits (WaitPanel) with dispatched_at now and the merge request's base and
+// start SHAs (the base both members review, and their results are checked
+// against), and one queued member per role is added, in one transaction. started is false when the run is no longer
 // claimed (superseded meanwhile), or was dispatched before: a run released
 // for Job P keeps its dispatched_at, so a review is split once. The members belong to the review's first
 // run, and the review's off row, from an earlier attempt, is dropped: the
 // panel did start.
-func (s *Store) StartPanel(ctx context.Context, runID string, now time.Time) (started bool, err error) {
+func (s *Store) StartPanel(ctx context.Context, runID, baseSHA, startSHA string, now time.Time) (started bool, err error) {
 	if !validUUID(runID) {
 		return false, nil
 	}
@@ -181,8 +182,9 @@ func (s *Store) StartPanel(ctx context.Context, runID string, now time.Time) (st
 	if err := lockMR(ctx, tx, mr); err != nil {
 		return false, err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'waiting', skip_reason = $2, dispatched_at = $3
-		WHERE id = $1::uuid AND state = 'running' AND job_name = '' AND dispatched_at IS NULL`, runID, WaitPanel, now)
+	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'waiting', skip_reason = $2, dispatched_at = $3,
+		base_sha = $4, start_sha = $5
+		WHERE id = $1::uuid AND state = 'running' AND job_name = '' AND dispatched_at IS NULL`, runID, WaitPanel, now, baseSHA, startSHA)
 	if err != nil {
 		return false, err
 	}
@@ -716,6 +718,23 @@ func (s *Store) RecoverUnlaunchedMembers(ctx context.Context, olderThan time.Tim
 		return 0, err
 	}
 	return int(tag.RowsAffected()), nil
+}
+
+// MembersToLog returns the members that have a result or a failure reported
+// since the given time and a Job, but no stored log, oldest report first, as
+// RunsToLog does for runs. Members created more than runLogLookback before
+// since are left out. A superseded member's log is taken by its cleanup.
+func (s *Store) MembersToLog(ctx context.Context, since time.Time) ([]PanelMember, error) {
+	ms, err := s.queryMembers(ctx, `SELECT `+memberColumns+` FROM panel_members m
+		WHERE state IN ('reported', 'done', 'failed', 'fell_back') AND job_name <> ''
+		  AND created_at >= $2 AND reported_at >= $1
+		  AND NOT EXISTS (SELECT 1 FROM panel_member_logs l WHERE l.member_id = m.id)`,
+		since, since.Add(-runLogLookback))
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(ms, func(i, j int) bool { return ms[i].ReportedAt.Before(ms[j].ReportedAt) })
+	return ms, nil
 }
 
 // SetMemberPod records the name of the pod that runs a member's Job.

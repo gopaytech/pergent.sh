@@ -204,7 +204,7 @@ func panelRun(t *testing.T, s *Store, mr MRKey, head string) string {
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	started, err := s.StartPanel(ctx, id, t0)
+	started, err := s.StartPanel(ctx, id, "base-sha", "start-sha", t0)
 	if err != nil || !started {
 		t.Fatalf("StartPanel = %v, %v", started, err)
 	}
@@ -286,6 +286,9 @@ func TestStartPanelWaitsAndQueuesMembers(t *testing.T) {
 	if r.State != Waiting || r.SkipReason != WaitPanel || !r.DispatchedAt.Equal(t0) || r.JobName != "" {
 		t.Errorf("run = %s %q dispatched %v job %q; want waiting for its members, dispatched at t0", r.State, r.SkipReason, r.DispatchedAt, r.JobName)
 	}
+	if r.BaseSHA != "base-sha" || r.StartSHA != "start-sha" {
+		t.Errorf("run base %q start %q; want the split's", r.BaseSHA, r.StartSHA)
+	}
 	ms, err := s.PanelMembers(ctx, id)
 	if err != nil || len(ms) != 2 {
 		t.Fatalf("PanelMembers = %+v, %v; want 2", ms, err)
@@ -301,7 +304,7 @@ func TestStartPanelWaitsAndQueuesMembers(t *testing.T) {
 		t.Errorf("roles = %v; want a and b", roles)
 	}
 	// A second start finds the run waiting, not claimed.
-	if started, err := s.StartPanel(ctx, id, t0); err != nil || started {
+	if started, err := s.StartPanel(ctx, id, "base-sha", "start-sha", t0); err != nil || started {
 		t.Errorf("second StartPanel = %v, %v; want false", started, err)
 	}
 	// The previous release never claims a waiting run.
@@ -317,7 +320,7 @@ func TestStartPanelSupersededRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	enqueue(t, s, mr1, "a2")
-	if started, err := s.StartPanel(ctx, id, t0); err != nil || started {
+	if started, err := s.StartPanel(ctx, id, "base-sha", "start-sha", t0); err != nil || started {
 		t.Errorf("StartPanel of a superseded run = %v, %v; want false", started, err)
 	}
 	if ms, err := s.PanelMembers(ctx, id); err != nil || len(ms) != 0 {
@@ -325,10 +328,10 @@ func TestStartPanelSupersededRun(t *testing.T) {
 	}
 	// A run with a Job is not split either.
 	d := dispatched(t, s, mr2, "b1", "tok")
-	if started, err := s.StartPanel(ctx, d, t0); err != nil || started {
+	if started, err := s.StartPanel(ctx, d, "base-sha", "start-sha", t0); err != nil || started {
 		t.Errorf("StartPanel of a dispatched run = %v, %v; want false", started, err)
 	}
-	if started, err := s.StartPanel(ctx, "not-a-uuid", t0); err != nil || started {
+	if started, err := s.StartPanel(ctx, "not-a-uuid", "base-sha", "start-sha", t0); err != nil || started {
 		t.Errorf("StartPanel of a bad id = %v, %v; want false", started, err)
 	}
 }
@@ -964,7 +967,7 @@ func TestRecordPanelOffOnce(t *testing.T) {
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	if started, err := s.StartPanel(ctx, next, t0); err != nil || !started {
+	if started, err := s.StartPanel(ctx, next, "base-sha", "start-sha", t0); err != nil || !started {
 		t.Fatalf("StartPanel of the later attempt = %v, %v", started, err)
 	}
 	if got := memberStates(t, s, id); !slices.Equal(got["a"], []MemberState{MemberQueued}) || !slices.Equal(got["b"], []MemberState{MemberQueued}) {
@@ -1149,7 +1152,7 @@ func apiPanelRun(t *testing.T, s *Store, clientID int64, subject string) string 
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	if started, err := s.StartPanel(ctx, id, t0); err != nil || !started {
+	if started, err := s.StartPanel(ctx, id, "base-sha", "start-sha", t0); err != nil || !started {
 		t.Fatalf("StartPanel = %v, %v", started, err)
 	}
 	return id
@@ -1356,7 +1359,7 @@ func TestStartPanelOncePerReview(t *testing.T) {
 	if got, err := s.ClaimQueued(ctx, 10, t0); err != nil || len(got) != 1 {
 		t.Fatal(runIDs(got), err)
 	}
-	if started, err := s.StartPanel(ctx, id, t0.Add(time.Minute)); err != nil || started {
+	if started, err := s.StartPanel(ctx, id, "base-sha", "start-sha", t0.Add(time.Minute)); err != nil || started {
 		t.Errorf("StartPanel of a released run = %v, %v; want not started", started, err)
 	}
 	if r := getRun(t, s, id); r.State != Running || r.SkipReason != "" || !r.DispatchedAt.Equal(t0) {
@@ -1379,7 +1382,7 @@ func TestReleasePanelByLaterAttempt(t *testing.T) {
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	if started, err := s.StartPanel(ctx, next, t0); err != nil || !started {
+	if started, err := s.StartPanel(ctx, next, "base-sha", "start-sha", t0); err != nil || !started {
 		t.Fatalf("StartPanel = %v, %v", started, err)
 	}
 	byRoot, err := s.PanelMembers(ctx, root)
@@ -1401,5 +1404,51 @@ func TestReleasePanelByLaterAttempt(t *testing.T) {
 	}
 	if r := getRun(t, s, root); r.State != Superseded {
 		t.Errorf("first run = %s; want left superseded", r.State)
+	}
+}
+
+// MembersToLog lists the reported, done, failed and fell-back members with a
+// Job and no log, reported since the given time.
+func TestMembersToLog(t *testing.T) {
+	s := newStore(t)
+	id := panelRun(t, s, mr1, "a1")
+	a, b := memberOf(t, s, id, "a"), memberOf(t, s, id, "b")
+	doneMember(t, s, a.ID, `{}`)
+	queued := panelRun(t, s, mr2, "b1") // members without a Job
+	ids := func(since time.Time) []string {
+		t.Helper()
+		ms, err := s.MembersToLog(ctx, since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, m := range ms {
+			out = append(out, m.ID)
+		}
+		return out
+	}
+	if got := ids(t0); !slices.Equal(got, []string{a.ID}) {
+		t.Errorf("MembersToLog = %v; want a's alone (b is running)", got)
+	}
+	dispatchMember(t, s, b.ID, "tok-b")
+	if ok, err := s.ReportMemberFailure(ctx, b.ID, Failure{Reason: "x"}, t0.Add(2*time.Minute)); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if got := ids(t0); !slices.Equal(got, []string{a.ID, b.ID}) {
+		t.Errorf("MembersToLog = %v; want a then b", got)
+	}
+	if got := ids(t0.Add(90 * time.Second)); !slices.Equal(got, []string{b.ID}) {
+		t.Errorf("MembersToLog since after a's report = %v; want b's alone", got)
+	}
+	if err := s.PutMemberLog(ctx, a.ID, "log"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(t0); !slices.Equal(got, []string{b.ID}) {
+		t.Errorf("MembersToLog after a's log = %v; want b's alone", got)
+	}
+	for _, m := range []string{"a", "b"} {
+		if slices.Contains(ids(t0), memberOf(t, s, queued, m).ID) {
+			t.Errorf("a member with no Job is listed")
+		}
 	}
 }

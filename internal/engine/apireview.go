@@ -309,10 +309,10 @@ func errText(err error) string {
 	return err.Error()
 }
 
-// deleteFiles removes the Secret of an API review's files, which only its
-// checkout reads. A failure is logged: the Job's deletion removes it too.
-func (e *Engine) deleteFiles(ctx context.Context, run store.Run, log *slog.Logger) {
-	if err := e.Launcher.DeleteFiles(ctx, run.JobName); err != nil {
+// deleteFiles removes the Secret of an API review's files of the Job jobName,
+// which only its checkout reads. A failure is logged: the Job's deletion removes it too.
+func (e *Engine) deleteFiles(ctx context.Context, jobName string, log *slog.Logger) {
+	if err := e.Launcher.DeleteFiles(ctx, jobName); err != nil {
 		log.Warn("couldn't delete the review's files; the job's deletion will", "error", e.redact(err.Error()))
 	}
 }
