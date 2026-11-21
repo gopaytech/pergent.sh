@@ -24,6 +24,9 @@ const (
 	msgConfigLLM      = "the config file has an llm: block, which is the default; change it there"
 	msgConfigModel    = "this model is set in the config file; change it there"
 	msgModelIsDefault = "this is the default model: make another one the default first"
+	// The default goes to position 1 of a saved global chain, and a full
+	// chain has no room for an entry it does not hold.
+	msgGlobalChainFull = "the global chain has 5 entries and this model is not one of them: remove one from the chain first"
 
 	msgModelInChain = "a repository's model is its model chain now: PUT .../chain, or POST .../chain/reset to inherit"
 	msgUnknownModel = "a model the repository names is not in the list"
@@ -425,6 +428,10 @@ func (d *Dashboard) setDefaultModel(w http.ResponseWriter, r *http.Request) {
 	next := rows[i]
 	if !next.Default {
 		found, err := d.Store.SetDefaultLLMModel(ctx, id, d.now())
+		if errors.Is(err, store.ErrChainTooLong) {
+			writeError(w, http.StatusConflict, msgGlobalChainFull)
+			return
+		}
 		if err != nil {
 			d.Log.Error("dashboard: changing the default model failed", "model_id", id, "error", d.registry.Redact(err.Error()))
 			writeError(w, http.StatusInternalServerError, msgWriteFailed)

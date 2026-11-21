@@ -60,7 +60,7 @@ Admins change the global chain on the admin **Settings** page, under **Global ch
 
 - Until an admin saves it, the global chain is the default entry alone, or the config file's entries when the file has an `llm:` block. The first entry added to the list becomes the default.
 - Saving the chain makes its first entry the default.
-- Once the chain is saved, the chain decides what reviews try first. **Set as default** then changes only the flag the previous release reads. Move the entry to the top of the chain instead.
+- Once the chain is saved, the chain decides what reviews try first. **Set as default** then also moves the entry to position 1 of the chain, and the other entries move down in their order. An entry that is not in the chain is added at position 1. When the chain already has 5 entries and the entry is not one of them, the dashboard refuses with 409 `the global chain has 5 entries and this model is not one of them: remove one from the chain first`.
 - Saving it with no entries makes it the default entry alone again.
 
 ## Which chain a review uses

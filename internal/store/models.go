@@ -212,7 +212,9 @@ func (s *Store) SetLLMModelMeta(ctx context.Context, id string, name *string, te
 
 // SetDefaultLLMModel makes an entry the default, in place of the one that is,
 // and writes it to llm_settings. found is false, and the default stays, when
-// there is no such entry.
+// there is no such entry. Once the global chain is saved, the chain and not
+// the flag decides what reviews try first, so the entry also goes to
+// position 1 of that chain: see moveToGlobalChainTop.
 func (s *Store) SetDefaultLLMModel(ctx context.Context, id string, at time.Time) (found bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -226,7 +228,41 @@ func (s *Store) SetDefaultLLMModel(ctx context.Context, id string, at time.Time)
 	if found, err := setDefault(ctx, tx, id, at); err != nil || !found {
 		return false, err
 	}
+	if err := moveToGlobalChainTop(ctx, tx, EntryRef{SourceGlobal, id}, at); err != nil {
+		return false, err
+	}
 	return true, tx.Commit(ctx)
+}
+
+// moveToGlobalChainTop puts ref at position 1 of the stored global chain, the
+// other entries moved down in their order, when that chain has entries. With
+// no stored chain (or an empty one) the default is the chain, so nothing is
+// written. An entry that is not in a full chain is ErrChainTooLong: no entry
+// is dropped to make room. tx holds the list lock, which SaveChain takes for
+// the global chain too.
+func moveToGlobalChainTop(ctx context.Context, tx pgx.Tx, ref EntryRef, at time.Time) error {
+	chains, err := loadChains(ctx, tx, chainWhere, ScopeGlobal, int64(0), "", "")
+	if err != nil || len(chains) == 0 || len(chains[0].Entries) == 0 {
+		return err
+	}
+	c := chains[0]
+	if c.Entries[0] == ref {
+		return nil
+	}
+	entries := []EntryRef{ref}
+	for _, e := range c.Entries {
+		if e != ref {
+			entries = append(entries, e)
+		}
+	}
+	if len(entries) > MaxChain {
+		return ErrChainTooLong
+	}
+	if err := writeChainEntries(ctx, tx, c.ID, entries); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE model_chains SET updated_at = $2 WHERE id = $1`, c.ID, at)
+	return err
 }
 
 // setDefault is SetDefaultLLMModel inside tx, which holds the list lock.
