@@ -15,7 +15,7 @@ afterEach(() => {
 const users = [userDev];
 const base = { "GET /api/overview?days=7": { body: overview } };
 const adminPages = ["Users", "Teams", "Integrations", "Settings", "Usage", "Audit log"];
-const userPages = ["Overview", "Repositories", "Reviews", "Skills", "Teams"];
+const userPages = ["Overview", "Repositories", "Reviews", "Skills", "Rules", "Teams"];
 
 // linkNames are the menu's links by their label, without the icon and the badge.
 const linkNames = (nav: HTMLElement) =>
@@ -48,7 +48,7 @@ describe("Layout: the user area", () => {
     renderApp("/");
     const nav = await screen.findByRole("navigation", { name: "Main" });
     // API clients sit right after Repositories, for an admin only.
-    expect(linkNames(nav)).toEqual(["Overview", "Repositories", "API clients", "Reviews", "Skills", "Teams", "Admin area"]);
+    expect(linkNames(nav)).toEqual(["Overview", "Repositories", "API clients", "Reviews", "Skills", "Rules", "Teams", "Admin area"]);
     expect(within(nav).getByRole("link", { name: "API clients" })).toHaveAttribute("href", "/api-clients");
     expect(within(nav).getByRole("link", { name: "Admin area" })).toHaveAttribute("href", "/admin");
     for (const label of adminPages.filter((p) => p !== "Teams")) expect(within(nav).queryByRole("link", { name: label })).not.toBeInTheDocument();

@@ -683,6 +683,44 @@ describe("RepositoryDetail", () => {
     expect(screen.getByText(/Be kind\./).tagName).toBe("PRE");
   });
 
+  it("shows the rule list a review would get, with each entry's source, and a problem", async () => {
+    const inputs = (rules: unknown) => ({
+      body: { branch: "main", skills: [], detected: [], instructions: "", rules },
+    });
+    fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments/inputs": inputs({
+        builtIn: true,
+        problem: "",
+        entries: [
+          { source: "repo", path: "internal/api/**/*.go", off: false, rule: "Defer <b>rollback</b>." },
+          { source: "dashboard:base", path: "**/*.pb.go", off: true, rule: "" },
+        ],
+      }),
+    });
+    const { unmount } = renderApp("/repos/main/acme/payments?tab=inputs");
+    const rules = await screen.findByRole("region", { name: "Rules" });
+    expect(within(rules).getByText("internal/api/**/*.go").closest(".skill")).toHaveTextContent("repo");
+    expect(within(rules).getByText("**/*.pb.go").closest(".skill")).toHaveTextContent("dashboard:base");
+    expect(within(rules).getByText("**/*.pb.go").closest(".skill")).toHaveTextContent("off");
+    expect(within(rules).getByText("Defer <b>rollback</b>.").tagName).toBe("PRE");
+    expect(rules).toHaveTextContent("Then pergent's built-in rules.");
+    unmount();
+
+    fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments/inputs": inputs({
+        builtIn: false,
+        problem: ".pergent/rules.yaml: entry 1: needs a rule or off: true",
+        entries: [],
+      }),
+    });
+    renderApp("/repos/main/acme/payments?tab=inputs");
+    const broken = await screen.findByRole("region", { name: "Rules" });
+    expect(broken).toHaveTextContent(".pergent/rules.yaml: entry 1: needs a rule or off: true");
+    expect(broken).toHaveTextContent("Built-in rules are off.");
+  });
+
   it("says when the repository isn't set up yet", async () => {
     fakeApi({
       ...base,

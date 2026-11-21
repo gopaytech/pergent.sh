@@ -308,6 +308,35 @@ function Inputs({ instance, project }: { instance: string; project: string }) {
         <h2>Instructions</h2>
         {v.instructions ? <pre className="doc">{v.instructions}</pre> : <div className="row empty-row">No instructions.</div>}
       </section>
+      {v.rules && <RuleList rules={v.rules} />}
     </>
+  );
+}
+
+// RuleList is the path rule list a review would get: the repository's
+// .pergent/rules.yaml, then its rule sets, then the built-in rules. The first
+// entry that matches a file gives it its rule.
+function RuleList({ rules }: { rules: InputsView["rules"] }) {
+  return (
+    <section className="card" aria-label="Rules">
+      <h2>Rules</h2>
+      {rules.problem && (
+        <div className="row">
+          <span className="problem">{rules.problem}</span>
+        </div>
+      )}
+      {!rules.problem && rules.entries.length === 0 && <div className="row empty-row">No rules of the repository or its rule sets.</div>}
+      {rules.entries.map((e, i) => (
+        <details className="skill-doc" key={`${i}|${e.source}|${e.path}`}>
+          <summary className="skill">
+            <b className="grow mono">{e.path}</b>
+            {e.off && <span className="meta">off: no rule</span>}
+            <span className="src">{e.source}</span>
+          </summary>
+          {!e.off && <pre className="doc">{e.rule}</pre>}
+        </details>
+      ))}
+      <div className="pad meta">{rules.builtIn ? "Then pergent's built-in rules." : "Built-in rules are off."}</div>
+    </section>
   );
 }

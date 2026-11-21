@@ -502,7 +502,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
             </>
           )}
           {tab === "checks" && <Checks skills={view.skills} />}
-          {tab === "files" && <Files files={view.files} />}
+          {tab === "files" && <Files files={view.files} rulesUsed={view.rulesUsed} />}
           {tab === "logs" && <RunLog logPath={paths.apiRunLog(id)} diagnosticsPath={paths.apiRunDiagnostics(id)} />}
         </div>
       </div>
@@ -665,14 +665,18 @@ function Checks({ skills }: { skills: SkillView[] }) {
   );
 }
 
-function Files({ files }: { files: RunDetailView["files"] }) {
+function Files({ files, rulesUsed }: { files: RunDetailView["files"]; rulesUsed: boolean }) {
+  // A file's path rule is the same in every skill that had rules on.
+  const ruleOf = new Map((files.rules ?? []).map((r) => [r.path, r.rule]));
   return (
     <div className="pad">
       <h3 className="group">Reviewed ({files.reviewed.length})</h3>
+      {!rulesUsed && <div className="meta">This image does not use rules.</div>}
       <ul className="files">
         {files.reviewed.map((p) => (
-          <li key={p} className="mono">
-            {p}
+          <li key={p}>
+            <span className="mono">{p}</span>
+            {ruleOf.has(p) && <span className="meta"> rule: {ruleOf.get(p)}</span>}
           </li>
         ))}
       </ul>

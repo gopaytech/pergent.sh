@@ -17,6 +17,7 @@ import {
   modelSonnet,
   models,
   operator,
+  ruleSets,
   ssoAdmin,
   viewer,
 } from "../test/fixtures";
@@ -29,6 +30,7 @@ const routes = (me = ssoAdmin) => ({
   "GET /api/admin/defaults": { body: defaults },
   "GET /api/admin/comment-footer": { body: commentFooter },
   "GET /api/skills": { body: librarySkills },
+  "GET /api/rule-sets": { body: ruleSets },
   "GET /api/admin/models": { body: models },
   "GET /api/admin/chain": { body: { ...chainGlobal, entries: [entrySonnet] } },
 });
@@ -132,6 +134,8 @@ describe("AdminSettings defaults", () => {
       rerunLimitPerRepo: null,
       // Untouched too: the default skills are sent as they are.
       skills: ["code-review"],
+      builtInRules: null,
+      ruleSets: [],
     });
     const saved = await screen.findByText("Defaults saved.");
     expect(saved).not.toHaveClass("problem");
@@ -372,7 +376,19 @@ describe("AdminSettings defaults", () => {
       rerunLimitPerMR: null,
       rerunLimitPerRepo: null,
       skills: ["code-review"],
+      builtInRules: null,
+      ruleSets: [],
     });
+  });
+
+  it("sets the default rule sets in order and the Built-in rules switch", async () => {
+    const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
+    renderApp("/admin/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    await userEvent.click(within(form).getByRole("switch", { name: "Built-in rules" }));
+    await userEvent.selectOptions(await within(form).findByRole("combobox", { name: "Add a rule set" }), "go-api");
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ builtInRules: false, ruleSets: ["go-api"] });
   });
 
   it("says under each default what the config gives", async () => {

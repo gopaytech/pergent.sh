@@ -21,6 +21,7 @@ import {
   repoWidgets,
   ssoAdmin,
   viewer,
+  ruleSets,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
@@ -439,5 +440,48 @@ describe("RepositorySettings: CI jobs", () => {
     expect(within(box).getByRole("button", { name: "Add a job" })).toBeDisabled();
     expect(within(box).getByRole("button", { name: "Remove build" })).toBeDisabled();
     expect(fake.calls.filter((c) => c.url.endsWith("/ci-job-names"))).toHaveLength(0);
+  });
+});
+
+describe("RepositorySettings: path rules", () => {
+  const settingsPath = "/api/repositories/main/acme/payments/settings";
+
+  it("chooses rule sets in order and sends them", async () => {
+    const fake = fakeApi({ ...base, "GET /api/rule-sets": { body: ruleSets }, [`PUT ${settingsPath}`]: { body: repoDetail(repoPayments) } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const card = await screen.findByRole("region", { name: "Rule sets used for this repository" });
+    await userEvent.click(within(card).getByRole("radio", { name: "Choose rule sets" }));
+    await userEvent.selectOptions(await within(card).findByRole("combobox", { name: "Add a rule set" }), "go-api");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ ruleSets: ["go-api"] });
+  });
+
+  it("goes back to the default list with null, and refuses an empty choice", async () => {
+    const own = repoDetail(repoPayments);
+    own.settings.ruleSets = { value: ["go-api"], overridden: true };
+    const fake = fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments": { body: own },
+      "GET /api/rule-sets": { body: ruleSets },
+      [`PUT ${settingsPath}`]: { body: repoDetail(repoPayments) },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const card = await screen.findByRole("region", { name: "Rule sets used for this repository" });
+    await userEvent.click(await within(card).findByRole("button", { name: "Remove go-api" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Choose at least one rule set, or use the default rule sets.")).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("radio", { name: /Use the default rule sets/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ ruleSets: null });
+  });
+
+  it("sends only builtInRules when the switch changes", async () => {
+    const fake = fakeApi({ ...base, "GET /api/rule-sets": { body: ruleSets }, [`PUT ${settingsPath}`]: { body: repoDetail(repoPayments) } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const toggle = await screen.findByRole("switch", { name: "Built-in rules" });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ builtInRules: false });
   });
 });
