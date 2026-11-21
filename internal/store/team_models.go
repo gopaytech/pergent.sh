@@ -96,34 +96,36 @@ func (s *Store) UpdateTeamModel(ctx context.Context, teamID int64, id string, na
 
 // DeleteTeamModel removes an entry of teamID, takes it out of every chain
 // that names it (chain A and chain B) and drops its mark, in one
-// transaction, and returns the chain A chains it changed as they are now. A
-// team with no such entry is ErrModelNotFound.
-func (s *Store) DeleteTeamModel(ctx context.Context, teamID int64, id string) (removedFrom []Chain, err error) {
+// transaction, and returns the chains it changed as they are now: chain A's
+// in removedFrom, chain B's in removedFromB. A team with no such entry is
+// ErrModelNotFound.
+func (s *Store) DeleteTeamModel(ctx context.Context, teamID int64, id string) (removedFrom, removedFromB []Chain, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
 	tag, err := tx.Exec(ctx, `DELETE FROM team_models WHERE team_id = $1 AND id = $2`, teamID, id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if tag.RowsAffected() == 0 {
-		return nil, ErrModelNotFound
+		return nil, nil, ErrModelNotFound
 	}
 	at := time.Now()
 	chains, err := removeFromChains(ctx, tx, ChainA, SourceTeam, []string{id}, at)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if _, err := removeFromChains(ctx, tx, ChainB, SourceTeam, []string{id}, at); err != nil {
-		return nil, err
+	chainsB, err := removeFromChains(ctx, tx, ChainB, SourceTeam, []string{id}, at)
+	if err != nil {
+		return nil, nil, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM model_entry_marks WHERE source = $1 AND model_id = $2`, SourceTeam, id); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return chains, tx.Commit(ctx)
+	return chains, chainsB, tx.Commit(ctx)
 }
 
 // clearAuthMark drops an entry's auth mark, leaving a quota or billing mark.

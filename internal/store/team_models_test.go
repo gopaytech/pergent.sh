@@ -335,7 +335,7 @@ func TestTeamModelCRUD(t *testing.T) {
 	if ms, err := s.TeamModels(ctx, other); err != nil || len(ms) != 0 {
 		t.Errorf("TeamModels(other) = %+v, %v; want none", ms, err)
 	}
-	if _, err := s.DeleteTeamModel(ctx, other, m.ID); !errors.Is(err, ErrModelNotFound) {
+	if _, _, err := s.DeleteTeamModel(ctx, other, m.ID); !errors.Is(err, ErrModelNotFound) {
 		t.Errorf("DeleteTeamModel from another team = %v; want ErrModelNotFound", err)
 	}
 
@@ -347,13 +347,13 @@ func TestTeamModelCRUD(t *testing.T) {
 	if all, err := s.AllTeamModels(ctx); err != nil || len(all) != 3 {
 		t.Errorf("AllTeamModels = %+v, %v; want 3", all, err)
 	}
-	if _, err := s.DeleteTeamModel(ctx, team, m.ID); err != nil {
+	if _, _, err := s.DeleteTeamModel(ctx, team, m.ID); err != nil {
 		t.Fatalf("DeleteTeamModel: %v", err)
 	}
 	if _, found := teamModelByID(t, s, team, m.ID); found {
 		t.Error("the entry is still there")
 	}
-	if _, err := s.DeleteTeamModel(ctx, team, m.ID); !errors.Is(err, ErrModelNotFound) {
+	if _, _, err := s.DeleteTeamModel(ctx, team, m.ID); !errors.Is(err, ErrModelNotFound) {
 		t.Errorf("DeleteTeamModel twice = %v; want ErrModelNotFound", err)
 	}
 }
@@ -489,7 +489,7 @@ func TestDeleteTeamModelLeavesChains(t *testing.T) {
 	untouched := insertChain(t, s, "repo", nil, "main", "acme/web", Kept)
 	setMark(t, s, "team", gone.ID, "auth")
 
-	changed, err := s.DeleteTeamModel(ctx, team, gone.ID)
+	changed, _, err := s.DeleteTeamModel(ctx, team, gone.ID)
 	if err != nil {
 		t.Fatalf("DeleteTeamModel: %v", err)
 	}

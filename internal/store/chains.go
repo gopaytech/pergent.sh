@@ -189,6 +189,14 @@ const (
 // ErrChainTooLong is returned when a chain has more than MaxChain entries.
 var ErrChainTooLong = errors.New("store: the chain has more than 5 entries")
 
+// ErrRepoNotFound is returned by SetRepoPanelOff for a repository with no
+// dashboard row: off would store nothing there.
+var ErrRepoNotFound = errors.New("store: the repository has no dashboard row")
+
+// errUnknownChainSet is returned for a ChainSet that is neither ChainA nor
+// ChainB.
+var errUnknownChainSet = errors.New("store: unknown chain set")
+
 // chainWhere matches the chain of one scope target, the project ignoring
 // case.
 const chainWhere = `WHERE c.scope = $1 AND COALESCE(c.team_id, 0) = $2 AND c.instance = $3 AND lower(c.project) = lower($4)`
@@ -277,6 +285,14 @@ func (s *Store) SaveChainOf(ctx context.Context, set ChainSet, c Chain, at time.
 			return err
 		}
 	}
+	// A chain B repository save locks the repository's row before the chain,
+	// as an off does (setRepoPanelMode). A repository with no row (one the
+	// config file switches on) is saved all the same: the resolver reads it.
+	if set == ChainB && c.Scope == ScopeRepo {
+		if _, err := lockRepoRow(ctx, tx, c.Instance, c.Project); err != nil {
+			return err
+		}
+	}
 	var id int64
 	if err := tx.QueryRow(ctx, `INSERT INTO `+set.chains+` (scope, team_id, instance, project, saved_by_admin, updated_at)
 		VALUES ($1, NULLIF($2::bigint, 0), $3, $4, $5, $6)
@@ -323,10 +339,13 @@ func (s *Store) ResetRepoChainOf(ctx context.Context, set ChainSet, instance, pr
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	if set == ChainA {
+	switch set {
+	case ChainA:
 		err = setRepoModelChain(ctx, tx, instance, project, nil)
-	} else {
-		err = setRepoPanelMode(ctx, tx, instance, project, PanelInherit)
+	case ChainB:
+		_, err = setRepoPanelMode(ctx, tx, instance, project, PanelInherit)
+	default:
+		return errUnknownChainSet
 	}
 	if err != nil {
 		return err
@@ -348,30 +367,57 @@ func (s *Store) RepoPanelMode(ctx context.Context, instance, project string) (st
 
 // SetRepoPanelOff turns the panel off for the repository: its chain B row
 // goes and its mode is PanelOff, in one transaction. A repository with no
-// dashboard row keeps no mode, as a chain save keeps none. at is not stored:
-// with the row gone there is nothing to date.
+// dashboard row has no mode to keep, so it is ErrRepoNotFound and nothing
+// changes. at is not stored: with the row gone there is nothing to date.
 func (s *Store) SetRepoPanelOff(ctx context.Context, instance, project string, at time.Time) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	if err := setRepoPanelMode(ctx, tx, instance, project, PanelOff); err != nil {
+	found, err := setRepoPanelMode(ctx, tx, instance, project, PanelOff)
+	if err != nil {
 		return err
+	}
+	if !found {
+		return ErrRepoNotFound
 	}
 	return tx.Commit(ctx)
 }
 
-// setRepoPanelMode drops the repository's chain B row and sets its chain B
-// mode to mode (PanelInherit or PanelOff, neither of which keeps a row).
-func setRepoPanelMode(ctx context.Context, tx pgx.Tx, instance, project, mode string) error {
+// lockRepoRow locks the repository's dashboard row, the first thing a chain
+// B write to the repository does, so a save and an off one after the other
+// never leave mode off with a chain B row. found is false with no row.
+func lockRepoRow(ctx context.Context, tx pgx.Tx, instance, project string) (found bool, err error) {
+	rows, err := tx.Query(ctx, `SELECT 1 FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2) FOR UPDATE`,
+		instance, project)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	found = rows.Next()
+	rows.Close()
+	return found, rows.Err()
+}
+
+// setRepoPanelMode locks the repository's row, drops its chain B row and
+// sets its chain B mode to mode (PanelInherit or PanelOff, neither of which
+// keeps a row). found is false when it has no dashboard row: the chain B row
+// is dropped all the same.
+func setRepoPanelMode(ctx context.Context, tx pgx.Tx, instance, project, mode string) (found bool, err error) {
+	if found, err = lockRepoRow(ctx, tx, instance, project); err != nil {
+		return false, err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM `+ChainB.chains+` WHERE scope = 'repo' AND instance = $1 AND lower(project) = lower($2)`,
 		instance, project); err != nil {
-		return err
+		return false, err
 	}
-	_, err := tx.Exec(ctx, `UPDATE dashboard_repos SET `+ChainB.mode+` = $3
+	if !found {
+		return false, nil
+	}
+	_, err = tx.Exec(ctx, `UPDATE dashboard_repos SET `+ChainB.mode+` = $3
 		WHERE instance = $1 AND lower(project) = lower($2)`, instance, project, mode)
-	return err
+	return true, err
 }
 
 // setRepoModelChain writes the repository chain the old model setting means:

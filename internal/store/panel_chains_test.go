@@ -411,13 +411,17 @@ func TestDeleteTeamModelLeavesNoChainBEntry(t *testing.T) {
 	if err := s.SetRepoPanelOff(ctx, "main", "acme/off", t0); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := s.DeleteTeamModel(ctx, team, tm1.ID)
+	changed, changedB, err := s.DeleteTeamModel(ctx, team, tm1.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// What it returns is chain A's, as before.
+	// Chain A's changed chains are returned as before, chain B's beside them.
 	if len(changed) != 1 || changed[0].Scope != ScopeTeam || !slices.Equal(changed[0].Entries, []EntryRef{G}) {
 		t.Errorf("DeleteTeamModel = %+v; want the team chain A", changed)
+	}
+	if len(changedB) != 2 || changedB[0].Scope != ScopeTeam || !slices.Equal(changedB[0].Entries, []EntryRef{G, T2}) ||
+		changedB[1].Scope != ScopeRepo || changedB[1].Project != "acme/api" || !slices.Equal(changedB[1].Entries, []EntryRef{G}) {
+		t.Errorf("DeleteTeamModel chain B = %+v; want the team chain B and acme/api's", changedB)
 	}
 	if c, _ := mustChainB(t, s, ScopeTeam, team, "", ""); !slices.Equal(c.Entries, []EntryRef{G, T2}) {
 		t.Errorf("team chain B = %+v; want [G T2]", c.Entries)
@@ -506,5 +510,122 @@ func TestRemoveRepoDropsItsChainB(t *testing.T) {
 	}
 	if _, found := mustChainB(t, s, ScopeRepo, 0, "main", "acme/api"); found {
 		t.Error("the removed repository's chain B is still there")
+	}
+}
+
+// Deleting a team entry no chain B names returns no chain B.
+func TestDeleteTeamModelNoChainB(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	tm := newTeamModel(t, s, team, "One", nil)
+	if err := s.SaveChain(ctx, Chain{Scope: ScopeTeam, TeamID: team, Entries: []EntryRef{{SourceTeam, tm.ID}}}, t0); err != nil {
+		t.Fatal(err)
+	}
+	changed, changedB, err := s.DeleteTeamModel(ctx, team, tm.ID)
+	if err != nil || len(changed) != 1 || len(changedB) != 0 {
+		t.Errorf("DeleteTeamModel = %+v, %+v, %v; want the team chain A only", changed, changedB, err)
+	}
+}
+
+// [Ruling 3c] A chain set that is neither ChainA nor ChainB is an error, and
+// nothing changes.
+func TestResetRepoChainOfUnknownSet(t *testing.T) {
+	s := newStore(t)
+	g := newModel(t, s, "openai", "gpt-5", "", nil)
+	addRepos(t, s, "acme/api")
+	repoB := Chain{Scope: ScopeRepo, Instance: "main", Project: "acme/api", Entries: []EntryRef{{SourceGlobal, g.ID}}}
+	if err := s.SaveChainOf(ctx, ChainB, repoB, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResetRepoChainOf(ctx, ChainSet{}, "main", "acme/api"); err == nil {
+		t.Error("ResetRepoChainOf(ChainSet{}) = nil; want an error")
+	}
+	if _, found := mustChainB(t, s, ScopeRepo, 0, "main", "acme/api"); !found || mustPanelMode(t, s, "acme/api") != PanelCustom {
+		t.Error("an unknown set changed the repository's chain B")
+	}
+}
+
+// [Ruling 3b] Off on a repository with no dashboard row stores nothing, so it
+// is ErrRepoNotFound and a chain B row saved for it stays. A reset there
+// still drops the row, as chain A's does.
+func TestSetRepoPanelOffNoRow(t *testing.T) {
+	s := newStore(t)
+	g := newModel(t, s, "openai", "gpt-5", "", nil)
+	repoB := Chain{Scope: ScopeRepo, Instance: "main", Project: "acme/config", Entries: []EntryRef{{SourceGlobal, g.ID}}}
+	if err := s.SaveChainOf(ctx, ChainB, repoB, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRepoPanelOff(ctx, "main", "acme/config", t0); !errors.Is(err, ErrRepoNotFound) {
+		t.Errorf("off with no row = %v; want ErrRepoNotFound", err)
+	}
+	if _, found := mustChainB(t, s, ScopeRepo, 0, "main", "acme/config"); !found {
+		t.Error("a refused off dropped the chain B row")
+	}
+	if err := s.ResetRepoChainOf(ctx, ChainB, "main", "acme/config"); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := mustChainB(t, s, ScopeRepo, 0, "main", "acme/config"); found {
+		t.Error("the reset kept the chain B row")
+	}
+}
+
+// [Ruling 3d] A chain B save and an off that wait on the repository's row,
+// save first, end as off with no chain B row: both lock the row before they
+// touch the chain.
+func TestChainBSaveThenOffLocksTheRepoFirst(t *testing.T) {
+	s := newStore(t)
+	g := newModel(t, s, "openai", "gpt-5", "", nil)
+	addRepos(t, s, "acme/api")
+	holder, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx) //nolint:errcheck // released below
+	var holderPID int32
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM dashboard_repos WHERE instance = 'main' AND project = 'acme/api' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	// blockedBy waits until a backend other than skip is blocked by one of
+	// pids, and returns it.
+	blockedBy := func(skip int32, pids ...int32) int32 {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			var pid int32
+			err := s.pool.QueryRow(ctx, `SELECT pid FROM pg_stat_activity
+				WHERE pid <> $1 AND pg_blocking_pids(pid) && $2::int[] LIMIT 1`, skip, pids).Scan(&pid)
+			if err == nil {
+				return pid
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatal("no backend waited on the repository's row")
+		return 0
+	}
+	saved, off := make(chan error, 1), make(chan error, 1)
+	go func() {
+		saved <- s.SaveChainOf(ctx, ChainB, Chain{Scope: ScopeRepo, Instance: "main", Project: "acme/api",
+			Entries: []EntryRef{{SourceGlobal, g.ID}}}, t0)
+	}()
+	savePID := blockedBy(0, holderPID)
+	go func() { off <- s.SetRepoPanelOff(ctx, "main", "acme/api", t0) }()
+	blockedBy(savePID, holderPID, savePID)
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-saved; err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if err := <-off; err != nil {
+		t.Fatalf("off: %v", err)
+	}
+	if mode := mustPanelMode(t, s, "acme/api"); mode != PanelOff {
+		t.Errorf("mode = %q; want off", mode)
+	}
+	if _, found := mustChainB(t, s, ScopeRepo, 0, "main", "acme/api"); found {
+		t.Error("off with a chain B row left")
 	}
 }
