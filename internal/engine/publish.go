@@ -153,11 +153,17 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if o.Dismissals, err = e.dismissals(ctx, run.MR); err != nil {
 		return err
 	}
+	pc, err := e.panelComment(ctx, run)
+	if err != nil {
+		return err
+	}
+	// Before the threads: a panel's threads hide its models too.
+	o.Panel, o.PanelOffNote, o.Hide = pc.names, pc.off, e.hideModel(run, pc.models...)
 	// Findings on the diff are posted as threads before the comment is
 	// decided: the comment lists the others.
 	view := e.syncInline(ctx, plat, run, repo, ok, o, log)
 	o.InlineOn, o.Inline, o.FindingNotes = view.On, view.Inline, view.Notes
-	o.MaxComment, o.Redact, o.Hide = kube.CommentLimitGitLab, e.redact, e.hideModel(run)
+	o.MaxComment, o.Redact = kube.CommentLimitGitLab, e.redact
 	if plat.isGitHub() {
 		o.MaxComment = kube.CommentLimitGitHub
 	}
@@ -376,13 +382,21 @@ func (e *Engine) replaceStepAdvice(ctx context.Context, run store.Run, advice st
 // of the entries that have the run's provider and model; a run that recorded
 // neither is left alone, and so is one whose entry is gone and which has no
 // URL to hide.
-func (e *Engine) hideModel(run store.Run) func(string) string {
+//
+// panel is the other models of a review panel's merge (its members' and its
+// judges'): their providers, models and base URLs are hidden too
+// (policy.HideModels), so none of the 3 Jobs' entries reaches the comment.
+// Without them it is the run's own model alone, as before.
+func (e *Engine) hideModel(run store.Run, panel ...store.ModelUsed) func(string) string {
 	var provider, model string
 	if run.Provider != nil {
 		provider = *run.Provider
 	}
 	if run.Model != nil {
 		model = *run.Model
+	}
+	if len(panel) > 0 {
+		return e.hidePanelModels(append([]store.ModelUsed{{Provider: provider, Model: model}}, panel...))
 	}
 	if provider == "" && model == "" {
 		return nil
@@ -394,6 +408,104 @@ func (e *Engine) hideModel(run store.Run) func(string) string {
 		}
 	}
 	return func(text string) string { return policy.HideModel(text, provider, model, urls...) }
+}
+
+// hidePanelModels is hideModel for every model of a review panel. A model
+// with no provider and no name hides nothing; with none left, nil.
+func (e *Engine) hidePanelModels(models []store.ModelUsed) func(string) string {
+	var refs []policy.ModelRef
+	for _, m := range models {
+		if m.Provider != "" || m.Model != "" {
+			refs = append(refs, policy.ModelRef{Provider: m.Provider, Model: m.Model})
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	var urls []string
+	for _, m := range e.registry().AllModels() {
+		for _, r := range refs {
+			if m.LLM.Provider == r.Provider && m.LLM.Model == r.Model && m.LLM.BaseURL != "" {
+				urls = append(urls, m.LLM.BaseURL)
+				break
+			}
+		}
+	}
+	return func(text string) string { return policy.HideModels(text, refs, urls) }
+}
+
+// panelComment is what a run's comment needs from its review panel.
+type panelComment struct {
+	// names are the entry names of a merge's 2 models; nil for a run that
+	// is not a panel's merge.
+	names *render.PanelNames
+	// models are the providers and models of a merge's members (every
+	// attempt) and judges, to hide.
+	models []store.ModelUsed
+	// off is the panel off line of a review that ran as one review because
+	// its panel could not start; "" otherwise.
+	off string
+}
+
+// panelComment reads run's review panel. A run whose review has a member
+// other than off is a panel's merge (Job P): each role is named by its judge
+// entry (panel_judges), else by its last member's entry. A review with only
+// an off row ran "A only" when that row is the run's own (PanelOffReason): a
+// row an earlier, failed launch left is not. A review with neither has
+// nothing, and its comment is today's.
+func (e *Engine) panelComment(ctx context.Context, run store.Run) (panelComment, error) {
+	var pc panelComment
+	ms, err := e.Store.PanelMembers(ctx, run.ID)
+	if err != nil {
+		return pc, fmt.Errorf("read the review's panel members: %w", err)
+	}
+	last := map[string]store.PanelMember{}
+	off := false
+	for _, m := range ms { // oldest first
+		if m.State == store.MemberOff {
+			off = true
+			continue
+		}
+		last[m.Role] = m
+		pc.models = append(pc.models, store.ModelUsed{Provider: m.Provider, Model: m.Model})
+	}
+	if len(last) == 0 {
+		if !off {
+			return pc, nil
+		}
+		reason, found, err := e.Store.PanelOffReason(ctx, run.ID)
+		if err != nil {
+			return pc, fmt.Errorf("read why the review has no panel: %w", err)
+		}
+		if found {
+			pc.off = policy.PanelOffLine(reason)
+		}
+		return pc, nil
+	}
+	judges, err := e.Store.PanelJudges(ctx, run.ID)
+	if err != nil {
+		return pc, fmt.Errorf("read the panel's judges: %w", err)
+	}
+	jm, err := e.Store.PanelJudgeModels(ctx, run.ID)
+	if err != nil {
+		return pc, fmt.Errorf("read the panel's judge models: %w", err)
+	}
+	for _, role := range []string{"a", "b"} {
+		if m, ok := jm[role]; ok {
+			pc.models = append(pc.models, m)
+		}
+	}
+	name := func(role, none string) string {
+		if n := judges[role].Name; n != "" {
+			return n
+		}
+		if n := last[role].Entry.Name; n != "" {
+			return n
+		}
+		return none
+	}
+	pc.names = &render.PanelNames{A: name("a", "model A"), B: name("b", "model B")}
+	return pc, nil
 }
 
 // dismissals are the dismissals of the merge request in the renderer's form.

@@ -67,7 +67,7 @@ func seedUsageOf(t *testing.T, env *testEnv, id string, at time.Time, tokens int
 	zero := int64(0)
 	err := env.Store.RecordUsage(env.ctx, id, []store.SkillUsage{{
 		Skill: "security", Verdict: "no_blocking_issues", In: tokens, CacheRead: &zero, CacheWrite: &zero, Reasoning: &zero,
-	}})
+	}}, nil)
 	if err != nil {
 		t.Fatalf("RecordUsage: %v", err)
 	}

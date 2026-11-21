@@ -12,12 +12,12 @@ func TestRecordUsage(t *testing.T) {
 	s := newStore(t)
 	id := reported(t, s, mr1, "head1", `{"schema_version":1,"status":"completed","skills":[]}`)
 	rows := []SkillUsage{{Skill: "security", Verdict: "failed", In: 10, Out: 2, Findings: 1, Blocking: 1}}
-	if err := s.RecordUsage(ctx, id, rows); err != nil {
+	if err := s.RecordUsage(ctx, id, rows, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A second call keeps the first rows: the background fill and the
 	// callback can meet.
-	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "security", In: 99}}); err != nil {
+	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "security", In: 99}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	var in int64
@@ -113,7 +113,7 @@ func TestRunUsage(t *testing.T) {
 	if in, out, found, err := s.RunUsage(ctx, id); err != nil || found || in != 0 || out != 0 {
 		t.Errorf("before = %d, %d, %v, %v; want 0, 0, false", in, out, found, err)
 	}
-	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "a", In: 10, Out: 2}, {Skill: "b", In: 5, Out: 1}}); err != nil {
+	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "a", In: 10, Out: 2}, {Skill: "b", In: 5, Out: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if in, out, found, err := s.RunUsage(ctx, id); err != nil || !found || in != 15 || out != 3 {
@@ -131,7 +131,7 @@ func TestRecordUsageKeepsUnknownCountsNull(t *testing.T) {
 		{Skill: "old", In: 1, Out: 1},
 		{Skill: "new", In: 1, Out: 1, CacheRead: &zero, CacheWrite: &zero, Reasoning: &zero},
 	}
-	if err := s.RecordUsage(ctx, id, rows); err != nil {
+	if err := s.RecordUsage(ctx, id, rows, nil); err != nil {
 		t.Fatal(err)
 	}
 	for skill, wantNull := range map[string]bool{"old": true, "new": false} {
@@ -157,7 +157,7 @@ func TestRecordUsageKeepsUnknownCountsNull(t *testing.T) {
 func TestRecordUsageNoSkillsMarksTheRun(t *testing.T) {
 	s := newStore(t)
 	id := reported(t, s, mr1, "head1", `{"schema_version":1,"status":"completed","skills":[]}`)
-	if err := s.RecordUsage(ctx, id, nil); err != nil {
+	if err := s.RecordUsage(ctx, id, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var rows int
@@ -175,7 +175,7 @@ func TestRunsWithoutUsage(t *testing.T) {
 	a := reported(t, s, mr1, "head1", `{"schema_version":1,"status":"completed","skills":[]}`)
 	b := reported(t, s, mr2, "head2", `{"schema_version":1,"status":"completed","skills":[]}`)
 	enqueue(t, s, MRKey{Instance: mr1.Instance, ProjectID: 7, IID: 5}, "head3") // no result yet: never returned
-	if err := s.RecordUsage(ctx, a, nil); err != nil {
+	if err := s.RecordUsage(ctx, a, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.RunsWithoutUsage(ctx, 10)
@@ -229,7 +229,7 @@ func seedUsageOn(t *testing.T, s *Store, mr MRKey, at time.Time, trigger string,
 		id, at, trigger, incremental, model, fmt.Sprintf("acme/p%d", mr.ProjectID), provider); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordUsage(ctx, id, skills); err != nil {
+	if err := s.RecordUsage(ctx, id, skills, nil); err != nil {
 		t.Fatal(err)
 	}
 	return id

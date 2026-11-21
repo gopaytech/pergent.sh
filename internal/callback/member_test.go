@@ -34,6 +34,8 @@ type fakeMembers struct {
 	replaced []store.Failure
 	reported []store.Failure
 	replErr  error
+	usage    map[string][]store.SkillUsage // RecordMemberUsage calls, by member
+	usageErr error
 }
 
 func (f *fakeMembers) PanelRun(_ context.Context, root string) (store.Run, bool, error) {
@@ -66,6 +68,14 @@ func (f *fakeMembers) ReplaceMemberWithFailure(_ context.Context, id string, fai
 	return f.replErr
 }
 
+func (f *fakeMembers) RecordMemberUsage(_ context.Context, id string, skills []store.SkillUsage) error {
+	if f.usage == nil {
+		f.usage = map[string][]store.SkillUsage{}
+	}
+	f.usage[id] = skills
+	return f.usageErr
+}
+
 // memberOf reports whether member id is one of run runID's.
 func (f *fakeMembers) memberOf(runID, id string) bool {
 	for _, m := range f.members[runID] {
@@ -93,6 +103,7 @@ type memberEnv struct {
 	woken int
 	logs  bytes.Buffer
 	mux   *http.ServeMux
+	h     *MemberHandler
 }
 
 func newMemberEnv(f *fakeMembers) *memberEnv {
@@ -102,6 +113,7 @@ func newMemberEnv(f *fakeMembers) *memberEnv {
 	e.mux = http.NewServeMux()
 	e.mux.Handle("POST /runs/{id}/members/{member}/result", h)
 	e.mux.Handle("/runs/{id}/members/{member}/result", h)
+	e.h = h
 	return e
 }
 
@@ -112,6 +124,7 @@ func (e *memberEnv) post(run, member, auth, body string) *httptest.ResponseRecor
 	}
 	rec := httptest.NewRecorder()
 	e.mux.ServeHTTP(rec, req)
+	e.h.usageWork.Wait()
 	return rec
 }
 
@@ -351,4 +364,46 @@ func parseOrFail(t *testing.T, body string) *result.Result {
 		t.Fatalf("parse %s: %v", body, err)
 	}
 	return res
+}
+
+// A member's usable result records what its skills used, with the skills its
+// run ran; an unusable one, a refused token and a discarded result record
+// nothing. A failed usage write never changes the answer.
+func TestMemberHandlerRecordsUsage(t *testing.T) {
+	f := newFakeMembers()
+	f.run.SkillSubset, f.run.Trigger = []string{"security"}, store.TriggerRerunFailed
+	e := newMemberEnv(f)
+	body := `{"schema_version":1,"status":"completed","base":"` + base + `","head":"` + head + `","skills":[{"name":"security",` +
+		`"verdict":"no_blocking_issues","findings":[],"files":{"reviewed":[],"skipped":[],"not_reviewed":[]},"tokens":{"input":7,"output":2}}],"comment":{"markdown":"hi"}}`
+	if rec := e.post(runID, memberID, "Bearer good", body); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if got := f.usage[memberID]; len(got) != 1 || got[0].Skill != "security" || got[0].In != 7 || got[0].Out != 2 {
+		t.Errorf("usage = %+v; want the member's tokens", f.usage)
+	}
+
+	for name, c := range map[string]struct {
+		f    func(*fakeMembers)
+		auth string
+		body string
+	}{
+		"unusable":  {func(*fakeMembers) {}, "Bearer good", resultJSON(base, "f00d")},
+		"bad token": {func(*fakeMembers) {}, "Bearer nope", body},
+		"discarded": {func(f *fakeMembers) { f.outcome = store.ResultDiscarded }, "Bearer good", body},
+	} {
+		f := newFakeMembers()
+		c.f(f)
+		e := newMemberEnv(f)
+		e.post(runID, memberID, c.auth, c.body)
+		if len(f.usage) != 0 {
+			t.Errorf("%s: usage = %+v; want none", name, f.usage)
+		}
+	}
+
+	f = newFakeMembers()
+	f.usageErr = errors.New("db down")
+	e = newMemberEnv(f)
+	if rec := e.post(runID, memberID, "Bearer good", body); rec.Code != http.StatusOK {
+		t.Errorf("status = %d with a failed usage write; want 200", rec.Code)
+	}
 }

@@ -852,7 +852,7 @@ func TestRunDetailTokensComeFromUsage(t *testing.T) {
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != (TokensView{In: 105, Out: 11}) {
 		t.Errorf("tokens before usage is recorded = %+v; want the sum of the result", v.Tokens)
 	}
-	if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{usageSkill("own", "no_blocking_issues", 5, 1)}); err != nil {
+	if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{usageSkill("own", "no_blocking_issues", 5, 1)}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != (TokensView{In: 5, Out: 1}) {

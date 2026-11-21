@@ -223,9 +223,12 @@ func (s *Store) RecordPanelOff(ctx context.Context, runID, reason string) error 
 	if !validUUID(runID) {
 		return fmt.Errorf("store: run %q not found", runID)
 	}
-	tag, err := s.pool.Exec(ctx, `INSERT INTO panel_members (run_id, role, state, failure_reason)
-		SELECT COALESCE(attempt_of, id), 'a', 'off', $2 FROM runs WHERE id = $1::uuid
-		ON CONFLICT (run_id) WHERE state = 'off' DO UPDATE SET failure_reason = EXCLUDED.failure_reason`,
+	// claimed_at is the claim of the run that recorded it: PanelOffReason
+	// tells this dispatch's row from one an earlier claim left.
+	tag, err := s.pool.Exec(ctx, `INSERT INTO panel_members (run_id, role, state, failure_reason, claimed_at)
+		SELECT COALESCE(attempt_of, id), 'a', 'off', $2, claimed_at FROM runs WHERE id = $1::uuid
+		ON CONFLICT (run_id) WHERE state = 'off' DO UPDATE SET failure_reason = EXCLUDED.failure_reason,
+			claimed_at = EXCLUDED.claimed_at`,
 		runID, cutText(reason))
 	if err != nil {
 		return err
@@ -234,6 +237,37 @@ func (s *Store) RecordPanelOff(ctx context.Context, runID, reason string) error 
 		return fmt.Errorf("store: run %s not found", runID)
 	}
 	return nil
+}
+
+// PanelOffReason is why run id ran as one review, its panel off: the
+// reason of its review's off row, when that row was recorded by run id's
+// current claim (the dispatch that launched it). found is false otherwise:
+// no off row, or one an earlier claim left (that launch failed, and the
+// dispatch that launched the run had no chain B, so it recorded none).
+func (s *Store) PanelOffReason(ctx context.Context, id string) (reason string, found bool, err error) {
+	if !validUUID(id) {
+		return "", false, nil
+	}
+	err = s.pool.QueryRow(ctx, `SELECT m.failure_reason FROM runs r
+		JOIN panel_members m ON m.run_id = COALESCE(r.attempt_of, r.id) AND m.state = 'off'
+		WHERE r.id = $1::uuid AND r.claimed_at IS NOT NULL AND m.claimed_at = r.claimed_at`, id).Scan(&reason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	return reason, err == nil, err
+}
+
+// IsPanelMerge reports whether run id is a review panel's merge (Job P):
+// its review has a member that is not off.
+func (s *Store) IsPanelMerge(ctx context.Context, id string) (bool, error) {
+	if !validUUID(id) {
+		return false, nil
+	}
+	var merge bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r
+		JOIN panel_members m ON m.run_id = COALESCE(r.attempt_of, r.id) AND m.state <> 'off'
+		WHERE r.id = $1::uuid)`, id).Scan(&merge)
+	return merge, err
 }
 
 // PanelMembers returns the members of the review of run id (its first run or
@@ -977,6 +1011,29 @@ func (s *Store) PanelJudges(ctx context.Context, runID string) (map[string]RunEn
 			return nil, err
 		}
 		out[role] = e
+	}
+	return out, rows.Err()
+}
+
+// PanelJudgeModels returns the provider and model each role of the Job P
+// run runID judged with, by role.
+func (s *Store) PanelJudgeModels(ctx context.Context, runID string) (map[string]ModelUsed, error) {
+	out := map[string]ModelUsed{}
+	if !validUUID(runID) {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT role, provider, model FROM panel_judges WHERE run_id = $1::uuid`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var role string
+		var m ModelUsed
+		if err := rows.Scan(&role, &m.Provider, &m.Model); err != nil {
+			return nil, err
+		}
+		out[role] = m
 	}
 	return out, rows.Err()
 }

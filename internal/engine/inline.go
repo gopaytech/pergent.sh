@@ -130,7 +130,13 @@ func runInline(ctx context.Context, d inlineDeps, run store.Run, o policy.Outcom
 		return inlineView{}
 	}
 
-	fs := buildFindings(o.Result, o.Dismissals, d.redact)
+	text := d.redact
+	if o.Panel != nil && o.Hide != nil {
+		// A panel's threads name none of its models either; a suggestion
+		// the hiding would change is not offered as one.
+		text = func(s string) string { return o.Hide(d.redact(s)) }
+	}
+	fs := buildFindings(o.Result, o.Dismissals, text)
 	diff := buildDiff(files, result.ChangedFiles(o.Result))
 	set := joinThreads(run.MR, run.HeadSHA, rows, onPlatform, fs.byFP)
 	for _, fp := range set.stale {

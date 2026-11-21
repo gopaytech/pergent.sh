@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -24,7 +25,14 @@ type SkillUsage struct {
 // repository, merge request, trigger, provider, model and time, and whose key
 // paid (the run's entry: global, or a team and its ID), and marks the run as
 // recorded, even with no skills. A row already there is kept.
-func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage) error {
+//
+// For a run with model rows (models not nil: a review panel's merge, Job P,
+// even when its result has no per-model tokens) it is recordMergeUsage
+// instead. Without model rows it is today's statement.
+func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage, models []ModelUsage) error {
+	if models != nil {
+		return s.recordMergeUsage(ctx, id, skills, models)
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -49,6 +57,172 @@ func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage)
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// usageInsertSQL inserts what skill $2 of run $1 used into run_usage, with
+// the run's repository, merge request, trigger, provider, model and whose key
+// paid. The verdict, the time and the counts are $3, $4 and $10, $11; the
+// tokens $5 to $9. What a conflict does follows it.
+//
+// A panel's members and its Job P add to the row of the run they count on:
+// its source is that run's entry, not each model's own (run_usage_models
+// keeps those). So the instance quota, which counts global keys only, counts
+// a team-key member of a review on a global entry, and misses a global-key
+// member of a review on a team entry. The quota rules are not changed here.
+const usageInsertSQL = `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid,
+		trigger, incremental, provider, model, verdict, reported_at, tokens_in, tokens_out, cache_read, cache_write,
+		reasoning, findings, blocking, source, team_id)
+	SELECT r.id, $2::text, r.instance, r.project_id, r.project_path, r.mr_iid, r.trigger, r.incremental,
+		COALESCE(r.provider, ''), COALESCE(r.model, ''), $3::text, $4::timestamptz, $5::bigint, $6::bigint,
+		$7::bigint, $8::bigint, $9::bigint, $10::integer, $11::integer,
+		CASE WHEN r.model_source = 'team' THEN 'team' ELSE 'global' END,
+		CASE WHEN r.model_source = 'team' THEN r.model_team_id END
+	FROM runs r WHERE r.id = $1::uuid
+	ON CONFLICT (run_id, skill) DO UPDATE SET tokens_in = run_usage.tokens_in + EXCLUDED.tokens_in,
+		tokens_out = run_usage.tokens_out + EXCLUDED.tokens_out,
+		cache_read = run_usage.cache_read + EXCLUDED.cache_read,
+		cache_write = run_usage.cache_write + EXCLUDED.cache_write,
+		reasoning = run_usage.reasoning + EXCLUDED.reasoning`
+
+// recordMergeUsage is RecordUsage of Job P's run id: each skill's tokens are
+// added to the run's row (a member of the review may have made it, when the
+// run is the review's first), with P's verdict, counts and time; a count one
+// side did not report stays unknown. models are stored as merge rows, each
+// with the judge entry of its role (panel_judges). The run's usage_recorded,
+// read under the row's lock in the same transaction, stops a second count.
+func (s *Store) recordMergeUsage(ctx context.Context, id string, skills []SkillUsage, models []ModelUsage) error {
+	if !validUUID(id) {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	var (
+		recorded bool
+		at       time.Time
+	)
+	err = tx.QueryRow(ctx, `SELECT usage_recorded, COALESCE(reported_at, created_at) FROM runs
+		WHERE id = $1::uuid FOR NO KEY UPDATE`, id).Scan(&recorded, &at)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && recorded) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, u := range byName(skills) {
+		if _, err := tx.Exec(ctx, usageInsertSQL+`, verdict = EXCLUDED.verdict, findings = EXCLUDED.findings,
+				blocking = EXCLUDED.blocking, reported_at = EXCLUDED.reported_at`,
+			id, u.Skill, u.Verdict, at, u.In, u.Out, u.CacheRead, u.CacheWrite, u.Reasoning, u.Findings, u.Blocking); err != nil {
+			return err
+		}
+	}
+	for _, m := range models {
+		if _, err := tx.Exec(ctx, `INSERT INTO run_usage_models (run_id, part, role, skill, provider, model, entry_name,
+				source, team_id, reported_at, tokens_in, tokens_out, cache_read, cache_write, reasoning)
+			SELECT r.id, 'merge', $2::text, $3::text, COALESCE(NULLIF($4::text, ''), j.provider, ''),
+				COALESCE(NULLIF($5::text, ''), j.model, ''), COALESCE(j.model_entry_name, ''),
+				CASE WHEN j.model_source = 'team' THEN 'team' ELSE 'global' END,
+				CASE WHEN j.model_source = 'team' THEN j.model_team_id END,
+				$6::timestamptz, $7::bigint, $8::bigint, $9::bigint, $10::bigint, $11::bigint
+			FROM runs r LEFT JOIN panel_judges j ON j.run_id = r.id AND j.role = $2::text
+			WHERE r.id = $1::uuid
+			ON CONFLICT (run_id, skill, role) WHERE part = 'merge' DO NOTHING`,
+			id, m.Role, m.Skill, cutText(m.Provider), cutText(m.Model), at, m.In, m.Out, m.CacheRead, m.CacheWrite, m.Reasoning); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runs SET usage_recorded = true WHERE id = $1::uuid`, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// byName is skills sorted by name, on a copy: the panel's writes to one
+// run's rows take them in one order, so two of them never wait for each other.
+func byName(skills []SkillUsage) []SkillUsage {
+	out := slices.Clone(skills)
+	slices.SortStableFunc(out, func(a, b SkillUsage) int { return strings.Compare(a.Skill, b.Skill) })
+	return out
+}
+
+// RecordMemberUsage stores what each skill of member id used: one
+// run_usage_models row per skill (part member, the member's entry, provider,
+// model, source and team), and the tokens added to run_usage of the member's
+// run (the review's first), then marks the member recorded, in one
+// transaction; a member already recorded changes nothing. A row the member
+// makes has no verdict and no counts: Job P's record sets them. A member
+// that failed records the tokens it reported all the same. An unknown or off
+// member is no error and writes nothing.
+func (s *Store) RecordMemberUsage(ctx context.Context, id string, skills []SkillUsage) error {
+	if !validUUID(id) {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	var root string
+	err = tx.QueryRow(ctx, `SELECT run_id::text FROM panel_members WHERE id = $1::uuid AND state <> 'off'`, id).Scan(&root)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// The run's row before the member's, the panel's lock order: the rows
+	// added below hold the run's key, and a run is only ever deleted with
+	// its row locked first.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1::uuid FOR KEY SHARE`, root); err != nil {
+		return err
+	}
+	var (
+		recorded bool
+		at       time.Time
+	)
+	err = tx.QueryRow(ctx, `SELECT m.usage_recorded, COALESCE(r.reported_at, m.reported_at, r.created_at)
+		FROM panel_members m JOIN runs r ON r.id = m.run_id
+		WHERE m.id = $1::uuid FOR UPDATE OF m`, id).Scan(&recorded, &at)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && recorded) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, u := range byName(skills) {
+		if _, err := tx.Exec(ctx, usageInsertSQL, root, u.Skill, "", at, u.In, u.Out, u.CacheRead, u.CacheWrite, u.Reasoning, 0, 0); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO run_usage_models (run_id, member_id, part, role, skill, provider, model,
+				entry_name, source, team_id, reported_at, tokens_in, tokens_out, cache_read, cache_write, reasoning)
+			SELECT m.run_id, m.id, 'member', m.role, $2::text, m.provider, m.model, m.model_entry_name,
+				CASE WHEN m.model_source = 'team' THEN 'team' ELSE 'global' END,
+				CASE WHEN m.model_source = 'team' THEN m.model_team_id END,
+				COALESCE(m.reported_at, $3::timestamptz), $4::bigint, $5::bigint, $6::bigint, $7::bigint, $8::bigint
+			FROM panel_members m WHERE m.id = $1::uuid
+			ON CONFLICT (member_id, skill) WHERE part = 'member' DO NOTHING`,
+			id, u.Skill, at, u.In, u.Out, u.CacheRead, u.CacheWrite, u.Reasoning); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE panel_members SET usage_recorded = true WHERE id = $1::uuid`, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// MembersWithoutUsage returns up to limit panel members with a stored
+// result and no usage recorded, oldest first: the fill at start records
+// those whose write was lost.
+func (s *Store) MembersWithoutUsage(ctx context.Context, limit int) ([]PanelMember, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	return s.queryMembers(ctx, `SELECT `+memberColumns+` FROM panel_members
+		WHERE NOT usage_recorded AND result IS NOT NULL AND state <> 'off'
+		ORDER BY created_at, id LIMIT $1`, limit)
 }
 
 // RunsWithoutUsage returns up to limit runs with a stored result and no

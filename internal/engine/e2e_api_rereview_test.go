@@ -171,7 +171,7 @@ func TestBudgetUsedUpAtDispatch(t *testing.T) {
 	a.finish(t, first, blockingSkill(t))
 	// What the result handler records too, in the background; the row is
 	// kept once, so the sum is the same whichever lands first.
-	if err := env.Store.RecordUsage(env.ctx, first, []store.SkillUsage{{Skill: "security", Verdict: "has_blocking_issues", In: 1200, Out: 300}}); err != nil {
+	if err := env.Store.RecordUsage(env.ctx, first, []store.SkillUsage{{Skill: "security", Verdict: "has_blocking_issues", In: 1200, Out: 300}}, nil); err != nil {
 		t.Fatal(err)
 	}
 

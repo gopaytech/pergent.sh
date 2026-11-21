@@ -33,7 +33,8 @@ type Results interface {
 	StoreResult(ctx context.Context, id, token string, body []byte, now time.Time) (store.ResultOutcome, error)
 	ReportFailure(ctx context.Context, id string, f store.Failure, now time.Time) (bool, error)
 	ReplaceWithFailure(ctx context.Context, id string, f store.Failure) error
-	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error
+	IsPanelMerge(ctx context.Context, id string) (bool, error)
+	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage, models []store.ModelUsage) error
 }
 
 // Handler serves POST /runs/{id}/result.
@@ -147,21 +148,28 @@ func (h *Handler) recordUsageLater(ctx context.Context, id string, body []byte) 
 	}()
 }
 
-// recordUsage stores what the accepted result's skills used. Usage is for
-// the admin views only: a failure is logged and never changes the review.
+// recordUsage stores what the accepted result's skills used, and for a
+// review panel's merge (Job P) what each model used (usage.Rows). Usage is
+// for the admin views and the quota only: a failure is logged and never
+// changes the review.
 func (h *Handler) recordUsage(ctx context.Context, id string, body []byte) {
 	run, found, err := h.Results.Run(ctx, id)
 	if err != nil || !found {
 		h.log().Warn("couldn't record the result's usage", "run", id, "found", found, "error", errText(err))
 		return
 	}
-	skills, err := usage.FromResult(body, run)
+	merge, err := h.Results.IsPanelMerge(ctx, id)
+	if err != nil {
+		// Not marked: the background fill at the next start records it.
+		h.log().Warn("couldn't record the result's usage", "run", id, "error", err.Error())
+		return
+	}
+	skills, models, err := usage.Rows(body, run, merge)
 	if err != nil {
 		// The run is still marked, so it isn't read again later.
 		h.log().Warn("couldn't read the result's usage", "run", id, "error", err.Error())
-		skills = nil
 	}
-	if err := h.Results.RecordUsage(ctx, id, skills); err != nil {
+	if err := h.Results.RecordUsage(ctx, id, skills, models); err != nil {
 		h.log().Warn("couldn't record the result's usage", "run", id, "error", err.Error())
 	}
 }

@@ -424,6 +424,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		if n := tokenusage.Backfill(ctx, st, log); n > 0 {
 			log.Info("recorded the usage of earlier reviews", "runs", n)
 		}
+		if n := tokenusage.BackfillMembers(ctx, st, log); n > 0 {
+			log.Info("recorded the usage of earlier review panel members", "members", n)
+		}
 	})
 	if eng.Scans {
 		loops = append(loops, eng.RunScans)
