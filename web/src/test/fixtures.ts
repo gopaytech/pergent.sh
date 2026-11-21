@@ -1,5 +1,7 @@
 import type {
   APIClientRow,
+  ChainEntryView,
+  ChainView,
   APIReviewDetail,
   APIReviewRow,
   APIClientView,
@@ -223,6 +225,8 @@ export const runDetail: RunDetailView = {
       checks: [],
     },
   ],
+  entry: null,
+  attempts: [],
 };
 
 // What an admin's run detail carries when the run has a Job. The key is left
@@ -569,23 +573,31 @@ const modelKey = { set: true, updatedAt: minutesAgo(3 * 24 * 60) };
 // The default of the list, and one a repository names.
 export const modelSonnet: ModelAdminView = {
   id: "m-sonnet",
+  name: "Claude Sonnet",
   provider: "anthropic",
   model: "claude-sonnet",
   baseURL: "",
   source: "dashboard",
   default: true,
+  teamsMayUse: false,
   key: modelKey,
   repositories: [],
+  usedIn: ["global chain"],
+  mark: null,
 };
 export const modelOpus: ModelAdminView = {
   id: "m-opus",
+  name: "Claude Opus",
   provider: "anthropic",
   model: "claude-opus",
   baseURL: "https://llm.example.com/v1",
   source: "dashboard",
   default: false,
+  teamsMayUse: false,
   key: modelKey,
   repositories: [{ instance: "main", project: "acme/payments" }],
+  usedIn: ["main/acme/payments"],
+  mark: null,
 };
 
 // The list of models: three repositories follow the default.
@@ -769,9 +781,9 @@ export const usageOverview: UsageOverviewView = {
     { day: "2026-11-07", tokens: tok(455_000, 111_000) },
   ],
   repositories: [
-    { instance: "main", project: "acme/payments", switchedOn: true, paused: false, tokens: tok(900_000, 200_000), reviews: 30 },
-    { instance: "main", project: "acme/widgets", switchedOn: true, paused: false, tokens: tok(200_000, 80_000), reviews: 8 },
-    { instance: "main", project: "acme/old", switchedOn: false, paused: false, tokens: tok(100_000, 20_000), reviews: 2 },
+    { instance: "main", project: "acme/payments", switchedOn: true, paused: false, tokens: tok(900_000, 200_000), reviews: 30, globalTokens: 1_100_000, teamTokens: 0 },
+    { instance: "main", project: "acme/widgets", switchedOn: true, paused: false, tokens: tok(200_000, 80_000), reviews: 8, globalTokens: 280_000, teamTokens: 0 },
+    { instance: "main", project: "acme/old", switchedOn: false, paused: false, tokens: tok(100_000, 20_000), reviews: 2, globalTokens: 120_000, teamTokens: 0 },
   ],
   clients: [
     {
@@ -985,4 +997,55 @@ export const apiReviewFailed: APIReviewDetail = {
     verdict: "failed",
     failure: { step: "starting", reason: "the checkout failed" },
   },
+};
+
+// Chain entries, as GET .../chain shows them: the config file's entry (fixed
+// at the front of the global chain), two global entries, and a team's own.
+export const entryConfig: ChainEntryView = {
+  position: 1,
+  source: "global",
+  id: "config",
+  name: "openai/gpt-5",
+  provider: "openai",
+  model: "gpt-5",
+  team: "",
+  state: "ready",
+  class: "",
+  until: null,
+  canClear: false,
+  fixed: true,
+};
+export const entrySonnet: ChainEntryView = {
+  ...entryConfig,
+  position: 2,
+  id: "m-sonnet",
+  name: "Claude Sonnet",
+  provider: "anthropic",
+  model: "claude-sonnet",
+  fixed: false,
+};
+export const entryOpus: ChainEntryView = { ...entrySonnet, position: 3, id: "m-opus", name: "Claude Opus", model: "claude-opus" };
+export const entryTeamQwen: ChainEntryView = {
+  ...entrySonnet,
+  position: 0,
+  source: "team",
+  id: "t-qwen",
+  name: "qwen3.5",
+  provider: "openrouter",
+  model: "qwen/qwen3.5",
+  team: "Payments",
+};
+
+// choice is an entry as the picker lists it: no place in the chain.
+export const choice = (e: ChainEntryView): ChainEntryView => ({ ...e, position: 0 });
+
+// The global chain an admin sees: the config entry in front, then Sonnet.
+export const chainGlobal: ChainView = {
+  scope: "global",
+  source: "global",
+  team: "",
+  readOnly: false,
+  savedByAdmin: true,
+  entries: [entryConfig, entrySonnet],
+  choices: [choice(entrySonnet), choice(entryOpus)],
 };

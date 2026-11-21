@@ -15,6 +15,7 @@ export type Outcome =
   | "no_blocking"
   | "failed"
   | "superseded"
+  | "fell_back"
   | "skipped"
   | "unknown"
   | "waiting";
@@ -222,7 +223,21 @@ export type RunDetailView = {
   // and for a run with no Job. pod is "" before one exists; detail is "" when
   // there is nothing more to say (a scheduler message, for one).
   kubernetes?: { namespace: string; job: string; pod: string; detail: string };
+  // entry is the chain entry the run ran on, by the name it had then: its
+  // place in the chain in effect (position of length), its source and its
+  // team's name ("" for a global entry). null for a run that recorded none.
+  entry: RunEntryView | null;
+  // attempts are every attempt of the review this run is one of, oldest
+  // first, this run included; empty for a review of one attempt.
+  attempts: AttemptView[];
 };
+
+export type RunEntryView = { name: string; position: number; length: number; source: EntrySource; team: string };
+
+// AttemptView is one attempt of a review. outcome is "fell_back" for one
+// dropped for the next entry ("" while it runs); reason is then the class it
+// was dropped on.
+export type AttemptView = { runId: string; name: string; position: number; outcome: Outcome | ""; reason: MarkClass | "" };
 
 export type LogView = { text: string };
 
@@ -517,6 +532,10 @@ export type UsageRepositoryRowView = {
   paused: boolean;
   tokens: UsageTokensView;
   reviews: number;
+  // globalTokens and teamTokens split its tokens (in plus out) by whose key
+  // paid: the global entries' or the teams' own.
+  globalTokens: number;
+  teamTokens: number;
 };
 
 // UsageTenantView is one tenant of an API client in the usage overview;
@@ -795,19 +814,29 @@ export type DefaultsView = DefaultValues & {
 export type RepoRef = { instance: string; project: string };
 
 // ModelAdminView is one entry of the list of models (GET /api/admin/models).
-// source is "config" (read-only, ID "config") or "dashboard". default is the
+// source is "config" (read-only, ID "config", or "config-1" on for the
+// config's fallbacks) or "dashboard". default is the
 // entry reviews use when a repository names none; while the config file has
 // an llm: block, that is its entry alone. The key is only whether it is set.
 // repositories are those that name the entry.
 export type ModelAdminView = {
   id: string;
+  // name is unique among global entries; it reaches the MR comment after a
+  // fallback.
+  name: string;
   provider: string;
   model: string;
   baseURL: string;
   source: "config" | "dashboard";
   default: boolean;
+  // teamsMayUse lets team chains name the entry.
+  teamsMayUse: boolean;
   key: SecretView;
   repositories: RepoRef[];
+  // usedIn labels every chain that names it ("global chain", "team
+  // Payments", "main/acme/payments").
+  usedIn: string[];
+  mark: MarkView | null;
 };
 
 // ModelsAdminView is the list of models. canSetDefault is false while the
@@ -815,6 +844,66 @@ export type ModelAdminView = {
 // followingDefault counts the repositories that name no model, which a change
 // of the default moves.
 export type ModelsAdminView = { canSetDefault: boolean; followingDefault: number; models: ModelAdminView[] };
+
+// --- model chains ---
+
+// EntrySource says whose an entry is: a global entry (the admins') or a
+// team's own.
+export type EntrySource = "global" | "team";
+
+// MarkClass is why the provider refused an entry: out of quota, out of
+// credit, or its key was rejected.
+export type MarkClass = "quota" | "billing" | "auth";
+
+// MarkView is what the provider said about an entry: quota or billing until
+// until, or auth (until null: until its key is edited). live is false once
+// until has passed; reviews then use the entry again.
+export type MarkView = { class: MarkClass; until: string | null; setAt: string; live: boolean };
+
+// EntryState is what reviews do with a chain entry now.
+export type EntryState = "ready" | "exhausted" | "key_rejected" | "removed" | "not_allowed" | "not_owner" | "key_unusable";
+
+// ChainEntryView is an entry of a chain, or one that may be put in it
+// (position 0). class and until are its mark's ("" and null with none);
+// canClear is whether the session may clear the mark. fixed is set on the
+// config file's entries, which stay at the front of the global chain. Never
+// a base URL or a key.
+export type ChainEntryView = {
+  position: number;
+  source: EntrySource;
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  team: string;
+  state: EntryState;
+  class: MarkClass | "";
+  until: string | null;
+  canClear: boolean;
+  fixed: boolean;
+};
+
+// ChainView is a chain as GET .../chain shows it. scope is the chain asked
+// for; source is where its entries come from (a repository's own chain, its
+// owner team's, named by team, or the global one). readOnly is set when the
+// session may not change it; choices are then empty. savedByAdmin says an
+// admin saved it: a repository chain an admin saved may hold global entries
+// teams may not use.
+export type ChainView = {
+  scope: "global" | "team" | "repo";
+  source: "repository" | "team" | "global";
+  team: string;
+  readOnly: boolean;
+  savedByAdmin: boolean;
+  entries: ChainEntryView[];
+  choices: ChainEntryView[];
+};
+
+// ChainRef names an entry in the body of a chain's PUT.
+export type ChainRef = { source: EntrySource; id: string };
+
+// ChainUpdate is the body of PUT .../chain: the entries in order.
+export type ChainUpdate = { entries: ChainRef[] };
 
 // ModelInUseView is the body of the 409 a removal gets while repositories
 // name the model.
@@ -1073,6 +1162,27 @@ export type TeamView = {
   repos: TeamRepoView[];
 };
 
+// MyTeamView is a team of GET /api/me/teams: role is the session's on it
+// ("admin" for an admin, who sees every team).
+export type MyTeamView = { id: number; name: string; role: Role; repos: TeamRepoView[] };
+
+// TeamModelView is one of a team's own entries. baseURL is "" for a viewer;
+// the key is only whether one is set. usedIn and mark are ModelAdminView's.
+export type TeamModelView = {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  baseURL: string;
+  key: SecretView;
+  usedIn: string[];
+  mark: MarkView | null;
+};
+
+// TeamModelsView is GET /api/teams/{id}/models. canEdit says the session may
+// add, change and remove the entries (a maintainer of the team, or an admin).
+export type TeamModelsView = { team: TeamRef; role: Role; canEdit: boolean; models: TeamModelView[] };
+
 // AddUserBody is the body of POST /api/admin/users: an email, and the teams to
 // put the account on, each with its role (viewer when left out).
 export type AddUserBody = { email: string; teams?: { teamId: number; role?: MemberRole }[] };
@@ -1319,6 +1429,16 @@ export const paths = {
   apiRepoPastDismissalStop: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals/stop`,
   apiRepoTeams: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/teams`,
+  // The repository's model chain: GET, PUT {entries}; POST .../reset to inherit again.
+  apiRepoChain: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/chain`,
+  apiRepoChainReset: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/chain/reset`,
+  // The team pages of the user area, and the team routes.
+  team: (id: number) => `/teams/${seg(String(id))}`,
+  apiTeamModels: (id: number) => `/api/teams/${seg(String(id))}/models`,
+  apiTeamModel: (id: number, model: string) => `/api/teams/${seg(String(id))}/models/${seg(model)}`,
+  apiTeamModelMark: (id: number, model: string) => `/api/teams/${seg(String(id))}/models/${seg(model)}/mark`,
+  apiTeamChain: (id: number) => `/api/teams/${seg(String(id))}/chain`,
+  apiAdminModelMark: (id: string) => `/api/admin/models/${seg(id)}/mark`,
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
   apiRepoReadiness: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/readiness`,
   apiRepoReadinessScan: (instance: string, project: string) =>
