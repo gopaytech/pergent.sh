@@ -34,12 +34,8 @@ github.com/google/pprof v0.0.0-20241029153458-d1b30febd7db h1:097atOisP2aRj7vFgY
 github.com/google/pprof v0.0.0-20241029153458-d1b30febd7db/go.mod h1:vavhavw2zAxS5dIdcRluK6cSGGPlZynqzFM8NdvU144=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/gopaytech/pergent v0.10.1-0.20261119005223-963a3305b173 h1:vgR1YvNLwMI2JZWch9epT1jfbOtUfx40XT1z1DBop6Y=
-github.com/gopaytech/pergent v0.10.1-0.20261119005223-963a3305b173/go.mod h1:DK3txruJIhV2PxYnouh3hBpaK0y6t8LLy8biccVjZag=
-github.com/gopaytech/pergent v0.10.1-0.20261120085056-df684a5bd415 h1:5mNKjcXbKy4jgk+mmQ3SJ0XUug9nDtBUtJ2BA4byQzc=
-github.com/gopaytech/pergent v0.10.1-0.20261120085056-df684a5bd415/go.mod h1:DK3txruJIhV2PxYnouh3hBpaK0y6t8LLy8biccVjZag=
-github.com/gopaytech/pergent v0.10.1-0.20261120092059-2a240ab98d61 h1:3VAY9vwIEuGbXI55iCPPYPPtONHcRj46A1tO7QIpdyo=
-github.com/gopaytech/pergent v0.10.1-0.20261120092059-2a240ab98d61/go.mod h1:DK3txruJIhV2PxYnouh3hBpaK0y6t8LLy8biccVjZag=
+github.com/gopaytech/pergent v0.10.1-0.20261121084510-549751b50983 h1:t6aQ1+nEUvtms4mbX3QxJcyEsC8/z+z9BGx432wrskY=
+github.com/gopaytech/pergent v0.10.1-0.20261121084510-549751b50983/go.mod h1:DK3txruJIhV2PxYnouh3hBpaK0y6t8LLy8biccVjZag=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=
