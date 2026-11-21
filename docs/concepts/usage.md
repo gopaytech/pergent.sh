@@ -1,6 +1,6 @@
 # Usage
 
-See where the model tokens went under **Admin → Usage** (`/admin/usage`). It's for admins only: anyone else gets a 404.
+See where the model tokens went on the admin **Usage** page (`/admin/usage`). It's for admins only: anyone else gets a 404.
 
 ## What the pages show
 
@@ -60,4 +60,6 @@ There's one row per skill per review, oldest first:
 
 - **Switched-off repositories** keep their usage, marked "switched off". They have no page of their own, but their row links to a CSV.
 - **The review page** still shows a review's own tokens to anyone who can see that review. A `review failed` re-run shows only the skills it ran.
+- **Backup models.** A review attempt dropped for the next entry of its [model chain](models.md#attempts) keeps its tokens here, on the entry that used them. On these pages each attempt counts as a review of its own.
+- **Global and team keys.** `GET /api/admin/usage` gives each repository's tokens (input plus output) on global keys as `globalTokens` and on teams' own keys as `teamTokens`. The page does not show the split yet. The instance's [token quota](token-quota.md) counts `globalTokens` only.
 - **Usage is never pruned.**

@@ -560,3 +560,33 @@ func TestRunDetailAttempts(t *testing.T) {
 		t.Errorf("old run = %+v, %+v", v.Entry, v.Attempts)
 	}
 }
+
+// Set as default moves the entry to position 1 of a saved global chain, since
+// the chain decides what reviews try first; a full chain without the entry
+// is a 409 that says so.
+func TestSetDefaultMovesAdminChain(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	var ids []string
+	for _, m := range []string{"m1", "m2", "m3", "m4", "m5", "m6"} {
+		ids = append(ids, e.addModel("openai", m, "", llmKeyOne).ID)
+	}
+	decode[ChainView](t, e.sendJSON(c, "PUT", adminChainURL, entryBody("global/"+ids[0], "global/"+ids[1])), "PUT", http.StatusOK)
+	wantCode(t, e.send(c, "POST", "/api/admin/models/"+ids[1]+"/default", ""), "default m2", http.StatusOK)
+	if got := chainRefs(getJSON[ChainView](e, c, adminChainURL)); !slices.Equal(got, []string{"global/" + ids[1], "global/" + ids[0]}) {
+		t.Errorf("chain after default m2 = %v; want m2, m1", got)
+	}
+
+	full := []string{}
+	for _, id := range ids[:5] {
+		full = append(full, "global/"+id)
+	}
+	decode[ChainView](t, e.sendJSON(c, "PUT", adminChainURL, entryBody(full...)), "PUT full", http.StatusOK)
+	rec := e.send(c, "POST", "/api/admin/models/"+ids[5]+"/default", "")
+	if rec.Code != http.StatusConflict || !strings.Contains(errorOf(t, rec), "global chain has 5 entries") {
+		t.Errorf("default m6 with a full chain = %d %s; want 409", rec.Code, rec.Body)
+	}
+	if got := chainRefs(getJSON[ChainView](e, c, adminChainURL)); !slices.Equal(got, full) {
+		t.Errorf("chain after the refusal = %v; want it unchanged", got)
+	}
+}

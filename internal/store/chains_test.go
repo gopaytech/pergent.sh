@@ -403,3 +403,64 @@ func TestRemoveRepoDropsItsChain(t *testing.T) {
 		t.Error("another repository's chain went too")
 	}
 }
+
+// Once the global chain is saved, it decides what reviews try first, so
+// SetDefaultLLMModel puts the entry at position 1 of it, the others moved down
+// in their order. An entry not in a full chain is ErrChainTooLong, and then
+// nothing changes. With no stored chain there is nothing to move.
+func TestSetDefaultMovesGlobalChain(t *testing.T) {
+	s := newStore(t)
+	var refs []EntryRef
+	for _, m := range []string{"m1", "m2", "m3", "m4", "m5", "m6"} {
+		refs = append(refs, EntryRef{SourceGlobal, newModel(t, s, "openai", m, "", []byte("k")).ID})
+	}
+	if found, err := s.SetDefaultLLMModel(ctx, refs[1].ID, t0); err != nil || !found {
+		t.Fatalf("SetDefaultLLMModel with no chain = %v, %v", found, err)
+	}
+	if _, found := mustChain(t, s, ScopeGlobal, 0, "", ""); found {
+		t.Errorf("a default set with no stored chain created one")
+	}
+
+	if err := s.SaveChain(ctx, Chain{Scope: ScopeGlobal, Entries: []EntryRef{refs[0], refs[1]}}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := s.SetDefaultLLMModel(ctx, refs[1].ID, t0.Add(time.Minute)); err != nil || !found {
+		t.Fatalf("SetDefaultLLMModel(m2) = %v, %v", found, err)
+	}
+	c, _ := mustChain(t, s, ScopeGlobal, 0, "", "")
+	if !slices.Equal(c.Entries, []EntryRef{refs[1], refs[0]}) || !c.UpdatedAt.Equal(t0.Add(time.Minute)) {
+		t.Errorf("chain after m2 = %+v; want m2, m1", c)
+	}
+	// An entry not in the chain goes in at position 1.
+	if _, err := s.SetDefaultLLMModel(ctx, refs[2].ID, t0); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := mustChain(t, s, ScopeGlobal, 0, "", ""); !slices.Equal(c.Entries, []EntryRef{refs[2], refs[1], refs[0]}) {
+		t.Errorf("chain after m3 = %+v; want m3, m2, m1", c.Entries)
+	}
+	if got := defaultsOf(mustModels(t, s)); !slices.Equal(got, []string{refs[2].ID}) {
+		t.Errorf("defaults = %v; want m3", got)
+	}
+
+	full := refs[:5]
+	if err := s.SaveChain(ctx, Chain{Scope: ScopeGlobal, Entries: full}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetDefaultLLMModel(ctx, refs[5].ID, t0); !errors.Is(err, ErrChainTooLong) {
+		t.Errorf("m6 into a full chain = %v; want ErrChainTooLong", err)
+	}
+	if c, _ := mustChain(t, s, ScopeGlobal, 0, "", ""); !slices.Equal(c.Entries, full) {
+		t.Errorf("full chain after the refusal = %+v; want it unchanged", c.Entries)
+	}
+	if got := defaultsOf(mustModels(t, s)); !slices.Equal(got, []string{refs[0].ID}) {
+		t.Errorf("defaults after the refusal = %v; want m1 kept", got)
+	}
+	// An entry already in a full chain still moves up.
+	if _, err := s.SetDefaultLLMModel(ctx, refs[4].ID, t0); err != nil {
+		t.Fatal(err)
+	}
+	want := []EntryRef{refs[4], refs[0], refs[1], refs[2], refs[3]}
+	if c, _ := mustChain(t, s, ScopeGlobal, 0, "", ""); !slices.Equal(c.Entries, want) {
+		t.Errorf("full chain after m5 = %+v; want m5 first", c.Entries)
+	}
+}
