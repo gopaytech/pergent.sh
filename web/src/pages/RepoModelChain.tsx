@@ -25,8 +25,8 @@ export default function RepoModelChain({ instance, project }: { instance: string
 
 // useClearMark clears a chain entry's mark. A global entry's is cleared on the
 // admins' route; a team entry's on its team's, found by the team's name among
-// the session's teams. It then reads the chain at key again.
-function useClearMark(key: string[]) {
+// the session's teams. It then reads both chains again.
+function useClearMark() {
   const client = useQueryClient();
   const write = useWrite();
   return useMutation({
@@ -37,7 +37,11 @@ function useClearMark(key: string[]) {
       if (!team) throw new Error(`The team ${e.team} is not one of yours.`);
       return write<void>("DELETE", paths.apiTeamModelMark(team.id, e.id));
     },
-    onSuccess: () => client.invalidateQueries({ queryKey: key }),
+    onSuccess: () => {
+      // Chain A and chain B may show the same mark.
+      client.invalidateQueries({ queryKey: ["repo-chain"] });
+      client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
+    },
   });
 }
 
@@ -65,7 +69,7 @@ function RepoModelChainA({ instance, project }: { instance: string; project: str
     onMutate: () => setNote(""),
     onSuccess: (next) => done(next, "It inherits its chain again."),
   });
-  const clear = useClearMark(key);
+  const clear = useClearMark();
   const busy = save.isPending || reset.isPending;
   return (
     <section className="card" aria-label="Model chain">
@@ -204,7 +208,7 @@ function RepoPanelChain({ instance, project }: { instance: string; project: stri
     onMutate: () => setNote(""),
     onSuccess: (next) => done(next, ""),
   });
-  const clear = useClearMark(key);
+  const clear = useClearMark();
   const busy = save.isPending || reset.isPending || off.isPending;
   const c = chain.data;
   const mode = starting ? "custom" : (c?.mode ?? "inherit");

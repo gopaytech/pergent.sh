@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -248,5 +248,30 @@ describe("TeamModels: team chain B", () => {
     const card = await screen.findByRole("region", { name: "Team chain B (review panel)" });
     expect(await within(card).findByText("Claude Sonnet")).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: "Save chain" })).not.toBeInTheDocument();
+  });
+
+  it("reads chain B again after a model is removed", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/teams/2/panel-chain": { body: panel },
+      "DELETE /api/teams/2/models/t-qwen": { status: 204 },
+    });
+    renderApp("/teams/2");
+    await screen.findByRole("region", { name: "Team chain B (review panel)" });
+    await userEvent.click(within(await entry("qwen3.5")).getByRole("button", { name: "Remove qwen3.5" }));
+    await waitFor(() => expect(fake.find("GET", "/api/teams/2/panel-chain")).toHaveLength(2));
+  });
+
+  it("cancels a new chain B with no request", async () => {
+    const fake = fakeApi(routes());
+    renderApp("/teams/2");
+    const card = await screen.findByRole("region", { name: "Team chain B (review panel)" });
+    await userEvent.click(await within(card).findByRole("button", { name: "Make a chain B" }));
+    expect(within(card).getByRole("button", { name: "Save chain" })).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Cancel" }));
+    expect(within(card).queryByRole("button", { name: "Save chain" })).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Make a chain B" })).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method !== "GET")).toHaveLength(0);
   });
 });

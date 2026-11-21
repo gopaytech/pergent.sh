@@ -52,7 +52,7 @@ export default function TeamModels() {
         queryKey={["team-panel-chain", v.team.id]}
         inheritNote="This team has no chain B of its own: its repositories use the global chain B, if there is one."
         clearPath={(e) => (e.source === "team" ? paths.apiTeamModelMark(v.team.id, e.id) : paths.apiAdminModelMark(e.id))}
-        also={[["repo-panel-chain"], ["repo"]]}
+        also={[["repo-panel-chain"], ["repo"], ["team-chain", v.team.id], ["repo-chain"]]}
       />
       {v.canEdit && <AddTeamModel team={v.team.id} />}
     </div>
@@ -67,6 +67,8 @@ function useTeamChanged(team: number) {
     client.invalidateQueries({ queryKey: ["team-models", team] });
     client.invalidateQueries({ queryKey: ["team-chain", team] });
     client.invalidateQueries({ queryKey: ["repo-chain"] });
+    client.invalidateQueries({ queryKey: ["team-panel-chain", team] });
+    client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
   };
 }
 
@@ -140,6 +142,7 @@ function TeamChain({ team }: { team: number }) {
       client.setQueryData(key, next);
       client.invalidateQueries({ queryKey: ["team-models", team] });
       client.invalidateQueries({ queryKey: ["repo-chain"] });
+      client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
       setStarting(false);
       setNote("Saved.");
     },
@@ -150,6 +153,7 @@ function TeamChain({ team }: { team: number }) {
       write<void>("DELETE", e.source === "team" ? paths.apiTeamModelMark(team, e.id) : paths.apiAdminModelMark(e.id)),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: key });
+      client.invalidateQueries({ queryKey: ["team-panel-chain", team] });
       client.invalidateQueries({ queryKey: ["team-models", team] });
     },
   });

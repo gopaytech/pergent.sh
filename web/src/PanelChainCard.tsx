@@ -78,6 +78,7 @@ export default function PanelChainCard({
             </>
           )}
           {starting && (
+            <>
             <ChainEditor
               label="Panel chain"
               value={{ ...c, entries: [] }}
@@ -87,6 +88,12 @@ export default function PanelChainCard({
               onSave={(entries) => save.mutate(entries)}
               onClear={(e) => clear.mutate(e)}
             />
+            <div className="pad">
+              <button type="button" className="btn small" disabled={save.isPending} onClick={() => setStarting(false)}>
+                Cancel
+              </button>
+            </div>
+            </>
           )}
         </>
       )}
