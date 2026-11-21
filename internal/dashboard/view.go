@@ -233,6 +233,36 @@ type RunDetailView struct {
 	// told us when it failed to start. Admins only: for anyone else the key
 	// is left out. Present from the moment the run has a Job.
 	Kubernetes *KubernetesView `json:"kubernetes,omitempty"`
+	// Entry is the chain entry the run ran on, by the name it had then;
+	// null for a run that recorded none (before chains, or before it was
+	// dispatched).
+	Entry *RunEntryView `json:"entry"`
+	// Attempts are every attempt of the review this run is one of, oldest
+	// first, this run included; empty for a review of one attempt.
+	Attempts []AttemptView `json:"attempts"`
+}
+
+// RunEntryView is the entry a run ran on: its name, its place in the chain
+// in effect (Position of Length), its source ("global" or "team") and its
+// team's name ("" for a global one).
+type RunEntryView struct {
+	Name     string `json:"name"`
+	Position int    `json:"position"`
+	Length   int    `json:"length"`
+	Source   string `json:"source"`
+	Team     string `json:"team"`
+}
+
+// AttemptView is one attempt of a review. Outcome is the run's ("fell_back"
+// for one that was dropped for the next entry, "" while it runs); Reason is
+// the class a dropped attempt fell back on ("quota", "billing" or "auth"),
+// "" otherwise.
+type AttemptView struct {
+	RunID    string `json:"runId"`
+	Name     string `json:"name"`
+	Position int    `json:"position"`
+	Outcome  string `json:"outcome"`
+	Reason   string `json:"reason"`
 }
 
 // KubernetesView is the cluster side of a run, for an admin to look it up
@@ -387,10 +417,10 @@ type Last7View struct {
 // reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR,
-// rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors and model (the ID of
-// the entry of the list of models the repository runs on; null follows the
-// default) and monthlyTokenQuota (the repository's token quota per UTC month,
-// null for none; shown to admins only, left out for anyone else).
+// rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors and monthlyTokenQuota
+// (the repository's token quota per UTC month, null for none; shown to admins
+// only, left out for anyone else). The model is the model chain's (GET
+// .../chain).
 type RepositoryDetailView struct {
 	Repo      RepositoryView         `json:"repo"`
 	Settings  map[string]SettingView `json:"settings"`
@@ -405,14 +435,11 @@ type RepositoryDetailView struct {
 	// InstanceTrustedAuthorsOnly is the instance's trusted-authors mode,
 	// what the repository follows when it sets none.
 	InstanceTrustedAuthorsOnly string `json:"instanceTrustedAuthorsOnly"`
-	// Model is the provider and model reviews of the repository run on, as
-	// "provider / model": the one it chose, else the default's. "" when
-	// neither is there. Anyone who sees the repository sees it; the base URL
-	// and the key are never in it.
+	// Model is the provider and model of position 1 of the chain in effect
+	// (GET .../chain has the chain), as "provider / model"; "" when the
+	// chain is empty or that entry was removed. Anyone who sees the
+	// repository sees it; the base URL and the key are never in it.
 	Model string `json:"model"`
-	// ModelChoices are the entries of the list a repository can be given, for
-	// an admin of the repository; empty for anyone else.
-	ModelChoices []ModelChoiceView `json:"modelChoices"`
 	// Quota is this month's tokens against the repository's and its
 	// instance's quotas, for an admin; null for anyone else, and when the
 	// usage can't be read.
@@ -452,16 +479,6 @@ type QuotaView struct {
 type QuotaUseView struct {
 	Used  int64  `json:"used"`
 	Limit *int64 `json:"limit"`
-}
-
-// ModelChoiceView is an entry of the list of models a repository can be
-// given: its ID, and "provider / model" to show. Default marks the entry
-// reviews use when a repository names none, so the page can name what
-// "Default" would move the repository to.
-type ModelChoiceView struct {
-	ID      string `json:"id"`
-	Label   string `json:"label"`
-	Default bool   `json:"default"`
 }
 
 // WaitingView is a change of an author the repository doesn't trust, not
@@ -956,18 +973,20 @@ type LLMView struct {
 //     "6Gi", from 256Mi, and no less than jobs.resources.requests.memory,
 //     to 32Gi), and rerunLimitPerMR and
 //     rerunLimitPerRepo (a whole number, 1 to 1000; only an admin changes
-//     these, else 403, and a maintainer's reset leaves them), and model (the
-//     ID of an entry of the list of models, or null to follow the default;
-//     only an admin of the repository changes it, else 403, and a
-//     maintainer's reset leaves it; an ID that is not in the list, "config"
-//     included while the config has no llm: block, is 400), and monthlyTokenQuota (a
+//     these, else 403, and a maintainer's reset leaves them), and monthlyTokenQuota (a
 //     whole number from 1 to 1000000000000000, or null for none; only an admin
 //     changes it, else 403, and a maintainer's reset leaves it). Any other key, or a value
-//     out of bounds, is 400 and nothing changes. 200, RepositoryDetailView.
+//     out of bounds, is 400 and nothing changes; so is model, which the
+//     model chain replaced. 200, RepositoryDetailView.
 //   - POST /api/repositories/{instance}/{project...}/settings/reset: every
 //     setting back to its default, except that a maintainer's reset leaves
 //     the two re-run caps, the linked repositories setting, the links, who is
-//     trusted, the model and the token quota as they are (only an admin resets those). 200, RepositoryDetailView.
+//     trusted and the token quota as they are (only an admin resets those).
+//     The model chain stays. 200, RepositoryDetailView.
+//   - GET .../chain: ChainView, the model chain in effect, for anyone who
+//     sees the repository. PUT .../chain {"entries"} and POST
+//     .../chain/reset: admins and maintainers of the owner team (403 for
+//     anyone else who sees it); see api_chains.go.
 //   - GET /api/admin/linkable?instance=&repo=&search= (admins only): LinkableView,
 //     the repositories the instance's review App reaches (at most 200, by name),
 //     each with whether `repo` (a repository switched on, GitHub only; 400 for
@@ -1116,10 +1135,47 @@ type TeamMemberView struct {
 	Role      string `json:"role"`
 }
 
-// TeamRepoView is a repository a team covers.
+// TeamRepoView is a repository a team covers. Owner is the owner tick: the
+// team whose chain the repository (or, for an instance entry, each
+// repository of the instance with no owner of its own) uses. In a team
+// change, a missing owner is false: the change replaces the ticks too.
 type TeamRepoView struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
+	Owner    bool   `json:"owner"`
+}
+
+// MyTeamView is a team of GET /api/me/teams: Role is the session's on it,
+// "viewer" or "maintainer" ("admin" for an admin, who sees every team).
+type MyTeamView struct {
+	ID    int64          `json:"id"`
+	Name  string         `json:"name"`
+	Role  string         `json:"role"`
+	Repos []TeamRepoView `json:"repos"`
+}
+
+// TeamModelsView is GET /api/teams/{id}/models: the team's own entries.
+// Role is the session's on the team; CanEdit is whether it may add, change
+// and remove them (a maintainer or an admin).
+type TeamModelsView struct {
+	Team    TeamRef         `json:"team"`
+	Role    string          `json:"role"`
+	CanEdit bool            `json:"canEdit"`
+	Models  []TeamModelView `json:"models"`
+}
+
+// TeamModelView is one of a team's entries. BaseURL is "" for a viewer; the
+// key is never sent, only whether one is set. UsedIn and Mark are
+// ModelAdminView's.
+type TeamModelView struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Provider string     `json:"provider"`
+	Model    string     `json:"model"`
+	BaseURL  string     `json:"baseURL"`
+	Key      SecretView `json:"key"`
+	UsedIn   []string   `json:"usedIn"`
+	Mark     *MarkView  `json:"mark"`
 }
 
 // RepoTeamsView is GET .../teams of a repository: every team, by name
@@ -1164,9 +1220,13 @@ type AuditView struct {
 // it is set and when it last changed. Every write needs the CSRF token and is
 // recorded in the audit log without a value: instance_added,
 // instance_updated (detail: the fields changed), instance_removed,
-// model_added, model_updated (detail: the model, then the fields changed,
-// "api_key" among them), model_default_changed, model_removed (detail: the
-// provider and model) and defaults_updated.
+// model_added, model_updated (detail: the name and model, then the fields
+// changed, "api_key" among them), teams_may_use_changed, model_default_changed,
+// model_removed (detail: the name and model), model_mark_cleared,
+// chain_changed (detail: the chain and its entry names in order) and
+// defaults_updated. The team routes add owner_set, owner_cleared,
+// team_model_added, team_model_updated, team_model_removed and
+// team_models_deleted.
 //
 //   - GET /api/admin/instances: [InstanceAdminView], the config's first,
 //     then those added in the dashboard.
@@ -1195,21 +1255,26 @@ type AuditView struct {
 //     the repositories the instance's review bot or App can set up that
 //     aren't switched on (the same list as the picker's).
 //   - GET /api/admin/models: ModelsAdminView (admins), the list of models:
-//     the config file's llm: block first, as a read-only entry with the ID
-//     "config", then those added in the dashboard, oldest first. POST
-//     /api/admin/models {"provider", "model", "baseURL", "apiKey"} adds one
-//     (the key is required; 400 for a missing or oversized field, 409 for
-//     the same provider, model and base URL as an entry there): 201,
-//     ModelAdminView. The first entry is the default.
-//     PUT /api/admin/models/{id} {"baseURL", "apiKey"?} changes the base URL
-//     and, when given, the key; a provider or model in the body is 400, as
-//     they never change (add another entry), and the config's entry is 409:
-//     200, ModelAdminView. POST /api/admin/models/{id}/default makes it the
-//     default (409 while the config has an llm: block, which is the default):
-//     200, ModelsAdminView. DELETE /api/admin/models/{id}: 204; 409
-//     ModelInUseView while a repository names it, and 409 {"error"} for the
-//     default (not while the config has an llm: block: that entry is the
-//     default then) and the config's entry. A key is sealed and never returned.
+//     the config file's entries first (its llm: block, ID "config", then
+//     llm.fallbacks, "config-1" on), read-only, then those added in the
+//     dashboard, oldest first. POST /api/admin/models {"name", "provider",
+//     "model", "baseURL", "apiKey", "teamsMayUse"?} adds one (name and key
+//     are required; 400 for a missing or wrong field, 409 for a name another
+//     global entry has): 201, ModelAdminView. The first entry is the default.
+//     PUT /api/admin/models/{id} {"baseURL", "apiKey"?, "name"?,
+//     "teamsMayUse"?} changes the base URL and what else is sent; a provider
+//     or model in the body is 400, as they never change (add another entry),
+//     and the config's entries are 409: 200, ModelAdminView. POST
+//     /api/admin/models/{id}/default makes it the default (409 while the
+//     config has an llm: block, which is the default): 200, ModelsAdminView.
+//     DELETE /api/admin/models/{id}: 204, chains that name it keeping it as
+//     removed; 409 for the default (not while the config has an llm: block:
+//     that entry is the default then) and the config's entries. DELETE
+//     /api/admin/models/{id}/mark clears its mark: 204. A key is sealed and
+//     never returned.
+//   - GET /api/admin/chain: ChainView (admins), the global chain. PUT
+//     /api/admin/chain {"entries": [{"source", "id"}]}: global entries only,
+//     the config's in front, at most 5; 200, ChainView.
 //   - GET /api/admin/sign-in: SignInAdminView (admins). PUT /api/admin/sign-in
 //     {"mode", "label", "issuer", "clientID", "clientSecret", "header",
 //     "audience", "jwksURL", "emailClaim", "allowedDomains", "allowedEmails"}
@@ -1317,32 +1382,85 @@ type ModelsAdminView struct {
 }
 
 // ModelAdminView is one entry of the list. Source is "config" (read-only, ID
-// "config") or "dashboard". Default is true for the entry reviews use when a
-// repository names none; while the config has an llm: block that is its entry
-// alone. Key says whether a key is set and when it changed; the key is never
-// sent. Repositories are those that name the entry, by instance and project.
+// "config", or "config-1" to "config-4" for llm.fallbacks) or "dashboard".
+// Name is unique among global entries ignoring case, and can hold no
+// markdown: it reaches the MR comment after a fallback. Default is true for
+// the entry reviews use when a repository names none; while the config has
+// an llm: block that is its entry alone. TeamsMayUse lets team chains name
+// it. Key says whether a key is set and when it changed; the key is never
+// sent. Repositories are those whose old model setting names the entry;
+// UsedIn labels every chain that names it ("global chain", "team <name>",
+// "<instance>/<project>"). Mark is null unless the provider marked it.
 type ModelAdminView struct {
 	ID           string        `json:"id"`
+	Name         string        `json:"name"`
 	Provider     string        `json:"provider"`
 	Model        string        `json:"model"`
 	BaseURL      string        `json:"baseURL"`
 	Source       string        `json:"source"`
 	Default      bool          `json:"default"`
+	TeamsMayUse  bool          `json:"teamsMayUse"`
 	Key          SecretView    `json:"key"`
 	Repositories []RepoRefView `json:"repositories"`
+	UsedIn       []string      `json:"usedIn"`
+	Mark         *MarkView     `json:"mark"`
+}
+
+// MarkView is what the provider said about an entry: Class "quota" or
+// "billing" until Until, or "auth" (Until null: until its key is edited).
+// Live is false once Until has passed; the mark is then ignored.
+type MarkView struct {
+	Class string     `json:"class"`
+	Until *time.Time `json:"until"`
+	SetAt time.Time  `json:"setAt"`
+	Live  bool       `json:"live"`
+}
+
+// ChainView is a chain as GET .../chain shows it. Scope is the chain asked
+// for: "global", "team" or "repo". Source is where its entries come from:
+// "repository" (a repository's own chain), "team" (its owner team's, Team
+// naming it) or "global". ReadOnly is true when the session may not change
+// it. SavedByAdmin is whether an admin saved the chain shown (a repository
+// chain an admin saved may name global entries teams may not use). Choices
+// are the entries the session may put in it, empty when ReadOnly.
+type ChainView struct {
+	Scope        string           `json:"scope"`
+	Source       string           `json:"source"`
+	Team         string           `json:"team"`
+	ReadOnly     bool             `json:"readOnly"`
+	SavedByAdmin bool             `json:"savedByAdmin"`
+	Entries      []ChainEntryView `json:"entries"`
+	Choices      []ChainEntryView `json:"choices"`
+}
+
+// ChainEntryView is an entry of a chain, or one that may be put in it. Source
+// is "global" or "team" (Team is then its team's name). State is what the
+// resolver does with it now: "ready", "exhausted" (a quota or billing mark),
+// "key_rejected" (an auth mark), "removed", "not_allowed" (a global entry
+// teams may not use), "not_owner" (a team entry of a team that doesn't own
+// the repository) or "key_unusable". Class and Until are its mark's, "" and
+// null with none; CanClear is whether the session may clear it. Fixed is set
+// on the config file's entries, which stay at the front of the global chain.
+// Never a base URL or a key.
+type ChainEntryView struct {
+	Position int        `json:"position"`
+	Source   string     `json:"source"`
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Provider string     `json:"provider"`
+	Model    string     `json:"model"`
+	Team     string     `json:"team"`
+	State    string     `json:"state"`
+	Class    string     `json:"class"`
+	Until    *time.Time `json:"until"`
+	CanClear bool       `json:"canClear"`
+	Fixed    bool       `json:"fixed"`
 }
 
 // RepoRefView names a repository by instance and project.
 type RepoRefView struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
-}
-
-// ModelInUseView is the 409 of a delete of a model that repositories name:
-// Repositories are the ones that do.
-type ModelInUseView struct {
-	Error        string        `json:"error"`
-	Repositories []RepoRefView `json:"repositories"`
 }
 
 // UsageTokensView is tokens used: input and output, which every total and
@@ -1366,13 +1484,17 @@ type UsageDayView struct {
 // UsageRepositoryRowView is one repository in GET /api/admin/usage.
 // SwitchedOn is false for a repository paused (Paused) or removed since, or
 // on an instance that was removed: its usage is kept.
+// GlobalTokens and TeamTokens split its tokens (in plus out) by whose key
+// paid: the global entries' or teams' own.
 type UsageRepositoryRowView struct {
-	Instance   string          `json:"instance"`
-	Project    string          `json:"project"`
-	SwitchedOn bool            `json:"switchedOn"`
-	Paused     bool            `json:"paused"`
-	Tokens     UsageTokensView `json:"tokens"`
-	Reviews    int64           `json:"reviews"`
+	Instance     string          `json:"instance"`
+	Project      string          `json:"project"`
+	SwitchedOn   bool            `json:"switchedOn"`
+	Paused       bool            `json:"paused"`
+	Tokens       UsageTokensView `json:"tokens"`
+	Reviews      int64           `json:"reviews"`
+	GlobalTokens int64           `json:"globalTokens"`
+	TeamTokens   int64           `json:"teamTokens"`
 }
 
 // UsageTenantView is one tenant of an API client in GET /api/admin/usage.

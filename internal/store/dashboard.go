@@ -302,15 +302,19 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return err
 	}
-	if err := lockModel(ctx, tx, r.ModelID); err != nil {
-		return err
-	}
 	var oldModel *string
 	err = tx.QueryRow(ctx, `SELECT model_id FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2) FOR UPDATE`,
 		r.Instance, r.Project).Scan(&oldModel)
 	existed := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
+	}
+	// Only a model the save gives must be in the list: one kept may have
+	// been removed since (its chain skips it).
+	if !existed || !samePtr(oldModel, r.ModelID) {
+		if err := lockModel(ctx, tx, r.ModelID); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
@@ -422,7 +426,7 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 // of the row stays. found is false, and nothing is created, when there is no
 // such row. Each library skill the new Skills names is locked until the
 // change is stored, so it can't be deleted meanwhile; one that is not in the
-// library is ErrSkillNotFound and nothing is written. The new ModelID is
+// library is ErrSkillNotFound and nothing is written. A changed ModelID is
 // locked the same way; one that is not in the list is ErrModelNotFound.
 func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project string, apply func(*DashboardRepo)) (found bool, err error) {
 	tx, err := s.pool.Begin(ctx)
@@ -460,8 +464,12 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return false, err
 	}
-	if err := lockModel(ctx, tx, r.ModelID); err != nil {
-		return false, err
+	// Only a new model must be in the list: one kept may have been removed
+	// since (its chain skips it).
+	if !samePtr(oldModel, r.ModelID) {
+		if err := lockModel(ctx, tx, r.ModelID); err != nil {
+			return false, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET approve = $3, review_drafts = $4, failure_status = $5,
 			skills = $6, repo_skills = $7, job_timeout_seconds = $8, max_turns = $9, job_memory = $10,
@@ -510,8 +518,8 @@ func (s *Store) SetDashboardRepoEnabled(ctx context.Context, instance, project s
 }
 
 // RemoveDashboardRepo deletes the dashboard repository project on instance
-// (matched ignoring case), paused or not, and the team links to it, in one
-// transaction. A team's link to the whole instance and links to the same path
+// (matched ignoring case), paused or not, its own model chain and the team
+// links to it, in one transaction. A team's link to the whole instance and links to the same path
 // on another instance stay. found is false, and nothing is deleted, when
 // there is no such row.
 func (s *Store) RemoveDashboardRepo(ctx context.Context, instance, project string) (found bool, err error) {
@@ -530,6 +538,12 @@ func (s *Store) RemoveDashboardRepo(ctx context.Context, instance, project strin
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM team_repos
 		WHERE instance = $1 AND project <> '' AND lower(project) = lower($2)`, instance, project); err != nil {
+		return false, err
+	}
+	// Its own chain goes with its settings: the resolver reads a chain row
+	// whatever the repository's row says, so one added again would run on it.
+	if _, err := tx.Exec(ctx, `DELETE FROM model_chains WHERE scope = 'repo' AND instance = $1 AND lower(project) = lower($2)`,
+		instance, project); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)

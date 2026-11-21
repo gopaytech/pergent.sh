@@ -94,12 +94,15 @@ func (t *TokenSum) dests() []any {
 }
 
 // RepoUsage is what one repository used.
+// GlobalTokens and TeamTokens are its tokens (in plus out) on global keys
+// and on teams' own.
 type RepoUsage struct {
-	Instance    string
-	ProjectID   int64
-	ProjectPath string
-	Tokens      TokenSum
-	Reviews     int64
+	Instance                 string
+	ProjectID                int64
+	ProjectPath              string
+	Tokens                   TokenSum
+	Reviews                  int64
+	GlobalTokens, TeamTokens int64
 }
 
 // DayUsage is what was used on one day, cut at midnight UTC.
@@ -185,7 +188,9 @@ const (
 // instance is empty) and is left out.
 func (s *Store) UsageByRepository(ctx context.Context, since time.Time) ([]RepoUsage, error) {
 	rows, err := s.pool.Query(ctx, `SELECT instance, project_id, (array_agg(project_path ORDER BY reported_at DESC))[1], `+tokenSumColumns+`,
-			count(DISTINCT run_id)
+			count(DISTINCT run_id),
+			COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'global'), 0),
+			COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'team'), 0)
 		FROM run_usage WHERE reported_at >= $1::timestamptz AND instance <> ''
 		GROUP BY instance, project_id
 		ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, instance, project_id`, since)
@@ -194,7 +199,7 @@ func (s *Store) UsageByRepository(ctx context.Context, since time.Time) ([]RepoU
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (RepoUsage, error) {
 		var u RepoUsage
-		err := row.Scan(append([]any{&u.Instance, &u.ProjectID, &u.ProjectPath}, append(u.Tokens.dests(), &u.Reviews)...)...)
+		err := row.Scan(append([]any{&u.Instance, &u.ProjectID, &u.ProjectPath}, append(u.Tokens.dests(), &u.Reviews, &u.GlobalTokens, &u.TeamTokens)...)...)
 		return u, err
 	})
 }

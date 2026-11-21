@@ -63,6 +63,8 @@ These are the owner's.
 | Telling people about a mark | A banner on the team Models tab and the admin Models page while any entry has a mark. Alerting uses the metric. |
 | Config-file installs | An optional `llm.fallbacks:` list gives them a global chain. |
 | Rollback to the previous release | A repository whose chain starts with a team entry runs on the global default until the next upgrade. Documented in `docs/upgrading.md`. |
+| A repository chain an admin saved (2026-11-20) | Each chain records whether an admin saved it. A repository chain an admin saved keeps its global entries usable, even when a team owns the repository and `teams may use` is off for them. A maintainer of the owner team who saves that chain may pick only the team's entries and the global entries with `teams may use` on, and the chain becomes team-saved. Global and team chains do not change. |
+| Re-run and start under a used-up instance quota (2026-11-20) | The re-run button, the comment command and the start request no longer refuse at once when the instance quota is used up. They ask the resolver, with the same rules as dispatch, whether an entry is usable. If a team entry is left, the review starts; if none is, they refuse with today's message. The repository quota still refuses as today. |
 
 ## Rulings this changes
 
@@ -118,7 +120,7 @@ On upgrade:
 2. Walk the chain from position 1. Skip an entry when:
    - this review already tried it,
    - it has a live mark,
-   - it is a removed global entry, or a global entry whose `teams may use` was turned off (team and repository chains),
+   - it is a removed global entry, or a global entry whose `teams may use` was turned off (team chains, and repository chains a team maintainer saved),
    - it is a team entry of a team that no longer owns the repository,
    - its key does not unseal,
    - it is a global entry and the **instance** token quota is used up.

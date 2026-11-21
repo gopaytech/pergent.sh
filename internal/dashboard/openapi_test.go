@@ -30,6 +30,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/readiness"
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -928,8 +929,14 @@ var openAPISchemas = map[string]schemaType{
 	"ModelsAdminView":         outputSchema(ModelsAdminView{}),
 	"ModelAdminView":          outputSchema(ModelAdminView{}),
 	"RepoRefView":             outputSchema(RepoRefView{}),
-	"ModelInUseView":          outputSchema(ModelInUseView{}),
-	"ModelChoiceView":         outputSchema(ModelChoiceView{}),
+	"MarkView":                outputSchema(MarkView{}),
+	"ChainView":               outputSchema(ChainView{}),
+	"ChainEntryView":          outputSchema(ChainEntryView{}),
+	"RunEntryView":            outputSchema(RunEntryView{}),
+	"AttemptView":             outputSchema(AttemptView{}),
+	"MyTeamView":              outputSchema(MyTeamView{}),
+	"TeamModelsView":          outputSchema(TeamModelsView{}),
+	"TeamModelView":           outputSchema(TeamModelView{}),
 	"SignInAdminView":         outputSchema(SignInAdminView{}),
 	"SignInTestView":          outputSchema(SignInTestView{}),
 	"ssoView":                 outputSchema(ssoView{}),
@@ -1001,6 +1008,7 @@ var openAPISchemas = map[string]schemaType{
 // bodies the handlers decode into a struct declared inside the function.
 var openAPIUntypedSchemas = map[string]string{
 	"ErrorBody":                 "map[string]string{error, code}",
+	"ChainRequest":              "struct in decodeChain",
 	"StatusBody":                "map[string]string{status}",
 	"InstanceTrustRequest":      "struct in Dashboard.putInstanceTrust",
 	"InstanceTokenQuotaRequest": "struct in Dashboard.putInstanceQuota",
@@ -1029,6 +1037,8 @@ var openAPIUntypedSchemas = map[string]string{
 	"CreateInstanceRequest":     "struct in Dashboard.addInstance",
 	"UpdateInstanceRequest":     "struct in Dashboard.updateInstance",
 	"CreateModelRequest":        "struct in Dashboard.createModel",
+	"CreateTeamModelRequest":    "struct in Dashboard.createTeamModel",
+	"UpdateTeamModelRequest":    "struct in Dashboard.updateTeamModel",
 	"UpdateModelRequest":        "struct in Dashboard.updateModel",
 	"PutSignInRequest":          "putSignInBody, decoded in Dashboard.putSignIn",
 	"PutCommentFooterRequest":   "struct in Dashboard.putCommentFooter",
@@ -1396,6 +1406,13 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		{"TeamMemberView", "role", teamRoles},
 		{"ReviewDetailView", "role", append(append([]string{}, roles...), "")},
 		{"RepositoryDetailView", "role", roles},
+		{"MyTeamView", "role", roles},
+		{"TeamModelsView", "role", roles},
+		{"MarkView", "class", []string{store.ClassQuota, store.ClassBilling, store.ClassAuth}},
+		{"AttemptView", "reason", []string{"", store.ClassQuota, store.ClassBilling, store.ClassAuth}},
+		{"ChainEntryView", "class", []string{"", store.ClassQuota, store.ClassBilling, store.ClassAuth}},
+		{"ChainEntryView", "state", []string{stateOf(""), stateOf(store.ClassQuota), stateOf(store.ClassAuth), chain.ReasonRemoved,
+			chain.ReasonNotAllowed, chain.ReasonNotOwner, chain.ReasonKeyUnusable}},
 		{"UserView", "kind", kinds},
 		{"UserView", "role", accountRoles},
 		{"meView", "kind", kinds},

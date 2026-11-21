@@ -63,7 +63,7 @@ const (
 	msgWriteFailed    = "could not save the change, please try again"
 	msgUserLookup     = "could not look the user up on the platform, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, checkDeleted, commentLayout, ciJobs, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, model, monthlyTokenQuota"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, checkDeleted, commentLayout, ciJobs, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, monthlyTokenQuota"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsAdminCaps = "only admins can change its re-run caps"
 	msgNeedsRole      = "only maintainers of this repository and admins can change its settings"
@@ -527,7 +527,7 @@ func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view.Settings = settingViews(def)
-	view.Model = d.effectiveModel("")
+	view.Model = d.defaultModelLabel()
 	view.Attention = []AttentionView{}
 	writeJSON(w, http.StatusOK, view)
 }
@@ -538,6 +538,10 @@ func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 // (scanNow), .../past-dismissals/stop (stopUsing) and .../settings/reset; any
 // other is 404.
 func (d *Dashboard) repositoryPost(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.PathValue("rest"), "/chain/reset") {
+		d.resetRepoChain(w, r)
+		return
+	}
 	if strings.HasSuffix(r.PathValue("rest"), "/readiness/scan") {
 		d.scanNow(w, r)
 		return
@@ -560,6 +564,10 @@ func (d *Dashboard) repositoryPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(r.PathValue("rest"), "/graph") {
 		d.putGraph(w, r)
+		return
+	}
+	if strings.HasSuffix(r.PathValue("rest"), "/chain") {
+		d.putRepoChain(w, r)
 		return
 	}
 	d.putSettings(w, r)
@@ -668,21 +676,6 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, msgNeedsAdminQuota)
 		return
 	}
-	// So is the model: it decides what the repository's reviews cost.
-	if slices.ContainsFunc(keys, isModelKey) && session(r).Role(repo.Instance, repo.Project) < RoleAdmin {
-		writeError(w, http.StatusForbidden, msgNeedsAdminModel)
-		return
-	}
-	// The entry the config's llm: block supplies is not stored, so only the
-	// registry knows whether it is there.
-	if slices.Contains(keys, "model") {
-		var probe store.DashboardRepo
-		edit(&probe)
-		if probe.ModelID != nil && *probe.ModelID == store.ConfigModelID && !d.hasConfigModel() {
-			writeError(w, http.StatusBadRequest, msgUnknownModel)
-			return
-		}
-	}
 	// ci.Validate needs the platform (GitHub's report needs an artifact).
 	if slices.Contains(keys, "ciJobs") {
 		var probe store.DashboardRepo
@@ -734,14 +727,8 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 			row.TrustedAuthors = resolved
 		}
 	}
-	// The audit detail names the model and the quota a change gives, not only
-	// the key.
+	// The audit detail names the quota a change gives, not only the key.
 	details := slices.Clone(keys)
-	if i := slices.Index(details, "model"); i >= 0 {
-		var probe store.DashboardRepo
-		edit(&probe)
-		details[i] = d.modelSettingDetail(probe.ModelID)
-	}
 	if i := slices.Index(details, "monthlyTokenQuota"); i >= 0 {
 		var probe store.DashboardRepo
 		edit(&probe)
@@ -769,21 +756,6 @@ func trustModeSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo
 		v = &m
 	}
 	return func(row *store.DashboardRepo) { row.TrustedAuthorsOnly = v }, ""
-}
-
-// modelSetting reads model: the ID of an entry of the list of models, or null
-// (follow the default). Whether the entry is there is the save's to say
-// (store.ErrModelNotFound), except for the config's, which putSettings checks.
-func modelSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
-	var v *string
-	if !null {
-		var id string
-		if json.Unmarshal(raw, &id) != nil || id == "" || len(id) > maxLLMField {
-			return nil, msgUnknownModel
-		}
-		v = &id
-	}
-	return func(row *store.DashboardRepo) { row.ModelID = v }, ""
 }
 
 // trustedAuthorsSetting reads trustedAuthors: a list of {"id"?, "username"}
@@ -859,14 +831,11 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// A maintainer's reset leaves the caps, the links, who is trusted, the
-	// model and the token quota, which only an admin changes.
+	// A maintainer's reset leaves the caps, the links, who is trusted and the
+	// token quota, which only an admin changes. The model chain has its own
+	// reset (POST .../chain/reset).
 	admin := session(r).Role(repo.Instance, repo.Project) >= RoleAdmin
 	detail := ""
-	if admin && repo.ModelID != "" {
-		// The model goes back to the default: say which one it was.
-		detail = "model (default, was " + d.effectiveModelOrID(repo.ModelID) + ")"
-	}
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.InlineFindings, row.FailureStatus = nil, nil, nil, nil
 		row.CommandsAuthorAndMaintainersOnly, row.IncrementalReviews, row.LearnFromDismissals, row.QuietReviews = nil, nil, nil, nil
@@ -878,7 +847,6 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
 			row.LinkedReposEnabled, row.LinkedRepos = nil, nil
 			row.TrustedAuthorsOnly, row.TrustedAuthors = nil, nil
-			row.ModelID = nil
 			row.MonthlyTokenQuota = nil
 		}
 	}, "settings reset", "settings_reset", detail)
@@ -979,7 +947,8 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 		case "trustedAuthors":
 			edit, msg = trustedAuthorsSetting(raw, null)
 		case "model":
-			edit, msg = modelSetting(raw, null)
+			// The model chain replaced it (PUT .../chain).
+			msg = msgModelInChain
 		case "monthlyTokenQuota":
 			edit, msg = quotaSetting(raw)
 		default:

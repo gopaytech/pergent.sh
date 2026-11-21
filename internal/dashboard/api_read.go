@@ -555,6 +555,40 @@ func (d *Dashboard) visibleRun(ctx context.Context, se Session, id string) (stor
 	return run, true, nil
 }
 
+// attemptsOf sets view's entry, from what run recorded, and the attempts of
+// the review run is one of. A team is named by its name now (a team since
+// removed reads "").
+func (d *Dashboard) attemptsOf(ctx context.Context, run store.Run, view *RunDetailView) error {
+	view.Attempts = []AttemptView{}
+	if run.ChainLength > 0 {
+		e := RunEntryView{Name: run.ModelEntryName, Position: run.ChainPosition, Length: run.ChainLength, Source: run.ModelSource}
+		if run.ModelTeamID != nil {
+			teams, err := d.teamNames(ctx)
+			if err != nil {
+				return err
+			}
+			e.Team = teams[*run.ModelTeamID]
+		}
+		view.Entry = &e
+	}
+	root := run.ID
+	if run.AttemptOf != nil {
+		root = *run.AttemptOf
+	}
+	attempts, err := d.Store.Attempts(ctx, root)
+	if err != nil || len(attempts) < 2 {
+		return err
+	}
+	for _, a := range attempts {
+		v := AttemptView{RunID: a.ID, Name: a.ModelEntryName, Position: a.ChainPosition, Outcome: a.Outcome}
+		if a.Outcome == store.OutcomeFellBack {
+			v.Reason = a.OutcomeReason
+		}
+		view.Attempts = append(view.Attempts, v)
+	}
+	return nil
+}
+
 // notMergedNote is the incrementalNote of an incremental run whose result was
 // not merged with the last review.
 const notMergedNote = "Part of an incremental review that was never merged."
@@ -575,18 +609,35 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "listing a review's runs", err)
 		return
 	}
-	idx := slices.IndexFunc(digests, func(x store.RunDigest) bool { return x.ID == run.ID })
-	if idx < 0 {
-		notFound(w)
-		return
-	}
-	j := judge(digests[idx])
+	var digest store.RunDigest
 	var prev *store.RunDigest
-	if idx > 0 {
-		prev = &digests[idx-1]
+	if idx := slices.IndexFunc(digests, func(x store.RunDigest) bool { return x.ID == run.ID }); idx >= 0 {
+		digest = digests[idx]
+		if idx > 0 {
+			prev = &digests[idx-1]
+		}
+	} else {
+		// An attempt dropped for the next entry of its chain is no row of
+		// the review list, but its review's attempts link to it: it is read
+		// on its own, after the review's runs created before it.
+		var found bool
+		if digest, found, err = d.Store.RunDigest(ctx, run.ID); err != nil {
+			d.failed(w, r, "loading a run", err)
+			return
+		}
+		if !found || digest.Outcome != store.OutcomeFellBack {
+			notFound(w)
+			return
+		}
+		for i := range digests {
+			if digests[i].CreatedAt.Before(digest.CreatedAt) {
+				prev = &digests[i]
+			}
+		}
 	}
+	j := judge(digest)
 	view := RunDetailView{
-		Run: runSummary(digests[idx], prev, j), Instance: run.MR.Instance, Project: run.ProjectPath, Number: run.MR.IID,
+		Run: runSummary(digest, prev, j), Instance: run.MR.Instance, Project: run.ProjectPath, Number: run.MR.IID,
 		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model, Provider: run.Provider, MaxTurns: run.MaxTurns, Quiet: run.Quiet,
 		CIJobs: ciResultViews(run.CIJobs),
 		Files:  FilesView{Reviewed: []string{}, Skipped: []SkippedFile{}, NotReviewed: []NotReviewedFile{}},
@@ -604,6 +655,10 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	if run.JobName != "" && se.Role(run.MR.Instance, run.ProjectPath) >= RoleAdmin {
 		view.Kubernetes = &KubernetesView{Namespace: d.cfg.Jobs.Namespace, Job: run.JobName, Pod: run.PodName,
 			Detail: run.FailureDetail}
+	}
+	if err := d.attemptsOf(ctx, run, &view); err != nil {
+		d.failed(w, r, "loading a review's attempts", err)
+		return
 	}
 	// The change's dismissals are applied to its newest decided review only,
 	// the one a dismissal or restore decides again; an older run shows what
@@ -931,6 +986,12 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if project, ok := strings.CutSuffix(rest, "/chain"); ok {
+		if repo, ok := find(project); ok {
+			d.repositoryChain(w, r, se, repo)
+			return
+		}
+	}
 	if project, ok := strings.CutSuffix(rest, "/ci-job-names"); ok {
 		if repo, ok := find(project); ok {
 			d.ciJobNames(w, r, repo)
@@ -981,9 +1042,12 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
+	model, err := d.chainModelLabel(ctx, repo)
+	if err != nil {
+		return RepositoryDetailView{}, err
+	}
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
-		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly,
-		Model:                      d.effectiveModel(repo.ModelID), ModelChoices: d.modelChoices(role),
+		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model,
 		Quota: d.quotaView(ctx, se, repo), Graph: gv}, nil
 }
 
@@ -1040,7 +1104,6 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"rerunLimitPerRepo":                {repo.RerunLimitPerRepo, ov[settings.KeyRerunLimitPerRepo]},
 		"trustedAuthorsOnly":               {repo.TrustedAuthorsOnly, ov[settings.KeyTrustedAuthorsOnly]},
 		"trustedAuthors":                   {nonNilAuthors(repo.TrustedAuthors), ov[settings.KeyTrustedAuthors]},
-		"model":                            {modelValue(repo), ov[settings.KeyModel]},
 		"monthlyTokenQuota":                {repo.MonthlyTokenQuota, ov[settings.KeyMonthlyTokenQuota]},
 	}
 }

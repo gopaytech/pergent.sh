@@ -252,9 +252,8 @@ func TestResolveGlobalChainAllowsAnyGlobal(t *testing.T) {
 }
 
 // A repository chain is the admin's when no team owns the repository (only an
-// admin can save it then), and the seeded 1-entry chains of the upgrade name
-// entries no team may use: those run. With an owner, its maintainers save the
-// chain, and a global entry no team may use any more is skipped.
+// admin can save it then): any global entry runs. With an owner, a chain its
+// maintainers saved skips a global entry no team may use any more.
 func TestResolveRepoChainTeamsMayUse(t *testing.T) {
 	in := input(store.ScopeRepo, g("a"), g("b"))
 	m := in.Entries[g("a")]
@@ -267,5 +266,52 @@ func TestResolveRepoChainTeamsMayUse(t *testing.T) {
 	in.OwnerTeam = 7
 	if d := Resolve(in); d.Ref != g("b") || d.FirstSkip != ReasonNotAllowed {
 		t.Fatalf("owned: decision = %+v", d)
+	}
+}
+
+// A repository chain an admin saved keeps its global entries usable when a
+// team owns the repository, teams may use or not (owner ruling 2026-11-20);
+// once a team's maintainer saves it, the rule of team chains applies. A team
+// chain an admin saved is still a team chain.
+func TestResolveAdminSavedRepoChain(t *testing.T) {
+	in := input(store.ScopeRepo, g("a"), g("b"))
+	m := in.Entries[g("a")]
+	m.TeamsMayUse = false
+	in.Entries[g("a")] = m
+	in.SavedByAdmin = true
+	if d := Resolve(in); d.Ref != g("a") || d.FirstSkip != "" {
+		t.Fatalf("admin-saved: decision = %+v", d)
+	}
+	in.SavedByAdmin = false
+	if d := Resolve(in); d.Ref != g("b") || d.FirstSkip != ReasonNotAllowed {
+		t.Fatalf("team-saved: decision = %+v", d)
+	}
+	in.Scope, in.SavedByAdmin = store.ScopeTeam, true
+	if d := Resolve(in); d.Ref != g("b") || d.FirstSkip != ReasonNotAllowed {
+		t.Fatalf("team chain an admin saved: decision = %+v", d)
+	}
+	// A team entry of another team is still skipped in an admin's chain.
+	in = input(store.ScopeRepo, tm("x"), g("b"))
+	in.SavedByAdmin, in.OwnerTeam = true, 8
+	if d := Resolve(in); d.Ref != g("b") || d.FirstSkip != ReasonNotOwner {
+		t.Fatalf("admin-saved, foreign team entry: decision = %+v", d)
+	}
+}
+
+// Runs is what the re-run and start requests ask under a used-up instance
+// quota: only a team's entry is left to run.
+func TestDecisionRunsUnderInstanceQuota(t *testing.T) {
+	in := input(store.ScopeTeam, g("a"), tm("b"))
+	in.InstanceQuotaUsedUp = true
+	if d := Resolve(in); !d.Runs() || d.Ref != tm("b") {
+		t.Fatalf("with a team entry: decision = %+v", d)
+	}
+	in = input(store.ScopeTeam, g("a"))
+	in.InstanceQuotaUsedUp = true
+	if d := Resolve(in); d.Runs() || !d.Hold {
+		t.Fatalf("global only: decision = %+v", d)
+	}
+	if d := Resolve(Input{}); d.Runs() {
+		t.Fatalf("empty chain: decision = %+v", d)
 	}
 }

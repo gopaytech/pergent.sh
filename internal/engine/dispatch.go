@@ -301,32 +301,32 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.hold(ctx, plat, store.WaitUntrusted, waitingDescription, true)
 		}
 	}
-	var instanceUsedUp bool
-	if !run.QuotaChecked && run.Trigger != store.TriggerStart {
-		// An automatic run (a push, pergent.sh's own full re-run) on a
-		// used-up monthly token quota waits. A run somebody asked for was
-		// checked when they asked, and goes ahead. A start is always a
-		// person's request, even when the previous release queued it without
-		// the flag: HoldForQuota refuses it too, so checking it would
-		// postpone it and check it again, for ever.
-		// The repository's quota counts every token and holds the run; the
-		// instance's counts global keys only, so it just stops global
-		// entries (the resolver holds when nothing else is left).
-		repoUsedUp, instUsedUp, err := quota.Check(ctx, e.Store, e.now(), run.MR.Instance, run.MR.ProjectID, repo)
-		if err != nil {
-			return d.retry(ctx, fmt.Errorf("read the token quota: %w", err))
-		}
-		if repoUsedUp {
-			return d.holdForQuota(ctx, plat)
-		}
-		instanceUsedUp = instUsedUp
+	// An automatic run (a push, pergent.sh's own full re-run) on a used-up
+	// monthly token quota waits. A run somebody asked for (quota_checked)
+	// was checked when they asked, and goes ahead. A start is always a
+	// person's request, even when the previous release queued it without
+	// the flag: HoldForQuota refuses it too, so holding it would postpone it
+	// and check it again, for ever.
+	// The repository's quota counts every token and holds the run; the
+	// instance's counts global keys only, so it just stops global entries
+	// (the resolver holds when nothing else is left). A run asked for is
+	// held by neither, but still runs on a team's entry when one is left
+	// under a used-up instance quota: that is why it was let start (owner
+	// ruling 2026-11-20).
+	askedFor := run.QuotaChecked || run.Trigger == store.TriggerStart
+	repoUsedUp, instanceUsedUp, err := quota.Check(ctx, e.Store, e.now(), run.MR.Instance, run.MR.ProjectID, repo)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("read the token quota: %w", err))
+	}
+	if repoUsedUp && !askedFor {
+		return d.holdForQuota(ctx, plat)
 	}
 	// The model is picked from the chain in effect, read now, so an edit made
 	// meanwhile is what runs. It falls back only on what the provider said
 	// (quota, billing, auth: a mark, or an earlier attempt of this review),
 	// never because an entry is missing: a 1-entry chain runs on its entry or
 	// fails, never on another model the repository did not ask for.
-	dec, err := d.resolve(ctx, repo, instanceUsedUp)
+	dec, err := d.resolve(ctx, repo, instanceUsedUp, askedFor)
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("read the model chain: %w", err))
 	}

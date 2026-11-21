@@ -751,7 +751,7 @@ func TestOnlyAdminsTouchInstances(t *testing.T) {
 	if !v.CanSetDefault {
 		t.Errorf("an SSO admin may not set the default: %+v", v)
 	}
-	wantCode(t, e.send(boss, "POST", "/api/admin/models", `{"provider":"anthropic","model":"m","apiKey":"`+llmKeyOne+`"}`), "SSO admin POST models", http.StatusCreated)
+	wantCode(t, e.send(boss, "POST", "/api/admin/models", `{"name":"m","provider":"anthropic","model":"m","apiKey":"`+llmKeyOne+`"}`), "SSO admin POST models", http.StatusCreated)
 	wantCode(t, e.send(boss, "DELETE", "/api/admin/instances/lab", ""), "SSO admin DELETE lab", http.StatusAccepted)
 
 	if rec := e.get(nil, "/api/admin/instances"); rec.Code != http.StatusUnauthorized {
@@ -924,11 +924,11 @@ func TestModelsAddAndChange(t *testing.T) {
 	post := func(body map[string]any) *httptest.ResponseRecorder {
 		return e.sendJSON(c, "POST", "/api/admin/models", body)
 	}
-	if rec := post(map[string]any{"provider": "anthropic", "model": "claude-sonnet-4"}); rec.Code != http.StatusBadRequest ||
+	if rec := post(map[string]any{"name": "first", "provider": "anthropic", "model": "claude-sonnet-4"}); rec.Code != http.StatusBadRequest ||
 		!strings.Contains(errorOf(t, rec), "apiKey is required") {
 		t.Errorf("POST without a key = %d %s, want 400", rec.Code, rec.Body)
 	}
-	rec := post(map[string]any{"provider": "anthropic", "model": "claude-sonnet-4", "baseURL": "https://llm.example.com/v1", "apiKey": llmKeyOne})
+	rec := post(map[string]any{"name": "first", "provider": "anthropic", "model": "claude-sonnet-4", "baseURL": "https://llm.example.com/v1", "apiKey": llmKeyOne})
 	first := decode[ModelAdminView](t, rec, "POST /api/admin/models", http.StatusCreated)
 	if first.ID == "" || first.Source != "dashboard" || first.Provider != "anthropic" || first.Model != "claude-sonnet-4" ||
 		first.BaseURL != "https://llm.example.com/v1" || !first.Default || !first.Key.Set || first.Key.UpdatedAt == nil {
@@ -941,7 +941,7 @@ func TestModelsAddAndChange(t *testing.T) {
 
 	// A second one is not the default; a new key and base URL apply to the
 	// entry, and the stored key stays when none is sent.
-	second := decode[ModelAdminView](t, post(map[string]any{"provider": "openai", "model": "gpt-x", "apiKey": llmKeyTwo}), "POST", http.StatusCreated)
+	second := decode[ModelAdminView](t, post(map[string]any{"name": "second", "provider": "openai", "model": "gpt-x", "apiKey": llmKeyTwo}), "POST", http.StatusCreated)
 	if second.Default || second.ID == first.ID {
 		t.Errorf("second entry = %+v, want another entry that is not the default", second)
 	}
@@ -970,7 +970,7 @@ func TestModelsAddAndChange(t *testing.T) {
 		}
 	}
 	slices.Reverse(details)
-	if !slices.Equal(details, []string{"anthropic / claude-sonnet-4 (base_url)", "anthropic / claude-sonnet-4 (api_key)"}) {
+	if !slices.Equal(details, []string{"first (anthropic / claude-sonnet-4) (base_url)", "first (anthropic / claude-sonnet-4) (api_key)"}) {
 		t.Errorf("model_updated details = %q", details)
 	}
 
@@ -979,13 +979,14 @@ func TestModelsAddAndChange(t *testing.T) {
 		body map[string]any
 		want string
 	}{
-		{"no provider", map[string]any{"provider": " ", "model": "m", "apiKey": "k"}, "provider and model"},
-		{"no model", map[string]any{"provider": "p", "apiKey": "k"}, "provider and model"},
-		{"relative base url", map[string]any{"provider": "p", "model": "m", "apiKey": "k", "baseURL": "llm.example.com"}, "baseURL"},
-		{"ftp base url", map[string]any{"provider": "p", "model": "m", "apiKey": "k", "baseURL": "ftp://llm.example.com"}, "baseURL"},
-		{"base url with credentials", map[string]any{"provider": "p", "model": "m", "apiKey": "k", "baseURL": "https://u:p@llm.example.com"}, "baseURL"},
-		{"empty key", map[string]any{"provider": "p", "model": "m", "apiKey": " "}, "apiKey must not be empty"},
-		{"unknown field", map[string]any{"provider": "p", "model": "m", "apiKey": "k", "key": "k"}, "the body must be"},
+		{"no provider", map[string]any{"name": "x", "provider": " ", "model": "m", "apiKey": "k"}, "provider and model"},
+		{"no model", map[string]any{"name": "x", "provider": "p", "apiKey": "k"}, "provider and model"},
+		{"relative base url", map[string]any{"name": "x", "provider": "p", "model": "m", "apiKey": "k", "baseURL": "llm.example.com"}, "baseURL"},
+		{"ftp base url", map[string]any{"name": "x", "provider": "p", "model": "m", "apiKey": "k", "baseURL": "ftp://llm.example.com"}, "baseURL"},
+		{"base url with credentials", map[string]any{"name": "x", "provider": "p", "model": "m", "apiKey": "k", "baseURL": "https://u:p@llm.example.com"}, "baseURL"},
+		{"empty key", map[string]any{"name": "x", "provider": "p", "model": "m", "apiKey": " "}, "apiKey must not be empty"},
+		{"unknown field", map[string]any{"name": "x", "provider": "p", "model": "m", "apiKey": "k", "key": "k"}, "the body must be"},
+		{"no name", map[string]any{"provider": "p", "model": "m", "apiKey": "k"}, "name must be"},
 	} {
 		if rec := post(tc.body); rec.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, rec), tc.want) {
 			t.Errorf("%s: POST = %d %s; want 400 with %q", tc.name, rec.Code, rec.Body, tc.want)
@@ -1019,7 +1020,7 @@ func TestModelsConfigWins(t *testing.T) {
 
 	// An entry can still be added, but the config's stays the default.
 	added := decode[ModelAdminView](t, e.sendJSON(c, "POST", "/api/admin/models",
-		map[string]any{"provider": "openai", "model": "gpt-x", "apiKey": llmKeyTwo}), "POST", http.StatusCreated)
+		map[string]any{"name": "added", "provider": "openai", "model": "gpt-x", "apiKey": llmKeyTwo}), "POST", http.StatusCreated)
 	if added.Default {
 		t.Errorf("an entry added beside the config's is the default: %+v", added)
 	}
@@ -1028,16 +1029,11 @@ func TestModelsConfigWins(t *testing.T) {
 		t.Errorf("default while the config has an llm: block = %d %s, want 409", rec.Code, rec.Body)
 	}
 	// The entry added first is flagged default in the table, but the config's
-	// is the default, so the flag is dormant and the entry can be removed: not
-	// while a repository names it, with the in-use answer first.
+	// is the default, so the flag is dormant and the entry can be removed,
+	// even while a repository names it (its chain skips it as removed).
 	other := decode[ModelAdminView](t, e.sendJSON(c, "POST", "/api/admin/models",
-		map[string]any{"provider": "bedrock", "model": "haiku", "apiKey": llmKeyThree}), "POST second", http.StatusCreated)
+		map[string]any{"name": "other", "provider": "bedrock", "model": "haiku", "apiKey": llmKeyThree}), "POST second", http.StatusCreated)
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.ModelID = &added.ID })
-	inUse := decode[ModelInUseView](t, e.send(c, "DELETE", "/api/admin/models/"+added.ID, ""), "DELETE in use", http.StatusConflict)
-	if inUse.Error != msgModelInUse || !slices.Equal(inUse.Repositories, []RepoRefView{{Instance: "main", Project: "acme/gadgets"}}) {
-		t.Errorf("in-use 409 = %+v", inUse)
-	}
-	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"model":null}`), "move gadgets off", http.StatusOK)
 	wantCode(t, e.send(c, "DELETE", "/api/admin/models/"+added.ID, ""), "DELETE shadowed default", http.StatusNoContent)
 	rows, err := e.st.LLMModels(ctx)
 	if err != nil || len(rows) != 1 || rows[0].ID != other.ID || !rows[0].Default {
@@ -1310,7 +1306,7 @@ func TestOperatorAPINeverReturnsSecrets(t *testing.T) {
 	e.addLab(c)
 	e.sendJSON(c, "POST", "/api/admin/instances", hubBody(nil))
 	e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"secrets": map[string]string{"approve_token": labApproveToken + "-v2"}})
-	m := decode[ModelAdminView](t, e.sendJSON(c, "POST", "/api/admin/models", map[string]any{"provider": "anthropic", "model": "m", "apiKey": llmKeyOne}),
+	m := decode[ModelAdminView](t, e.sendJSON(c, "POST", "/api/admin/models", map[string]any{"name": "m", "provider": "anthropic", "model": "m", "apiKey": llmKeyOne}),
 		"POST /api/admin/models", http.StatusCreated)
 	e.sendJSON(c, "PUT", "/api/admin/models/"+m.ID, map[string]any{"baseURL": "", "apiKey": llmKeyTwo})
 	// Failing writes echo nothing either.
@@ -1392,7 +1388,7 @@ func TestAddModelSavedButNotReloaded(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.d.loadLLM = func(context.Context) error { return errors.New("database went away (" + llmKeyOne + ")") }
-	rec := e.sendJSON(c, "POST", "/api/admin/models", map[string]any{"provider": "anthropic", "model": "claude-sonnet-4", "baseURL": "https://llm.example.com/v1", "apiKey": llmKeyOne})
+	rec := e.sendJSON(c, "POST", "/api/admin/models", map[string]any{"name": "main", "provider": "anthropic", "model": "claude-sonnet-4", "baseURL": "https://llm.example.com/v1", "apiKey": llmKeyOne})
 	v := decode[ModelAdminView](t, rec, "POST /api/admin/models", http.StatusCreated)
 	if v.Provider != "anthropic" || v.Model != "claude-sonnet-4" || v.BaseURL != "https://llm.example.com/v1" || !v.Key.Set || !v.Default {
 		t.Errorf("view = %+v, want what was saved", v)

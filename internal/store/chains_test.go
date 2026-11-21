@@ -304,3 +304,102 @@ func TestSetMark(t *testing.T) {
 		t.Fatalf("Marks = %+v, %v; want one auth mark", marks, err)
 	}
 }
+
+// A chain records whether an admin saved it; each save says so again. The
+// old model setting is an admin's, so the chain it writes is admin-saved.
+func TestSaveChainSavedByAdmin(t *testing.T) {
+	s := newStore(t)
+	g := newModel(t, s, "openai", "gpt-5", "", nil)
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/api"}); err != nil {
+		t.Fatal(err)
+	}
+	save := func(admin bool) {
+		t.Helper()
+		if err := s.SaveChain(ctx, Chain{Scope: ScopeRepo, Instance: "main", Project: "acme/api", SavedByAdmin: admin,
+			Entries: []EntryRef{{SourceGlobal, g.ID}}}, t0); err != nil {
+			t.Fatal(err)
+		}
+		if c, found := mustChain(t, s, ScopeRepo, 0, "main", "acme/api"); !found || c.SavedByAdmin != admin {
+			t.Errorf("after a save by admin=%v: chain = %+v, %v", admin, c, found)
+		}
+	}
+	save(true)
+	save(false)
+	save(true)
+
+	if _, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/web", ModelID: &g.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if c, found := mustChain(t, s, ScopeRepo, 0, "main", "acme/web"); !found || !c.SavedByAdmin {
+		t.Errorf("chain of the model setting = %+v, %v; want admin-saved", c, found)
+	}
+}
+
+// 0046 only adds, and the chains written before it (the upgrade's seeded
+// repository chains and the admin's model setting) read as admin-saved.
+func TestSavedByAdminMigration(t *testing.T) {
+	s := newStoreAt(t, 45)
+	if _, err := s.pool.Exec(ctx, `INSERT INTO model_chains (scope, instance, project, updated_at)
+		VALUES ('repo', 'main', 'acme/api', $1), ('global', '', '', $1)`, t0); err != nil {
+		t.Fatal(err)
+	}
+	before := schemaColumns(t, s)
+	applyUpTo(t, s, 46)
+	after := schemaColumns(t, s)
+	for col, c := range before {
+		if got, ok := after[col]; !ok || got != c {
+			t.Errorf("column %s after 0046 = %+v (present %v); want %+v", col, got, ok, c)
+		}
+	}
+	if c := after["model_chains.saved_by_admin"]; c.Nullable != "NO" {
+		t.Errorf("model_chains.saved_by_admin = %+v; want NOT NULL", c)
+	}
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM model_chains WHERE saved_by_admin`).Scan(&n); err != nil || n != 2 {
+		t.Errorf("admin-saved chains after 0046 = %d, %v; want 2", n, err)
+	}
+}
+
+// Chains reads every chain with its entries, by ID.
+func TestChains(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	g := newModel(t, s, "openai", "gpt-5", "", nil)
+	for _, c := range []Chain{
+		{Scope: ScopeGlobal, Entries: []EntryRef{{SourceGlobal, g.ID}}, SavedByAdmin: true},
+		{Scope: ScopeTeam, TeamID: team, Entries: []EntryRef{{SourceGlobal, g.ID}}},
+	} {
+		if err := s.SaveChain(ctx, c, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chains, err := s.Chains(ctx)
+	if err != nil || len(chains) != 2 || chains[0].Scope != ScopeGlobal || !chains[0].SavedByAdmin ||
+		chains[1].TeamID != team || len(chains[1].Entries) != 1 {
+		t.Errorf("Chains = %+v, %v", chains, err)
+	}
+}
+
+// Removing a repository drops its own chain with its settings and team
+// links, so one added again starts by inheriting, as its settings do.
+func TestRemoveRepoDropsItsChain(t *testing.T) {
+	s := newStore(t)
+	g := newModel(t, s, "openai", "gpt-5", "", nil)
+	for _, p := range []string{"acme/api", "acme/web"} {
+		if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: p}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SaveChain(ctx, Chain{Scope: ScopeRepo, Instance: "main", Project: p, Entries: []EntryRef{{SourceGlobal, g.ID}}}, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if found, err := s.RemoveDashboardRepo(ctx, "main", "ACME/api"); err != nil || !found {
+		t.Fatalf("RemoveDashboardRepo = %v, %v", found, err)
+	}
+	if _, found := mustChain(t, s, ScopeRepo, 0, "main", "acme/api"); found {
+		t.Error("the removed repository's chain is still there")
+	}
+	if _, found := mustChain(t, s, ScopeRepo, 0, "main", "acme/web"); !found {
+		t.Error("another repository's chain went too")
+	}
+}

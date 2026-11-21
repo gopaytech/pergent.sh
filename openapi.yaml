@@ -1738,6 +1738,98 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/chain:
+    get:
+      operationId: getRepositoryChain
+      tags: [Repositories]
+      summary: A repository's model chain
+      description: |
+        Anyone who sees the repository. The chain in effect and where it comes
+        from: the repository's own (`repository`), its owner team's (`team`)
+        or the global one. Read-only unless the session is an admin or a
+        maintainer of the owner team.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The chain.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putRepositoryChain
+      tags: [Repositories]
+      summary: Give a repository its own model chain
+      description: |
+        Admins and maintainers of the repository's owner team; 403 for anyone
+        else who sees it (a viewer, a maintainer of another team; only admins
+        for a repository with no owner team), 404 for anyone who does not. It
+        replaces the owner team's chain for this repository. An admin picks any
+        global entry and the owner team's entries; a maintainer the team's
+        entries and the global entries teams may use. Another team's entry,
+        or an entry that is not one of those, is 400, and so is no entry. The
+        chain records whether an admin saved it: one an admin saved keeps
+        global entries teams may not use. Audited as `chain_changed`.
+      x-pergent-access: session
+      x-pergent-pattern: PUT /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChainRequest'}
+      responses:
+        '200':
+          description: The chain saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/chain/reset:
+    post:
+      operationId: resetRepositoryChain
+      tags: [Repositories]
+      summary: Drop a repository's own model chain
+      description: |
+        Who may save the chain. The repository inherits again: its owner
+        team's chain, else the global one. Audited as `chain_changed`
+        (`repository: inherit`).
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The chain in effect now.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/graph:
     put:
       operationId: putRepositoryGraph
@@ -2461,6 +2553,9 @@ paths:
         named twice has the higher role. A repository is one switched on, or
         `{"instance": X, "project": ""}` for every repository of instance X,
         which also covers repositories switched on later (400 otherwise).
+        `owner` ticks the team as the repository's owner team; another team's
+        tick at the same level is 409. Ticks set and cleared are audited
+        (`owner_set`, `owner_cleared`).
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -2489,7 +2584,9 @@ paths:
       tags: [Organization]
       summary: Remove a team
       description: |
-        Admins only. Removes the team, not its members' accounts.
+        Admins only. Removes the team, not its members' accounts. Its own
+        entries, keys and chain go with it, and its entries leave the
+        repository chains that name them (`team_models_deleted`).
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -2503,6 +2600,216 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/me/teams:
+    get:
+      operationId: listMyTeams
+      tags: [Organization]
+      summary: The session's teams
+      description: |
+        The teams the session is a member of, with its role on each; every
+        team, as `admin`, for an admin.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The teams.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/MyTeamView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/models:
+    get:
+      operationId: listTeamModels
+      tags: [Organization]
+      summary: A team's own entries
+      description: |
+        Members of the team and admins; anyone else gets 404. Never a key; the
+        base URL only for those who may change it.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      responses:
+        '200':
+          description: The entries.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamModelsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createTeamModel
+      tags: [Organization]
+      summary: Add an entry to a team
+      description: |
+        Maintainers of the team and admins. 403 for a viewer of the team or a
+        maintainer of another team, 404 for anyone else. The name is unique in
+        the team (409); the key is sealed and never returned. Audited as
+        `team_model_added`.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateTeamModelRequest'}
+      responses:
+        '201':
+          description: Added.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamModelView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/models/{model}:
+    put:
+      operationId: updateTeamModel
+      tags: [Organization]
+      summary: Change a team entry's name, base URL or key
+      description: |
+        As adding one. A new key clears the entry's auth mark. Audited as
+        `team_model_updated`.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - $ref: '#/components/parameters/TeamModelId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateTeamModelRequest'}
+      responses:
+        '200':
+          description: Changed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamModelView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deleteTeamModel
+      tags: [Organization]
+      summary: Remove a team entry
+      description: |
+        As adding one. The entry leaves every chain that names it in the same
+        step (`usedIn` lists them first), and its mark goes. Audited as
+        `team_model_removed`, with the chains it left.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - $ref: '#/components/parameters/TeamModelId'
+      responses:
+        '204':
+          description: Removed.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/models/{model}/mark:
+    delete:
+      operationId: clearTeamModelMark
+      tags: [Organization]
+      summary: Clear a team entry's mark
+      description: |
+        As adding one. Only the team's own entries: a global entry's mark is
+        the admins' (`DELETE /api/admin/models/{id}/mark`). 204 whether it had
+        a mark or not; a cleared one is audited (`model_mark_cleared`).
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - $ref: '#/components/parameters/TeamModelId'
+      responses:
+        '204':
+          description: No mark now.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/chain:
+    get:
+      operationId: getTeamChain
+      tags: [Organization]
+      summary: A team's chain
+      description: |
+        Members of the team and admins; anyone else gets 404. While the team
+        has no chain its repositories use the global one, which is shown
+        (`source` `global`).
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      responses:
+        '200':
+          description: The chain.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putTeamChain
+      tags: [Organization]
+      summary: Save a team's chain
+      description: |
+        Maintainers of the team and admins (403 for a viewer of the team or a
+        maintainer of another team, 404 for anyone else). The team's own
+        entries and the global entries teams may use, at most 5; another
+        team's entry or a global entry teams may not use is 400. No entries
+        is no chain. Audited as `chain_changed`.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChainRequest'}
+      responses:
+        '200':
+          description: The chain saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/audit:
     get:
@@ -2858,9 +3165,10 @@ paths:
       summary: Add a model to the list
       description: |
         Admins only. The first entry becomes the default. The key is sealed and
-        never returned. The same provider, model and base URL as an entry
-        there is 409. Nothing is checked against the provider: a review that
-        cannot use the model fails and says why.
+        never returned. A name is required; one another global entry has,
+        ignoring case, is 409. The same provider, model and base URL as another
+        entry is allowed (another key). Nothing is checked against the
+        provider: a review that cannot use the model fails and says why.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -2919,11 +3227,11 @@ paths:
       tags: [Instances and settings]
       summary: Remove a model from the list
       description: |
-        Admins only. A model a repository names is 409, with the repositories
-        in the body (`ModelInUseView`); so is the default (unless the config
-        file has an `llm:` block, which is the default then), and the entry the
-        config file supplies. A repository is never moved to another model by
-        a removal.
+        Admins only. The default is 409 (unless the config file has an `llm:`
+        block, which is the default then), and so are the config file's
+        entries. An entry chains name goes all the same: the chains keep it and
+        skip it as removed (`usedIn` lists them first). A repository is never
+        moved to another model by a removal.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -2936,14 +3244,78 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
-        '409':
-          description: The model is in use, or is the default, or is the config file's.
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/models/{id}/mark:
+    delete:
+      operationId: clearModelMark
+      tags: [Instances and settings]
+      summary: Clear a global entry's mark
+      description: |
+        Admins only. Reviews may use the entry again. 204 whether it had a mark
+        or not; a cleared mark is audited (`model_mark_cleared`, with the name).
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ModelId'
+      responses:
+        '204':
+          description: No mark now.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/chain:
+    get:
+      operationId: getGlobalChain
+      tags: [Instances and settings]
+      summary: The global chain
+      description: |
+        Admins only. The config file's entries first (`fixed`), then the stored
+        chain's. With none stored it is the default entry alone. Repositories
+        whose owner team has no chain, and those with no owner team, use it.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The chain.
           content:
             application/json:
-              schema:
-                oneOf:
-                  - $ref: '#/components/schemas/ModelInUseView'
-                  - $ref: '#/components/schemas/ErrorBody'
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putGlobalChain
+      tags: [Instances and settings]
+      summary: Save the global chain
+      description: |
+        Admins only. Global entries only, at most 5 with the config file's,
+        which stay in front: the body may start with them in their order or
+        leave them out. Position 1 becomes the default. 400 for a team entry,
+        an unknown entry, an entry twice or a config entry moved. Audited as
+        `chain_changed` with the names in order.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChainRequest'}
+      responses:
+        '200':
+          description: The chain saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/models/{id}/default:
     post:
@@ -4094,6 +4466,12 @@ components:
         type: integer
         format: int64
         minimum: 1
+    TeamModelId:
+      name: model
+      in: path
+      required: true
+      description: The ID of one of the team's entries.
+      schema: {type: string}
     SkillName:
       name: name
       in: path
@@ -4563,8 +4941,17 @@ components:
                 enum: [viewer, maintainer]
         repos:
           type: array
-          description: An empty `project` covers every repository of the instance, now and later.
-          items: {$ref: '#/components/schemas/TeamRepoView'}
+          description: An empty `project` covers every repository of the instance, now and later. The list replaces the owner ticks too, so send `owner` for each tick to keep.
+          items:
+            type: object
+            required: [instance, project]
+            properties:
+              instance: {type: string}
+              project: {type: string}
+              owner:
+                type: boolean
+                default: false
+                description: The owner tick. A second owner at the same level is 409 (`<project> already has owner <team>`, `<instance> (whole instance)` for an instance entry).
     CreateInstanceRequest:
       type: object
       required: [name, platform]
@@ -4627,9 +5014,19 @@ components:
           format: int64
     CreateModelRequest:
       type: object
-      required: [provider, model, apiKey]
+      required: [name, provider, model, apiKey]
       additionalProperties: false
       properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9 ._:/+-]*$'
+          description: Unique among global entries, ignoring case. It reaches the MR comment after a fallback, so it can hold no markdown.
+        teamsMayUse:
+          type: boolean
+          default: false
+          description: Lets team chains, and repository chains a team maintainer saves, name the entry.
         provider:
           type: string
           maxLength: 256
@@ -4655,7 +5052,16 @@ components:
         apiKey:
           type: [string, 'null']
           format: password
-          description: Replaces the key when sent. At most 16 KiB. Never returned.
+          description: Replaces the key when sent, and clears an auth mark. At most 16 KiB. Never returned.
+        name:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9 ._:/+-]*$'
+          description: Renames the entry when sent; a name another global entry has is 409.
+        teamsMayUse:
+          type: [boolean, 'null']
+          description: Turns teams may use on or off when sent (audited as `teams_may_use_changed`).
     CreateSkillRequest:
       type: object
       required: [name, content]
@@ -4845,14 +5251,6 @@ components:
             The tokens (in plus out) the repository's reviews may use in a UTC
             calendar month. A whole number: a fraction, a string or a number
             above the maximum is 400. Null means no quota of its own.
-        model:
-          type: [string, 'null']
-          description: |
-            The ID of an entry of the list of models (`GET /api/admin/models`)
-            the repository runs on; null follows the default. Admins of the
-            repository only (403 for a maintainer). An ID that is not in the
-            list is 400, and so is `config` while the config file has no `llm:`
-            block.
     StartRequest:
       type: object
       required: [head]
@@ -5500,11 +5898,25 @@ components:
     ModelAdminView:
       description: One entry of the list of models.
       type: object
-      required: [id, provider, model, baseURL, source, default, key, repositories]
+      required: [id, name, provider, model, baseURL, source, default, teamsMayUse, key, repositories, usedIn, mark]
       properties:
         id:
           type: string
-          description: The entry's ID, which stays; `config` for the entry the config file supplies.
+          description: The entry's ID, which stays; `config` for the entry the config file's `llm:` block supplies, `config-1` to `config-4` for `llm.fallbacks`.
+        name:
+          type: string
+          description: Unique among global entries, ignoring case; `provider/model` for the config file's entries.
+        teamsMayUse:
+          type: boolean
+          description: Team chains, and repository chains a team maintainer saved, may name it. Never for the config file's entries.
+        usedIn:
+          type: array
+          items: {type: string}
+          description: Every chain that names the entry, as `global chain`, `team <name>` or `<instance>/<project>`. A removed entry stays in them and is skipped.
+        mark:
+          oneOf:
+            - $ref: '#/components/schemas/MarkView'
+            - type: 'null'
         provider: {type: string}
         model: {type: string}
         baseURL: {type: string}
@@ -5526,27 +5938,137 @@ components:
       properties:
         instance: {type: string}
         project: {type: string}
-    ModelInUseView:
-      description: The 409 of a removal of a model that repositories name.
+    MarkView:
+      description: What the provider said about an entry. A quota or billing mark lasts until `until` (`fallback.quota_cooldown`); an auth mark until its key is edited or the mark is cleared.
       type: object
-      required: [error, repositories]
+      required: [class, until, setAt, live]
       properties:
-        error: {type: string}
-        repositories:
-          type: array
-          items: {$ref: '#/components/schemas/RepoRefView'}
-    ModelChoiceView:
-      description: An entry of the list a repository can be given, never with its base URL or key.
-      type: object
-      required: [id, label, default]
-      properties:
-        id: {type: string}
-        label:
+        class:
           type: string
-          description: '`provider / model`.'
-        default:
+          enum: [quota, billing, auth]
+        until:
+          type: [string, 'null']
+          format: date-time
+          description: Null for an auth mark.
+        setAt: {type: string, format: date-time}
+        live:
           type: boolean
-          description: True for the entry reviews use when a repository names none, which is what choosing the default gives.
+          description: False once `until` has passed; the mark is then ignored.
+    ChainView:
+      description: A chain of entries a review picks its model from, position 1 first. Never a base URL or a key.
+      type: object
+      required: [scope, source, team, readOnly, savedByAdmin, entries, choices]
+      properties:
+        scope:
+          type: string
+          enum: [global, team, repo]
+          description: The chain asked for.
+        source:
+          type: string
+          enum: [repository, team, global]
+          description: Where the entries come from. A repository that inherits shows its owner team's chain, or the global one.
+        team:
+          type: string
+          description: The team of a team chain, or the owner team a repository's entries come from; empty otherwise.
+        readOnly:
+          type: boolean
+          description: The session may not change this chain.
+        savedByAdmin:
+          type: boolean
+          description: An admin saved the chain shown. A repository chain an admin saved may name global entries teams may not use; one a team maintainer saves may not.
+        entries:
+          type: array
+          maxItems: 5
+          items: {$ref: '#/components/schemas/ChainEntryView'}
+        choices:
+          type: array
+          items: {$ref: '#/components/schemas/ChainEntryView'}
+          description: The entries the session may put in the chain (`position` 0); empty when `readOnly`.
+    ChainEntryView:
+      description: An entry of a chain, or one that may be put in it.
+      type: object
+      required: [position, source, id, name, provider, model, team, state, class, until, canClear, fixed]
+      properties:
+        position:
+          type: integer
+          description: From 1; 0 in `choices`.
+        source:
+          type: string
+          enum: [global, team]
+        id: {type: string}
+        name:
+          type: string
+          description: Empty for a removed entry.
+        provider: {type: string}
+        model: {type: string}
+        team:
+          type: string
+          description: The team of a team entry; empty for a global one.
+        state:
+          type: string
+          enum: [ready, exhausted, key_rejected, removed, not_allowed, not_owner, key_unusable]
+          description: What a review does with the entry now. `exhausted` is a quota or billing mark, `key_rejected` an auth mark. A 1-entry chain ignores marks, so its entry reads `ready` with `class` set.
+        class:
+          type: string
+          enum: ['', quota, billing, auth]
+          description: The entry's mark; empty with none.
+        until:
+          type: [string, 'null']
+          format: date-time
+        canClear:
+          type: boolean
+          description: The session may clear the mark.
+        fixed:
+          type: boolean
+          description: One of the config file's entries, which stay at the front of the global chain.
+    ChainRequest:
+      type: object
+      required: [entries]
+      additionalProperties: false
+      properties:
+        entries:
+          type: array
+          maxItems: 5
+          items:
+            type: object
+            required: [source, id]
+            additionalProperties: false
+            properties:
+              source:
+                type: string
+                enum: [global, team]
+              id: {type: string}
+    RunEntryView:
+      description: The chain entry a run ran on, by the name it had then.
+      type: object
+      required: [name, position, length, source, team]
+      properties:
+        name: {type: string}
+        position:
+          type: integer
+          description: Its place in the chain in effect, from 1. Above 1 the run is a backup.
+        length: {type: integer}
+        source:
+          type: string
+          enum: [global, team]
+        team:
+          type: string
+          description: The team of a team entry; empty for a global one, or a team since removed.
+    AttemptView:
+      description: One attempt of a review. An attempt the provider refused (quota, billing, auth) is dropped for the next entry.
+      type: object
+      required: [runId, name, position, outcome, reason]
+      properties:
+        runId: {type: string, format: uuid}
+        name: {type: string}
+        position: {type: integer}
+        outcome:
+          type: string
+          description: The run's outcome; `fell_back` for a dropped attempt, empty while it runs.
+        reason:
+          type: string
+          enum: ['', quota, billing, auth]
+          description: Why a dropped attempt fell back; empty otherwise.
     APILimitsView:
       description: The caps on a client's requests.
       type: object
@@ -5984,7 +6506,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, modelChoices, quota, graph]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, quota, graph]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -5994,9 +6516,9 @@ components:
             learnFromDismissals, quietReviews, checkDeleted, ciJobs (a CIJobsView), commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly (the mode in
             effect, follow_visibility, on or off), trustedAuthors (a list of TrustedAuthor)
-            model (the ID of the entry of the list of models the repository names, null
-            while it follows the default) and monthlyTokenQuota (the repository's token quota
-            per UTC month, null for none; left out for anyone but an admin).
+            and monthlyTokenQuota (the repository's token quota per UTC month, null for
+            none; left out for anyone but an admin). The model is the model chain's
+            (`GET .../chain`).
         attention:
           type: array
           items: {$ref: '#/components/schemas/AttentionView'}
@@ -6015,12 +6537,8 @@ components:
         model:
           type: string
           description: |
-            `provider / model` the repository's reviews run on: the entry it names, else the default.
-            Empty when there is none. Never the base URL or the key.
-        modelChoices:
-          type: array
-          items: {$ref: '#/components/schemas/ModelChoiceView'}
-          description: The entries of the list the repository can be given; empty unless the session is an admin of the repository.
+            `provider / model` of position 1 of the model chain in effect (`GET .../chain`).
+            Empty when the chain is empty or that entry was removed. Never the base URL or the key.
         quota:
           description: This month's tokens against the repository's and its instance's quotas. Null for anyone but an admin, and when the usage could not be read.
           oneOf:
@@ -6252,8 +6770,17 @@ components:
     RunDetailView:
       description: One run. A run without a usable result has no skills or files.
       type: object
-      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, provider, maxTurns, quiet, incrementalNote, ciJobs, ciDeadline, tokens, files, skills, latestDecided]
+      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, provider, maxTurns, quiet, incrementalNote, ciJobs, ciDeadline, tokens, files, skills, latestDecided, entry, attempts]
       properties:
+        entry:
+          description: The chain entry the run ran on; null for a run that recorded none.
+          oneOf:
+            - $ref: '#/components/schemas/RunEntryView'
+            - type: 'null'
+        attempts:
+          type: array
+          items: {$ref: '#/components/schemas/AttemptView'}
+          description: Every attempt of the review, oldest first, this run included; empty for a review of one attempt.
         run: {$ref: '#/components/schemas/RunSummary'}
         instance: {type: string}
         project: {type: string}
@@ -6628,10 +7155,99 @@ components:
     TeamRepoView:
       description: A repository a team covers.
       type: object
-      required: [instance, project]
+      required: [instance, project, owner]
       properties:
         instance: {type: string}
         project: {type: string}
+        owner:
+          type: boolean
+          description: The owner tick. The team's chain is the one the repository uses (for an instance entry, each repository of the instance with no owner of its own). At most one team owns each repository or instance entry.
+    MyTeamView:
+      description: A team of the session's, with its role there.
+      type: object
+      required: [id, name, role, repos]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        role:
+          type: string
+          enum: [admin, maintainer, viewer]
+          description: '`admin` for an admin, who sees every team.'
+        repos:
+          type: array
+          items: {$ref: '#/components/schemas/TeamRepoView'}
+    TeamModelsView:
+      description: A team's own entries.
+      type: object
+      required: [team, role, canEdit, models]
+      properties:
+        team: {$ref: '#/components/schemas/TeamRef'}
+        role:
+          type: string
+          enum: [admin, maintainer, viewer]
+        canEdit:
+          type: boolean
+          description: The session may add, change and remove the entries (a maintainer of the team, or an admin).
+        models:
+          type: array
+          items: {$ref: '#/components/schemas/TeamModelView'}
+    TeamModelView:
+      description: One of a team's entries. It runs only for repositories its team owns.
+      type: object
+      required: [id, name, provider, model, baseURL, key, usedIn, mark]
+      properties:
+        id: {type: string}
+        name:
+          type: string
+          description: Unique in the team, ignoring case; it can hold no markdown.
+        provider: {type: string}
+        model: {type: string}
+        baseURL:
+          type: string
+          description: Empty for a viewer.
+        key: {$ref: '#/components/schemas/SecretView'}
+        usedIn:
+          type: array
+          items: {type: string}
+          description: The chains that name it.
+        mark:
+          oneOf:
+            - $ref: '#/components/schemas/MarkView'
+            - type: 'null'
+    CreateTeamModelRequest:
+      type: object
+      required: [name, provider, model, apiKey]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9 ._:/+-]*$'
+        provider: {type: string, maxLength: 256}
+        model: {type: string, maxLength: 256}
+        baseURL:
+          type: string
+          description: Empty, or an absolute http or https URL without credentials (at most 2048 characters).
+        apiKey:
+          type: string
+          format: password
+          description: At most 16 KiB. Sealed, and never returned.
+    UpdateTeamModelRequest:
+      type: object
+      additionalProperties: false
+      description: Each field is optional; a `provider` or `model` is 400, as they never change.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9 ._:/+-]*$'
+        baseURL: {type: string}
+        apiKey:
+          type: string
+          format: password
+          description: Replaces the key, and clears an auth mark. Never returned.
     TeamView:
       description: One team.
       type: object
@@ -6691,8 +7307,16 @@ components:
     UsageRepositoryRowView:
       description: One repository in `GET /api/admin/usage`.
       type: object
-      required: [instance, project, switchedOn, paused, tokens, reviews]
+      required: [instance, project, switchedOn, paused, tokens, reviews, globalTokens, teamTokens]
       properties:
+        globalTokens:
+          type: integer
+          format: int64
+          description: Tokens (in plus out) on global keys. The instance quota counts these only.
+        teamTokens:
+          type: integer
+          format: int64
+          description: Tokens (in plus out) on teams' own keys.
         instance: {type: string}
         project:
           type: string

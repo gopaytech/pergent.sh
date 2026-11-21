@@ -9,27 +9,24 @@ import (
 	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/instances"
-	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 const (
 	maxLLMField = 256
 
-	msgBadModelBody   = `the body must be {"provider": ..., "model": ..., "baseURL": ..., "apiKey": ...}`
-	msgBadModelEdit   = `the body must be {"baseURL": ..., "apiKey": ...}: an entry's provider and model never change, add another entry instead`
+	msgBadModelBody   = `the body must be {"name": ..., "provider": ..., "model": ..., "baseURL": ..., "apiKey": ..., "teamsMayUse": ...}`
+	msgBadModelEdit   = `the body must be {"baseURL": ..., "apiKey": ..., "name": ..., "teamsMayUse": ...}: an entry's provider and model never change, add another entry instead`
 	msgLLMRequired    = "provider and model are required, each at most 256 characters"
 	msgBadBaseURL     = "baseURL must be empty or an absolute http or https URL"
 	msgKeyRequired    = "apiKey is required"
 	msgBadKey         = "apiKey must not be empty, and at most 16 KiB"
-	msgModelExists    = "a model with this provider, model and base URL is in the list already"
 	msgConfigLLM      = "the config file has an llm: block, which is the default; change it there"
 	msgConfigModel    = "this model is set in the config file; change it there"
 	msgModelIsDefault = "this is the default model: make another one the default first"
-	msgModelInUse     = "the model is in use: change the model of the repositories that name it first"
 
-	msgNeedsAdminModel = "only admins of this repository change its model"
-	msgUnknownModel    = "model must be the ID of a model in the list, or null to follow the default"
+	msgModelInChain = "a repository's model is its model chain now: PUT .../chain, or POST .../chain/reset to inherit"
+	msgUnknownModel = "a model the repository names is not in the list"
 )
 
 // modelLabel is how a provider and model are shown and audited. It holds
@@ -75,23 +72,57 @@ func sortRepoRefs(list []RepoRefView) {
 	})
 }
 
+// modelLists is what every model view reads besides the entry: the
+// repositories whose model setting names each entry, the chains that name
+// it, and the marks.
+type modelLists struct {
+	users  map[string][]RepoRefView
+	usedIn map[store.EntryRef][]string
+	marks  map[store.EntryRef]store.Mark
+}
+
+func (d *Dashboard) modelLists(ctx context.Context) (l modelLists, following int, err error) {
+	if l.users, following, err = d.modelUsers(ctx); err != nil {
+		return modelLists{}, 0, err
+	}
+	teams, err := d.teamNames(ctx)
+	if err != nil {
+		return modelLists{}, 0, err
+	}
+	if l.usedIn, err = d.usedIn(ctx, teams); err != nil {
+		return modelLists{}, 0, err
+	}
+	if l.marks, err = d.marksByRef(ctx); err != nil {
+		return modelLists{}, 0, err
+	}
+	return l, following, nil
+}
+
+// globalView adds what l says of the global entry v.ID to v.
+func (d *Dashboard) globalView(v ModelAdminView, l modelLists) ModelAdminView {
+	ref := store.EntryRef{Source: store.SourceGlobal, ID: v.ID}
+	v.Repositories, v.UsedIn = nonNilRefs(l.users[v.ID]), nonNilStrings(l.usedIn[ref])
+	mk, ok := l.marks[ref]
+	v.Mark = d.markView(mk, ok)
+	return v
+}
+
 // modelView is the view of an entry the dashboard keeps. Its key counts as
 // set when one is stored and opens with PERGENT_SH_SECRET_KEY, as the
 // registry counts it.
-func (d *Dashboard) modelView(m store.LLMModel, repos []RepoRefView) ModelAdminView {
-	v := ModelAdminView{ID: m.ID, Provider: m.Provider, Model: m.Model, BaseURL: m.BaseURL,
+func (d *Dashboard) modelView(m store.LLMModel, l modelLists) ModelAdminView {
+	v := ModelAdminView{ID: m.ID, Name: m.Name, Provider: m.Provider, Model: m.Model, BaseURL: m.BaseURL,
 		Source: string(instances.SourceDashboard),
 		// While the config has an llm: block its entry is the default,
 		// whatever the row says.
-		Default:      m.Default && !d.cfg.HasLLM(),
-		Repositories: nonNilRefs(repos)}
+		Default: m.Default && !d.cfg.HasLLM(), TeamsMayUse: m.TeamsMayUse}
 	if len(m.APIKeySealed) > 0 {
 		if _, err := d.Auth.box.Open(m.APIKeySealed); err == nil {
 			at := m.UpdatedAt
 			v.Key = SecretView{Set: true, UpdatedAt: &at}
 		}
 	}
-	return v
+	return d.globalView(v, l)
 }
 
 func nonNilRefs(list []RepoRefView) []RepoRefView {
@@ -101,29 +132,42 @@ func nonNilRefs(list []RepoRefView) []RepoRefView {
 	return list
 }
 
-// modelsView is the whole list: the config's entry first, when there is one,
-// then the dashboard's.
+func nonNilStrings(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
+}
+
+// modelsView is the whole list: the config's entries first (its llm: block,
+// then llm.fallbacks), when there are any, then the dashboard's.
 func (d *Dashboard) modelsView(ctx context.Context) (ModelsAdminView, error) {
 	rows, err := d.Store.LLMModels(ctx)
 	if err != nil {
 		return ModelsAdminView{}, err
 	}
-	users, following, err := d.modelUsers(ctx)
+	l, following, err := d.modelLists(ctx)
 	if err != nil {
 		return ModelsAdminView{}, err
 	}
 	v := ModelsAdminView{CanSetDefault: !d.cfg.HasLLM(), FollowingDefault: following, Models: []ModelAdminView{}}
-	for _, m := range d.registry.Models() {
-		if m.ID == store.ConfigModelID {
-			v.Models = append(v.Models, ModelAdminView{ID: m.ID, Provider: m.LLM.Provider, Model: m.LLM.Model, BaseURL: m.LLM.BaseURL,
-				Source: string(instances.SourceConfig), Default: true, Key: SecretView{Set: m.Key != ""},
-				Repositories: nonNilRefs(users[m.ID])})
+	for _, m := range d.registry.GlobalModels() {
+		if m.Source == instances.SourceConfig {
+			v.Models = append(v.Models, d.globalView(ModelAdminView{ID: m.ID, Name: m.Name, Provider: m.LLM.Provider, Model: m.LLM.Model,
+				BaseURL: m.LLM.BaseURL, Source: string(instances.SourceConfig), Default: m.ID == store.ConfigModelID,
+				Key: SecretView{Set: m.Key != ""}}, l))
 		}
 	}
 	for _, row := range rows {
-		v.Models = append(v.Models, d.modelView(row, users[row.ID]))
+		v.Models = append(v.Models, d.modelView(row, l))
 	}
 	return v, nil
+}
+
+// modelDetail is how an entry is audited: its name, provider and model,
+// never a base URL or a key.
+func modelDetail(name, provider, model string) string {
+	return name + " (" + modelLabel(provider, model) + ")"
 }
 
 // storedModel finds the entry id among the dashboard's.
@@ -177,13 +221,24 @@ func (d *Dashboard) getModels(w http.ResponseWriter, r *http.Request) {
 func (d *Dashboard) createModel(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	var in struct {
-		Provider string  `json:"provider"`
-		Model    string  `json:"model"`
-		BaseURL  string  `json:"baseURL"`
-		APIKey   *string `json:"apiKey"`
+		Name        *string `json:"name"`
+		Provider    string  `json:"provider"`
+		Model       string  `json:"model"`
+		BaseURL     string  `json:"baseURL"`
+		APIKey      *string `json:"apiKey"`
+		TeamsMayUse bool    `json:"teamsMayUse"`
 	}
 	if err := decodeStrict(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, msgBadModelBody)
+		return
+	}
+	if in.Name == nil {
+		writeError(w, http.StatusBadRequest, msgBadModelName)
+		return
+	}
+	name, ok := entryName(*in.Name)
+	if !ok {
+		writeError(w, http.StatusBadRequest, msgBadModelName)
 		return
 	}
 	in.Provider, in.Model, in.BaseURL = strings.TrimSpace(in.Provider), strings.TrimSpace(in.Model), strings.TrimSpace(in.BaseURL)
@@ -203,10 +258,10 @@ func (d *Dashboard) createModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msgBadKey)
 		return
 	}
-	m, err := d.Store.CreateLLMModel(ctx, store.LLMModel{Provider: in.Provider, Model: in.Model, BaseURL: in.BaseURL,
-		APIKeySealed: d.Auth.box.Seal([]byte(*in.APIKey))}, d.now())
-	if errors.Is(err, store.ErrExists) {
-		writeError(w, http.StatusConflict, msgModelExists)
+	m, err := d.Store.CreateLLMModel(ctx, store.LLMModel{Name: name, Provider: in.Provider, Model: in.Model, BaseURL: in.BaseURL,
+		TeamsMayUse: in.TeamsMayUse, APIKeySealed: d.Auth.box.Seal([]byte(*in.APIKey))}, d.now())
+	if errors.Is(err, store.ErrNameTaken) {
+		writeError(w, http.StatusConflict, msgNameTaken)
 		return
 	}
 	if err != nil {
@@ -215,25 +270,30 @@ func (d *Dashboard) createModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.reloadModels(ctx, *in.APIKey)
-	label := modelLabel(m.Provider, m.Model)
-	d.Log.Info("dashboard: model added", "model_id", m.ID, "model", label, "by", se.Username)
-	d.audit(ctx, se, "model_added", "", "", label)
-	writeJSON(w, http.StatusCreated, d.modelView(m, nil))
+	detail := modelDetail(m.Name, m.Provider, m.Model)
+	d.Log.Info("dashboard: model added", "model_id", m.ID, "model", detail, "by", se.Username)
+	d.audit(ctx, se, "model_added", "", "", detail)
+	writeJSON(w, http.StatusCreated, d.modelView(m, modelLists{}))
 }
 
 // --- PUT /api/admin/models/{id} ---
 
+// updateModel changes an entry's base URL (required, as before names) and,
+// when given, its key, name and teams may use switch. The name is checked
+// and stored first, so a name taken changes nothing.
 func (d *Dashboard) updateModel(w http.ResponseWriter, r *http.Request) {
 	ctx, se, id := r.Context(), session(r), r.PathValue("id")
-	if id == store.ConfigModelID {
+	if id == store.ConfigModelID || strings.HasPrefix(id, store.ConfigModelID+"-") {
 		writeError(w, http.StatusConflict, msgConfigModel)
 		return
 	}
 	// A provider or model in the body is an unknown field: refused, since
-	// they would move the repositories that name the entry to another model.
+	// they would move the chains that name the entry to another model.
 	var in struct {
-		BaseURL *string `json:"baseURL"`
-		APIKey  *string `json:"apiKey"`
+		BaseURL     *string `json:"baseURL"`
+		APIKey      *string `json:"apiKey"`
+		Name        *string `json:"name"`
+		TeamsMayUse *bool   `json:"teamsMayUse"`
 	}
 	if err := decodeStrict(r, &in); err != nil || in.BaseURL == nil {
 		writeError(w, http.StatusBadRequest, msgBadModelEdit)
@@ -243,6 +303,15 @@ func (d *Dashboard) updateModel(w http.ResponseWriter, r *http.Request) {
 	if !checkBaseURL(baseURL) {
 		writeError(w, http.StatusBadRequest, msgBadBaseURL)
 		return
+	}
+	var name *string
+	if in.Name != nil {
+		n, ok := entryName(*in.Name)
+		if !ok {
+			writeError(w, http.StatusBadRequest, msgBadModelName)
+			return
+		}
+		name = &n
 	}
 	// hidden is the new key, to keep out of anything logged.
 	var sealed []byte
@@ -263,10 +332,23 @@ func (d *Dashboard) updateModel(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	found, err = d.Store.UpdateLLMModel(ctx, id, baseURL, sealed, d.now())
-	if errors.Is(err, store.ErrExists) {
-		writeError(w, http.StatusConflict, msgModelExists)
-		return
+	if name != nil && *name == before.Name {
+		name = nil
+	}
+	if in.TeamsMayUse != nil && *in.TeamsMayUse == before.TeamsMayUse {
+		in.TeamsMayUse = nil
+	}
+	if name != nil || in.TeamsMayUse != nil {
+		found, err = d.Store.SetLLMModelMeta(ctx, id, name, in.TeamsMayUse, d.now())
+		if errors.Is(err, store.ErrNameTaken) {
+			writeError(w, http.StatusConflict, msgNameTaken)
+			return
+		}
+		if err == nil && found {
+			found, err = d.Store.UpdateLLMModel(ctx, id, baseURL, sealed, d.now())
+		}
+	} else {
+		found, err = d.Store.UpdateLLMModel(ctx, id, baseURL, sealed, d.now())
 	}
 	if err != nil {
 		d.Log.Error("dashboard: changing a model failed", "model_id", id, "error", d.registry.Redact(redactKey(err.Error(), hidden)))
@@ -279,32 +361,46 @@ func (d *Dashboard) updateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	d.reloadModels(ctx, hidden)
 
+	after := before
+	after.BaseURL, after.UpdatedAt = baseURL, d.now()
+	if sealed != nil {
+		after.APIKeySealed = sealed
+	}
+	if name != nil {
+		after.Name = *name
+	}
+	if in.TeamsMayUse != nil {
+		after.TeamsMayUse = *in.TeamsMayUse
+	}
 	var changed []string
+	if name != nil {
+		changed = append(changed, "name")
+	}
 	if before.BaseURL != baseURL {
 		changed = append(changed, "base_url")
 	}
 	if in.APIKey != nil {
 		changed = append(changed, "api_key")
 	}
-	label := modelLabel(before.Provider, before.Model)
-	detail := label
+	detail := modelDetail(after.Name, before.Provider, before.Model)
 	if len(changed) > 0 {
-		detail += " (" + strings.Join(changed, ", ") + ")"
+		d.Log.Info("dashboard: model updated", "model_id", id, "model", detail, "fields", changed, "by", se.Username)
+		d.audit(ctx, se, "model_updated", "", "", detail+" ("+strings.Join(changed, ", ")+")")
 	}
-	d.Log.Info("dashboard: model updated", "model_id", id, "model", label, "fields", changed, "by", se.Username)
-	d.audit(ctx, se, "model_updated", "", "", detail)
-
-	after := before
-	after.BaseURL, after.UpdatedAt = baseURL, d.now()
-	if sealed != nil {
-		after.APIKeySealed = sealed
+	if in.TeamsMayUse != nil {
+		state := "off"
+		if *in.TeamsMayUse {
+			state = "on"
+		}
+		d.Log.Info("dashboard: teams may use changed", "model_id", id, "teams_may_use", state, "by", se.Username)
+		d.audit(ctx, se, "teams_may_use_changed", "", "", after.Name+": "+state)
 	}
-	users, _, err := d.modelUsers(ctx)
+	l, _, err := d.modelLists(ctx)
 	if err != nil {
 		d.failed(w, r, "reading the models", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, d.modelView(after, users[id]))
+	writeJSON(w, http.StatusOK, d.modelView(after, l))
 }
 
 // --- POST /api/admin/models/{id}/default ---
@@ -363,7 +459,7 @@ func (d *Dashboard) setDefaultModel(w http.ResponseWriter, r *http.Request) {
 
 func (d *Dashboard) deleteModel(w http.ResponseWriter, r *http.Request) {
 	ctx, se, id := r.Context(), session(r), r.PathValue("id")
-	if id == store.ConfigModelID {
+	if id == store.ConfigModelID || strings.HasPrefix(id, store.ConfigModelID+"-") {
 		writeError(w, http.StatusConflict, msgConfigModel)
 		return
 	}
@@ -379,12 +475,10 @@ func (d *Dashboard) deleteModel(w http.ResponseWriter, r *http.Request) {
 	// While the config has an llm: block it is the default, and the flag on
 	// a dashboard entry is dormant: the entry may go, and the store passes
 	// the flag on.
+	// Chains that name it keep it and skip it as removed: the views list
+	// where it was used (usedIn) and show it as removed there.
 	err = d.Store.DeleteLLMModel(ctx, id, d.cfg.HasLLM())
-	var inUse *store.ModelInUseError
 	switch {
-	case errors.As(err, &inUse):
-		writeJSON(w, http.StatusConflict, modelInUseView(inUse))
-		return
 	case errors.Is(err, store.ErrModelIsDefault):
 		writeError(w, http.StatusConflict, msgModelIsDefault)
 		return
@@ -397,48 +491,10 @@ func (d *Dashboard) deleteModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.reloadModels(ctx, "")
-	label := modelLabel(before.Provider, before.Model)
-	d.Log.Info("dashboard: model removed", "model_id", id, "model", label, "by", se.Username)
-	d.audit(ctx, se, "model_removed", "", "", label)
+	detail := modelDetail(before.Name, before.Provider, before.Model)
+	d.Log.Info("dashboard: model removed", "model_id", id, "model", detail, "by", se.Username)
+	d.audit(ctx, se, "model_removed", "", "", detail)
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// modelInUseView is the 409's body: every repository that names the model.
-func modelInUseView(e *store.ModelInUseError) ModelInUseView {
-	v := ModelInUseView{Error: msgModelInUse, Repositories: []RepoRefView{}}
-	for _, repo := range e.Repos {
-		v.Repositories = append(v.Repositories, RepoRefView{Instance: repo.Instance, Project: repo.Project})
-	}
-	sortRepoRefs(v.Repositories)
-	return v
-}
-
-// --- a repository's model ---
-
-// effectiveModel is "provider / model" for the entry a repository runs on:
-// the one it names, else the default; "" when there is none (the entry was
-// removed from the config file, or nothing is set up).
-func (d *Dashboard) effectiveModel(modelID string) string {
-	for _, m := range d.registry.Models() {
-		if (modelID == "" && m.Default) || (modelID != "" && m.ID == modelID) {
-			return modelLabel(m.LLM.Provider, m.LLM.Model)
-		}
-	}
-	return ""
-}
-
-// modelChoices are the entries a repository can be given, for an admin of
-// the repository: an ID and a name each, never a base URL or a key. Anyone
-// else gets an empty list.
-func (d *Dashboard) modelChoices(role Role) []ModelChoiceView {
-	out := []ModelChoiceView{}
-	if role < RoleAdmin {
-		return out
-	}
-	for _, m := range d.registry.Models() {
-		out = append(out, ModelChoiceView{ID: m.ID, Label: modelLabel(m.LLM.Provider, m.LLM.Model), Default: m.Default})
-	}
-	return out
 }
 
 // hasConfigModel reports whether the config file's llm: block supplies the
@@ -447,32 +503,13 @@ func (d *Dashboard) hasConfigModel() bool {
 	return slices.ContainsFunc(d.registry.Models(), func(m instances.Model) bool { return m.ID == store.ConfigModelID })
 }
 
-// modelValue is a repository's model setting as the API shows it: the entry's
-// ID, or null for the default.
-func modelValue(repo settings.Effective) any {
-	if repo.ModelID == "" {
-		return nil
+// defaultModelLabel is "provider / model" of the default entry; "" when there
+// is none.
+func (d *Dashboard) defaultModelLabel() string {
+	for _, m := range d.registry.Models() {
+		if m.Default {
+			return modelLabel(m.LLM.Provider, m.LLM.Model)
+		}
 	}
-	return repo.ModelID
-}
-
-// isModelKey reports whether key is the model setting, which only an admin
-// of the repository changes: it decides what the reviews cost.
-func isModelKey(key string) bool { return key == "model" }
-
-// effectiveModelOrID is effectiveModel, or the ID when the entry is gone.
-func (d *Dashboard) effectiveModelOrID(id string) string {
-	if label := d.effectiveModel(id); label != "" {
-		return label
-	}
-	return id
-}
-
-// modelSettingDetail is the audit detail of a change to the model setting,
-// naming the provider and model it was given, or "default".
-func (d *Dashboard) modelSettingDetail(id *string) string {
-	if id == nil {
-		return "model (default)"
-	}
-	return "model (" + d.effectiveModelOrID(*id) + ")"
+	return ""
 }

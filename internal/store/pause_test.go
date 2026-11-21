@@ -178,8 +178,8 @@ func TestUnscannedProjectsSkipsPaused(t *testing.T) {
 	}
 }
 
-// A paused repository still counts as using its skills and its model, so a
-// resume never meets a missing one.
+// A paused repository still counts as using its skills, so a resume never
+// meets a missing one.
 func TestDeleteInUseByPausedRepo(t *testing.T) {
 	s := newStore(t)
 	newSkill(t, s, "a", "x")
@@ -196,9 +196,9 @@ func TestDeleteInUseByPausedRepo(t *testing.T) {
 		!slices.Equal(skillInUse.Repos, []RepoRef{{Instance: "lab", Project: "acme/web"}}) {
 		t.Errorf("delete of a skill a paused repository names = %#v; want in use by it", err)
 	}
-	var modelInUse *ModelInUseError
-	if err := s.DeleteLLMModel(ctx, m.ID, false); !errors.As(err, &modelInUse) ||
-		!slices.Equal(modelInUse.Repos, []RepoRef{{Instance: "lab", Project: "acme/web"}}) {
-		t.Errorf("delete of a model a paused repository names = %#v; want in use by it", err)
+	// A model goes even when a repository names it (its chain skips it as
+	// removed), paused or not.
+	if err := s.DeleteLLMModel(ctx, m.ID, false); err != nil {
+		t.Errorf("delete of a model a paused repository names = %v; want it removed", err)
 	}
 }
