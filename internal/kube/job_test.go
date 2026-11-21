@@ -2,7 +2,9 @@ package kube
 
 import (
 	"encoding/json"
+	"flag"
 	"maps"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -876,5 +878,63 @@ func TestJobLabelsWithoutTracingAreToday(t *testing.T) {
 	}
 	if job.Annotations != nil || job.Spec.Template.Annotations != nil {
 		t.Errorf("annotations = %v, %v; want none", job.Annotations, job.Spec.Template.Annotations)
+	}
+}
+
+var updateReviewJob = flag.Bool("update", false, "rewrite testdata/review-job.golden.json (only when a review Job changes on purpose)")
+
+// goldenParams sets every optional input of a review Job, so the golden holds
+// each part a later change could move.
+func goldenParams() JobParams {
+	p := tracedParams()
+	p.LLM.BaseURL = "https://llm.example.com/v1"
+	p.WorkSize = resource.MustParse("20Gi")
+	p.Inputs.Carried = []byte(`{"security":["a.go"]}`)
+	p.Inputs.Dismissals = []byte(`{"security":[]}`)
+	p.Inputs.Description = []byte("Title\n\nBody\n")
+	p.Inputs.Linked = []byte(`[{"name":"acme/api","path":"/work/linked-1","watched":[],"can_block":false,"error":""}]`)
+	p.Inputs.CIResults = []byte("lint: passed\n")
+	p.LinkedClones = []LinkedClone{{Dir: "linked-1", CloneURL: "https://github.com/acme/api.git"}}
+	p.CheckDeleted = true
+	p.GraphURL = "http://pergent-sh:8080/runs/" + p.RunID + "/graph"
+	p.GraphImage = "ghcr.io/gopaytech/pergent.sh:v0.4.0"
+	return p
+}
+
+var goldenSecrets = Secrets{GitToken: "git-token-value", LLMKey: "llm-key-value", ResultToken: "result-token-value"}
+
+// reviewGolden is a review Job, its ConfigMap and its Secret as JSON.
+func reviewGolden(t *testing.T, p JobParams, s Secrets) string {
+	t.Helper()
+	job := BuildJob(p)
+	owner := job.DeepCopy()
+	owner.UID = "uid-1"
+	b, err := json.MarshalIndent(map[string]any{
+		"job":       job,
+		"configMap": BuildConfigMap(p, owner),
+		"secret":    BuildSecret(p, owner, s),
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b) + "\n"
+}
+
+// A review Job, its ConfigMap and its Secret are byte for byte the ones
+// pinned before review panels existed.
+func TestBuildJobUnchanged(t *testing.T) {
+	got := reviewGolden(t, goldenParams(), goldenSecrets)
+	const path = "testdata/review-job.golden.json"
+	if *updateReviewJob {
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != string(want) {
+		t.Errorf("a review Job changed:\n got:\n%s\nwant:\n%s", got, want)
 	}
 }
