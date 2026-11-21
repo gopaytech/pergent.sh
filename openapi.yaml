@@ -128,6 +128,8 @@ tags:
     description: The repositories of an instance, their settings and readiness.
   - name: Skills
     description: The skill library, and installing skills from git.
+  - name: Rules
+    description: The rule library (path rules) and pergent's built-in rules.
   - name: Organization
     description: Users, teams and the audit log.
   - name: Usage
@@ -2089,6 +2091,157 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/rule-sets:
+    get:
+      operationId: listRuleSets
+      tags: [Rules]
+      summary: List the rule library
+      description: Without the sets' text, by name. The config file's sets are listed with `source` `config`.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The rule sets.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/RuleSetView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/rule-sets/{name}:
+    get:
+      operationId: getRuleSet
+      tags: [Rules]
+      summary: One rule set with its text and notes
+      description: The text is to be shown as plain text only.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RuleSetName'
+      responses:
+        '200':
+          description: The rule set.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RuleSetDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/built-in-rules:
+    get:
+      operationId: listBuiltInRules
+      tags: [Rules]
+      summary: The built-in path rules of the pergent pergent.sh is built with
+      description: Read-only, in match order. Empty until the built-in texts ship.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The built-in rules.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/BuiltInRuleView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/admin/rule-sets:
+    post:
+      operationId: createRuleSet
+      tags: [Rules]
+      summary: Add a rule set to the library
+      description: |
+        Admins only. The text is checked with pergent's rule loader (400 names
+        the entry) and against the secrets pergent.sh holds (400, the answer
+        names no secret). A taken name is 409, a name of the config file's
+        sets is 409, and a full library (200 sets) is 400.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        description: At most 1 MiB; the set itself at most 64 KB.
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateRuleSetRequest'}
+      responses:
+        '201':
+          description: Saved as version 1, with the notes on the text.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RuleSetWrittenView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/rule-sets/{name}:
+    put:
+      operationId: updateRuleSet
+      tags: [Rules]
+      summary: Save a new version of a rule set
+      description: |
+        Admins only. `version` is the version the editor opened: if the set
+        changed since, the answer is 409. A config-file set is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/RuleSetName'
+      requestBody:
+        required: true
+        description: At most 1 MiB; the set itself at most 64 KB.
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateRuleSetRequest'}
+      responses:
+        '200':
+          description: Saved. `version` is the new one.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RuleSetWrittenView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deleteRuleSet
+      tags: [Rules]
+      summary: Delete a rule set
+      description: |
+        Admins only. A set a repository or the default list names is 409, with
+        the repositories in the body. A config-file set is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/RuleSetName'
+      responses:
+        '204':
+          description: Deleted.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The rule set is in use, or is the config file's.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/SkillInUseView'
+                - $ref: '#/components/schemas/ErrorBody'
         '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/skills:
     post:
@@ -4478,6 +4631,12 @@ components:
       required: true
       description: The skill's name.
       schema: {type: string}
+    RuleSetName:
+      name: name
+      in: path
+      required: true
+      description: The rule set's name.
+      schema: {type: string}
   responses:
     Unauthorized:
       description: Not signed in (`not signed in`), or the session ended (`session expired`).
@@ -5073,6 +5232,72 @@ components:
         addToDefaults:
           type: boolean
           default: false
+    CreateRuleSetRequest:
+      type: object
+      required: [name, content]
+      properties:
+        name: {type: string}
+        content:
+          type: string
+          description: The rule file's YAML (`rules:` entries with `path` and `rule` or `off`).
+    UpdateRuleSetRequest:
+      type: object
+      required: [content, version]
+      properties:
+        content: {type: string}
+        version:
+          type: integer
+          minimum: 1
+          description: The version that was opened.
+    RuleSetView:
+      description: One rule set of the library, without its text.
+      type: object
+      required: [name, version, updatedAt, entries, source, inDefaults]
+      properties:
+        name: {type: string}
+        version:
+          type: integer
+          description: 0 for a set of the config file.
+        updatedAt:
+          type: string
+          format: date-time
+        entries:
+          type: integer
+          description: 0 for a stored set that no longer loads.
+        source:
+          type: string
+          enum: [dashboard, config]
+          description: '`config` is read-only here and wins over a stored set of the same name.'
+        inDefaults: {type: boolean}
+    RuleSetDetailView:
+      description: A rule set with its text and the editor's notes.
+      allOf:
+      - $ref: '#/components/schemas/RuleSetView'
+      - type: object
+        required: [content, notes]
+        properties:
+          content: {type: string}
+          notes:
+            type: array
+            items: {type: string}
+            description: One per entry that hides a built-in rule for its files.
+    RuleSetWrittenView:
+      type: object
+      required: [version, notes]
+      properties:
+        version: {type: integer}
+        notes:
+          type: array
+          items: {type: string}
+    BuiltInRuleView:
+      description: One of pergent's built-in path rules.
+      type: object
+      required: [name, path, off, rule]
+      properties:
+        name: {type: string}
+        path: {type: string}
+        off: {type: boolean}
+        rule: {type: string}
     UpdateSkillRequest:
       type: object
       required: [content, version]
@@ -7793,6 +8018,27 @@ components:
           type: array
           items: {$ref: '#/components/schemas/result.Renamed'}
           description: The reviewed files the change renamed whose old path was checked. Written by pergent's `--check-deleted`; absent without it.
+        rules:
+          type: array
+          items: {$ref: '#/components/schemas/result.FileRule'}
+          description: The path rule each reviewed file was checked with, for the files that had one. Absent from an older pergent.
+      additionalProperties: true
+    result.FileRule:
+      description: The rule a reviewed file was checked with.
+      type: object
+      properties:
+        path: {type: string}
+        rule:
+          type: string
+          description: '`repo:<glob>`, `dashboard:<set>:<glob>` or `built-in:<name>`.'
+      additionalProperties: true
+      required: [path, rule]
+    result.RulesInfo:
+      description: The path rule list a review used.
+      type: object
+      properties:
+        built_in: {type: boolean}
+        entries: {type: integer}
       additionalProperties: true
     result.Finding:
       description: One finding of a skill. pergent.sh reads these fields; the finding may carry others.
@@ -7877,6 +8123,11 @@ components:
           - $ref: '#/components/schemas/result.Incremental'
           - type: 'null'
           description: Set by pergent.sh on the result of an incremental review.
+        rules:
+          oneOf:
+          - $ref: '#/components/schemas/result.RulesInfo'
+          - type: 'null'
+          description: Set by a pergent that runs with path rules, even when no file had one. Absent from an older image.
       additionalProperties: true
       required: [schema_version, status, comment]
     result.Skill:

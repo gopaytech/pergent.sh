@@ -1784,3 +1784,39 @@ type APIDismissalView struct {
 	Actor       string    `json:"actor"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
+
+// RuleSetView is one rule set of the library, without its text. Source is
+// "dashboard" (stored, admins edit it) or "config" (the config file's,
+// read-only; it has no version). Entries is 0 for a stored set that no longer
+// loads.
+type RuleSetView struct {
+	Name       string    `json:"name"`
+	Version    int       `json:"version"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+	Entries    int       `json:"entries"`
+	Source     string    `json:"source"`
+	InDefaults bool      `json:"inDefaults"`
+}
+
+// RuleSetDetailView is a rule set with its text and the editor's notes.
+type RuleSetDetailView struct {
+	RuleSetView
+	Content string   `json:"content"`
+	Notes   []string `json:"notes"`
+}
+
+// RuleSetWrittenView answers a rule-set save: the new version and the notes
+// on the saved text.
+type RuleSetWrittenView struct {
+	Version int      `json:"version"`
+	Notes   []string `json:"notes"`
+}
+
+// BuiltInRuleView is one of pergent's built-in path rules: its name (empty
+// for an off entry), glob and text.
+type BuiltInRuleView struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	Off  bool   `json:"off"`
+	Rule string `json:"rule"`
+}
