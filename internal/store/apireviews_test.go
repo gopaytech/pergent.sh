@@ -130,6 +130,26 @@ func TestEnqueueAPIReviewSupersedesSubject(t *testing.T) {
 	}
 }
 
+// A review whose panel members run is superseded by a newer request, as a
+// queued or running one is; another waiting review is not.
+func TestEnqueueAPIReviewSupersedesWaitingPanel(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "fastgateway")
+	panel := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
+	setRun(t, s, panel, `state = 'waiting', skip_reason = 'panel_members', dispatched_at = now()`)
+	held := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:2"))
+	setRun(t, s, held, `state = 'waiting', skip_reason = 'untrusted'`)
+
+	enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
+	enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:2"))
+	if got := apiState(t, s, panel); got != Superseded {
+		t.Errorf("waiting panel state = %s, want superseded", got)
+	}
+	if got := apiState(t, s, held); got != Waiting {
+		t.Errorf("other waiting review state = %s, want waiting", got)
+	}
+}
+
 func TestEnqueueAPIReviewKeepsReported(t *testing.T) {
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")

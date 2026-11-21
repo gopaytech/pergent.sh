@@ -39,10 +39,11 @@ func providerError(stored []byte) *result.ProviderError {
 // on an entry of a chain of at least 2 (a 1-entry chain never falls back),
 // and handled is true only then: the caller publishes the run otherwise. An
 // API review is marked but not retried, since its inputs are gone once its
-// Job has them; it is published as before. A review panel's merge (Job P)
-// falls back by its judges instead (fallBackJudge).
+// Job has them; it is published as before (markOnly). A review panel's
+// merge (Job P) falls back by its judges instead (fallBackJudge); an API
+// review's Job P marks the judge entry and is published.
 func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) (handled bool, err error) {
-	if pe := providerError(run.Result); pe != nil && run.Kind == store.KindMR {
+	if pe := providerError(run.Result); pe != nil {
 		merge, err := e.isPanelMerge(ctx, run)
 		if err != nil {
 			return false, err
@@ -57,16 +58,8 @@ func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) 
 	}
 	log = log.With("model_entry", run.ModelEntryID, "class", m.Class)
 	if run.Kind != store.KindMR {
-		if err := e.Store.SetMark(ctx, m); err != nil {
-			return false, fmt.Errorf("mark the model entry: %w", err)
-		}
-		// The mark is set again on a publish retry (the same upsert); the
-		// audit entry is written on the first try only.
-		if run.PublishError == "" {
-			log.Warn("the provider refused the review's model entry; it is skipped until the mark ends")
-			e.auditMark(ctx, run, run.ModelEntryName, m.Class, log)
-		}
-		return false, nil
+		// The audit entry is written on the first try only.
+		return false, e.markOnly(ctx, run, run.ModelEntryName, m, run.PublishError == "", log)
 	}
 	next, created, err := e.Store.EnqueueAttempt(ctx, run, m)
 	if err != nil {
@@ -125,7 +118,8 @@ func (e *Engine) isPanelMerge(ctx context.Context, run store.Run) (bool, error) 
 // judge's: the run is published as it is. When the role has no entry left,
 // the next attempt runs without that judge and pergent's merge keeps its
 // findings. Nothing is posted for the dropped attempt: the review's status
-// already says it runs.
+// already says it runs. An API review's P only marks the entry (markOnly)
+// and is published.
 func (e *Engine) fallBackJudge(ctx context.Context, run store.Run, role string, log *slog.Logger) (handled bool, err error) {
 	if role == "" {
 		return false, nil
@@ -143,6 +137,10 @@ func (e *Engine) fallBackJudge(ctx context.Context, run store.Run, role string, 
 		return false, nil
 	}
 	log = log.With("role", role, "model_entry", j.ID, "class", m.Class)
+	if run.Kind != store.KindMR {
+		// An API review's P has no next attempt either.
+		return false, e.markOnly(ctx, run, j.Name, m, run.PublishError == "", log)
+	}
 	next, created, err := e.Store.EnqueueAttempt(ctx, run, m)
 	if err != nil {
 		return false, fmt.Errorf("queue the next attempt: %w", err)
@@ -155,6 +153,21 @@ func (e *Engine) fallBackJudge(ctx context.Context, run store.Run, role string, 
 	e.auditMark(ctx, run, j.Name, m.Class, log)
 	e.Wake()
 	return true, nil
+}
+
+// markOnly marks the entry the provider refused, with no next attempt: the
+// rule of an API review, whose inputs are gone once its Job has them, and of
+// its panel's members and Job P. The mark is set again on a retry (the same
+// upsert); with audit the audit entry is written too.
+func (e *Engine) markOnly(ctx context.Context, run store.Run, entryName string, m store.Mark, audit bool, log *slog.Logger) error {
+	if err := e.Store.SetMark(ctx, m); err != nil {
+		return fmt.Errorf("mark the model entry: %w", err)
+	}
+	if audit {
+		log.Warn("the provider refused the review's model entry; it is skipped until the mark ends")
+		e.auditMark(ctx, run, entryName, m.Class, log)
+	}
+	return nil
 }
 
 // refusedMark is the mark of the entry ref when the stored result says the

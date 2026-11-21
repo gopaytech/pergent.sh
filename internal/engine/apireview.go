@@ -12,6 +12,8 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/actions"
 	"github.com/gopaytech/pergent.sh/internal/chain"
+	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -46,10 +48,31 @@ const (
 // past its monthly token budget gets no Job: the review fails. It calls no
 // forge, and sets no status and no attention item. As for a merge request, a
 // store or Kubernetes error is retried and anything else fails the review.
+//
+// With the global chain B in effect the review is a panel, in 3 stages: the
+// split (after the files are read and every check passes), a member's Job
+// (stageMember, which reads the stored files and never drops them) and Job
+// P (stageMerge). The stored files go once the review's own Job starts:
+// today's, or Job P.
 func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	e, run := d.e, d.run
 	d.api = true
 	d.log = e.log().With("run", run.ID, "kind", store.KindAPI, "head", run.HeadSHA)
+	if d.isMember() {
+		d.log = d.log.With("member", d.member.ID, "role", d.member.Role)
+	} else {
+		ms, err := e.Store.PanelMembers(ctx, run.ID)
+		if err != nil {
+			return d.retry(ctx, fmt.Errorf("read the review's panel members: %w", err))
+		}
+		for _, m := range ms {
+			if m.State != store.MemberOff {
+				// Released: its members are final.
+				d.stage, d.members = stageMerge, ms
+				break
+			}
+		}
+	}
 
 	if run.APIClientID == nil {
 		return d.fail(ctx, reasonClientGone)
@@ -64,12 +87,14 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	d.log = d.log.With("api_client", client.Name)
 
 	// The budget is checked again here: reviews queued before it was used up
-	// don't run past it.
+	// don't run past it. A member's run passed it at the split; Job P runs
+	// with no judge past it.
 	used, err := e.Store.APITokensSince(ctx, client.ID, quota.MonthStart(e.now()))
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("read the client's tokens this month: %w", err))
 	}
-	if used >= client.Limits.MonthlyTokenBudget {
+	budgetUsedUp := used >= client.Limits.MonthlyTokenBudget
+	if budgetUsedUp && d.stage == stageReview {
 		d.log.Warn("not reviewing: the client's monthly token budget is used up", "used", used, "budget", client.Limits.MonthlyTokenBudget)
 		return d.fail(ctx, reasonBudget)
 	}
@@ -92,17 +117,40 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	}
 
 	// A client that chose a model runs on it or on nothing, as a repository
-	// does.
+	// does; in a panel that is member A's model.
+	d.clientModel = client.ModelID
 	var model instances.Model
-	if client.ModelID != "" {
+	if client.ModelID != "" && (d.stage == stageReview || d.isMember() && d.member.Role == kube.PanelRoleA) {
 		var ok bool
 		if model, ok = e.registry().ModelByID(client.ModelID); !ok {
 			d.log.Warn("the model chosen for this API client can't be used", "model_id", client.ModelID)
 			return d.fail(ctx, reasonClientModel)
 		}
-	} else {
-		// The global chain, marked entries skipped. There is no fallback
-		// within the review: its inputs are gone once its Job has them.
+	}
+	// There is no fallback within the review, nor for a member: the run's
+	// inputs are gone once its Job has them, and a member that fails leaves
+	// Job P the other.
+	switch {
+	case d.isMember():
+		// A chain read for an API review ignores the repository.
+		dec, err := d.resolveMember(ctx, settings.Effective{}, false)
+		if err != nil {
+			return d.retry(ctx, fmt.Errorf("read the model chain: %w", err))
+		}
+		if !dec.Runs() {
+			return d.memberCannotRun(ctx, dec)
+		}
+		model = dec.Entry
+	case d.stage == stageMerge:
+		if e.ScanImage == "" {
+			return d.fail(ctx, reasonNoPanelImage)
+		}
+		if err := d.resolveMerge(ctx, settings.Effective{}, budgetUsedUp, false); err != nil {
+			return d.retry(ctx, fmt.Errorf("read the model chain: %w", err))
+		}
+		model = d.entry.Entry
+	case client.ModelID == "":
+		// The global chain, marked entries skipped.
 		dec, err := d.resolve(ctx, settings.Effective{}, false, false)
 		if err != nil {
 			return d.retry(ctx, fmt.Errorf("read the model chain: %w", err))
@@ -120,6 +168,11 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	llm, llmKey := model.LLM, model.Key
 	d.provider, d.model = llm.Provider, llm.Model
 	d.secrets = append(d.secrets, llmKey)
+	if d.stage == stageMerge {
+		// Job P judges with up to 2 keys.
+		d.secrets = append(d.secrets, d.merge.key(kube.PanelRoleB))
+		d.provider, d.model = deref(run.Provider), deref(run.Model)
+	}
 
 	// What a repository switched on in the dashboard gets when it sets
 	// nothing.
@@ -208,6 +261,14 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 		d.log.Info("past dismissals", "entries", dismissalCounts)
 	}
 
+	if d.keepsRun() {
+		// A member, or Job P, writes nothing to its run, which was split
+		// with these inputs.
+		if !d.memberInputsMatch(in, store.Run{}, linkPlan{}) {
+			return d.fail(ctx, reasonInputsChanged)
+		}
+		return d.launchAPI(ctx, client, defaults, in, sent.Import, llm, llmKey)
+	}
 	if err := e.Store.SetRunModel(ctx, run.ID, d.provider, d.model); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's model: %w", err))
 	}
@@ -219,6 +280,29 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 			return d.retry(ctx, fmt.Errorf("record the review's model entry: %w", err))
 		}
 	}
+	// With the global chain B in effect the review is a panel: the run
+	// waits for its members, and its stored files stay until Job P starts.
+	// With no chain B this writes nothing and the review goes on as before.
+	split, err := d.panel(ctx, forge.Change{BaseSHA: run.BaseSHA}, in, defaults, false, false)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("start the review panel: %w", err))
+	}
+	if split {
+		return nil
+	}
+	return d.launchAPI(ctx, client, defaults, in, sent.Import, llm, llmKey)
+}
+
+// launchAPI starts the Job of the API review, of its member in stageMember
+// or its Job P in stageMerge, with the fitted inputs in and the files im,
+// and records it. A member's Job has its own name, result route and token,
+// its own entry's key alone and --no-skill-verify, and records itself on the
+// member: the stored files stay for the other Jobs. Job P has the judges'
+// keys, fetches the member results and has its own timeout. Once the
+// review's own Job (today's, or P) is recorded, the stored files go.
+func (d *dispatcher) launchAPI(ctx context.Context, client store.APIClient, defaults settings.Effective,
+	in *inputs.Inputs, im []byte, llm config.LLM, llmKey string) error {
+	e, run := d.e, d.run
 	token, tokenHash, err := mintToken()
 	if err != nil {
 		return d.retry(ctx, err)
@@ -227,29 +311,59 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 
 	now := e.now()
 	allowance := kube.CloneAllowance(0, 0)
-	expires := now.Add(kube.Deadline(defaults.JobTimeout, allowance) + tokenGrace)
-	name := kube.JobName(run.ID)
+	timeout, budget := defaults.JobTimeout, defaults.JobTimeout
+	merging := d.stage == stageMerge
+	if merging {
+		// Job P's deadline counts the member results' fetch too.
+		timeout, budget = kube.PanelTimeout, kube.PanelTimeout+kube.PanelFetchTimeout
+	}
+	expires := now.Add(kube.Deadline(budget, allowance) + tokenGrace)
+	name, runID := kube.JobName(run.ID), run.ID
+	resultURL := strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/result"
+	if d.isMember() {
+		m := d.member
+		name, runID = kube.JobName(m.ID), m.RunID
+		resultURL = strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + m.RunID + "/members/" + m.ID + "/result"
+	}
 	params := kube.JobParams{
 		Name:           name,
-		RunID:          run.ID,
+		RunID:          runID,
 		Image:          e.Config.Jobs.Image,
-		Timeout:        defaults.JobTimeout,
+		Timeout:        timeout,
 		CloneAllowance: allowance,
 		Concurrency:    e.Config.Jobs.Concurrency,
 		MaxTurns:       defaults.MaxTurns,
 		BaseSHA:        run.BaseSHA,
 		HeadSHA:        run.HeadSHA,
-		ResultURL:      strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/result",
+		ResultURL:      resultURL,
 		MaxCommentSize: kube.CommentLimitGitLab,
 		LLM:            llm,
 		Resources:      jobResources(e.Config.Jobs.Resources, defaults.JobMemory),
 		WorkSize:       e.Config.Jobs.WorkSize,
 		Inputs:         in,
-		Import:         sent.Import,
+		Import:         im,
 		APIClient:      client.Name,
 		NoBuiltInRules: !defaults.BuiltInRules,
 	}
-	if err := e.Launcher.Launch(ctx, params, kube.Secrets{LLMKey: llmKey, ResultToken: token}); err != nil {
+	secrets := kube.Secrets{LLMKey: llmKey, ResultToken: token}
+	if merging {
+		callback := strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/panel/"
+		params.PanelRole = kube.PanelRoleMerge
+		params.Panel = &kube.PanelParams{AURL: callback + kube.PanelRoleA, BURL: callback + kube.PanelRoleB,
+			B: d.merge.b, NoJudge: d.merge.noJudge, Image: e.ScanImage}
+		secrets.LLMKeyB = d.merge.key(kube.PanelRoleB)
+		if err := d.recordJudges(ctx); err != nil {
+			return d.retry(ctx, err)
+		}
+	}
+	if d.isMember() {
+		params.SkipSkillVerify = true
+		params.PanelMemberID, params.PanelRole = d.member.ID, d.member.Role
+		if err := e.Store.SetMemberEntry(ctx, d.member.ID, runEntry(d.entry), d.provider, d.model); err != nil {
+			return d.retry(ctx, fmt.Errorf("record the member's model entry: %w", err))
+		}
+	}
+	if err := e.Launcher.Launch(ctx, params, secrets); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			d.deleteJob(ctx, name)
 		}
@@ -258,11 +372,19 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 
 	// MarkDispatched matches no row once the run was superseded, or its client
 	// removed (DeleteAPIClient locks the run first): the Job is deleted then,
-	// as for a merge request.
-	err = e.Store.MarkDispatched(ctx, run.ID, name, run.BaseSHA, "", tokenHash, expires, now)
+	// as for a merge request. A member's matches none once its run no longer
+	// waits.
+	if d.isMember() {
+		_, err = e.Store.MarkMemberDispatched(ctx, d.member.ID, name, tokenHash, expires, now)
+	} else {
+		err = e.Store.MarkDispatched(ctx, run.ID, name, run.BaseSHA, "", tokenHash, expires, now)
+	}
 	if errors.Is(err, store.ErrNotRunning) {
 		d.log.Info("review was superseded or its client removed while its job started; deleting the job", "job", name)
 		d.deleteJob(ctx, name)
+		if d.isMember() {
+			return d.postpone(ctx, e.now())
+		}
 		return nil
 	}
 	if err != nil {
@@ -270,10 +392,19 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 		return d.retry(ctx, fmt.Errorf("record dispatch: %w", err))
 	}
 	d.log.Info("review job started", "job", name)
+	if d.isMember() {
+		// The other member and Job P build their checkout from the stored
+		// files too.
+		return nil
+	}
 	// The Job has the files: the stored copy goes. One left behind is dropped
 	// by the next pass (DropSpentAPIInputs).
 	if err := e.Store.DropAPIInputs(ctx, run.ID); err != nil {
 		d.log.Warn("couldn't drop the review's stored files; the next pass will", "error", d.redact(err.Error()))
+	}
+	if merging {
+		// The run keeps the inputs its split recorded.
+		return nil
 	}
 	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, defaults.MaxTurns, in.Sources, in.Versions, skillHashes(in.Skills)); err != nil {
 		d.log.Info("couldn't record the review's model, step limit and skills for the dashboard", "error", d.redact(err.Error()))

@@ -21,6 +21,23 @@ func (e *Engine) chainFor(ctx context.Context, run store.Run, repo settings.Effe
 	return chain.Load(ctx, e.Store, e.registry(), e.now(), run, repo)
 }
 
+// chainA is the run's chain A as a panel reads it: the chain in effect
+// (chainFor), or for an API client that chose a model, that model alone, a
+// chain of 1 that never falls back. A model that is gone leaves the chain
+// empty.
+func (d *dispatcher) chainA(ctx context.Context, repo settings.Effective) (chain.Input, error) {
+	in, err := d.e.chainFor(ctx, d.run, repo)
+	if err != nil || d.clientModel == "" {
+		return in, err
+	}
+	in.Scope, in.Refs, in.Tried = store.ScopeGlobal, nil, nil
+	if m, ok := d.e.registry().ModelByID(d.clientModel); ok {
+		ref := entryRef(m)
+		in.Refs, in.Entries[ref] = []store.EntryRef{ref}, m
+	}
+	return in, nil
+}
+
 // entryRef is how a chain names m.
 func entryRef(m instances.Model) store.EntryRef { return chain.RefOf(m) }
 

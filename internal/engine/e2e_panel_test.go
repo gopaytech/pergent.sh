@@ -1991,3 +1991,179 @@ func TestE2EPanelPLogHidesKeyB(t *testing.T) {
 		t.Errorf("jobHide = %v; want model B's key from the Secret", err)
 	}
 }
+
+// runMembers dispatches the members of run id's review, posts each body as
+// its result (keyed by role) and publishes, which releases the run for Job
+// P. It returns members A and B.
+func runMembers(t *testing.T, e *e2e, id string, bodies map[string][]byte) (store.PanelMember, store.PanelMember) {
+	t.Helper()
+	dispatch(t, e.env)
+	a, b := memberOfRole(t, e.env, id, "a"), memberOfRole(t, e.env, id, "b")
+	wantMemberKey(t, e.env, a, "key-team-a")
+	wantMemberKey(t, e.env, b, "key-team-b")
+	for _, m := range []store.PanelMember{a, b} {
+		if code := e.postMember(t, id, m, bodies[m.Role]); code != http.StatusOK {
+			t.Fatalf("member %s's result: status %d\n%s", m.Role, code, e.env.Logs())
+		}
+	}
+	publish(t, e.env)
+	if r := e.env.Run(id); r.State != store.Queued || r.SkipReason != "" {
+		t.Fatalf("run = %s/%q; want released for Job P\n%s", r.State, r.SkipReason, e.env.Logs())
+	}
+	return a, b
+}
+
+// A re-run command, with chain B in effect, runs as a panel: the split, 2
+// member Jobs and Job P, which publishes.
+func TestE2ERerunIsPanel(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	base := env.Publish(1, head, clean(t, head))
+	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false, false)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v", created, err)
+	}
+	servePublish(env, 1, head)
+
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Waiting || r.SkipReason != store.WaitPanel || r.Trigger != store.TriggerRerun {
+		t.Fatalf("re-run = %s/%q %q; want a panel\n%s", r.State, r.SkipReason, r.Trigger, env.Logs())
+	}
+	if n := len(env.Jobs()); n != 0 {
+		t.Fatalf("%d Jobs after the split; want none", n)
+	}
+	runMembers(t, e, id, map[string][]byte{"a": clean(t, head), "b": clean(t, head)})
+	e.runP(t, id, clean(t, head))
+	if r := env.Run(base); r.ID == id {
+		t.Errorf("the re-run replaced the base run")
+	}
+}
+
+// A re-run of the failed skills, with chain B in effect: the members review
+// that subset alone, and publishing P's result merges it with the base run's
+// other skills, as today.
+func TestE2ERerunFailedSkillsPanel(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
+	head := sha('a')
+	base := env.Publish(1, head, resultFor(t, head,
+		namedSkill(t, "security", "has_blocking_issues", "blocking", "aaaaaa000001"),
+		namedSkill(t, "style", "failed", "", "")))
+	recordVersions(t, env, base, map[string]int{"security": 1, "style": 1})
+	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)
+	servePublish(env, 1, head)
+
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Waiting || r.SkipReason != store.WaitPanel ||
+		!slices.Equal(r.SkillSubset, []string{"style"}) || r.SkillSources["security"] != "library" {
+		t.Fatalf("re-run = %s/%q subset %v sources %v; want a panel of the subset, the whole review's sources\n%s",
+			r.State, r.SkipReason, r.SkillSubset, r.SkillSources, env.Logs())
+	}
+	style := resultFor(t, head, namedSkill(t, "style", "no_blocking_issues", "suggestion", "cccccc000001"))
+	dispatch(t, env)
+	for _, role := range []string{"a", "b"} {
+		m := memberOfRole(t, env, id, role)
+		var all strings.Builder
+		for _, v := range env.ConfigMap(m.ID).Data {
+			all.WriteString(v)
+		}
+		if !strings.Contains(all.String(), "Check the style.") || strings.Contains(all.String(), "Look for security problems.") {
+			t.Errorf("member %s's inputs are not the subset:\n%s", role, all.String())
+		}
+		if code := e.postMember(t, id, m, style); code != http.StatusOK {
+			t.Fatalf("member %s's result: status %d\n%s", role, code, env.Logs())
+		}
+	}
+	publish(t, env)
+	if r := env.Run(id); r.State != store.Queued {
+		t.Fatalf("re-run = %s; want released for Job P\n%s", r.State, env.Logs())
+	}
+	e.runP(t, id, style)
+
+	body := createdComment(t, env, 1)
+	for _, want := range []string{"| `security` |", "| `style` |", "finding of security", "finding of style"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("comment lacks %q:\n%s", want, body)
+		}
+	}
+	r, err := result.Parse(env.Run(id).Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Merged || len(r.Skills) != 2 || r.Skills[0].Name != "security" || r.Skills[1].Name != "style" ||
+		r.Skills[1].Verdict != "no_blocking_issues" {
+		t.Errorf("stored result = %+v; want the kept security and P's style", r)
+	}
+}
+
+// A push with carried files, with chain B in effect: both members get
+// --carried, Job P does not, and the published result keeps the carried
+// files.
+func TestE2EIncrementalPanel(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	e, _ := newFallbackE2E(t, "team-a")
+	env := e.env
+	headA, headB := sha('1'), sha('2')
+	last := publishedReview(t, env, headA, "0.5.0", nil)
+	savePanelChain(t, env, "team-b")
+	serveChangedSince(env, "b.go")
+	servePublish(env, 3, headB)
+	env.GitLab.SetMR(openMR(3, headB))
+	id := env.Enqueue(3, headB)
+
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Waiting || !r.Incremental || r.BaseRunID == nil || *r.BaseRunID != last {
+		t.Fatalf("run = %s incremental %v base %v; want an incremental panel on %s\n%s", r.State, r.Incremental, r.BaseRunID, last, env.Logs())
+	}
+	partial := resultFor(t, headB, partialReview([]string{"b.go"}, []string{"a.go", "c.go"}))
+	dispatch(t, env)
+	for _, role := range []string{"a", "b"} {
+		m := memberOfRole(t, env, id, role)
+		if env.Job(m.ID) == nil {
+			t.Fatalf("member %s has no Job (%s %q)\n%s", role, m.State, m.FailureReason, env.Logs())
+		}
+		if !hasArg(env.Job(m.ID).Spec.Template.Spec.Containers[0].Args, "--carried=/in/carried.json") {
+			t.Errorf("member %s's Job has no --carried", role)
+		}
+		if _, ok := env.ConfigMap(m.ID).Data["carried.json"]; !ok {
+			t.Errorf("member %s has no carried.json", role)
+		}
+		if code := e.postMember(t, id, m, partial); code != http.StatusOK {
+			t.Fatalf("member %s's result: status %d\n%s", role, code, env.Logs())
+		}
+	}
+	publish(t, env)
+	if r := env.Run(id); r.State != store.Queued {
+		t.Fatalf("run = %s; want released for Job P\n%s", r.State, env.Logs())
+	}
+
+	dispatch(t, env)
+	if env.Job(id) == nil {
+		t.Fatalf("no Job P\n%s", env.Logs())
+	}
+	for _, a := range env.Job(id).Spec.Template.Spec.Containers[0].Args {
+		if strings.HasPrefix(a, "--carried") {
+			t.Errorf("Job P got %q", a)
+		}
+	}
+	if _, ok := env.ConfigMap(id).Data["carried.json"]; ok {
+		t.Errorf("Job P got carried.json")
+	}
+	if code := e.postResult(t, id, string(env.Secret(id).Data["result-token"]), partial); code != http.StatusOK {
+		t.Fatalf("P's result: status %d\n%s", code, env.Logs())
+	}
+	publish(t, env)
+	wantPublished(t, env, id)
+	r, err := result.Parse(env.Run(id).Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Merged || r.Incremental == nil || r.Incremental.Carried != 2 || r.Incremental.From != headA {
+		t.Fatalf("stored result = %+v; want the merged incremental review from %s", r, headA)
+	}
+	if got := r.Skills[0].Files.Reviewed; !slices.Equal(got, []string{"b.go", "a.go", "c.go"}) {
+		t.Errorf("reviewed = %v; want the new file, then the carried", got)
+	}
+}

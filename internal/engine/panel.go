@@ -44,9 +44,6 @@ var errInputsChanged = errors.New(reasonInputsChanged)
 // members' results: pergent.sh's own image is not set.
 const reasonNoPanelImage = "a review panel needs pergent.sh's own image (PERGENT_SH_IMAGE, set by the chart) to merge its members"
 
-// reasonAPIPanel fails a member of an API review, which has no panel yet.
-const reasonAPIPanel = "an API review has no review panel yet"
-
 // panel decides whether the run is a panel review, after every check a
 // review passes and the run's writes, before its token. split is true when
 // the dispatch ends here: StartPanel made the run a panel (its members get
@@ -93,7 +90,7 @@ func (d *dispatcher) panel(ctx context.Context, mr forge.Change, fitted *inputs.
 	sources, versions, hashes := d.runInputs(fitted)
 	started, err := e.Store.StartPanel(ctx, d.run.ID, store.PanelSplit{
 		BaseSHA: mr.BaseSHA, StartSHA: mr.StartSHA,
-		Inputs: store.RunInputs{Model: d.entry.Entry.LLM.Model, MaxTurns: repo.MaxTurns,
+		Inputs: store.RunInputs{Model: d.model, MaxTurns: repo.MaxTurns,
 			Sources: sources, Versions: versions, Hashes: hashes},
 	}, e.now())
 	if err != nil {
@@ -165,7 +162,7 @@ func (e *Engine) dispatchMember(ctx context.Context, m store.PanelMember) error 
 	d.log = e.log().With("run", run.ID, "member", m.ID, "role", m.Role, "instance", run.MR.Instance,
 		"project", run.ProjectPath, "mr", run.MR.IID, "head", run.HeadSHA)
 	if run.Kind == store.KindAPI {
-		return d.fail(ctx, reasonAPIPanel)
+		return d.dispatchAPI(ctx)
 	}
 	return d.dispatch(ctx)
 }
@@ -208,7 +205,7 @@ func (d *dispatcher) resolveMember(ctx context.Context, repo settings.Effective,
 // the run's chain and tried entries, the entries member A's earlier attempts
 // ran, and no hold for the instance quota.
 func (d *dispatcher) resolveA(ctx context.Context, repo settings.Effective, ms []store.PanelMember, instanceUsedUp bool) (chain.Decision, chain.Input, error) {
-	in, err := d.e.chainFor(ctx, d.run, repo)
+	in, err := d.chainA(ctx, repo)
 	if err != nil {
 		return chain.Decision{}, chain.Input{}, err
 	}
@@ -365,6 +362,10 @@ func (d *dispatcher) memberRunningText(ctx context.Context) string {
 // gives no message.
 const reasonMemberError = "the review failed"
 
+// reasonMemberRefused, then why (chain.ReasonWords), fails an API review's
+// member whose provider refused its model: it does not fall back.
+const reasonMemberRefused = "the provider refused the model: "
+
 // settleBatch is how many reported members one settle pass takes, as
 // publishBatch is for runs.
 const settleBatch = 20
@@ -422,7 +423,8 @@ func (e *Engine) settleMembers(ctx context.Context) error {
 // handler stores a result before it checks it: a result that fails the
 // check, or says its review failed, fails the member. A result whose
 // provider refused the member's entry falls back along the member's chain,
-// as a run does (fallBack), on a merge request's review. Otherwise the
+// as a run does (fallBack), on a merge request's review; on an API review
+// the entry is marked and the member fails (markOnly). Otherwise the
 // member is done with its result, or failed with its failure.
 func (e *Engine) settleMember(ctx context.Context, m store.PanelMember) error {
 	log := e.log().With("run", m.RunID, "member", m.ID, "role", m.Role)
@@ -449,8 +451,20 @@ func (e *Engine) settleMember(ctx context.Context, m store.PanelMember) error {
 				return fmt.Errorf("fail the member's result: %w", err)
 			}
 			log.Warn("the panel member's result can't be used; the member fails", "step", f.Step)
-		} else if mark, refused := e.refusedMark(store.EntryRef{Source: m.Entry.Source, ID: m.Entry.ID}, m.Entry.Length, m.Result); refused && run.Kind == store.KindMR {
-			return e.fallBackMember(ctx, run, m, mark, log)
+		} else if mark, refused := e.refusedMark(store.EntryRef{Source: m.Entry.Source, ID: m.Entry.ID}, m.Entry.Length, m.Result); refused {
+			if run.Kind == store.KindMR {
+				return e.fallBackMember(ctx, run, m, mark, log)
+			}
+			// An API review's member does not fall back: its entry is
+			// marked as the review's would be, and it fails, which leaves
+			// Job P the other member.
+			if err := e.markOnly(ctx, run, m.Entry.Name, mark, true, log.With("model_entry", m.Entry.ID, "class", mark.Class)); err != nil {
+				return err
+			}
+			f := store.Failure{Reason: reasonMemberRefused + chain.ReasonWords(mark.Class)}
+			if err := e.Store.ReplaceMemberWithFailure(ctx, m.ID, f); err != nil && !errors.Is(err, store.ErrNotReported) {
+				return fmt.Errorf("fail the member's result: %w", err)
+			}
 		}
 	}
 	state, err := e.Store.SettleMember(ctx, m.ID)
@@ -525,7 +539,7 @@ func (d *dispatcher) resolveMerge(ctx context.Context, repo settings.Effective, 
 	if err != nil {
 		return err
 	}
-	inA, err := d.e.chainFor(ctx, d.run, repo)
+	inA, err := d.chainA(ctx, repo)
 	if err != nil {
 		return err
 	}

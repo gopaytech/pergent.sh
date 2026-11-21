@@ -232,6 +232,9 @@ type dispatcher struct {
 	// rulesHash is the hash of the run's rule list and built-in switch, set
 	// once the list is built; the next push compares it with its own.
 	rulesHash string
+	// clientModel is the model an API client chose ("" for none): its chain
+	// A is that model alone (chainA).
+	clientModel string
 }
 
 // dispatchRun starts the claimed merge request run: today's review, or the
