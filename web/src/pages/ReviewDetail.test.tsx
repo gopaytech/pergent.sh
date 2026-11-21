@@ -878,3 +878,106 @@ describe("ReviewDetail path rules", () => {
     expect(screen.getByText("This image does not use rules.")).toBeInTheDocument();
   });
 });
+
+describe("ReviewDetail: review panel", () => {
+  const a1 = "aaaaaaaa-0000-0000-0000-000000000001";
+  const a2 = "aaaaaaaa-0000-0000-0000-000000000002";
+  const b1 = "bbbbbbbb-0000-0000-0000-000000000001";
+  const panelRun: RunDetailView = {
+    ...runDetail,
+    panel: {
+      members: [
+        {
+          role: "a",
+          attempts: [
+            { id: a1, entry: "sonnet", position: 1, provider: "anthropic", model: "claude-sonnet", state: "fell_back", failure: "", step: "" },
+            { id: a2, entry: "qwen", position: 2, provider: "alibaba", model: "qwen3", state: "done", failure: "", step: "" },
+          ],
+        },
+        {
+          role: "b",
+          attempts: [
+            { id: b1, entry: "gpt", position: 1, provider: "openai", model: "gpt-5", state: "failed", failure: "the member Job ran out of memory", step: "review" },
+          ],
+        },
+      ],
+      judges: [{ role: "a", entry: "qwen", provider: "alibaba", model: "qwen3" }],
+      cost: [
+        { part: "member", role: "a", entry: "qwen", provider: "alibaba", model: "qwen3", in: 150000, out: 15000 },
+        { part: "member", role: "b", entry: "gpt", provider: "openai", model: "gpt-5", in: 20000, out: 2000 },
+        { part: "merge", role: "a", entry: "qwen", provider: "alibaba", model: "qwen3", in: 30000, out: 3000 },
+      ],
+    },
+  };
+
+  it("shows the panel members and the cost per model", async () => {
+    renderAndWait(panelRun);
+    const panel = await screen.findByRole("region", { name: "Review panel" });
+    const a = within(panel).getByRole("list", { name: "Member A attempts" });
+    const aItems = within(a).getAllByRole("listitem");
+    expect(aItems[0]).toHaveTextContent("Attempt 1: sonnet (entry 1) · anthropic / claude-sonnet · fell back to the next model");
+    expect(aItems[1]).toHaveTextContent("Attempt 2: qwen (entry 2) · alibaba / qwen3 · done");
+    const b = within(panel).getByRole("list", { name: "Member B attempts" });
+    expect(within(b).getByRole("listitem")).toHaveTextContent(
+      "Attempt 1: gpt (entry 1) · openai / gpt-5 · failed at review: the member Job ran out of memory",
+    );
+    expect(panel).toHaveTextContent("Judged by A: qwen (alibaba / qwen3)");
+
+    const cost = within(panel).getByRole("table", { name: "Tokens per model" });
+    const rows = within(cost).getAllByRole("row");
+    // The header, one row per model and part, and the total.
+    expect(rows).toHaveLength(5);
+    expect(within(rows[1]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Member A", "qwen", "alibaba / qwen3", "150k", "15k"]);
+    expect(within(rows[2]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Member B", "gpt", "openai / gpt-5", "20k", "2k"]);
+    expect(within(rows[3]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Merge (judge A)", "qwen", "alibaba / qwen3", "30k", "3k"]);
+    expect(within(rows[4]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Total", "", "", "200k", "20k"]);
+  });
+
+  it("opens a member's log and diagnostics under its run", async () => {
+    const fake = fakeApi({
+      ...routes(panelRun),
+      [`GET /api/runs/${newest}/members/${b1}/log`]: { body: { text: "member <b>B</b> log" } },
+      [`GET /api/runs/${newest}/members/${b1}/diagnostics`]: { body: { cloneLog: "clone of B" } },
+    });
+    const { container } = renderAppAt();
+    const panel = await screen.findByRole("region", { name: "Review panel" });
+    expect(fake.find("GET", `/api/runs/${newest}/members/${b1}/log`)).toHaveLength(0);
+    const button = within(panel).getByRole("button", { name: "Log of member B, attempt 1" });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(await within(panel).findByText("member <b>B</b> log")).toBeInTheDocument();
+    expect(await within(panel).findByText("clone of B")).toBeInTheDocument();
+    expect(container.querySelector("pre b")).toBeNull();
+    // Only the attempt asked for is read.
+    expect(fake.find("GET", `/api/runs/${newest}/members/${a1}/log`)).toHaveLength(0);
+    await userEvent.click(button);
+    expect(within(panel).queryByText("member <b>B</b> log")).not.toBeInTheDocument();
+  });
+
+  it("renders entry and model names as text, never as HTML", async () => {
+    const run = structuredClone(panelRun);
+    run.panel!.members[0].attempts[0].entry = "<b>sonnet</b>";
+    run.panel!.cost[0].model = "<i>qwen3</i>";
+    const { container } = renderAndWait(run);
+    const panel = await screen.findByRole("region", { name: "Review panel" });
+    expect(panel).toHaveTextContent("<b>sonnet</b>");
+    expect(panel).toHaveTextContent("<i>qwen3</i>");
+    expect([...container.querySelectorAll("b")].some((b) => b.textContent === "sonnet")).toBe(false);
+    expect(container.querySelector("i")).toBeNull();
+  });
+
+  it("says why the panel did not start", async () => {
+    renderAndWait({ ...runDetail, panel: { off: "chain B has no usable entry", members: [], judges: [], cost: [] } });
+    const panel = await screen.findByRole("region", { name: "Review panel" });
+    expect(panel).toHaveTextContent("Panel off: chain B has no usable entry. The review ran on chain A alone.");
+    expect(within(panel).queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("shows no panel for a run that is no panel review", async () => {
+    renderAndWait();
+    await screen.findByRole("region", { name: "Skills" });
+    expect(screen.queryByRole("region", { name: "Review panel" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Panel off/)).not.toBeInTheDocument();
+  });
+});

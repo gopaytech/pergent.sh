@@ -10,10 +10,15 @@ import {
   type CheckView,
   type CIJobResult,
   type FindingView,
+  type MemberAttemptView,
+  type MemberState,
+  type ModelCostView,
+  type PanelRole,
   type RerunStatus,
   type ReviewDetailView,
   type ReviewHeader,
   type RunDetailView,
+  type RunPanelView,
   type RunSummary,
   type SkillView,
 } from "../api";
@@ -428,6 +433,125 @@ function CIJobs({ jobs, deadline }: { jobs: CIJobResult[]; deadline: string | nu
   );
 }
 
+const roleName = (role: PanelRole) => role.toUpperCase();
+
+// memberStateText is a member attempt's state as people read it.
+const memberStateText: Record<MemberState, string> = {
+  queued: "queued",
+  running: "running",
+  reported: "reported",
+  done: "done",
+  failed: "failed",
+  fell_back: "fell back to the next model",
+  superseded: "superseded",
+};
+
+// attemptState is an attempt's state, with where and why a failed one failed.
+function attemptState(a: MemberAttemptView) {
+  const state = memberStateText[a.state] ?? a.state;
+  if (a.failure === "") return state;
+  return `${state}${a.step ? ` at ${a.step}` : ""}: ${a.failure}`;
+}
+
+// costLabel says which Job a model's tokens were used in.
+const costLabel = (c: ModelCostView) => (c.part === "member" ? `Member ${roleName(c.role)}` : `Merge (judge ${roleName(c.role)})`);
+
+// Panel is a panel review on its run's page: why it did not start, or its
+// members A and B with each attempt (and its log), the entries Job P judged
+// with, and the tokens of each model on this run with their total. Names
+// are entry and model names, shown as text.
+function Panel({ runId, panel }: { runId: string; panel: RunPanelView }) {
+  if (panel.off !== undefined) {
+    return (
+      <section className="card" aria-label="Review panel">
+        <h2>Review panel</h2>
+        <div className="pad">Panel off: {panel.off}. The review ran on chain A alone.</div>
+      </section>
+    );
+  }
+  const total = panel.cost.reduce((t, c) => ({ in: t.in + c.in, out: t.out + c.out }), { in: 0, out: 0 });
+  return (
+    <section className="card" aria-label="Review panel">
+      <h2>Review panel</h2>
+      <div className="facts">
+        {panel.members.map((m) => (
+          <div key={m.role}>
+            <h3 className="group">Member {roleName(m.role)}</h3>
+            <ol className="attempts" aria-label={`Member ${roleName(m.role)} attempts`}>
+              {m.attempts.map((a, i) => (
+                <MemberAttempt key={a.id} runId={runId} role={m.role} n={i + 1} attempt={a} />
+              ))}
+            </ol>
+          </div>
+        ))}
+        {panel.judges.length > 0 && (
+          <div>
+            Judged by{" "}
+            {panel.judges.map((j) => `${roleName(j.role)}: ${j.entry} (${modelText(j.provider, j.model)})`).join(" · ")}
+          </div>
+        )}
+      </div>
+      {panel.cost.length > 0 && (
+        <table className="table" aria-label="Tokens per model">
+          <thead>
+            <tr>
+              <th>Job</th>
+              <th>Entry</th>
+              <th>Model</th>
+              <th>In</th>
+              <th>Out</th>
+            </tr>
+          </thead>
+          <tbody>
+            {panel.cost.map((c) => (
+              <tr key={`${c.part}/${c.role}/${c.entry}/${c.provider}/${c.model}`}>
+                <td>{costLabel(c)}</td>
+                <td>{c.entry}</td>
+                <td className="mono">{modelText(c.provider, c.model)}</td>
+                <td>{count(c.in)}</td>
+                <td>{count(c.out)}</td>
+              </tr>
+            ))}
+            <tr>
+              <td>
+                <b>Total</b>
+              </td>
+              <td></td>
+              <td></td>
+              <td>{count(total.in)}</td>
+              <td>{count(total.out)}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+// MemberAttempt is one attempt of a member, with a button that shows its
+// log and what was kept of its Job, read only when asked for.
+function MemberAttempt({ runId, role, n, attempt }: { runId: string; role: PanelRole; n: number; attempt: MemberAttemptView }) {
+  const [open, setOpen] = useState(false);
+  const model = attempt.model === "" && attempt.provider === "" ? "" : ` · ${modelText(attempt.provider || null, attempt.model || null)}`;
+  return (
+    <li>
+      Attempt {n}: {attempt.entry || "not started"} (entry {attempt.position}){model} · {attemptState(attempt)}{" "}
+      <button
+        type="button"
+        className="btn small"
+        aria-expanded={open}
+        aria-label={`Log of member ${roleName(role)}, attempt ${n}`}
+        onClick={() => setOpen(!open)}
+      >
+        {open ? "Hide log" : "Log"}
+      </button>
+      {open && (
+        <RunLog logPath={paths.apiRunMemberLog(runId, attempt.id)} diagnosticsPath={paths.apiRunMemberDiagnostics(runId, attempt.id)} />
+      )}
+    </li>
+  );
+}
+
 function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
   const run = useRun(id);
   const [tab, setTab] = useState<Tab>("findings");
@@ -449,6 +573,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
   return (
     <>
       {(view.ciJobs !== null || view.ciDeadline !== null) && <CIJobs jobs={view.ciJobs ?? []} deadline={view.ciDeadline} />}
+      {view.panel && <Panel runId={id} panel={view.panel} />}
       <section className="card" aria-label="Skills">
         <h2>Skills</h2>
         {view.skills.length === 0 && (

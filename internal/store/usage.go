@@ -260,6 +260,46 @@ func (s *Store) RunUsage(ctx context.Context, id string) (in, out int64, found b
 	return in, out, recorded != nil && *recorded, err
 }
 
+// ModelCost is what one model used on a run of a panel review: the sum of
+// its run_usage_models rows of one part ("member" or "merge"), role ("a" or
+// "b") and entry.
+type ModelCost struct {
+	Part, Role, Entry, Provider, Model string
+	In, Out                            int64
+}
+
+// RunModelCosts returns what each model used on run id, from the rows that
+// count on it: the members' on the run that was split, Job P's on its own
+// run. Members first, then by role, entry, provider and model. A run with
+// none, or a malformed id, has none.
+func (s *Store) RunModelCosts(ctx context.Context, id string) ([]ModelCost, error) {
+	if !validUUID(id) {
+		return nil, nil
+	}
+	// Each part by its own index: a member's rows by its id, Job P's by run.
+	rows, err := s.pool.Query(ctx, `SELECT part, role, entry_name, provider, model, sum(tokens_in)::bigint, sum(tokens_out)::bigint
+		FROM (SELECT * FROM run_usage_models WHERE part = 'member' AND run_id = $1::uuid
+				AND member_id IN (SELECT m.id FROM panel_members m
+					WHERE m.run_id = (SELECT COALESCE(attempt_of, id) FROM runs WHERE id = $1::uuid))
+			UNION ALL
+			SELECT * FROM run_usage_models WHERE part = 'merge' AND run_id = $1::uuid) u
+		GROUP BY part, role, entry_name, provider, model
+		ORDER BY part = 'merge', role, entry_name, provider, model`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ModelCost
+	for rows.Next() {
+		var c ModelCost
+		if err := rows.Scan(&c.Part, &c.Role, &c.Entry, &c.Provider, &c.Model, &c.In, &c.Out); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // TokenSum is input and output tokens, plus the counts reported apart and how
 // many rows didn't report them.
 type TokenSum struct {

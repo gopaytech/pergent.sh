@@ -237,6 +237,54 @@ export type RunDetailView = {
   // attempts are every attempt of the review this run is one of, oldest
   // first, this run included; empty for a review of one attempt.
   attempts: AttemptView[];
+  // panel is the review panel of a panel review; the key is absent for any
+  // other run.
+  panel?: RunPanelView;
+};
+
+// RunPanelView is a review panel on its run's page. off says why it did not
+// start (the lists are then empty); otherwise its members, the entries Job P
+// judged with on this run, and the tokens of each model counted on this run.
+export type RunPanelView = {
+  off?: string;
+  members: PanelMemberView[];
+  judges: PanelJudgeView[];
+  cost: ModelCostView[];
+};
+
+export type PanelRole = "a" | "b";
+
+// PanelMemberView is member A or B, its attempts oldest first.
+export type PanelMemberView = { role: PanelRole; attempts: MemberAttemptView[] };
+
+export type MemberState = "queued" | "running" | "reported" | "done" | "failed" | "fell_back" | "superseded";
+
+// MemberAttemptView is one attempt of a member: the entry it ran on and its
+// place in the chain, the model, its state, and why it failed ("" when it
+// did not) at which step.
+export type MemberAttemptView = {
+  id: string;
+  entry: string;
+  position: number;
+  provider: string;
+  model: string;
+  state: MemberState;
+  failure: string;
+  step: string;
+};
+
+export type PanelJudgeView = { role: PanelRole; entry: string; provider: string; model: string };
+
+// ModelCostView is the tokens one model used: part "member" (a member's
+// review) or "merge" (Job P).
+export type ModelCostView = {
+  part: "member" | "merge";
+  role: PanelRole;
+  entry: string;
+  provider: string;
+  model: string;
+  in: number;
+  out: number;
 };
 
 export type RunEntryView = { name: string; position: number; length: number; source: EntrySource; team: string };
@@ -1458,6 +1506,8 @@ export const paths = {
   apiRun: (id: string) => `/api/runs/${seg(id)}`,
   apiRunLog: (id: string) => `/api/runs/${seg(id)}/log`,
   apiRunDiagnostics: (id: string) => `/api/runs/${seg(id)}/diagnostics`,
+  apiRunMemberLog: (id: string, member: string) => `/api/runs/${seg(id)}/members/${seg(member)}/log`,
+  apiRunMemberDiagnostics: (id: string, member: string) => `/api/runs/${seg(id)}/members/${seg(member)}/diagnostics`,
   apiRepo: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}`,
   // apiAdminRepo pauses (PUT {"enabled": false}) and resumes ({"enabled": true}) a repository.
   apiAdminRepo: (instance: string, project: string) => `/api/admin/repositories/${seg(instance)}/${proj(project)}`,

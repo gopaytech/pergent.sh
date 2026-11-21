@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1917,4 +1918,226 @@ func TestRunRoutesHideAPIReviews(t *testing.T) {
 	for _, target := range []string{"/api/runs/" + id, "/api/runs/" + id + "/log", "/api/runs/" + id + "/diagnostics"} {
 		e.wantStatus(c, target, http.StatusNotFound)
 	}
+}
+
+// --- a review panel on its run's page ---
+
+// memberFix is one panel_members row of a test.
+type memberFix struct {
+	role, state, entry, provider, model string
+	position                            int
+	attemptOf                           string
+	failure, step                       string
+	at                                  time.Time
+}
+
+// addMember stores m as a member of the review whose first run is root, and
+// returns its id.
+func (e *env) addMember(root string, m memberFix) string {
+	e.t.Helper()
+	var id string
+	if err := e.db.QueryRow(ctx, `INSERT INTO panel_members (run_id, role, attempt_of, state, provider, model, model_source,
+			model_entry_id, model_entry_name, chain_position, chain_length, failure_reason, failure_step, created_at)
+		VALUES ($1::uuid, $2, NULLIF($3, '')::uuid, $4, $5, $6, 'global', $7, $7, $8, 2, $9, $10, $11) RETURNING id::text`,
+		root, m.role, m.attemptOf, m.state, m.provider, m.model, m.entry, m.position, m.failure, m.step, m.at).Scan(&id); err != nil {
+		e.t.Fatalf("adding a panel member: %v", err)
+	}
+	return id
+}
+
+// addModelUsage stores one run_usage_models row: a member's when member is
+// set, else a merge row of run.
+func (e *env) addModelUsage(run, member, role, skill, entry, provider, model string, in, out int64) {
+	e.t.Helper()
+	part := "merge"
+	if member != "" {
+		part = "member"
+	}
+	e.exec(`INSERT INTO run_usage_models (run_id, member_id, part, role, skill, provider, model, entry_name, reported_at,
+			tokens_in, tokens_out)
+		VALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, now(), $9, $10)`,
+		run, member, part, role, skill, provider, model, entry, in, out)
+}
+
+// The run page of a panel review shows its members (each attempt with its
+// entry, model, state and failure), the entries Job P judged with, and the
+// tokens of each model by part and role: entry names and model names, never
+// a key.
+func TestRunPagePanel(t *testing.T) {
+	e := newEnv(t, withSecrets(t))
+	now := e.clock.now()
+	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a')),
+		outcome: OutcomeApproved, approved: true, provider: "anthropic", model: "claude-sonnet-4", at: now.Add(-time.Hour)})
+	a1 := e.addMember(run, memberFix{role: "a", state: "fell_back", entry: "sonnet", provider: "anthropic", model: "claude-sonnet-4",
+		position: 1, at: now.Add(-50 * time.Minute)})
+	b1 := e.addMember(run, memberFix{role: "b", state: "failed", entry: "gpt", provider: "openai", model: "gpt-5", position: 1,
+		failure: "the member Job ran out of memory (OOMKilled)", step: "review", at: now.Add(-49 * time.Minute)})
+	a2 := e.addMember(run, memberFix{role: "a", state: "done", entry: "qwen", provider: "alibaba", model: "qwen3", position: 2,
+		attemptOf: a1, at: now.Add(-40 * time.Minute)})
+	e.exec(`INSERT INTO panel_judges (run_id, role, provider, model, model_source, model_entry_id, model_entry_name, chain_length)
+		VALUES ($1::uuid, 'b', 'openai', 'gpt-5', 'global', 'gpt', 'gpt', 1), ($1::uuid, 'a', 'alibaba', 'qwen3', 'global', 'qwen', 'qwen', 2)`, run)
+	e.addModelUsage(run, a2, "a", "code-review", "qwen", "alibaba", "qwen3", 100, 10)
+	e.addModelUsage(run, a2, "a", "security", "qwen", "alibaba", "qwen3", 50, 5)
+	e.addModelUsage(run, b1, "b", "code-review", "gpt", "openai", "gpt-5", 20, 2)
+	e.addModelUsage(run, "", "a", "code-review", "qwen", "alibaba", "qwen3", 30, 3)
+	e.addModelUsage(run, "", "b", "code-review", "gpt", "openai", "gpt-5", 7, 1)
+	// Another review's tokens are not this one's.
+	other := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
+	e.addModelUsage(other, "", "a", "code-review", "qwen", "alibaba", "qwen3", 999, 99)
+
+	c := e.userOnMain(false, "acme/widgets")
+	v := getJSON[RunDetailView](e, c, "/api/runs/"+run)
+	if v.Panel == nil {
+		t.Fatal("no panel on a panel review's run")
+	}
+	want := RunPanelView{
+		Members: []PanelMemberView{
+			{Role: "a", Attempts: []MemberAttemptView{
+				{ID: a1, Entry: "sonnet", Position: 1, Provider: "anthropic", Model: "claude-sonnet-4", State: "fell_back"},
+				{ID: a2, Entry: "qwen", Position: 2, Provider: "alibaba", Model: "qwen3", State: "done"},
+			}},
+			{Role: "b", Attempts: []MemberAttemptView{
+				{ID: b1, Entry: "gpt", Position: 1, Provider: "openai", Model: "gpt-5", State: "failed",
+					Failure: "the member Job ran out of memory (OOMKilled)", Step: "review"},
+			}},
+		},
+		Judges: []PanelJudgeView{
+			{Role: "a", Entry: "qwen", Provider: "alibaba", Model: "qwen3"},
+			{Role: "b", Entry: "gpt", Provider: "openai", Model: "gpt-5"},
+		},
+		Cost: []ModelCostView{
+			{Part: "member", Role: "a", Entry: "qwen", Provider: "alibaba", Model: "qwen3", In: 150, Out: 15},
+			{Part: "member", Role: "b", Entry: "gpt", Provider: "openai", Model: "gpt-5", In: 20, Out: 2},
+			{Part: "merge", Role: "a", Entry: "qwen", Provider: "alibaba", Model: "qwen3", In: 30, Out: 3},
+			{Part: "merge", Role: "b", Entry: "gpt", Provider: "openai", Model: "gpt-5", In: 7, Out: 1},
+		},
+	}
+	if !reflect.DeepEqual(*v.Panel, want) {
+		t.Errorf("panel = %+v\nwant %+v", *v.Panel, want)
+	}
+	raw := rawKeys(e, c, "/api/runs/"+run)
+	var panel map[string]json.RawMessage
+	if err := json.Unmarshal(raw["panel"], &panel); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := panel["off"]; ok {
+		t.Errorf("a panel that ran has an off key: %s", raw["panel"])
+	}
+	body := e.get(c, "/api/runs/"+run).Body.String()
+	for _, s := range []string{llmKey, "SECRET"} {
+		if strings.Contains(body, s) {
+			t.Errorf("the run page shows %q: %s", s, body)
+		}
+	}
+}
+
+// A review whose panel could not start says why, with no members, judges or
+// cost. An off row an earlier claim left is not this run's.
+func TestRunPagePanelOff(t *testing.T) {
+	e := newEnv(t, nil)
+	now := e.clock.now()
+	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a')),
+		outcome: OutcomeApproved, approved: true})
+	e.exec(`UPDATE runs SET claimed_at = $2 WHERE id = $1::uuid`, run, now.Add(-time.Hour))
+	e.exec(`INSERT INTO panel_members (run_id, role, state, failure_reason, claimed_at) VALUES ($1::uuid, 'b', 'off', $2, $3)`,
+		run, "chain B has no usable entry", now.Add(-time.Hour))
+	stale := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
+	e.exec(`UPDATE runs SET claimed_at = $2 WHERE id = $1::uuid`, stale, now.Add(-time.Hour))
+	e.exec(`INSERT INTO panel_members (run_id, role, state, failure_reason, claimed_at) VALUES ($1::uuid, 'b', 'off', $2, $3)`,
+		stale, "the review image is too old", now.Add(-2*time.Hour))
+
+	c := e.userOnMain(false, "acme/widgets")
+	v := getJSON[RunDetailView](e, c, "/api/runs/"+run)
+	want := RunPanelView{Off: "chain B has no usable entry", Members: []PanelMemberView{}, Judges: []PanelJudgeView{}, Cost: []ModelCostView{}}
+	if v.Panel == nil || !reflect.DeepEqual(*v.Panel, want) {
+		t.Errorf("panel = %+v; want %+v", v.Panel, want)
+	}
+	if _, ok := rawKeys(e, c, "/api/runs/"+stale)["panel"]; ok {
+		t.Error("a run with a stale off row has a panel key")
+	}
+}
+
+// A run that is no panel review has no panel key at all, and so has an
+// attempt of a review that fell back before its panel was split.
+func TestRunPageNoPanel(t *testing.T) {
+	e := newEnv(t, nil)
+	now := e.clock.now()
+	plain := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a'))})
+	first := e.addRun(runFix{project: "acme/widgets", number: 7, head: head('7'), state: store.Superseded, outcome: OutcomeFellBack,
+		reason: store.ClassQuota, at: now.Add(-3 * time.Hour)})
+	split := e.addRun(runFix{project: "acme/widgets", number: 7, head: head('7'), result: cleanResult(head('7')),
+		outcome: OutcomeApproved, approved: true, at: now.Add(-2 * time.Hour)})
+	e.exec(`UPDATE runs SET attempt_of = $2::uuid WHERE id = $1::uuid`, split, first)
+	e.addMember(first, memberFix{role: "a", state: "done", entry: "qwen", provider: "alibaba", model: "qwen3", position: 1,
+		at: now.Add(-90 * time.Minute)})
+
+	c := e.userOnMain(false, "acme/widgets")
+	for _, id := range []string{plain, first} {
+		if _, ok := rawKeys(e, c, "/api/runs/"+id)["panel"]; ok {
+			t.Errorf("run %s has a panel key", id)
+		}
+	}
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+split); v.Panel == nil || len(v.Panel.Members) != 1 {
+		t.Errorf("the split run's panel = %+v", v.Panel)
+	}
+}
+
+// A member's log and diagnostics have the gates of its run's: a session
+// that can't see the run gets 404, as for a member of another review, an
+// unknown one and one with nothing kept; the clone log is masked below admin.
+func TestMemberLogGated(t *testing.T) {
+	e := newEnv(t, nil)
+	now := e.clock.now()
+	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a'))})
+	member := e.addMember(run, memberFix{role: "a", state: "done", entry: "qwen", position: 1, at: now})
+	quiet := e.addMember(run, memberFix{role: "b", state: "done", entry: "gpt", position: 1, at: now})
+	otherRun := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
+	otherMember := e.addMember(otherRun, memberFix{role: "a", state: "done", entry: "qwen", position: 1, at: now})
+	hiddenRun := e.addRun(runFix{project: "acme/payments", projectID: 8, number: 9, head: head('9'), result: cleanResult(head('9'))})
+	hiddenMember := e.addMember(hiddenRun, memberFix{role: "a", state: "done", entry: "qwen", position: 1, at: now})
+	for _, id := range []string{member, otherMember, hiddenMember} {
+		if err := e.st.PutMemberLog(ctx, id, "member log "+id); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.st.PutMemberDiagnostics(ctx, id, store.Diagnostics{CloneLog: "fatal: acme/private-lib.git",
+			CloneLogMasked: "fatal: [linked repository]", PodState: "phase: Failed"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	memberPath := func(runID, memberID, what string) string {
+		return "/api/runs/" + runID + "/members/" + memberID + "/" + what
+	}
+
+	c := e.userOnMain(false, "acme/widgets")
+	if v := getJSON[LogView](e, c, memberPath(run, member, "log")); v.Text != "member log "+member {
+		t.Errorf("log = %q", v.Text)
+	}
+	if v := getJSON[DiagnosticsView](e, c, memberPath(run, member, "diagnostics")); v.CloneLog != "fatal: [linked repository]" || v.PodState != nil {
+		t.Errorf("viewer diagnostics = %+v; want the masked log and no pod state", v)
+	}
+	admin := e.sessionFor(e.ssoAdmin("root@example.com"))
+	if v := getJSON[DiagnosticsView](e, admin, memberPath(run, member, "diagnostics")); v.CloneLog != "fatal: acme/private-lib.git" ||
+		v.PodState == nil || *v.PodState != "phase: Failed" {
+		t.Errorf("admin diagnostics = %+v; want the whole log and the pod state", v)
+	}
+	for _, what := range []string{"log", "diagnostics"} {
+		for name, target := range map[string]string{
+			"hidden run":         memberPath(hiddenRun, hiddenMember, what),
+			"another run's":      memberPath(run, otherMember, what),
+			"unknown member":     memberPath(run, "00000000-0000-0000-0000-000000000000", what),
+			"malformed member":   memberPath(run, "bad", what),
+			"malformed run":      memberPath("bad", member, what),
+			"nothing kept":       memberPath(run, quiet, what),
+			"under the hidden's": memberPath(hiddenRun, member, what),
+		} {
+			rec := e.wantStatus(c, target, http.StatusNotFound)
+			if strings.Contains(rec.Body.String(), "member log") || strings.Contains(rec.Body.String(), "payments") {
+				t.Errorf("%s %s: the 404 says too much: %s", name, what, rec.Body)
+			}
+		}
+		e.wantStatus(nil, memberPath(run, member, what), http.StatusUnauthorized)
+	}
+	// The admin sees the other run's member under its own run only.
+	e.wantStatus(admin, memberPath(run, otherMember, "log"), http.StatusNotFound)
+	e.wantStatus(admin, memberPath(otherRun, otherMember, "log"), http.StatusOK)
 }
