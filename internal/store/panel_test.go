@@ -1653,3 +1653,61 @@ func TestClearPanelJudges(t *testing.T) {
 		t.Errorf("ClearPanelJudges(bad) = %v", err)
 	}
 }
+
+// A review that fell back on chain A before its split: the split is on its
+// later attempt, and Job P's later attempts take that run's values, never the
+// first run's. The split run itself, dispatched at its split, takes nothing.
+func TestInheritPanelSplitFromTheSplitRun(t *testing.T) {
+	s := newStore(t)
+	root := reported(t, s, mr1, "a1", `{}`)
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET base_sha = 'old-base', quiet_reviews = false WHERE id = $1::uuid`, root); err != nil {
+		t.Fatal(err)
+	}
+	split, created, err := s.EnqueueAttempt(ctx, getRun(t, s, root), quotaMark("m1"))
+	if err != nil || !created {
+		t.Fatal(split, created, err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if started, err := s.StartPanel(ctx, split, testSplit, t0); err != nil || !started {
+		t.Fatalf("StartPanel = %v, %v", started, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET quiet_reviews = true WHERE id = $1::uuid`, split); err != nil {
+		t.Fatal(err)
+	}
+	doneMember(t, s, memberOf(t, s, root, "a").ID, `{}`)
+	doneMember(t, s, memberOf(t, s, root, "b").ID, `{}`)
+	if released, _, err := s.ReleasePanel(ctx, split, t0); err != nil || !released {
+		t.Fatal(released, err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InheritPanelSplit(ctx, split); err == nil {
+		t.Error("InheritPanelSplit of the split run (dispatched at its split) succeeded")
+	}
+	if r := getRun(t, s, split); r.BaseSHA != "base-sha" {
+		t.Fatalf("split run base = %q; want the split's", r.BaseSHA)
+	}
+	if err := s.MarkDispatched(ctx, split, "job-p", "base-sha", "start-sha", hash("tok-p"), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.StoreResult(ctx, split, "tok-p", []byte(`{}`), t0); err != nil || out != ResultStored {
+		t.Fatal(out, err)
+	}
+	next, created, err := s.EnqueueAttempt(ctx, getRun(t, s, split), quotaMark("m2"))
+	if err != nil || !created {
+		t.Fatal(next, created, err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InheritPanelSplit(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	if a := getRun(t, s, next); a.BaseSHA != "base-sha" || a.StartSHA != "start-sha" || !a.Quiet ||
+		a.SkillSources["security"] != "library" {
+		t.Errorf("P's next attempt = base %q start %q quiet %v skills %v; want the split run's", a.BaseSHA, a.StartSHA, a.Quiet, a.SkillSources)
+	}
+}

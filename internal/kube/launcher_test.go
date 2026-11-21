@@ -18,6 +18,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/gopaytech/pergent.sh/internal/config"
 )
 
 func fakeLauncher() (*Launcher, *fake.Clientset) {
@@ -276,5 +278,20 @@ func TestLaunchJobSecrets(t *testing.T) {
 	}
 	if _, err := l.JobSecrets(context.Background(), "nope"); err == nil {
 		t.Errorf("JobSecrets of a missing Job succeeded")
+	}
+}
+
+// Job P's Secret gives model B's key back too, so its logs hide it.
+func TestLaunchJobSecretsPanel(t *testing.T) {
+	l, _ := fakeLauncher()
+	p := testParams()
+	p.Panel = &PanelParams{AURL: "https://cb.example.com/runs/r/panel/a", BURL: "https://cb.example.com/runs/r/panel/b",
+		B: config.LLM{Provider: "openai", Model: "gpt-b"}, Image: "img"}
+	want := Secrets{GitToken: "g1", LLMKey: "l1", LLMKeyB: "lb", ResultToken: "r1"}
+	if err := l.Launch(context.Background(), p, want); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := l.JobSecrets(context.Background(), p.Name); err != nil || got != want {
+		t.Errorf("JobSecrets = %+v, %v; want %+v", got, err, want)
 	}
 }

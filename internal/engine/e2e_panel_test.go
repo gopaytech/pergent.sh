@@ -1869,3 +1869,125 @@ func TestE2EPanelPNoRoleNoFallBack(t *testing.T) {
 		t.Errorf("A's entry is marked")
 	}
 }
+
+// withBase is body with its base commit set to base.
+func withBase(t *testing.T, body []byte, base string) []byte {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["base"] = base
+	out, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// A review falls back on chain A before chain B exists, and its next attempt
+// is split, on a base the merge request moved to meanwhile. Job P runs on
+// that split run and reviews the split's base, and P's own later attempt
+// takes the split run's values, never the first run's older ones.
+func TestE2EPanelSplitAfterFallBack(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	e, _ := newFallbackE2E(t, "team-a", "team-a2")
+	env := e.env
+	head, base := sha('a'), sha('9')
+	servePublish(env, 1, head)
+	env.Enqueue(1, head)
+	first := e.attempt(t, "key-team-a", failedOn(t, head, "quota"))
+	wantFellBack(t, env, first, store.ClassQuota)
+
+	savePanelChain(t, env, "team-b", "team-c")
+	mr := openMR(1, head)
+	mr.DiffRefs.BaseSHA, mr.DiffRefs.StartSHA = base, sha('8')
+	env.GitLab.SetMR(mr)
+	dispatch(t, env)
+	as, err := env.Store.Attempts(env.ctx, first)
+	if err != nil || len(as) != 2 {
+		t.Fatalf("attempts = %d, %v; want the first run and its split attempt", len(as), err)
+	}
+	split := as[1].ID
+	if r := env.Run(split); r.State != store.Waiting || r.SkipReason != store.WaitPanel || r.BaseSHA != base {
+		t.Fatalf("split attempt = %s/%q base %q; want a panel on the moved base\n%s", r.State, r.SkipReason, r.BaseSHA, env.Logs())
+	}
+	if r := env.Run(first); r.BaseSHA == base {
+		t.Fatalf("the first run's base is the new one; the test needs an older one")
+	}
+	dispatch(t, env)
+	for _, role := range []string{"a", "b"} {
+		m := memberOfRole(t, env, first, role)
+		if code := e.postMember(t, m.RunID, m, withBase(t, clean(t, head), base)); code != http.StatusOK {
+			t.Fatalf("member %s's result: status %d\n%s", role, code, env.Logs())
+		}
+	}
+	publish(t, env)
+
+	dispatch(t, env)
+	if job := env.Job(split); job == nil || !hasArg(job.Spec.Template.Spec.Containers[0].Args, "--base="+base) {
+		t.Fatalf("Job P does not review the split's base\n%s", env.Logs())
+	}
+	if r := env.Run(split); r.BaseSHA != base || r.StartSHA != sha('8') {
+		t.Errorf("split run base %q start %q; want the split's", r.BaseSHA, r.StartSHA)
+	}
+	token := string(env.Secret(split).Data["result-token"])
+	if code := e.postResult(t, split, token, withRoleError(t, withBase(t, clean(t, head), base), "quota", "b")); code != http.StatusOK {
+		t.Fatalf("P's result: status %d\n%s", code, env.Logs())
+	}
+	publish(t, env)
+	wantFellBack(t, env, split, store.ClassQuota)
+
+	dispatch(t, env)
+	next := e.newJob(t, first, split)
+	r, want := env.Run(next), env.Run(split)
+	if r.BaseSHA != base || r.StartSHA != sha('8') || !maps.Equal(r.SkillSources, want.SkillSources) ||
+		r.ModelEntryID != want.ModelEntryID {
+		t.Errorf("P's next attempt = base %q start %q entry %q; want the split run's", r.BaseSHA, r.StartSHA, r.ModelEntryID)
+	}
+	if !hasArg(env.Job(next).Spec.Template.Spec.Containers[0].Args, "--base="+base) {
+		t.Errorf("P's next Job does not review the split's base")
+	}
+	if code := e.postResult(t, next, string(env.Secret(next).Data["result-token"]), withBase(t, clean(t, head), base)); code != http.StatusOK {
+		t.Fatalf("next P's result: status %d\n%s", code, env.Logs())
+	}
+	publish(t, env)
+	wantPublished(t, env, next)
+}
+
+// B's member entry left chain B after the split (it still exists, with its
+// key): B's judge takes the chain's entry now, not the one that left.
+func TestE2EPanelPJudgeLeftChain(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, _, _ := releasedPanel(t, e, head, clean(t, head), clean(t, head))
+	refs := savePanelChain(t, env, "team-c")
+
+	dispatch(t, env)
+	if got := string(env.Secret(id).Data["llm-api-key-b"]); got != "key-team-c" {
+		t.Errorf("P's B key = %q; want the chain's entry now", got)
+	}
+	if js := panelJudges(t, env, id); js["b"].ID != refs[0].ID || js["b"].Length != 1 {
+		t.Errorf("B's judge = %+v; want team-c of a chain of 1", js["b"])
+	}
+}
+
+// Job P's captured log hides model B's key from its own Secret, even when
+// the engine no longer knows that key.
+func TestE2EPanelPLogHidesKeyB(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, _, _ := releasedPanel(t, e, head, clean(t, head), clean(t, head))
+	dispatch(t, env)
+	sec := env.Secret(id)
+	sec.Data["llm-api-key-b"] = []byte("key-only-in-the-secret")
+	if _, err := env.Kube.CoreV1().Secrets(testNamespace).Update(env.ctx, sec, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	hide, err := env.Engine.jobHide(env.ctx, kube.JobName(id))
+	if err != nil || !slices.Contains(hide, "key-only-in-the-secret") {
+		t.Errorf("jobHide = %v; want model B's key from the Secret", err)
+	}
+}

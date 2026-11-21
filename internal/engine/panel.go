@@ -28,6 +28,9 @@ const (
 	panelOffSame  = "model B is the model A runs on"
 	panelOffNone  = "no entry of chain B can be used"
 	panelOffRead  = "chain B could not be read"
+	// panelOffFetch: Job P fetches the members' results with pergent.sh's
+	// own image (PERGENT_SH_IMAGE, set by the chart).
+	panelOffFetch = "pergent.sh's own image is not set"
 )
 
 // reasonInputsChanged fails a member whose dispatch would change what its run
@@ -73,6 +76,10 @@ func (d *dispatcher) panel(ctx context.Context, mr forge.Change, fitted *inputs.
 	if ok, why := config.PanelImage(e.Config.Jobs.Image); !ok {
 		d.log.Info("the review runs without a panel: the review image does not support it", "image_check", why)
 		return false, d.panelOff(ctx, panelOffImage)
+	}
+	if e.ScanImage == "" {
+		d.log.Info("the review runs without a panel: pergent.sh's own image (PERGENT_SH_IMAGE) is not set")
+		return false, d.panelOff(ctx, panelOffFetch)
 	}
 	if repoUsedUp {
 		return false, d.panelOff(ctx, panelOffQuota)
@@ -567,16 +574,16 @@ func (d *dispatcher) resolveMerge(ctx context.Context, repo settings.Effective, 
 }
 
 // pickJudge is the entry the role whose chain is in judges with: its done
-// member's final entry when the chain's rules still let it run (a key, no
-// mark, not the model to avoid), else the chain's first usable entry. ok is
-// false with no done member or no usable entry. The instance quota is left
-// to resolveMerge.
+// member's final entry while it is still in the chain and the chain's rules
+// let it run (a key, no mark, not the model to avoid), else the chain's
+// first usable entry. ok is false with no done member or no usable entry.
+// The instance quota is left to resolveMerge.
 func pickJudge(in chain.Input, done *store.PanelMember) (judge, bool) {
 	if done == nil {
 		return judge{}, false
 	}
 	ref := store.EntryRef{Source: done.Entry.Source, ID: done.Entry.ID}
-	if ref.ID != "" && chain.EntryReason(in, ref) == "" {
+	if ref.ID != "" && slices.Contains(in.Refs, ref) && chain.EntryReason(in, ref) == "" {
 		m := in.Entries[ref]
 		return judge{model: m, entry: store.RunEntry{Source: ref.Source, ID: ref.ID, Name: m.Name, TeamID: m.TeamID,
 			Position: slices.Index(in.Refs, ref) + 1, Length: len(in.Refs)}}, true

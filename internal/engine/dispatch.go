@@ -236,9 +236,11 @@ type dispatcher struct {
 
 // dispatchRun starts the claimed merge request run: today's review, or the
 // merge (Job P) of a review panel, which is a run whose review has a member
-// that is not off (its members are final: the run was released). A later
-// attempt of Job P first takes what the review's first run recorded at the
-// split, which Job P writes nothing of.
+// that is not off (its members are final: the run was released). The run
+// that was split is dispatched at its split and has what it recorded then.
+// A later attempt of Job P (not dispatched yet) first takes those values
+// from the run it fell back from (InheritPanelSplit), since Job P writes
+// nothing of them.
 func (d *dispatcher) dispatchRun(ctx context.Context) error {
 	ms, err := d.e.Store.PanelMembers(ctx, d.run.ID)
 	if err != nil {
@@ -250,7 +252,7 @@ func (d *dispatcher) dispatchRun(ctx context.Context) error {
 			break
 		}
 	}
-	if d.stage == stageMerge && d.run.AttemptOf != nil {
+	if d.stage == stageMerge && d.run.AttemptOf != nil && d.run.DispatchedAt.IsZero() {
 		if err := d.e.Store.InheritPanelSplit(ctx, d.run.ID); err != nil {
 			return d.retry(ctx, fmt.Errorf("take the review panel's split: %w", err))
 		}
@@ -313,7 +315,8 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("get merge request: %w", err))
 	}
-	if !d.isMember() {
+	if d.stage == stageReview {
+		// A member's and Job P's run keep what the review recorded.
 		d.recordChange(ctx, mr)
 	}
 	if mr.State != forge.StateOpen {

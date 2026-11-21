@@ -117,13 +117,13 @@ func (e *Engine) captureJobLog(ctx context.Context, j jobLog, obs kube.Observati
 func diagKey(id string) string { return "diag:" + id }
 
 // jobHide is what to hide in text read from a Job: the values of its own
-// Secret and the engine's model keys.
+// Secret (Job P's model B key too) and the engine's model keys.
 func (e *Engine) jobHide(ctx context.Context, jobName string) ([]string, error) {
 	secrets, err := e.Launcher.JobSecrets(ctx, jobName)
 	if err != nil {
 		return nil, err
 	}
-	return append([]string{secrets.GitToken, secrets.LLMKey, secrets.ResultToken}, e.registry().LLMKeys()...), nil
+	return append([]string{secrets.GitToken, secrets.LLMKey, secrets.LLMKeyB, secrets.ResultToken}, e.registry().LLMKeys()...), nil
 }
 
 // capturePergentLog stores the redacted tail of the pergent container's log.

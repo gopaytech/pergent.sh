@@ -183,9 +183,13 @@ func panelFloor(t *testing.T, v string) {
 	t.Cleanup(func() { config.PanelMinVersion = "" })
 }
 
-// saveChainB stores chain B c.
+// saveChainB stores chain B c. A panel needs pergent.sh's own image for its
+// merge, so it is set when the test left it empty.
 func saveChainB(t *testing.T, env *testEnv, c store.Chain) {
 	t.Helper()
+	if env.Engine.ScanImage == "" {
+		env.Engine.ScanImage = testScanImage
+	}
 	if err := env.Store.SaveChainOf(env.ctx, store.ChainB, c, env.Now()); err != nil {
 		t.Fatalf("SaveChainOf(ChainB): %v", err)
 	}
@@ -319,6 +323,17 @@ func TestDispatchPanelImageTooOld(t *testing.T) {
 			wantOnlyA(t, env, id, "the review image does not support it")
 		})
 	}
+}
+
+// Without pergent.sh's own image Job P could not fetch the members'
+// results: the review runs A only, with the note, and no member starts.
+func TestDispatchPanelNoFetchImage(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	env := newTestEnv(t)
+	globalChainB(t, env)
+	env.Engine.ScanImage = ""
+	id := dispatchMR(t, env, 3, sha('a'))
+	wantOnlyA(t, env, id, "pergent.sh's own image is not set")
 }
 
 // A run asked for under a used-up instance quota goes ahead on A's global

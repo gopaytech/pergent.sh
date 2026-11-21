@@ -992,11 +992,15 @@ func (s *Store) ClearPanelJudges(ctx context.Context, runID string) error {
 }
 
 // InheritPanelSplit gives the running later attempt id of a panel's merge
-// (Job P) what its review's first run recorded at the split and its
-// dispatch: the base and start SHAs, the model and entry, the skills, the
-// step limit, the rules hash, whether it is quiet or incremental, the
-// layout, the links and the change's details. Job P writes none of them
-// itself, and its result is checked against them. Any other run is an error.
+// (Job P), not yet dispatched, what the run it fell back from carries: that
+// run is the one that was split, or an earlier attempt of P that took it
+// from there, so these are what the split recorded and its dispatch: the
+// base and start SHAs, the model and entry, the skills, the step limit, the
+// rules hash, whether it is quiet or incremental, the layout, the links and
+// the change's details. It is never the review's first run as such: a
+// review can fall back on chain A before it is split, and those attempts
+// carry older values. Job P writes none of them itself, and its result is
+// checked against them. Any other run is an error.
 func (s *Store) InheritPanelSplit(ctx context.Context, id string) error {
 	return s.mustUpdate(ctx, id, `UPDATE runs a SET base_sha = r.base_sha, start_sha = r.start_sha,
 			provider = r.provider, model = r.model, max_turns = r.max_turns,
@@ -1007,5 +1011,9 @@ func (s *Store) InheritPanelSplit(ctx context.Context, id string) error {
 			model_team_id = r.model_team_id, chain_position = r.chain_position, chain_length = r.chain_length,
 			fallback_class = r.fallback_class,
 			title = r.title, web_url = r.web_url, source_branch = r.source_branch, author = r.author
-		FROM runs r WHERE a.id = $1::uuid AND a.state = 'running' AND r.id = a.attempt_of`, id)
+		FROM runs r WHERE a.id = $1::uuid AND a.state = 'running' AND a.dispatched_at IS NULL AND a.attempt_of IS NOT NULL
+		  AND r.id = (SELECT x.id FROM runs x
+			WHERE (x.id = a.attempt_of OR x.attempt_of = a.attempt_of) AND x.id <> a.id
+			  AND (x.created_at, x.id) < (a.created_at, a.id)
+			ORDER BY x.created_at DESC, x.id DESC LIMIT 1)`, id)
 }
