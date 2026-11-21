@@ -335,7 +335,6 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     rerunLimitPerRepo: { value: 50, overridden: false },
     trustedAuthorsOnly: { value: "follow_visibility", overridden: false },
     trustedAuthors: { value: [], overridden: false },
-    model: { value: null, overridden: false },
     // Only an admin is sent the quota.
     ...(role === "admin" ? { monthlyTokenQuota: { value: null, overridden: false } } : {}),
   },
@@ -358,14 +357,6 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     error: "",
     failedAt: null,
   },
-  // Only an admin of the repository is given the choices.
-  modelChoices:
-    role === "admin"
-      ? [
-          { id: "m-sonnet", label: "anthropic / claude-sonnet", default: true },
-          { id: "m-opus", label: "anthropic / claude-opus", default: false },
-        ]
-      : [],
 });
 
 // A skill written in the dashboard, on the default list.
@@ -1090,4 +1081,22 @@ export const chainTeam: ChainView = {
     { ...entrySonnet, position: 2 },
   ],
   choices: [choice(entryTeamQwen), choice(entrySonnet)],
+};
+
+// acme/payments' chain in effect while it inherits its owner team's, as an
+// admin of it sees it (every global entry and the team's are choices).
+export const chainRepoInherit: ChainView = {
+  ...chainTeam,
+  scope: "repo",
+  source: "team",
+  choices: [choice(entryTeamQwen), choice(entrySonnet), choice(entryOpus)],
+};
+
+// acme/payments' own chain.
+export const chainRepoCustom: ChainView = {
+  ...chainRepoInherit,
+  source: "repository",
+  team: "",
+  savedByAdmin: true,
+  entries: [{ ...entryOpus, position: 1 }],
 };

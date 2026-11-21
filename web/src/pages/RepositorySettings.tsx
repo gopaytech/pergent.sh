@@ -13,7 +13,6 @@ import {
   type LibrarySkill,
   type LinkableView,
   type Link as RepoLink,
-  type ModelChoice,
   type RepoSettings,
   type RepoTeamsView,
   type RepositoryDetailView,
@@ -27,6 +26,7 @@ import LinkedReposEditor, { tidyLinks, type LinkableState } from "../LinkedRepos
 import { useWrite } from "../layout/write";
 import { parseQuota, quotaProblem, quotaText } from "../quota";
 import { ErrorBox, Loading, Switch, bytesText } from "../ui";
+import RepoModelChain from "./RepoModelChain";
 
 // SettingsTab edits a repository's settings (maintainers and admins only;
 // the page hides the tab from others). A config-managed repository's are
@@ -111,12 +111,8 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         canSetLinks={canSetLinks}
         // Who is trusted is an admin's to say too.
         canSetTrust={view.role === "admin"}
-        // So is the model: it decides what the reviews cost.
-        canSetModel={view.role === "admin"}
-        // And the token quota.
+        // So is the token quota.
         canSetQuota={view.role === "admin"}
-        modelNow={view.model}
-        modelChoices={view.modelChoices}
         instanceTrust={view.instanceTrustedAuthorsOnly}
         platform={repo.platform}
         ciNames={ciNames.isSuccess ? ciNames.data.names : null}
@@ -138,8 +134,8 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
           const caps =
             view.role === "admin"
               ? ""
-              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories, who is trusted, the model and the token quota.";
-          if (window.confirm(`Put every setting of this repository back to its default?${caps}`)) reset.mutate();
+              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories, who is trusted and the token quota.";
+          if (window.confirm(`Put every setting of this repository back to its default?${caps} The model chain stays as it is.`)) reset.mutate();
         }}
       />
       {note && (
@@ -149,6 +145,9 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
       )}
       {save.isError && <ErrorBox error={save.error} />}
       {reset.isError && <ErrorBox error={reset.error} />}
+      {/* The model chain is not a setting: it has its own routes, and the
+          config does not set it, so it is there for every repository. */}
+      <RepoModelChain instance={repo.instance} project={repo.project} />
       {/* Which teams cover a repository is an admin's to say, also for a
           repository the config sets up: it is not one of its settings. */}
       {view.role === "admin" && <RepoTeams instance={repo.instance} project={repo.project} />}
@@ -291,8 +290,6 @@ type Draft = {
   // "" follows the instance.
   trustedAuthorsOnly: "" | "on" | "off";
   trustedAuthors: TrustedAuthor[];
-  // The ID of the entry of the list of models; "" follows the default.
-  model: string;
   // The quota as typed; "" is none of its own.
   monthlyTokenQuota: string;
 };
@@ -337,10 +334,7 @@ function Form({
   canSetCaps,
   canSetLinks,
   canSetTrust,
-  canSetModel,
   canSetQuota,
-  modelNow,
-  modelChoices,
   instanceTrust,
   platform,
   ciNames,
@@ -358,12 +352,7 @@ function Form({
   canSetCaps: boolean;
   canSetLinks: boolean;
   canSetTrust: boolean;
-  canSetModel: boolean;
   canSetQuota: boolean;
-  // modelNow is "provider / model" the repository runs on, modelChoices what
-  // an admin of it can pick.
-  modelNow: string;
-  modelChoices: ModelChoice[];
   // instanceTrust is the instance's mode, which "Instance default" follows.
   instanceTrust: TrustMode;
   platform: string;
@@ -406,11 +395,8 @@ function Form({
     trustedAuthorsOnly:
       settings.trustedAuthorsOnly.overridden && settings.trustedAuthorsOnly.value !== "follow_visibility" ? settings.trustedAuthorsOnly.value : "",
     trustedAuthors: settings.trustedAuthors.value,
-    model: settings.model.value ?? "",
     monthlyTokenQuota: quotaText(settings.monthlyTokenQuota?.value ?? null),
   };
-  // What "Default" would give the repository; none flagged, none named.
-  const defaultChoice = modelChoices.find((c) => c.default);
   const [newAuthor, setNewAuthor] = useState("");
   const [d, setD] = useState<Draft>(initial);
   const [problem, setProblem] = useState("");
@@ -457,9 +443,7 @@ function Form({
         body.trustedAuthors = d.trustedAuthors.length === 0 ? null : d.trustedAuthors;
       }
     }
-    // The model is an admin's too (the server would refuse the whole save).
-    if (canSetModel && d.model !== initial.model) body.model = d.model === "" ? null : d.model;
-    // So is the token quota: it stops the repository's reviews.
+    // The token quota is an admin's too: it stops the repository's reviews.
     if (canSetQuota && settings.monthlyTokenQuota && d.monthlyTokenQuota.trim() !== initial.monthlyTokenQuota) {
       const quota = parseQuota(d.monthlyTokenQuota);
       if (quota === undefined) {
@@ -622,30 +606,6 @@ function Form({
             <option value="on">on</option>
             <option value="off">off</option>
           </select>
-        </Setting>
-        <Setting
-          name="Model"
-          overridden={settings.model.overridden}
-          help="The model this repository's reviews run on. The default follows the one an admin of pergent.sh made the default."
-        >
-          <select aria-label="Model" value={d.model} disabled={disabled || !canSetModel} onChange={(e) => set("model", e.target.value)}>
-            {canSetModel ? (
-              <>
-                <option value="">{defaultChoice ? `Default (${defaultChoice.label})` : "Default"}</option>
-                {modelChoices.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label}
-                  </option>
-                ))}
-                {initial.model !== "" && !modelChoices.some((c) => c.id === initial.model) && (
-                  <option value={initial.model}>{modelNow || initial.model} (not in the list)</option>
-                )}
-              </>
-            ) : (
-              <option value={initial.model}>{modelNow || "none set"}</option>
-            )}
-          </select>
-          {!locked && !canSetModel && <div className="meta">Only admins of this repository change the model.</div>}
         </Setting>
         {canSetQuota && settings.monthlyTokenQuota && (
           <Setting

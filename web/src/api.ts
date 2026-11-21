@@ -348,17 +348,10 @@ export type RepoSettings = {
   // overridden, else its instance's.
   trustedAuthorsOnly: SettingView<TrustMode>;
   trustedAuthors: SettingView<TrustedAuthor[]>;
-  // model is the ID of the entry of the list of models the repository runs
-  // on; null follows the default.
-  model: SettingView<string | null>;
   // monthlyTokenQuota is the tokens (in plus out) the repository's reviews may
   // use in a UTC month; null is none of its own. Only an admin is sent it.
   monthlyTokenQuota?: SettingView<number | null>;
 };
-
-// ModelChoice is an entry of the list of models a repository can be given:
-// its ID, "provider / model" to show, and whether it is the default.
-export type ModelChoice = { id: string; label: string; default: boolean };
 
 export type RepositoryDetailView = {
   repo: RepositoryView;
@@ -371,12 +364,10 @@ export type RepositoryDetailView = {
   // instanceTrustedAuthorsOnly is the instance's mode, which the repository
   // follows unless it sets its own.
   instanceTrustedAuthorsOnly: TrustMode;
-  // model is "provider / model", the one the repository runs on: its own
-  // choice, else the default. "" when there is none. Never a base URL or key.
+  // model is "provider / model" of position 1 of the model chain in effect
+  // (GET .../chain has the chain); "" when the chain is empty or that entry
+  // was removed. Never a base URL or key.
   model: string;
-  // modelChoices are the entries an admin of the repository can pick from;
-  // empty for anyone else.
-  modelChoices: ModelChoice[];
   // quota is this month's tokens against the quotas; null for anyone but an
   // admin, and when the usage could not be read.
   quota: QuotaView | null;
@@ -636,10 +627,7 @@ export type SettingsUpdate = Partial<{
   rerunLimitPerRepo: number | null;
   trustedAuthorsOnly: "on" | "off" | null;
   trustedAuthors: TrustedAuthor[] | null;
-  // Admins only, like the two above: the ID of an entry of the list of
-  // models, or null to follow the default.
-  model: string | null;
-  // Admins only too: tokens per UTC month, or null for none.
+  // Admins only, like the two above: tokens per UTC month, or null for none.
   monthlyTokenQuota: number | null;
 }>;
 

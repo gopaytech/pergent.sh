@@ -74,7 +74,12 @@ export default function ReviewDetail() {
 function Review({ view }: { view: ReviewDetailView }) {
   const { header, runs, can } = view;
   const [params] = useSearchParams();
-  const selected = runs.find((r) => r.id === params.get("run")) ?? runs[0];
+  const asked = params.get("run");
+  const listed = runs.find((r) => r.id === asked);
+  // An attempt dropped for the next model is no run of the history, but the
+  // run's attempts link to it: an ID the history doesn't have is still shown
+  // (the server says not found for one the session may not see).
+  const selected: { id: string } | undefined = listed ?? (asked ? { id: asked } : runs[0]);
   const platform = platformName(header.platform);
   const sub = [
     changeRef(header.platform, header.project, header.number),
@@ -235,10 +240,59 @@ function ThisRun({ id, platform }: { id: string; platform: string }) {
 const modelText = (provider: string | null, model: string | null) =>
   model === null ? (provider === null ? "not recorded" : provider) : provider === null ? model : `${provider} / ${model}`;
 
+// droppedText says why an attempt was dropped for the next model.
+const droppedText: Record<string, string> = {
+  quota: "out of quota",
+  billing: "out of credit",
+  auth: "key rejected",
+};
+
+// entryText is the chain entry a run ran on and its place in the chain.
+const entryText = (e: NonNullable<RunDetailView["entry"]>) =>
+  `Model chain: ${e.name} · entry ${e.position} of ${e.length} · ${e.source === "team" ? `team ${e.team}` : "global"}`;
+
+// Attempts lists every attempt of the review the run is one of, linked to
+// each but the run shown, with why an earlier one was dropped.
+function Attempts({ run }: { run: RunDetailView }) {
+  return (
+    <ol className="attempts" aria-label="Attempts">
+      {run.attempts.map((a, i) => {
+        const label = `Attempt ${i + 1}: ${a.name} (entry ${a.position})`;
+        const why =
+          a.runId === run.run.id
+            ? "this run"
+            : a.outcome === "fell_back"
+              ? `${droppedText[a.reason] ?? a.reason}, so the review started again on the next model`
+              : a.outcome === ""
+                ? "running"
+                : "";
+        return (
+          <li key={a.runId}>
+            {a.runId === run.run.id ? label : <Link to={`?run=${encodeURIComponent(a.runId)}`}>{label}</Link>}
+            {why && ` · ${why}`}
+            {why === "" && (
+              <>
+                {" "}
+                <OutcomePill outcome={a.outcome} />
+              </>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
   const f = run.files;
   return (
     <>
+      {run.run.outcome === "fell_back" && (
+        <div>
+          <OutcomePill outcome="fell_back" /> The provider refused this model ({droppedText[run.run.reason] ?? run.run.reason}), so
+          the review started again on the next model of the chain.
+        </div>
+      )}
       <div>
         Status on {platform}: {run.status ? <Pill tone={statusTone[run.status] ?? "grey"}>{run.status}</Pill> : "none"}
       </div>
@@ -248,6 +302,8 @@ function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
         <span className="mono">{modelText(run.provider, run.model)}</span> · max steps{" "}
         <span className="mono">{run.maxTurns ?? "not recorded"}</span>
       </div>
+      {run.entry && <div>{entryText(run.entry)}</div>}
+      {run.attempts.length > 0 && <Attempts run={run} />}
       {run.incrementalNote && <div>{run.incrementalNote.replaceAll("`", "")}</div>}
       {run.quiet && (
         <div>

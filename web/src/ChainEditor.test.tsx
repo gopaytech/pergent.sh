@@ -48,6 +48,25 @@ describe("ChainEditor", () => {
     expect(screen.getByRole("button", { name: "Move Claude Opus down" })).toBeDisabled();
   });
 
+  it("keeps the config file's entries in front of the global chain only", async () => {
+    // In a repository's chain the config file's entry is one like any other.
+    const repo: ChainView = {
+      ...chainGlobal,
+      scope: "repo",
+      source: "repository",
+      entries: [{ ...entrySonnet, position: 1 }, { ...entryConfig, position: 2 }],
+      choices: [choice(entrySonnet), choice(entryConfig)],
+    };
+    const { onSave } = setup(repo);
+    expect(rowOf("openai/gpt-5")).not.toHaveTextContent("from the config file");
+    await userEvent.click(screen.getByRole("button", { name: "Move openai/gpt-5 up" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save chain" }));
+    expect(onSave).toHaveBeenCalledWith([
+      { source: "global", id: "config" },
+      { source: "global", id: "m-sonnet" },
+    ]);
+  });
+
   it("adds a choice at the end and removes an entry", async () => {
     const { onSave } = setup();
     const pick = screen.getByRole("combobox", { name: "Entry to add" });

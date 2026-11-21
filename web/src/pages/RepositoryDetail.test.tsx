@@ -4,10 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
 import {
-  linkable,
-  ssoAdmin,
-  viewer,
+  chainRepoInherit,
   librarySkills,
+  linkable,
   pastDismissals,
   repoDetail,
   repoGadgets,
@@ -18,6 +17,8 @@ import {
   reviewBlocking,
   skillResults,
   skillTokens,
+  ssoAdmin,
+  viewer,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
@@ -37,6 +38,8 @@ const base = {
   "GET /api/repositories/main/acme/widgets/inputs": { body: noInputs },
   "GET /api/repositories/main/acme/payments/teams": { body: repoTeams },
   "GET /api/repositories/main/acme/widgets/teams": { body: repoTeams },
+  "GET /api/repositories/main/acme/payments/chain": { body: chainRepoInherit },
+  "GET /api/repositories/main/acme/widgets/chain": { body: chainRepoInherit },
   "GET /api/repositories/main/acme/payments/skill-results/tokens": { body: [] },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
 };
@@ -458,7 +461,7 @@ describe("RepositoryDetail", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderApp("/repos/main/acme/payments?tab=settings");
     await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
-    expect(confirm).toHaveBeenCalledWith("Put every setting of this repository back to its default?");
+    expect(confirm).toHaveBeenCalledWith("Put every setting of this repository back to its default? The model chain stays as it is.");
     confirm.mockRestore();
   });
 
@@ -1047,6 +1050,7 @@ describe("RepositorySettings: Linked repositories", () => {
     "GET /api/repositories/hub/acme/gadgets": { body: gadgets },
     "GET /api/repositories/hub/acme/gadgets/inputs": { body: noInputs },
     "GET /api/repositories/hub/acme/gadgets/teams": { body: repoTeams },
+    "GET /api/repositories/hub/acme/gadgets/chain": { body: chainRepoInherit },
     [`GET ${linkablePath}`]: { body: linkable },
   };
   const withLinks = (enabled: boolean) => ({

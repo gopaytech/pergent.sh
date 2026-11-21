@@ -35,8 +35,9 @@ export function entryStateText(e: ChainEntryView): string {
 
 // ChainEditor shows a model chain, and edits it unless readOnly: the entries
 // in the order reviews try them, with up, down and remove on each, and the
-// choices to add at the end. The config file's entries (fixed) stay at the
-// front and are never sent: onSave gets the other entries in order. An entry
+// choices to add at the end. In the global chain the config file's entries
+// (fixed) stay at the front and are never sent: onSave gets the other
+// entries in order. In any other chain they are entries like the rest. An entry
 // that is not one of choices can't be saved (the server would refuse the
 // whole chain), so it is flagged and Save waits until it is removed. Clear
 // mark shows on an entry whose mark the session may clear (canClear) and
@@ -60,7 +61,11 @@ export default function ChainEditor({
   onSave: (entries: ChainRef[]) => void;
   onClear: (entry: ChainEntryView) => void;
 }) {
-  const [draft, setDraft] = useState<ChainEntryView[]>(value.entries);
+  // The server marks the config file's entries fixed in every chain; they
+  // stay in front of the global chain only.
+  const [draft, setDraft] = useState<ChainEntryView[]>(() =>
+    value.entries.map((e) => (e.fixed && value.scope !== "global" ? { ...e, fixed: false } : e)),
+  );
   const [pick, setPick] = useState("");
   const allowed = new Set(choices.map(refKey));
   const fixed = draft.filter((e) => e.fixed).length;
@@ -76,7 +81,7 @@ export default function ChainEditor({
   const add = () => {
     const c = toAdd.find((x) => refKey(x) === pick);
     if (!c) return;
-    setDraft([...draft, c]);
+    setDraft([...draft, { ...c, fixed: c.fixed && value.scope === "global" }]);
     setPick("");
   };
 
