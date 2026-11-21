@@ -14,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/gopaytech/pergent/rule"
+
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -370,5 +372,112 @@ func TestE2EPanelMaxRunning(t *testing.T) {
 	dispatch(t, env)
 	if n := len(env.Jobs()); n != 2 {
 		t.Errorf("%d Jobs; want the second member's too", n)
+	}
+}
+
+// A member's Job gets the review's rules and built-in switch, as the review
+// Job does: rules.json in its ConfigMap, PERGENT_RULES and
+// PERGENT_NO_BUILT_IN_RULES in its env.
+func TestE2EPanelMemberRules(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	off := false
+	env.Engine.Config.Repositories[0].RuleSets = []string{"a"}
+	env.Engine.Config.Repositories[0].BuiltInRules = &off
+	addRuleSet(t, env, "a", setAYAML)
+	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
+	id := splitPanel(t, env, 1, sha('a'))
+
+	dispatch(t, env)
+	for _, role := range []string{"a", "b"} {
+		m := memberOfRole(t, env, id, role)
+		var labels []string
+		for _, r := range jobRules(t, env, m.ID) {
+			labels = append(labels, r.Label())
+		}
+		if want := []string{"repo:*.go", "dashboard:a:*.py"}; !slices.Equal(labels, want) {
+			t.Errorf("member %s's rules = %v, want %v", role, labels, want)
+		}
+		if v, ok := jobVar(t, env, m.ID, "PERGENT_RULES"); !ok || v != "/in/rules.json" {
+			t.Errorf("member %s's PERGENT_RULES = %q, %v", role, v, ok)
+		}
+		if v, ok := jobVar(t, env, m.ID, "PERGENT_NO_BUILT_IN_RULES"); !ok || v != "true" {
+			t.Errorf("member %s's PERGENT_NO_BUILT_IN_RULES = %q, %v", role, v, ok)
+		}
+	}
+}
+
+// The panel's run is superseded while a member's Job starts: the Job is
+// deleted and the member goes back to the queue, so it holds no
+// jobs.max_running slot until the sweep supersedes it.
+func TestE2EPanelMemberSupersededAtLaunch(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	id := splitPanel(t, env, 1, sha('a'))
+	once := false
+	env.Kube.PrependReactor("create", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if !once {
+			once = true
+			// A push of a new head supersedes the waiting run.
+			if _, _, err := env.Store.EnqueueRun(env.ctx, env.MRKey(1), testProjectPath, sha('c'), "main"); err != nil {
+				t.Error(err)
+			}
+		}
+		return false, nil, nil
+	})
+
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Superseded {
+		t.Fatalf("run = %s; want superseded", r.State)
+	}
+	for _, m := range members(t, env, id) {
+		if m.State == store.MemberRunning || m.JobName != "" || env.Job(m.ID) != nil {
+			t.Errorf("member %s = %s job %q; want back in the queue with no Job", m.Role, m.State, m.JobName)
+		}
+	}
+	running, err := env.Store.RunningMembers(env.ctx)
+	if err != nil || len(running) != 0 {
+		t.Errorf("running members = %d, %v; want none", len(running), err)
+	}
+}
+
+// With the code graph on, a member's Job has no graph (the graph route takes
+// only the run's token), and each member logs that once, with no URL.
+func TestE2EPanelMemberNoGraph(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	env.Engine.ScanImage = testScanImage
+	env.Engine.GraphImage = testGraphImage
+	env.Engine.GraphDir = t.TempDir()
+	env.Engine.Config.Repositories = nil
+	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: testProjectPath, CreatedBy: "alice"})
+	if _, _, err := env.Store.SetDashboardRepoGraph(env.ctx, testInstance, testProjectPath, true); err != nil {
+		t.Fatal(err)
+	}
+	storeTestGraph(t, env, "main", sha('d'))
+	id := splitPanel(t, env, 1, sha('a'))
+
+	dispatch(t, env)
+	for _, role := range []string{"a", "b"} {
+		m := memberOfRole(t, env, id, role)
+		job := env.Job(m.ID)
+		if job == nil {
+			t.Fatalf("member %s has no Job\n%s", role, env.Logs())
+		}
+		for _, c := range job.Spec.Template.Spec.InitContainers {
+			if c.Image == testScanImage {
+				t.Errorf("member %s's Job has the graph container %s", role, c.Name)
+			}
+		}
+		if _, ok := jobVar(t, env, m.ID, "PERGENT_GRAPH"); ok {
+			t.Errorf("member %s's Job reads a graph", role)
+		}
+	}
+	logs := env.Logs()
+	if n := strings.Count(logs, "the code graph is left out for a panel member"); n != 2 {
+		t.Errorf("the graph note was logged %d times; want once per member\n%s", n, logs)
+	}
+	if strings.Contains(logs, "/graph") {
+		t.Errorf("a graph URL reached the log:\n%s", logs)
 	}
 }

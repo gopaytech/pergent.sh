@@ -399,6 +399,28 @@ func TestClaimQueuedMembersOnce(t *testing.T) {
 	}
 }
 
+// A claim takes at most limit members, even with more due: one panel's 2
+// queued members and limit 1 give one.
+func TestClaimQueuedMembersLimit(t *testing.T) {
+	s := newStore(t)
+	id := panelRun(t, s, mr1, "a1")
+	got, err := s.ClaimQueuedMembers(ctx, 1, t0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ClaimQueuedMembers(1) = %d members, %v; want 1", len(got), err)
+	}
+	if st := memberStates(t, s, id); len(st["a"])+len(st["b"]) != 2 ||
+		(st["a"][0] == MemberRunning) == (st["b"][0] == MemberRunning) {
+		t.Errorf("states = %v; want one running and one queued", st)
+	}
+	if n, err := s.CountRunning(ctx); err != nil || n != 1 {
+		t.Errorf("CountRunning = %d, %v; want 1", n, err)
+	}
+	got, err = s.ClaimQueuedMembers(ctx, 1, t0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("second ClaimQueuedMembers(1) = %d members, %v; want the other one", len(got), err)
+	}
+}
+
 func TestCountRunningCountsMembers(t *testing.T) {
 	s := newStore(t)
 	dispatched(t, s, mr2, "b1", "tok")

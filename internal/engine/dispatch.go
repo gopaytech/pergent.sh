@@ -701,8 +701,10 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 // the fitted inputs in, and records it. gitToken is the clone token (a
 // GitHub one is minted here). A member's Job has its own name, result route
 // and token, its own entry's key alone and --no-skill-verify; it records
-// itself on the member, never on the run, and sets the running status only
-// when it is the review's first member Job.
+// itself on the member and sets the running status only when it is the
+// review's first member Job. It writes nothing to the run, with one
+// exception: on GitHub that first status stores its Check Run's ref on the
+// run (status_ref, best effort, in setStatus), so Job P updates the same one.
 func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Effective, project store.Project,
 	mr forge.Change, in *inputs.Inputs, links linkPlan, gitToken []byte, gitUser string) error {
 	e, run := d.e, d.run
@@ -745,10 +747,10 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 	var graphURL, graphImage string
 	if repo.GraphContext {
 		e.WantGraph(repo.Instance, repo.Project)
-		if !d.isMember() {
-			if graphURL = e.reviewGraphURL(ctx, run.ID, repo.Instance, repo.Project, mr.TargetBranch); graphURL != "" {
-				graphImage = e.ScanImage
-			}
+		if d.isMember() {
+			d.log.Info("the code graph is left out for a panel member")
+		} else if graphURL = e.reviewGraphURL(ctx, run.ID, repo.Instance, repo.Project, mr.TargetBranch); graphURL != "" {
+			graphImage = e.ScanImage
 		}
 	}
 	params := kube.JobParams{
@@ -811,6 +813,11 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 	if errors.Is(err, store.ErrNotRunning) {
 		d.log.Info("run was superseded while its job started; deleting the job", "job", name)
 		d.deleteJob(ctx, name)
+		if d.isMember() {
+			// As for a moved head: back to the queue, so the member holds no
+			// slot until the sweep supersedes it.
+			return d.postpone(ctx, e.now())
+		}
 		return nil
 	}
 	if err != nil {
