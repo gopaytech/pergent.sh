@@ -76,6 +76,11 @@ type DashboardRepo struct {
 	// admins only (nil: none). They belong to the repository, not to the
 	// defaults.
 	LinkedRepos []Link
+	// RuleSets names the library rule sets the repository uses, in match
+	// order (nil: the default list). BuiltInRules is the Built-in rules
+	// switch (nil: the default, on).
+	RuleSets     []string
+	BuiltInRules *bool
 	// TrustedAuthorsOnly is "on" or "off" (nil: the instance's setting).
 	TrustedAuthorsOnly *string
 	// TrustedAuthors is the repository's allowlist (nil: nobody).
@@ -189,7 +194,7 @@ const dashboardRepoColumns = `instance, project, approve, review_drafts, failure
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
 	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
 	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs, enabled, graph_context,
-	chain_mode, panel_chain_mode`
+	chain_mode, panel_chain_mode, rule_sets, built_in_rules`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
@@ -198,7 +203,7 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout,
 		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota, &r.CheckDeleted, &ci, &r.Enabled, &r.GraphContext,
-		&r.ChainMode, &r.PanelChainMode)
+		&r.ChainMode, &r.PanelChainMode, &r.RuleSets, &r.BuiltInRules)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -207,6 +212,9 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	}
 	if len(r.RepoSkills) == 0 {
 		r.RepoSkills = nil
+	}
+	if len(r.RuleSets) == 0 {
+		r.RuleSets = nil
 	}
 	if err != nil {
 		return r, err
@@ -306,6 +314,9 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return err
 	}
+	if err := lockNamedRuleSets(ctx, tx, r.RuleSets); err != nil {
+		return err
+	}
 	var oldModel *string
 	err = tx.QueryRow(ctx, `SELECT model_id FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2) FOR UPDATE`,
 		r.Instance, r.Project).Scan(&oldModel)
@@ -323,8 +334,10 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24, $25, $26, $27::jsonb)
+			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs,
+			rule_sets, built_in_rules)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24, $25, $26, $27::jsonb,
+			$28, $29)
 		ON CONFLICT (instance, lower(project)) DO UPDATE SET
 			project = EXCLUDED.project, approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, skills = EXCLUDED.skills, repo_skills = EXCLUDED.repo_skills,
@@ -340,11 +353,13 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 			linked_repos = EXCLUDED.linked_repos,
 			trusted_authors_only = EXCLUDED.trusted_authors_only, trusted_authors = EXCLUDED.trusted_authors,
 			model_id = EXCLUDED.model_id, monthly_token_quota = EXCLUDED.monthly_token_quota,
-			check_deleted = EXCLUDED.check_deleted, ci_jobs = EXCLUDED.ci_jobs, updated_at = now()`,
+			check_deleted = EXCLUDED.check_deleted, ci_jobs = EXCLUDED.ci_jobs,
+			rule_sets = EXCLUDED.rule_sets, built_in_rules = EXCLUDED.built_in_rules, updated_at = now()`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, repoSkills,
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
 		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
-		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci); err != nil {
+		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci,
+		nilIfEmpty(r.RuleSets), r.BuiltInRules); err != nil {
 		return err
 	}
 	if existed && !samePtr(oldModel, r.ModelID) || !existed && r.ModelID != nil {
@@ -396,19 +411,25 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return false, err
 	}
+	if err := lockNamedRuleSets(ctx, tx, r.RuleSets); err != nil {
+		return false, err
+	}
 	if err := lockModel(ctx, tx, r.ModelID); err != nil {
 		return false, err
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24, $25, $26, $27::jsonb)
+			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs,
+			rule_sets, built_in_rules)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24, $25, $26, $27::jsonb,
+			$28, $29)
 		ON CONFLICT (instance, lower(project)) DO NOTHING`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills),
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
 		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
-		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci)
+		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci,
+		nilIfEmpty(r.RuleSets), r.BuiltInRules)
 	if err != nil {
 		return false, err
 	}
@@ -468,6 +489,9 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return false, err
 	}
+	if err := lockNamedRuleSets(ctx, tx, r.RuleSets); err != nil {
+		return false, err
+	}
 	// Only a new model must be in the list: one kept may have been removed
 	// since (its chain skips it).
 	if !samePtr(oldModel, r.ModelID) {
@@ -480,12 +504,12 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 			rerun_limit_per_mr = $11, rerun_limit_per_repo = $12, inline_findings = $13,
 			commands_author_and_maintainers_only = $14, incremental_reviews = $15, learn_from_dismissals = $16, quiet_reviews = $17, comment_layout = $18,
 			linked_repos_enabled = $19, linked_repos = $20::jsonb, trusted_authors_only = $21, trusted_authors = $22::jsonb, model_id = $23,
-			monthly_token_quota = $24, check_deleted = $25, ci_jobs = $26::jsonb, updated_at = now()
+			monthly_token_quota = $24, check_deleted = $25, ci_jobs = $26::jsonb, rule_sets = $27, built_in_rules = $28, updated_at = now()
 		WHERE instance = $1 AND lower(project) = lower($2)`,
 		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills), r.JobTimeoutSeconds,
 		r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.InlineFindings, r.CommandsAuthorAndMaintainersOnly,
 		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout), r.LinkedReposEnabled, links,
-		r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci); err != nil {
+		r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci, nilIfEmpty(r.RuleSets), r.BuiltInRules); err != nil {
 		return false, err
 	}
 	if !samePtr(oldModel, r.ModelID) {

@@ -34,6 +34,7 @@ const (
 	fullTooLarge     = "inputs too large"
 	fullImpactOpen   = "an open linked-repositories check can't be repeated"
 	fullModelChanged = "the model changed"
+	fullRules        = "rules changed"
 )
 
 // Why a skill carries no files, as the log says it.
@@ -42,6 +43,7 @@ const (
 	carryOutside     = "finding outside reviewed files"
 	carryOpenOutside = "open blocking finding outside reviewed files"
 	carryUnchanged   = "nothing unchanged"
+	carryRules       = "rules changed"
 )
 
 // planCarried decides whether the push run reviews only what changed since
@@ -67,6 +69,15 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 	case imagePinnedBeforeCarried(d.e.Config.Jobs.Image):
 		return nil, fullOlderPergent, nil
 	}
+	// A file kept as reviewed must have seen the checklist the rest gets: a
+	// new rules hash reviews every skill with rules in full.
+	var withRules map[string]bool
+	if rulesChanged(last.RulesHash, d.rulesHash) {
+		withRules = skillsWithRules(in.Skills)
+		if len(withRules) == len(in.Skills) {
+			return nil, fullRules, nil
+		}
+	}
 	inline, ok := plat.Forge.(forge.Inline)
 	if !ok {
 		return nil, fullNoCompare, nil
@@ -91,6 +102,7 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 		return nil, "", err
 	}
 	carried := carriedFiles(lastResult, last.SkillHashes, skillHashes(in.Skills), changed, ds, d.log)
+	carried = dropRulesCarry(carried, withRules, d.log)
 	if len(carried) == 0 {
 		return nil, fullNothing, nil
 	}
@@ -294,6 +306,44 @@ func skillHashes(skills map[string][]byte) map[string]string {
 	for name, content := range skills {
 		sum := sha256.Sum256(content)
 		out[name] = hex.EncodeToString(sum[:])
+	}
+	return out
+}
+
+// rulesChanged reports whether a run given the rules hash now differs from
+// the last review, which recorded last. A last review with no hash (from
+// before rules) counts as a change.
+func rulesChanged(last *string, now string) bool {
+	return last == nil || *last != now
+}
+
+// skillsWithRules is the skills that get path rules: all but those with
+// rules: false. One whose frontmatter can't be read counts as having them,
+// so it is reviewed in full rather than carried.
+func skillsWithRules(skills map[string][]byte) map[string]bool {
+	out := map[string]bool{}
+	for name, content := range skills {
+		if on, err := inputs.SkillRules(content); on || err != nil {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// dropRulesCarry removes from carried the skills in withRules (those with
+// rules on, when the rules changed) and logs each, so a skill that falls back
+// to a full review can be told apart.
+func dropRulesCarry(carried map[string][]string, withRules map[string]bool, log *slog.Logger) map[string][]string {
+	if len(withRules) == 0 {
+		return carried
+	}
+	out := make(map[string][]string, len(carried))
+	for name, files := range carried {
+		if withRules[name] {
+			log.Info("nothing carried for a skill", "skill", name, "reason", carryRules)
+			continue
+		}
+		out[name] = files
 	}
 	return out
 }

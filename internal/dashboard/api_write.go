@@ -63,7 +63,7 @@ const (
 	msgWriteFailed    = "could not save the change, please try again"
 	msgUserLookup     = "could not look the user up on the platform, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, checkDeleted, commentLayout, ciJobs, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, monthlyTokenQuota"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, checkDeleted, commentLayout, ciJobs, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, monthlyTokenQuota, ruleSets, builtInRules"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsAdminCaps = "only admins can change its re-run caps"
 	msgNeedsRole      = "only maintainers of this repository and admins can change its settings"
@@ -855,6 +855,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 		row.CommentLayout = nil
 		row.CIJobs = nil
 		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.MaxTurns, row.JobMemory = nil, nil, nil, nil, nil
+		row.RuleSets, row.BuiltInRules = nil, nil
 		if admin {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
 			row.LinkedReposEnabled, row.LinkedRepos = nil, nil
@@ -878,6 +879,10 @@ func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo 
 		skillsChanged = !slices.Equal(skills, row.Skills) || !slices.Equal(repoSkills, row.RepoSkills)
 	})
 	if msg, ok := skillMissing(err); ok {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if msg, ok := ruleSetMissing(err); ok {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -932,8 +937,10 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 		var edit func(*store.DashboardRepo)
 		var msg string
 		switch key {
-		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "checkDeleted", "linkedReposEnabled":
+		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "checkDeleted", "linkedReposEnabled", "builtInRules":
 			edit, msg = boolSetting(key, raw, null)
+		case "ruleSets":
+			edit, msg = ruleSetsSetting(raw, null)
 		case "commentLayout":
 			edit, msg = commentLayoutSetting(raw, null, msgBadSettings)
 		case "ciJobs":
@@ -992,6 +999,7 @@ var boolSettings = map[string]func(row *store.DashboardRepo, v *bool){
 	"quietReviews":                     func(row *store.DashboardRepo, v *bool) { row.QuietReviews = v },
 	"checkDeleted":                     func(row *store.DashboardRepo, v *bool) { row.CheckDeleted = v },
 	"linkedReposEnabled":               func(row *store.DashboardRepo, v *bool) { row.LinkedReposEnabled = v },
+	"builtInRules":                     func(row *store.DashboardRepo, v *bool) { row.BuiltInRules = v },
 }
 
 // boolSetting reads the setting key, one of boolSettings, as true, false or
@@ -1066,6 +1074,51 @@ func skillsSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), 
 		}
 	}
 	return func(row *store.DashboardRepo) { row.Skills = v }, ""
+}
+
+// ruleSetsSetting takes null (the default list) or a non-empty list of
+// library rule-set names, in match order. A name the library lacks is refused
+// by the save, which locks the sets it names.
+func ruleSetsSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	var v []string
+	if !null {
+		var names []string
+		if json.Unmarshal(raw, &names) != nil || len(names) == 0 {
+			return nil, "ruleSets must be a non-empty list of rule sets from the library, or null for the default list"
+		}
+		var msg string
+		if v, msg = ruleSetNames(names); msg != "" {
+			return nil, msg
+		}
+	}
+	return func(row *store.DashboardRepo) { row.RuleSets = v }, ""
+}
+
+// ruleSetNames drops repeats from names, keeping the order, and refuses a
+// name that can't be a rule set's.
+func ruleSetNames(names []string) ([]string, string) {
+	var out []string
+	seen := map[string]bool{}
+	for _, n := range names {
+		if !inputs.ValidName(n) {
+			return nil, msgRuleSetMissing(n)
+		}
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out, ""
+}
+
+// ruleSetMissing is the 400's message for a save naming a rule set the
+// library lacks.
+func ruleSetMissing(err error) (string, bool) {
+	var missing *store.MissingRuleSetError
+	if errors.As(err, &missing) {
+		return msgRuleSetMissing(missing.Name), true
+	}
+	return "", false
 }
 
 // skillNames drops repeats from names, keeping the order, and refuses a name

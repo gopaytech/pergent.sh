@@ -178,6 +178,16 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	var dismissalCounts map[string]int
 	in.Dismissals, dismissalCounts = d.apiDismissals(ctx, review, in)
 	in.AddDescription(review.Title, sent.Description)
+	// An API review has no repository to read a rules file from: it gets
+	// the admin default rule-set list and Built-in rules switch, added before
+	// Fit, which never drops them.
+	if err := d.addRules(ctx, nil, defaults, "", false, in); err != nil {
+		var bad *rulesProblem
+		if errors.As(err, &bad) {
+			return d.fail(ctx, bad.reason)
+		}
+		return d.retry(ctx, err)
+	}
 	hadPrevious := len(in.Previous) > 0
 	hadDismissals := len(in.Dismissals) > 0
 	hadDescription := len(in.Description) > 0
@@ -200,6 +210,9 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 
 	if err := e.Store.SetRunModel(ctx, run.ID, d.provider, d.model); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's model: %w", err))
+	}
+	if err := e.Store.SetRunRulesHash(ctx, run.ID, d.rulesHash); err != nil {
+		return d.retry(ctx, fmt.Errorf("record the review's rules: %w", err))
 	}
 	if d.entry.Position > 0 {
 		if err := e.Store.SetRunEntry(ctx, run.ID, runEntry(d.entry)); err != nil {
@@ -234,6 +247,7 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 		Inputs:         in,
 		Import:         sent.Import,
 		APIClient:      client.Name,
+		NoBuiltInRules: !defaults.BuiltInRules,
 	}
 	if err := e.Launcher.Launch(ctx, params, kube.Secrets{LLMKey: llmKey, ResultToken: token}); err != nil {
 		if apierrors.IsAlreadyExists(err) {

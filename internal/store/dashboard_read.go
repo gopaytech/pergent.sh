@@ -37,6 +37,9 @@ type RunDigest struct {
 	// SkipReason is why a Skipped run was skipped or a Waiting run waits; ""
 	// for any other run.
 	SkipReason string
+	// Attempts is how many attempts the review the run is one of has now,
+	// the run included: 1 for a review that never fell back.
+	Attempts int
 }
 
 // ReviewCursor is where a page of ReviewDigests starts: after the review
@@ -120,7 +123,8 @@ const outcomeSQL = `(CASE r.state
 	WHEN 'publish_failed' THEN 'failed'
 	ELSE COALESCE(NULLIF(r.outcome, ''), 'unknown') END)`
 
-// digestColumns are a RunDigest's columns, of runs r.
+// digestColumns are a RunDigest's columns, of runs r. The attempts are the
+// review's first run and the runs that point at it (runs_attempt_of_idx).
 const digestColumns = `r.id::text, r.instance, r.project_id, r.mr_iid, r.project_path, r.head_sha, r.base_sha,
 	r.target_branch, r.state, r.failure_reason,
 	COALESCE(NULLIF(r.title, ''), (SELECT t.title FROM runs t
@@ -132,7 +136,8 @@ const digestColumns = `r.id::text, r.instance, r.project_id, r.mr_iid, r.project
 		  AND lower(t.project_path) = lower(r.project_path)
 		ORDER BY t.created_at DESC, t.id DESC LIMIT 1), ''),
 	r.source_branch, r.author, r.created_at, r.dispatched_at, r.reported_at, r.updated_at,
-	` + outcomeSQL + `, r.outcome_reason, r.decision_status, r.approved, r.skip_reason`
+	` + outcomeSQL + `, r.outcome_reason, r.decision_status, r.approved, r.skip_reason,
+	1 + (SELECT count(*) FROM runs a WHERE a.attempt_of = COALESCE(r.attempt_of, r.id))`
 
 // reviewDigestsSQL lists the newest run of each merge request, read through
 // runs_project_updated_idx: only the runs of the visible projects (visible,
@@ -182,7 +187,7 @@ func (s *Store) queryDigests(ctx context.Context, sql string, args ...any) ([]Ru
 		if err := rows.Scan(&d.ID, &d.MR.Instance, &d.MR.ProjectID, &d.MR.IID, &d.ProjectPath, &d.HeadSHA, &d.BaseSHA,
 			&d.TargetBranch, &state, &d.FailureReason, &d.Title, &d.WebURL, &d.SourceBranch, &d.Author,
 			&d.CreatedAt, &dispatched, &rep, &d.UpdatedAt, &d.Outcome, &d.OutcomeReason, &d.DecisionStatus,
-			&d.Approved, &d.SkipReason); err != nil {
+			&d.Approved, &d.SkipReason, &d.Attempts); err != nil {
 			return nil, err
 		}
 		d.State = RunState(state)

@@ -52,7 +52,7 @@ const (
 	msgBadTrustMode      = `the body must be {"mode": "follow_visibility" | "on" | "off"}`
 	msgNothingToChange   = `nothing to change: give "secrets"`
 
-	msgBadDefaults    = "the body must be a JSON object of defaults: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
+	msgBadDefaults    = "the body must be a JSON object of defaults: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, ruleSets, builtInRules"
 	instanceNameLimit = 63
 )
 
@@ -817,7 +817,8 @@ func (d *Dashboard) defaultsView(ctx context.Context) (DefaultsView, error) {
 		FailureStatus:      string(def.FailureStatus),
 		JobTimeoutSeconds:  int64(def.JobTimeout / time.Second), MaxTurns: def.MaxTurns, JobMemory: quantityText(def.JobMemory),
 		RerunLimitPerMR: def.RerunLimitPerMR, RerunLimitPerRepo: def.RerunLimitPerRepo,
-		Skills: nonNil(stored.Skills), Config: cfg, Pinned: pinnedDefaults(stored)}, nil
+		Skills: nonNil(stored.Skills), RuleSets: nonNil(stored.RuleSets), BuiltInRules: def.BuiltInRules,
+		Config: cfg, Pinned: pinnedDefaults(stored)}, nil
 }
 
 // defaultValues is the settings of eff as the defaults API shows them.
@@ -828,7 +829,7 @@ func defaultValues(eff settings.Effective) DefaultValues {
 		CommentLayout:      layoutText(eff.CommentLayout),
 		FailureStatus:      string(eff.FailureStatus),
 		JobTimeoutSeconds:  int64(eff.JobTimeout / time.Second), MaxTurns: eff.MaxTurns, JobMemory: quantityText(eff.JobMemory),
-		RerunLimitPerMR: eff.RerunLimitPerMR, RerunLimitPerRepo: eff.RerunLimitPerRepo}
+		RerunLimitPerMR: eff.RerunLimitPerMR, RerunLimitPerRepo: eff.RerunLimitPerRepo, BuiltInRules: eff.BuiltInRules}
 }
 
 // pinnedDefaults says which defaults were saved in the dashboard, by the
@@ -840,6 +841,7 @@ func pinnedDefaults(s store.RepoDefaults) map[string]bool {
 		"commentLayout": len(s.CommentLayout) > 0, "linkedReposEnabled": s.LinkedReposEnabled != nil,
 		"failureStatus": s.FailureStatus != nil, "jobTimeoutSeconds": s.JobTimeoutSeconds != nil, "maxTurns": s.MaxTurns != nil,
 		"jobMemory": s.JobMemory != nil, "rerunLimitPerMR": s.RerunLimitPerMR != nil, "rerunLimitPerRepo": s.RerunLimitPerRepo != nil,
+		"builtInRules": s.BuiltInRules != nil,
 	}
 }
 
@@ -859,7 +861,7 @@ func (d *Dashboard) putDefaults(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "reading the defaults", err)
 		return
 	}
-	next, skillsGiven, msg := d.parseDefaults(r, before.Skills)
+	next, skillsGiven, msg := d.parseDefaults(r, before.Skills, before.RuleSets)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -877,6 +879,10 @@ func (d *Dashboard) putDefaults(w http.ResponseWriter, r *http.Request) {
 	}
 	err = d.Store.PutRepoDefaults(ctx, next)
 	if msg, ok := skillMissing(err); ok {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if msg, ok := ruleSetMissing(err); ok {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -903,22 +909,25 @@ func (d *Dashboard) putDefaults(w http.ResponseWriter, r *http.Request) {
 // parseDefaults reads a replacement set of defaults: a JSON object of some
 // of the settings, each a valid value (the bounds and messages of a
 // repository's settings) or null; the ones left out are the built-in
-// default. The exception is skills, the default list of library skills:
-// left out it stays as stored (kept), null or [] clears it. skillsGiven says
-// the body has the key. It returns the 400's message when the body is wrong.
-func (d *Dashboard) parseDefaults(r *http.Request, kept []string) (next store.RepoDefaults, skillsGiven bool, msg string) {
+// default. The exceptions are skills and ruleSets, the default lists of the
+// libraries: left out each stays as stored (kept, keptRuleSets), null or []
+// clears it. skillsGiven says the body has the skills key. It returns the
+// 400's message when the body is wrong.
+func (d *Dashboard) parseDefaults(r *http.Request, kept, keptRuleSets []string) (next store.RepoDefaults, skillsGiven bool, msg string) {
 	var fields map[string]json.RawMessage
 	if err := decodeStrict(r, &fields); err != nil || fields == nil {
 		return store.RepoDefaults{}, false, msgBadDefaults
 	}
-	row := store.DashboardRepo{Skills: slices.Clone(kept)}
+	row := store.DashboardRepo{Skills: slices.Clone(kept), RuleSets: slices.Clone(keptRuleSets)}
 	for key, raw := range fields {
 		null := string(bytes.TrimSpace(raw)) == "null"
 		var edit func(*store.DashboardRepo)
 		var msg string
 		switch key {
-		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "linkedReposEnabled":
+		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "linkedReposEnabled", "builtInRules":
 			edit, msg = boolSetting(key, raw, null)
+		case "ruleSets":
+			edit, msg = defaultRuleSetsSetting(raw, null)
 		case "commentLayout":
 			edit, msg = commentLayoutSetting(raw, null, msgBadDefaults)
 		case "failureStatus":
@@ -944,7 +953,25 @@ func (d *Dashboard) parseDefaults(r *http.Request, kept []string) (next store.Re
 	}
 	return store.RepoDefaults{Approve: row.Approve, ReviewDrafts: row.ReviewDrafts, InlineFindings: row.InlineFindings, CommandsAuthorAndMaintainersOnly: row.CommandsAuthorAndMaintainersOnly, IncrementalReviews: row.IncrementalReviews, LearnFromDismissals: row.LearnFromDismissals, QuietReviews: row.QuietReviews, LinkedReposEnabled: row.LinkedReposEnabled, CommentLayout: row.CommentLayout, FailureStatus: row.FailureStatus,
 		JobTimeoutSeconds: row.JobTimeoutSeconds, MaxTurns: row.MaxTurns, JobMemory: row.JobMemory,
-		RerunLimitPerMR: row.RerunLimitPerMR, RerunLimitPerRepo: row.RerunLimitPerRepo, Skills: row.Skills}, skillsGiven, ""
+		RerunLimitPerMR: row.RerunLimitPerMR, RerunLimitPerRepo: row.RerunLimitPerRepo, Skills: row.Skills,
+		RuleSets: row.RuleSets, BuiltInRules: row.BuiltInRules}, skillsGiven, ""
+}
+
+// defaultRuleSetsSetting takes null, [] (no default rule sets) or a list of
+// library rule-set names, in match order.
+func defaultRuleSetsSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	var v []string
+	if !null {
+		var names []string
+		if json.Unmarshal(raw, &names) != nil {
+			return nil, "ruleSets must be a list of rule sets from the library, or null for none"
+		}
+		var msg string
+		if v, msg = ruleSetNames(names); msg != "" {
+			return nil, msg
+		}
+	}
+	return func(row *store.DashboardRepo) { row.RuleSets = v }, ""
 }
 
 // defaultSkillsSetting takes null, [] (no default skills) or a list of
@@ -1015,6 +1042,12 @@ func changedDefaults(a, b store.RepoDefaults) []string {
 	}
 	if !slices.Equal(a.Skills, b.Skills) {
 		out = append(out, "skills")
+	}
+	if !slices.Equal(a.RuleSets, b.RuleSets) {
+		out = append(out, "ruleSets")
+	}
+	if !samePtr(a.BuiltInRules, b.BuiltInRules) {
+		out = append(out, "builtInRules")
 	}
 	return out
 }

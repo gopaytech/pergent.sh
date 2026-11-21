@@ -171,6 +171,10 @@ func (d *Dashboard) repositoryUsage(w http.ResponseWriter, r *http.Request, se S
 		d.failed(w, r, "reading usage", err)
 		return
 	}
+	if out.GlobalTokens, out.TeamTokens, err = d.Store.UsageBySource(ctx, repo.Instance, id, since); err != nil {
+		d.failed(w, r, "reading usage", err)
+		return
+	}
 
 	out.Daily, out.Skills, out.Models = usageDays(daily), usageNamed(skills), usageNamed(models)
 	for _, m := range mrs {
@@ -201,7 +205,8 @@ const msgBadUsageRepository = "instance and project go together: give both or ne
 
 // usageCSVHeader is the first row of an export.
 var usageCSVHeader = []string{"reported_at", "instance", "repository", "merge_request", "trigger", "incremental", "model",
-	"skill", "verdict", "tokens_in", "tokens_out", "cache_read", "cache_write", "reasoning", "findings", "blocking", "provider"}
+	"skill", "verdict", "tokens_in", "tokens_out", "cache_read", "cache_write", "reasoning", "findings", "blocking", "provider",
+	"source"}
 
 // csvCell keeps a spreadsheet from reading a cell as a formula.
 func csvCell(s string) string {
@@ -221,10 +226,10 @@ func optionalCount(n *int64) string {
 
 // usageCSV exports what each skill of each run used in the last days, one row
 // a run and skill, oldest first, for every repository or for the one given by
-// instance and project; the provider is the last column, so the others keep
-// their places. A row holds no title and no text a person wrote, and
-// no dismissal: those belong to a change. The rows go out as the database
-// sends them.
+// instance and project; provider and source (whose key paid) come last, so
+// the others keep their places. A row holds no title and no text a person
+// wrote, and no dismissal: those belong to a change. The rows go out as the
+// database sends them.
 func (d *Dashboard) usageCSV(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	days, ok := parseDays(r, defaultUsageDays, maxUsageDays)
@@ -278,7 +283,7 @@ func (d *Dashboard) usageCSV(w http.ResponseWriter, r *http.Request) {
 				strconv.FormatInt(u.MR, 10), csvCell(u.Trigger), strconv.FormatBool(u.Incremental), csvCell(u.Model),
 				csvCell(u.Skill), csvCell(u.Verdict), strconv.FormatInt(u.In, 10), strconv.FormatInt(u.Out, 10),
 				optionalCount(u.CacheRead), optionalCount(u.CacheWrite), optionalCount(u.Reasoning),
-				strconv.Itoa(u.Findings), strconv.Itoa(u.Blocking), csvCell(u.Provider)})
+				strconv.Itoa(u.Findings), strconv.Itoa(u.Blocking), csvCell(u.Provider), csvCell(u.Source)})
 		})
 		if err != nil {
 			if ctx.Err() != nil {

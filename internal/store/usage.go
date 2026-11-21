@@ -182,15 +182,27 @@ const (
 	maxOutliers   = 20
 )
 
+// sourceTokensColumns are the tokens (in plus out) on global keys and on
+// teams' own, of run_usage rows.
+const sourceTokensColumns = `COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'global'), 0),
+			COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'team'), 0)`
+
+// UsageBySource returns the tokens (in plus out) one repository used since
+// the given time on global keys and on teams' own.
+func (s *Store) UsageBySource(ctx context.Context, instance string, projectID int64, since time.Time) (global, team int64, err error) {
+	err = s.pool.QueryRow(ctx, `SELECT `+sourceTokensColumns+` FROM run_usage
+		WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz`,
+		instance, projectID, since).Scan(&global, &team)
+	return global, team, err
+}
+
 // UsageByRepository returns what each repository used since the given time,
 // busiest first, with the path it was last reported under. Reviews counts a
 // run once, however many skills it ran. An API review has no repository (its
 // instance is empty) and is left out.
 func (s *Store) UsageByRepository(ctx context.Context, since time.Time) ([]RepoUsage, error) {
 	rows, err := s.pool.Query(ctx, `SELECT instance, project_id, (array_agg(project_path ORDER BY reported_at DESC))[1], `+tokenSumColumns+`,
-			count(DISTINCT run_id),
-			COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'global'), 0),
-			COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'team'), 0)
+			count(DISTINCT run_id), `+sourceTokensColumns+`
 		FROM run_usage WHERE reported_at >= $1::timestamptz AND instance <> ''
 		GROUP BY instance, project_id
 		ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, instance, project_id`, since)
@@ -458,7 +470,8 @@ func (s *Store) UsageCostPerReview(ctx context.Context, instance string, project
 
 // UsageRow is one run and skill, as the CSV export lists it. It holds no
 // title and no text a person wrote. CacheRead, CacheWrite and Reasoning are
-// nil when the Job didn't report them.
+// nil when the Job didn't report them. Source is whose key paid: SourceGlobal
+// or SourceTeam.
 type UsageRow struct {
 	ReportedAt                       time.Time
 	Instance, Project                string
@@ -470,6 +483,7 @@ type UsageRow struct {
 	In, Out                          int64
 	CacheRead, CacheWrite, Reasoning *int64
 	Findings, Blocking               int
+	Source                           string
 }
 
 // UsageProjectID returns the platform ID of the repository at project (matched
@@ -498,7 +512,7 @@ func (s *Store) UsageProjectID(ctx context.Context, instance, project string) (i
 // repository and is left out.
 func (s *Store) UsageRows(ctx context.Context, since time.Time, instance string, projectID int64, limit int, each func(UsageRow) error) error {
 	rows, err := s.pool.Query(ctx, `SELECT reported_at, instance, project_path, mr_iid, trigger, incremental, model, skill, verdict,
-			tokens_in, tokens_out, cache_read, cache_write, reasoning, findings, blocking, provider
+			tokens_in, tokens_out, cache_read, cache_write, reasoning, findings, blocking, provider, source
 		FROM run_usage
 		WHERE reported_at >= $1::timestamptz AND instance <> '' AND ($2::text = '' OR (instance = $2::text AND project_id = $3::bigint))
 		ORDER BY reported_at, run_id, skill
@@ -510,7 +524,7 @@ func (s *Store) UsageRows(ctx context.Context, since time.Time, instance string,
 	for rows.Next() {
 		var u UsageRow
 		if err := rows.Scan(&u.ReportedAt, &u.Instance, &u.Project, &u.MR, &u.Trigger, &u.Incremental, &u.Model, &u.Skill,
-			&u.Verdict, &u.In, &u.Out, &u.CacheRead, &u.CacheWrite, &u.Reasoning, &u.Findings, &u.Blocking, &u.Provider); err != nil {
+			&u.Verdict, &u.In, &u.Out, &u.CacheRead, &u.CacheWrite, &u.Reasoning, &u.Findings, &u.Blocking, &u.Provider, &u.Source); err != nil {
 			return err
 		}
 		u.ReportedAt = u.ReportedAt.UTC()

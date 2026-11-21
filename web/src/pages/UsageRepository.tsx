@@ -4,7 +4,7 @@ import { Link, useParams } from "react-router";
 
 import { api, isStatus, paths, safeHref, type UsageNamedView, type UsageRepositoryView } from "../api";
 import { ErrorBox, ExternalLink, Loading, NotFound, count } from "../ui";
-import { CsvLink, DailyTable, dash, EmptyRow, PeriodSelect, UsageCells, UsageHead, UsageNotes, reviewsText } from "./usageParts";
+import { CsvLink, DailyTable, dash, EmptyRow, PeriodSelect, UsageCells, UsageHead, UsageNotes, reviewsText, sourceText } from "./usageParts";
 
 // when is an RFC 3339 time as "2026-10-30 14:02 UTC" (the API sends UTC).
 const when = (at: string) => `${at.slice(0, 16).replace("T", " ")} UTC`;
@@ -16,9 +16,9 @@ const median = (m: number | null) => (m === null ? dash : count(Math.round(m)));
 // reviews recorded no provider.
 const modelText = (m: { provider: string; model: string }) => (m.provider === "" ? m.model : `${m.provider} / ${m.model}`);
 
-// UsageRepository is one repository's usage, for admins: per skill, merge
-// request, model and day, what was wasted and what a review costs. Titles,
-// skill and model names are text only.
+// UsageRepository is one repository's usage, for admins: what global and team
+// keys paid, per skill, merge request, model and day, what was wasted and
+// what a review costs. Titles, skill and model names are text only.
 export default function UsageRepository() {
   const params = useParams();
   const instance = params.instance ?? "";
@@ -60,6 +60,7 @@ function Body({ view, instance, project }: { view: UsageRepositoryView; instance
   const { wasted } = view;
   return (
     <>
+      <p className="sub">{sourceText(view.globalTokens, view.teamTokens)}</p>
       <Named title="Skills" first="Skill" rows={view.skills} failed />
       <section className="card scroll" aria-label="Merge requests">
         <h2>Merge requests</h2>

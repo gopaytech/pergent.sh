@@ -38,6 +38,8 @@ import type {
   UsageRepositoryView,
   UsageTokensView,
   UserView,
+  RuleSet,
+  RuleSetDetail,
 } from "../api";
 
 // An SSO account an admin made an admin.
@@ -87,6 +89,7 @@ export const reviewApproved: ReviewSummary = {
   reason: "",
   updatedAt: minutesAgo(4),
   webURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/128",
+  attempts: 1,
 };
 
 export const reviewBlocking: ReviewSummary = {
@@ -99,6 +102,7 @@ export const reviewBlocking: ReviewSummary = {
   reason: "security-review found blocking issues.",
   updatedAt: minutesAgo(12),
   webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/77",
+  attempts: 1,
 };
 
 export const overview: OverviewView = {
@@ -184,7 +188,9 @@ export const runDetail: RunDetailView = {
     reviewed: ["internal/refund/handler.go", "internal/refund/key.go"],
     skipped: [{ path: "go.sum", rule: "lockfile" }],
     notReviewed: [{ path: "internal/ledger/big.go", cause: "context overflow" }],
+    rules: [{ path: "internal/refund/handler.go", rule: "repo:internal/**/*.go" }],
   },
+  rulesUsed: true,
   skills: [
     {
       name: "security-review",
@@ -337,6 +343,8 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     trustedAuthors: { value: [], overridden: false },
     // Only an admin is sent the quota.
     ...(role === "admin" ? { monthlyTokenQuota: { value: null, overridden: false } } : {}),
+    ruleSets: { value: null, overridden: false },
+    builtInRules: { value: true, overridden: false },
   },
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
   waiting: [],
@@ -542,6 +550,8 @@ export const defaults: DefaultsView = {
   rerunLimitPerMR: 10,
   rerunLimitPerRepo: 50,
   skills: ["code-review"],
+  ruleSets: [],
+  builtInRules: true,
   // The config gives what is in effect, and nothing is saved here.
   config: {
     approve: true,
@@ -559,6 +569,7 @@ export const defaults: DefaultsView = {
     jobMemory: "",
     rerunLimitPerMR: 10,
     rerunLimitPerRepo: 50,
+    builtInRules: true,
   },
   pinned: {},
 };
@@ -776,7 +787,7 @@ export const usageOverview: UsageOverviewView = {
     { day: "2026-11-07", tokens: tok(455_000, 111_000) },
   ],
   repositories: [
-    { instance: "main", project: "acme/payments", switchedOn: true, paused: false, tokens: tok(900_000, 200_000), reviews: 30, globalTokens: 1_100_000, teamTokens: 0 },
+    { instance: "main", project: "acme/payments", switchedOn: true, paused: false, tokens: tok(900_000, 200_000), reviews: 30, globalTokens: 800_000, teamTokens: 300_000 },
     { instance: "main", project: "acme/widgets", switchedOn: true, paused: false, tokens: tok(200_000, 80_000), reviews: 8, globalTokens: 280_000, teamTokens: 0 },
     { instance: "main", project: "acme/old", switchedOn: false, paused: false, tokens: tok(100_000, 20_000), reviews: 2, globalTokens: 120_000, teamTokens: 0 },
   ],
@@ -817,6 +828,8 @@ export const usageRepository: UsageRepositoryView = {
   fullMedian: 120_000,
   incrementalMedian: null,
   outliers: [{ runID: "run-9", iid: 77, incremental: false, total: 450_000, at: "2026-11-06T10:15:00Z" }],
+  globalTokens: 800_000,
+  teamTokens: 300_000,
 };
 
 // What the Skill results tab reads for admins: tokens per skill on the same changes.
@@ -1100,6 +1113,18 @@ export const chainRepoCustom: ChainView = {
   team: "",
   savedByAdmin: true,
   entries: [{ ...entryOpus, position: 1 }],
+};
+
+// The rule library: a set written in the dashboard and one of the config file.
+export const ruleSets: RuleSet[] = [
+  { name: "go-api", version: 2, updatedAt: minutesAgo(60), entries: 2, source: "dashboard", inDefaults: true },
+  { name: "team", version: 0, updatedAt: "0001-01-01T00:00:00Z", entries: 1, source: "config", inDefaults: false },
+];
+
+export const ruleSetGoAPI: RuleSetDetail = {
+  ...ruleSets[0],
+  content: 'rules:\n  - path: "internal/api/**/*.go"\n    rule: Every handler must defer tx.Rollback().\n  - path: "**/*.pb.go"\n    off: true\n',
+  notes: [],
 };
 
 // Chain B of acme/payments while nothing is set anywhere: no entries.

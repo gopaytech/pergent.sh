@@ -11,6 +11,7 @@ import {
   type DetectedSkill,
   type InputsView,
   type LibrarySkill,
+  type RuleSet,
   type LinkableView,
   type Link as RepoLink,
   type RepoSettings,
@@ -25,6 +26,7 @@ import CommentLayoutEditor from "../CommentLayoutEditor";
 import LinkedReposEditor, { tidyLinks, type LinkableState } from "../LinkedReposEditor";
 import { useWrite } from "../layout/write";
 import { parseQuota, quotaProblem, quotaText } from "../quota";
+import RuleSetPicker from "../RuleSetPicker";
 import { ErrorBox, Loading, Switch, bytesText } from "../ui";
 import RepoModelChain from "./RepoModelChain";
 
@@ -37,6 +39,9 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
   const write = useWrite();
   const { repo } = view;
   const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
+  // The rule library, to choose and order rule sets from; the page doesn't
+  // wait for it.
+  const ruleLibrary = useQuery({ queryKey: ["rule-sets"], queryFn: () => api.get<RuleSet[]>("/api/rule-sets") });
   // The skills found in the repository's folders, from the default branch:
   // the same read the Skills & instructions tab shows.
   const inputs = useQuery({
@@ -97,6 +102,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         key={JSON.stringify(view.settings)}
         settings={view.settings}
         library={library.data}
+        ruleLibrary={ruleLibrary.isSuccess ? ruleLibrary.data : null}
         detected={
           inputs.isPending
             ? { status: "loading" }
@@ -282,6 +288,10 @@ type Draft = {
   skillsMode: "default" | "choose";
   skills: string[];
   repoSkills: string[];
+  // mode "default" is a null ruleSets setting: the default list.
+  ruleSetsMode: "default" | "choose";
+  ruleSets: string[];
+  builtInRules: boolean;
   jobTimeoutSeconds: string;
   maxTurns: string;
   jobMemory: string;
@@ -328,6 +338,7 @@ type DetectedState = { status: "loading" } | { status: "error"; error: unknown }
 function Form({
   settings,
   library: librarySkills,
+  ruleLibrary,
   detected,
   attention,
   locked,
@@ -346,6 +357,8 @@ function Form({
 }: {
   settings: RepoSettings;
   library: LibrarySkill[];
+  // ruleLibrary is the rule library; null while it is read (or can't be).
+  ruleLibrary: RuleSet[] | null;
   detected: DetectedState;
   attention: string[];
   locked: boolean;
@@ -370,6 +383,8 @@ function Form({
   const defaultSkills = librarySkills.filter((s) => s.inDefaults).map((s) => s.name);
   // skills null is the default list.
   const skillsNow = settings.skills.value ?? defaultSkills;
+  // The default rule sets, by name.
+  const defaultRuleSets = (ruleLibrary ?? []).filter((x) => x.inDefaults).map((x) => x.name);
   const initial: Draft = {
     approve: settings.approve.value,
     reviewDrafts: settings.reviewDrafts.value,
@@ -387,6 +402,9 @@ function Form({
     skillsMode: settings.skills.value === null ? "default" : "choose",
     skills: skillsNow,
     repoSkills: settings.repoSkills.value,
+    ruleSetsMode: (settings.ruleSets?.value ?? null) === null ? "default" : "choose",
+    ruleSets: settings.ruleSets?.value ?? [],
+    builtInRules: settings.builtInRules?.value ?? true,
     jobTimeoutSeconds: String(settings.jobTimeoutSeconds.value),
     maxTurns: String(settings.maxTurns.value),
     jobMemory: settings.jobMemory.value,
@@ -479,6 +497,19 @@ function Form({
         return;
       }
       body.skills = kept;
+    }
+    if (d.builtInRules !== initial.builtInRules) body.builtInRules = d.builtInRules;
+    if (d.ruleSetsMode === "default") {
+      // Back to the default list: null resets the setting.
+      if (initial.ruleSetsMode === "choose") body.ruleSets = null;
+    } else if (initial.ruleSetsMode === "default" || d.ruleSets.join() !== initial.ruleSets.join()) {
+      // The order matters: the first entry that matches a file wins.
+      const kept = ruleLibrary === null ? d.ruleSets : d.ruleSets.filter((n) => ruleLibrary.some((x) => x.name === n));
+      if (kept.length === 0) {
+        setProblem("Choose at least one rule set, or use the default rule sets.");
+        return;
+      }
+      body.ruleSets = kept;
     }
     // The detected skills are only sent when they were read: without the
     // read the page doesn't know what the switches would say.
@@ -838,6 +869,59 @@ function Form({
             removes {gone.length === 1 ? "it" : "them"} from this repository.
           </div>
         )}
+      </section>
+
+      <section className="card" aria-label="Rule sets used for this repository">
+        <h2>
+          Rule sets used for this repository <Badge overridden={settings.ruleSets?.overridden ?? false} /> {managed}
+        </h2>
+        <div className="skill">
+          <label className="grow">
+            <input
+              type="radio"
+              name="rule-sets-mode"
+              checked={d.ruleSetsMode === "default"}
+              disabled={disabled}
+              onChange={() => set("ruleSetsMode", "default")}
+            />{" "}
+            Use the default rule sets ({defaultRuleSets.length > 0 ? defaultRuleSets.join(", ") : "none"})
+          </label>
+        </div>
+        <div className="skill">
+          <label className="grow">
+            <input
+              type="radio"
+              name="rule-sets-mode"
+              checked={d.ruleSetsMode === "choose"}
+              disabled={disabled}
+              onChange={() => set("ruleSetsMode", "choose")}
+            />{" "}
+            Choose rule sets
+          </label>
+        </div>
+        {d.ruleSetsMode === "choose" &&
+          (ruleLibrary === null ? (
+            <Loading />
+          ) : (
+            <RuleSetPicker
+              label="Rule sets"
+              library={ruleLibrary}
+              selected={d.ruleSets}
+              disabled={disabled}
+              onChange={(v) => set("ruleSets", v)}
+            />
+          ))}
+        <div className="pad meta">
+          After the repository's own .pergent/rules.yaml, in this order. The first entry that matches a file gives it its rule;
+          a rule never says what is blocking.
+        </div>
+        <Setting
+          name="Built-in rules"
+          overridden={settings.builtInRules?.overridden ?? false}
+          help="pergent's own path rules, after the repository's and the rule sets'."
+        >
+          <Switch label="Built-in rules" checked={d.builtInRules} disabled={disabled} onChange={(v) => set("builtInRules", v)} />
+        </Setting>
       </section>
 
       <section className="card" aria-label="Skills in the repository">

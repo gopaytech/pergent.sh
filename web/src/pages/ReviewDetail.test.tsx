@@ -851,3 +851,24 @@ describe("ReviewDetail: CI jobs", () => {
     expect(box).toHaveTextContent("Waiting for CI until 2026-11-18 10:30 UTC.");
   });
 });
+
+describe("ReviewDetail path rules", () => {
+  it("shows the rule each reviewed file was checked with", async () => {
+    fakeApi(routes(runDetail));
+    renderApp("/reviews/main/acme/payments/77");
+    await userEvent.click(await screen.findByRole("tab", { name: "Files" }));
+    expect(screen.getByText("internal/refund/handler.go").closest("li")).toHaveTextContent("rule: repo:internal/**/*.go");
+    expect(screen.getByText("internal/refund/key.go").closest("li")).not.toHaveTextContent("rule:");
+    expect(screen.queryByText("This image does not use rules.")).not.toBeInTheDocument();
+  });
+
+  it("says when the image that reviewed does not use rules", async () => {
+    const run = structuredClone(runDetail);
+    run.rulesUsed = false;
+    run.files.rules = [];
+    fakeApi(routes(run));
+    renderApp("/reviews/main/acme/payments/77");
+    await userEvent.click(await screen.findByRole("tab", { name: "Files" }));
+    expect(screen.getByText("This image does not use rules.")).toBeInTheDocument();
+  });
+});

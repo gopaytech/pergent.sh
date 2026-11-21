@@ -16,7 +16,7 @@ const (
 // CheckSkill reports why content cannot be the skill called name: the name
 // does not match ^[A-Za-z0-9][A-Za-z0-9._-]*$, the text is over MaxSkillBytes,
 // the frontmatter does not parse or has a field of the wrong type (`paths` and
-// `exclude` are string lists, `cross_batch` a boolean), or its `name` differs
+// `exclude` are string lists, `cross_batch` and `rules` booleans), or its `name` differs
 // from name, or a `paths` or `exclude` pattern is one pergent refuses at load
 // (scope.CheckPattern: bad glob syntax, or one that can never match, such as
 // "api/"). Other frontmatter fields are ignored.

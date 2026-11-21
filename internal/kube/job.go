@@ -109,6 +109,9 @@ type JobParams struct {
 	// check what still uses deleted and renamed files. It reaches the Job only
 	// when true; false leaves the Job as it was before the setting existed.
 	CheckDeleted bool
+	// NoBuiltInRules leaves pergent's built-in path rules out. It reaches the
+	// Job only when true; false leaves the Job as it was before rules existed.
+	NoBuiltInRules bool
 	// The change this Job reviews, so a Job found in the cluster can be traced
 	// to it. Labels carry Instance, ProjectID, IID and HeadSHA; annotations carry
 	// ProjectPath and MRURL, which a label value cannot hold. A zero value is left out.
@@ -294,6 +297,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 	hasDescription := p.Inputs != nil && len(p.Inputs.Description) > 0
 	hasLinked := p.Inputs != nil && len(p.Inputs.Linked) > 0
 	hasCI := p.Inputs != nil && len(p.Inputs.CIResults) > 0
+	hasRules := p.Inputs != nil && len(p.Inputs.Rules) > 0
 	hasGraph := p.GraphURL != "" && p.GraphImage != ""
 
 	args := []string{
@@ -359,6 +363,15 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if p.CheckDeleted {
 		// An environment variable for the same reason.
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_CHECK_DELETED", Value: "true"})
+	}
+	if hasRules {
+		// An environment variable for the same reason: an older image then
+		// reviews without the rules, which never block.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_RULES", Value: "/in/rules.json"})
+	}
+	if p.NoBuiltInRules {
+		// An environment variable for the same reason.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_NO_BUILT_IN_RULES", Value: "true"})
 	}
 	if p.Panel != nil {
 		mainEnv = append(mainEnv, panelEnv(p)...)
@@ -451,6 +464,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 	}
 	if hasCI {
 		items = append(items, corev1.KeyToPath{Key: "ci-results.md", Path: "ci-results.md"})
+	}
+	if hasRules {
+		items = append(items, corev1.KeyToPath{Key: "rules.json", Path: "rules.json"})
 	}
 
 	volumes := []corev1.Volume{
@@ -545,6 +561,9 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 		}
 		if len(p.Inputs.CIResults) > 0 {
 			data["ci-results.md"] = string(p.Inputs.CIResults)
+		}
+		if len(p.Inputs.Rules) > 0 {
+			data["rules.json"] = string(p.Inputs.Rules)
 		}
 		if len(p.Inputs.Linked) > 0 {
 			data["linked-repos.json"] = string(p.Inputs.Linked)
