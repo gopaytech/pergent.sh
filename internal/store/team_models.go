@@ -106,6 +106,14 @@ func (s *Store) DeleteTeamModel(ctx context.Context, teamID int64, id string) (r
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
+	// One removal at a time per team: the chain A and chain B passes lock
+	// repository rows in 2 orders, so 2 removals at once could deadlock.
+	// NO KEY UPDATE, not UPDATE: a team chain save takes KEY SHARE on the
+	// row (its foreign key) and must not wait. DeleteTeam and UpdateTeam
+	// lock the row FOR UPDATE first too, so the order is the same.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM teams WHERE id = $1 FOR NO KEY UPDATE`, teamID); err != nil {
+		return nil, nil, err
+	}
 	tag, err := tx.Exec(ctx, `DELETE FROM team_models WHERE team_id = $1 AND id = $2`, teamID, id)
 	if err != nil {
 		return nil, nil, err

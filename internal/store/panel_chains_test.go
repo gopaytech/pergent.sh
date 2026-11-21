@@ -669,6 +669,68 @@ func TestDeleteTeamModelLocksTheRepoFirst(t *testing.T) {
 	}
 }
 
+// Two team entries of one team, removed at once, with the repositories
+// crosswise: repository a has chain A [m1] and chain B [m2], repository b
+// has chain A [m2] and chain B [m1]. Without a team lock each removal holds
+// one repository row from its chain A pass and wants the other for its
+// chain B pass: a deadlock (40P01). The holder stalls both removals between
+// the 2 passes (it holds the chain B entries table), so the order is fixed.
+func TestDeleteTeamModelOneAtATimePerTeam(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	m1 := newTeamModel(t, s, team, "One", nil)
+	m2 := newTeamModel(t, s, team, "Two", nil)
+	addRepos(t, s, "acme/a", "acme/b")
+	save := func(set ChainSet, project string, m TeamModel) {
+		t.Helper()
+		if err := s.SaveChainOf(ctx, set, Chain{Scope: ScopeRepo, Instance: "main", Project: project, Entries: []EntryRef{{SourceTeam, m.ID}}}, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save(ChainA, "acme/a", m1)
+	save(ChainB, "acme/a", m2)
+	save(ChainA, "acme/b", m2)
+	save(ChainB, "acme/b", m1)
+	holder, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx) //nolint:errcheck // committed below
+	var holderPID int32
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(ctx, `LOCK TABLE `+ChainB.entries+` IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	first, second := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, _, err := s.DeleteTeamModel(ctx, team, m1.ID)
+		first <- err
+	}()
+	firstPID := waitBlocked(t, s, 0, holderPID)
+	go func() {
+		_, _, err := s.DeleteTeamModel(ctx, team, m2.ID)
+		second <- err
+	}()
+	// The second waits on the holder (no team lock) or on the first (team lock).
+	waitBlocked(t, s, firstPID, holderPID, firstPID)
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-first; err != nil {
+		t.Errorf("first DeleteTeamModel: %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Errorf("second DeleteTeamModel: %v", err)
+	}
+	for _, project := range []string{"acme/a", "acme/b"} {
+		if _, found := mustChainB(t, s, ScopeRepo, 0, "main", project); found {
+			t.Errorf("%s: chain B row is still there", project)
+		}
+	}
+}
+
 // waitBlocked waits until a backend other than skip is blocked by one of
 // pids, and returns it.
 func waitBlocked(t *testing.T, s *Store, skip int32, pids ...int32) int32 {
