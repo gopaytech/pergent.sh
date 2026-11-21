@@ -13,6 +13,7 @@ import ApiClients from "./pages/ApiClients";
 import ApiReview from "./pages/ApiReview";
 import AuditLog from "./pages/AuditLog";
 import Integrations from "./pages/Integrations";
+import MyTeams from "./pages/MyTeams";
 import Overview from "./pages/Overview";
 import Repositories from "./pages/Repositories";
 import RepositoryDetail from "./pages/RepositoryDetail";
@@ -24,6 +25,7 @@ import SkillEditor, { NewSkill } from "./pages/SkillEditor";
 import SkillInstall from "./pages/SkillInstall";
 import Skills from "./pages/Skills";
 import SkillUpdates from "./pages/SkillUpdates";
+import TeamModels from "./pages/TeamModels";
 import Teams from "./pages/Teams";
 import Usage from "./pages/Usage";
 import UsageRepository from "./pages/UsageRepository";
@@ -31,7 +33,7 @@ import Users from "./pages/Users";
 import { NotFound } from "./ui";
 
 // App routes the pages. There are two areas: the user pages (Overview,
-// Repositories, Reviews, Skills) with their sign-in at /sign-in, and the admin
+// Repositories, Reviews, Skills, Teams) with their sign-in at /sign-in, and the admin
 // pages under /admin with theirs at /admin/sign-in. A 401 from any call drops
 // what was loaded and sends the browser to the sign-in page of the area it was
 // in; a 403 that says the account waits for a team or must change its password
@@ -126,6 +128,9 @@ export default function App() {
           }
         />
         <Route path="skills/view/:name" element={<SkillEditor />} />
+        {/* The session's own teams; the admins' Teams page is /admin/teams. */}
+        <Route path="teams" element={<MyTeams />} />
+        <Route path="teams/:id" element={<TeamModels />} />
         <Route
           path="admin"
           element={
@@ -193,7 +198,6 @@ export default function App() {
         />
         {/* The admin pages' old addresses: an admin is sent to the new one, a user finds nothing. */}
         <Route path="users" element={<OldAdminPage to="/admin/users" />} />
-        <Route path="teams" element={<OldAdminPage to="/admin/teams" />} />
         <Route path="integrations" element={<OldAdminPage to="/admin/integrations" />} />
         <Route path="settings" element={<OldAdminPage to="/admin/settings" />} />
         <Route path="audit" element={<OldAdminPage to="/admin/audit" />} />

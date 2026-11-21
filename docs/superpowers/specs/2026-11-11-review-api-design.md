@@ -31,7 +31,7 @@ The API is a public, versioned standard, "the pergent review API, v1". Anyone ca
 
 - **A false pass.** A review that fails, in whole or for one skill, never reads as a pass in the result or the callback. Neither does a review in which no skill reviewed any file.
 - **A leaked key or secret.** A key is shown once and stored as a hash. Keys and the callback secret never reach a log, the audit log or a metric label. The result and logs are redacted like an MR review's: the values pergent.sh knows, plus pergent's own token rules. pergent.sh has no detector for credentials inside the sent files (my call). The guide tells callers to strip secrets before sending, since the files go to the model provider too.
-- **Keeping the caller's files.** Gateway configs can hold upstream credentials. pergent.sh holds the sent files sealed until the Job is created, then deletes them. In the cluster they live in their own Secret, deleted once the checkout step ends, and in the pod's work volume while the pod runs. After that only the result (kept like an MR run's) and redacted logs (30 days) remain.
+- **Keeping the caller's files.** Gateway configs can hold upstream credentials. pergent.sh holds the sent files sealed until the Job is created, then deletes them. A review panel keeps them until its merge Job (Job P) is created, because its 3 Jobs each build a checkout from them. In the cluster they live in their own Secret, deleted once the checkout step ends, and in the pod's work volume while the pod runs. After that only the result (kept like an MR run's) and redacted logs (30 days) remain.
 - **One client reaching another's data.** A key reads and acts on its own client's reviews only. Another client's review ID answers as not found.
 - **pergent.sh calling an address a caller chose.** The callback URL is set by an admin. Nothing in a request can change where pergent.sh sends anything.
 - **Breaking MR reviews or the previous release.** Migrations only add, and the GitHub and GitLab paths behave as before.
@@ -56,7 +56,7 @@ These are the owner's.
 | The callback URL | Set per client by an admin. Each callback is signed with a client secret. |
 | Dismissals | A dismiss call per finding, with a reason, stored by subject. |
 | Limits | Max request size (bytes and files), reviews in flight, a monthly token budget, and requests per hour per key. |
-| The sent files | Discarded once the Job has them. |
+| The sent files | Discarded once the Job has them. A review panel discards them once its merge Job (Job P) has them. |
 | Where it lives in the dashboard | A new "API clients" section in the sidebar beside Repositories, for admins. |
 | Model | The default model, overridable per client. |
 | What ships beside the API | OpenAPI, a guide, curl examples and callback verification. No library. |
@@ -194,7 +194,7 @@ An API review runs as a Kubernetes Job with `pergent agent`, like an MR review, 
 What changes:
 
 - **Input.** There is no clone. The checkout step builds a local git repository from the sent files: one commit of the old files (the base) and one of the new (the head). `pergent agent` then reviews `--base..--head` as it does today. The engine must know both SHAs to check the result. Building the commits deterministically (fixed author, committer and date) lets it compute them up front. That method is my call, and the builder can choose another way to check the result.
-- **Where the files go.** From the request until dispatch, the files are stored sealed with `secretbox`. The stored copy is deleted when the Job is created, or when the review ends without one.
+- **Where the files go.** From the request until dispatch, the files are stored sealed with `secretbox`. The stored copy is deleted when the Job is created, or when the review ends without one. For a review panel it is deleted when Job P is created: Jobs A and B do not delete it. The clean-up pass still deletes any copy left behind.
   - In the cluster, the files go in a Secret of their own (the owner's), not the ConfigMap or the Job's Secret. They may hold credentials, and the Job's Secret must stay for the `pergent` container.
   - Only the checkout step mounts the files' Secret. The watcher deletes it once the checkout has ended, and the Job's cleanup deletes it in any case.
   - The Secret's 1 MiB cap bounds the request size. The hard maximum is left to the builder, below that cap.

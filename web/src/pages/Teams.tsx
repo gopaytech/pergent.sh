@@ -22,7 +22,11 @@ import { ErrorBox, Loading } from "../ui";
 const memberRoles: MemberRole[] = ["viewer", "maintainer"];
 
 // repoLabel names what a team covers: a whole instance or one repository.
-const repoLabel = (r: TeamRepoView) => (r.project === "" ? `All repositories of ${r.instance}` : r.project);
+const repoLabel = (r: { instance: string; project: string }) => (r.project === "" ? `All repositories of ${r.instance}` : r.project);
+
+// ownerLabel names an entry's owner tick.
+const ownerLabel = (r: { instance: string; project: string }) =>
+  r.project === "" ? `Owner of every repository of ${r.instance}` : `Owner of ${r.project} on ${r.instance}`;
 
 // Teams lists the teams, makes new ones, and opens one to change its
 // members and the repositories it covers.
@@ -120,7 +124,10 @@ function TeamCard({ team }: { team: TeamView }) {
         <div>
           Members: {team.members.length === 0 ? "none" : team.members.map((m) => `${m.username} (${m.role})`).join(", ")}
         </div>
-        <div>Repositories: {team.repos.length === 0 ? "none" : team.repos.map(repoLabel).join(", ")}</div>
+        <div>
+          Repositories:{" "}
+          {team.repos.length === 0 ? "none" : team.repos.map((r) => (r.owner ? `${repoLabel(r)} (owner)` : repoLabel(r))).join(", ")}
+        </div>
       </div>
       {/* A new answer from the server starts the editor again from it. */}
       {editing && <Editor key={JSON.stringify(team)} team={team} onClose={() => setEditing(false)} />}
@@ -128,8 +135,11 @@ function TeamCard({ team }: { team: TeamView }) {
   );
 }
 
+// RepoRef is a repository or instance entry a team may cover.
+type RepoRef = { instance: string; project: string };
+
 // repoKey identifies a team's repository in the editor's selection.
-const repoKey = (r: TeamRepoView) => JSON.stringify([r.instance, r.project]);
+const repoKey = (r: RepoRef) => JSON.stringify([r.instance, r.project]);
 
 // Editor loads what the choices are made from, then shows the form.
 function Editor({ team, onClose }: { team: TeamView; onClose: () => void }) {
@@ -169,8 +179,8 @@ function EditorForm({
   accounts: UserView[];
   instanceNames: string[];
   // switchedOn holds the paused repositories too: a team may cover one.
-  switchedOn: TeamRepoView[];
-  paused: TeamRepoView[];
+  switchedOn: RepoRef[];
+  paused: RepoRef[];
   onClose: () => void;
 }) {
   const client = useQueryClient();
@@ -178,16 +188,19 @@ function EditorForm({
   // The choices: whole instances and the repositories switched on or paused,
   // and what the team covers that is none of those: shown as removed and
   // unticked, since saving it would be refused.
-  const available: TeamRepoView[] = [...instanceNames.map((instance) => ({ instance, project: "" })), ...switchedOn];
-  const gone = team.repos.filter((r) => !available.some((c) => repoKey(c) === repoKey(r)));
+  const available: RepoRef[] = [...instanceNames.map((instance) => ({ instance, project: "" })), ...switchedOn];
+  const gone: RepoRef[] = team.repos.filter((r) => !available.some((c) => repoKey(c) === repoKey(r)));
   const choices = [...available, ...gone];
-  const isGone = (c: TeamRepoView) => gone.some((g) => repoKey(g) === repoKey(c));
-  const isPaused = (c: TeamRepoView) => paused.some((p) => repoKey(p) === repoKey(c));
+  const isGone = (c: RepoRef) => gone.some((g) => repoKey(g) === repoKey(c));
+  const isPaused = (c: RepoRef) => paused.some((p) => repoKey(p) === repoKey(c));
 
   const [name, setName] = useState(team.name);
   // The members: account ID to the role on this team.
   const [members, setMembers] = useState(() => new Map<number, MemberRole>(team.members.map((m) => [m.accountId, m.role])));
   const [covered, setCovered] = useState(() => new Set(team.repos.filter((r) => !isGone(r)).map(repoKey)));
+  // The owner ticks, of covered entries only: an entry the team stops
+  // covering loses its tick.
+  const [owned, setOwned] = useState(() => new Set(team.repos.filter((r) => r.owner && !isGone(r)).map(repoKey)));
   // Adding by email: the account is made now, as invited, and joins the team
   // when the team is saved. An account that is there already is asked for too,
   // so it is marked added (it can sign in whatever the allowlist says); a 409
@@ -251,7 +264,9 @@ function EditorForm({
     save.mutate({
       name: name.trim(),
       members: [...members].map(([accountId, role]) => ({ accountId, role })).sort((a, b) => a.accountId - b.accountId),
-      repos: choices.filter((c) => covered.has(repoKey(c))),
+      repos: choices
+        .filter((c) => covered.has(repoKey(c)))
+        .map((c): TeamRepoView => ({ instance: c.instance, project: c.project, owner: owned.has(repoKey(c)) })),
     });
   };
   return (
@@ -331,30 +346,50 @@ function EditorForm({
 
       <fieldset>
         <legend>Repositories</legend>
+        <div className="meta">
+          The owner team's models and chain are what the repository's reviews use. An entry has one owner team at most; a
+          repository's own entry wins over its instance's.
+        </div>
         {choices.map((c) => (
-          <label className="check" key={repoKey(c)}>
-            <input
-              type="checkbox"
-              checked={covered.has(repoKey(c))}
-              onChange={(e) => setCovered(toggle(covered, repoKey(c), e.target.checked))}
-            />
-            <span>
-              {c.project === "" ? (
-                repoLabel(c)
-              ) : (
-                <>
-                  <span className="mr">{c.project}</span> <span className="meta">{c.instance}</span>
-                </>
-              )}
-              {isPaused(c) && (
-                <span className="meta">
-                  {" "}
-                  (<Link to={paths.repo(c.instance, c.project)}>paused</Link>)
-                </span>
-              )}
-              {isGone(c) && <span className="meta"> (removed)</span>}
-            </span>
-          </label>
+          <div className="check" key={repoKey(c)}>
+            <label className="check plain">
+              <input
+                type="checkbox"
+                checked={covered.has(repoKey(c))}
+                onChange={(e) => {
+                  setCovered(toggle(covered, repoKey(c), e.target.checked));
+                  if (!e.target.checked) setOwned(toggle(owned, repoKey(c), false));
+                }}
+              />
+              <span>
+                {c.project === "" ? (
+                  repoLabel(c)
+                ) : (
+                  <>
+                    <span className="mr">{c.project}</span> <span className="meta">{c.instance}</span>
+                  </>
+                )}
+                {isPaused(c) && (
+                  <span className="meta">
+                    {" "}
+                    (<Link to={paths.repo(c.instance, c.project)}>paused</Link>)
+                  </span>
+                )}
+                {isGone(c) && <span className="meta"> (removed)</span>}
+              </span>
+            </label>
+            {covered.has(repoKey(c)) && (
+              <label className="check plain">
+                <input
+                  type="checkbox"
+                  aria-label={ownerLabel(c)}
+                  checked={owned.has(repoKey(c))}
+                  onChange={(e) => setOwned(toggle(owned, repoKey(c), e.target.checked))}
+                />
+                <span>owner</span>
+              </label>
+            )}
+          </div>
         ))}
         {choices.length === 0 && <div className="meta">No repository is switched on yet.</div>}
       </fieldset>

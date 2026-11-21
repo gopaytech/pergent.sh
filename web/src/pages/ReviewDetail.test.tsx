@@ -294,6 +294,66 @@ describe("ReviewDetail", () => {
     expect(await screen.findByText("fatal: could not read")).toBeInTheDocument();
   });
 
+  it("names the chain entry the run ran on and its place in the chain", async () => {
+    renderAndWait({ ...runDetail, entry: { name: "qwen3.5", position: 2, length: 3, source: "team", team: "Payments" } });
+    const run = await screen.findByRole("region", { name: "This run" });
+    expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
+    expect(run).toHaveTextContent("Model chain: qwen3.5 · entry 2 of 3 · team Payments");
+  });
+
+  it("says nothing of a chain or attempts for a run that recorded no entry", async () => {
+    renderAndWait();
+    const run = await screen.findByRole("region", { name: "This run" });
+    expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
+    expect(run).not.toHaveTextContent("Model chain:");
+    expect(within(run).queryByRole("list", { name: "Attempts" })).not.toBeInTheDocument();
+  });
+
+  it("lists each attempt of the review, with why an earlier one was dropped, linked to its run", async () => {
+    const dropped = "33333333-3333-3333-3333-333333333333";
+    renderAndWait({
+      ...runDetail,
+      entry: { name: "qwen3.5", position: 2, length: 2, source: "global", team: "" },
+      attempts: [
+        { runId: dropped, name: "Claude <b>Sonnet</b>", position: 1, outcome: "fell_back", reason: "quota" },
+        { runId: newest, name: "qwen3.5", position: 2, outcome: "blocking", reason: "" },
+      ],
+    });
+    const run = await screen.findByRole("region", { name: "This run" });
+    const list = await within(run).findByRole("list", { name: "Attempts" });
+    const items = within(list).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("Attempt 1: Claude <b>Sonnet</b> (entry 1) · out of quota, so the review started again on the next model");
+    expect(items[0].querySelector("b")).toBeNull();
+    expect(within(items[0]).getByRole("link", { name: /Attempt 1/ })).toHaveAttribute("href", `/reviews/main/acme/payments/77?run=${dropped}`);
+    expect(items[1]).toHaveTextContent("Attempt 2: qwen3.5 (entry 2) · this run");
+    expect(within(items[1]).queryByRole("link")).not.toBeInTheDocument();
+    expect(run).toHaveTextContent("Model chain: qwen3.5 · entry 2 of 2 · global");
+  });
+
+  it("opens a dropped attempt, which the history leaves out", async () => {
+    const dropped = "33333333-3333-3333-3333-333333333333";
+    const fake = fakeApi({
+      ...routes(),
+      [`GET /api/runs/${dropped}`]: {
+        body: {
+          ...runDetail,
+          run: { ...reviewDetail.runs[0], id: dropped, outcome: "fell_back", reason: "quota" },
+          latestDecided: false,
+          skills: [],
+          entry: { name: "Claude Sonnet", position: 1, length: 2, source: "global", team: "" },
+        },
+      },
+    });
+    renderApp(`/reviews/main/acme/payments/77?run=${dropped}`);
+    const run = await screen.findByRole("region", { name: "This run" });
+    expect(await within(run).findByText("Model chain: Claude Sonnet · entry 1 of 2 · global", { exact: false })).toBeInTheDocument();
+    expect(fake.find("GET", `/api/runs/${dropped}`)).toHaveLength(1);
+    expect(screen.getByText("Retried on backup")).toBeInTheDocument();
+    // No run of the history is the one shown.
+    const history = screen.getByRole("region", { name: "Review history" });
+    expect(within(history).queryByRole("link", { current: "true" })).not.toBeInTheDocument();
+  });
+
   it("selects an older run", async () => {
     const fake = fakeApi({
       ...routes(),

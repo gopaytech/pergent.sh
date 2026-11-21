@@ -37,6 +37,7 @@ const outcomes: Record<Outcome, [Tone, string]> = {
   no_blocking: ["ok", "Not approved"],
   failed: ["warn", "Failed"],
   superseded: ["grey", "Superseded"],
+  fell_back: ["grey", "Retried on backup"],
   skipped: ["grey", "Not reviewed"],
   unknown: ["grey", "Unknown"],
   waiting: ["grey", "Waiting for a start"],

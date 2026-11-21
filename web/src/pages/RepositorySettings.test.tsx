@@ -2,9 +2,26 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { CIJob, RepositoryDetailView } from "../api";
+import type { ChainView, CIJob, RepositoryDetailView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { librarySkills, repoDetail, repoGadgets, repoPayments, repoTeams, repoWidgets, ssoAdmin, viewer } from "../test/fixtures";
+import {
+  chainRepoCustom,
+  chainRepoInherit,
+  choice,
+  entryConfig,
+  entryOpus,
+  entryTeamQwen,
+  librarySkills,
+  maintainer,
+  myTeams,
+  repoDetail,
+  repoGadgets,
+  repoPayments,
+  repoTeams,
+  repoWidgets,
+  ssoAdmin,
+  viewer,
+} from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -20,6 +37,8 @@ const base = {
   "GET /api/repositories/main/acme/widgets/inputs": { body: noInputs },
   "GET /api/repositories/main/acme/payments/teams": { body: repoTeams },
   "GET /api/repositories/main/acme/widgets/teams": { body: repoTeams },
+  "GET /api/repositories/main/acme/payments/chain": { body: chainRepoInherit },
+  "GET /api/repositories/main/acme/widgets/chain": { body: chainRepoInherit },
 };
 
 const teamsSection = () => screen.findByRole("region", { name: "Teams" });
@@ -105,109 +124,160 @@ describe("RepositorySettings: Teams", () => {
   });
 });
 
-describe("RepositorySettings: Model", () => {
+describe("RepositorySettings: Model chain", () => {
   const payments = "/api/repositories/main/acme/payments";
-  const withModel = (d: RepositoryDetailView, id: string | null, label: string): RepositoryDetailView => ({
-    ...d,
-    model: label,
-    settings: { ...d.settings, model: { value: id, overridden: id !== null } },
-  });
-  const routes = (detail: RepositoryDetailView, me = ssoAdmin) => ({
+  const chainPath = `${payments}/chain`;
+  const routes = (detail: RepositoryDetailView, me = ssoAdmin, chain: ChainView = chainRepoInherit) => ({
     ...base,
     "GET /api/me": { body: me },
     [`GET ${payments}`]: { body: detail },
     [`PUT ${payments}/settings`]: { body: detail },
+    [`GET ${chainPath}`]: { body: chain },
   });
-  const settingsPath = `${payments}/settings`;
+  const card = () => screen.findByRole("region", { name: "Model chain" });
+  const names = (box: HTMLElement) =>
+    within(within(box).getByRole("list", { name: "Model chain" }))
+      .getAllByRole("listitem")
+      .map((r) => r.querySelector("b")?.textContent);
 
-  it("offers an admin the default, named, first, then every model of the list", async () => {
-    fakeApi(routes(repoDetail(repoPayments)));
-    renderApp("/repos/main/acme/payments?tab=settings");
-    const select = await screen.findByLabelText("Model");
-    expect(select).toBeEnabled();
-    expect(select).toHaveValue("");
-    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Default (anthropic / claude-sonnet)",
-      "anthropic / claude-sonnet",
-      "anthropic / claude-opus",
-    ]);
-  });
-
-  it("names the default on the first option also when the repository names its own model", async () => {
-    fakeApi(routes(withModel(repoDetail(repoPayments), "m-opus", "anthropic / claude-opus")));
-    renderApp("/repos/main/acme/payments?tab=settings");
-    const select = await screen.findByLabelText("Model");
-    expect(within(select).getAllByRole("option")[0]).toHaveTextContent("Default (anthropic / claude-sonnet)");
-  });
-
-  it("says plain Default when no choice is the default", async () => {
-    const detail = repoDetail(repoPayments);
-    fakeApi(routes({ ...detail, modelChoices: detail.modelChoices.map((c) => ({ ...c, default: false })) }));
-    renderApp("/repos/main/acme/payments?tab=settings");
-    const select = await screen.findByLabelText("Model");
-    expect(within(select).getAllByRole("option")[0]).toHaveTextContent(/^Default$/);
-  });
-
-  it("sends the ID of the model picked, and nothing else", async () => {
+  it("has no model menu any more, and sends no model in the settings", async () => {
     const fake = fakeApi(routes(repoDetail(repoPayments)));
     renderApp("/repos/main/acme/payments?tab=settings");
-    await userEvent.selectOptions(await screen.findByLabelText("Model"), "anthropic / claude-opus");
+    await userEvent.click(await screen.findByRole("switch", { name: "Quiet reviews" }));
+    expect(screen.queryByRole("combobox", { name: "Model" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ model: "m-opus" });
+    expect(fake.find("PUT", `${payments}/settings`)[0].body).toEqual({ quietReviews: true });
   });
 
-  it("sends null to follow the default again", async () => {
-    const fake = fakeApi(routes(withModel(repoDetail(repoPayments), "m-opus", "anthropic / claude-opus")));
+  it("shows the chain the repository inherits and where it comes from", async () => {
+    fakeApi(routes(repoDetail(repoPayments)));
     renderApp("/repos/main/acme/payments?tab=settings");
-    const select = await screen.findByLabelText("Model");
-    expect(select).toHaveValue("m-opus");
-    await userEvent.selectOptions(select, "");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ model: null });
+    const box = await card();
+    expect(await within(box).findByText("Inherited from the chain of its owner team, Payments.")).toBeInTheDocument();
+    expect(names(box)).toEqual(["qwen3.5", "Claude Sonnet"]);
+    expect(within(box).queryByRole("button", { name: "Save chain" })).not.toBeInTheDocument();
   });
 
-  it("doesn't send the model when it didn't change", async () => {
-    const fake = fakeApi(routes(withModel(repoDetail(repoPayments), "m-opus", "anthropic / claude-opus")));
+  it("says when the repository inherits the global chain", async () => {
+    fakeApi(routes(repoDetail(repoPayments), ssoAdmin, { ...chainRepoInherit, source: "global", team: "" }));
     renderApp("/repos/main/acme/payments?tab=settings");
-    await userEvent.click(await screen.findByRole("switch", { name: "Review drafts" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ reviewDrafts: true });
+    expect(await within(await card()).findByText("Inherited from the global chain.")).toBeInTheDocument();
   });
 
-  it("shows a maintainer the current model in a disabled select, and never saves it", async () => {
-    const detail = withModel(repoDetail(repoPayments, "maintainer"), "m-opus", "anthropic / claude-opus");
-    const fake = fakeApi(routes(detail, viewer));
+  it("gives the repository its own chain, starting from the one in effect, with a PUT of the entries", async () => {
+    const fake = fakeApi({ ...routes(repoDetail(repoPayments)), [`PUT ${chainPath}`]: { body: chainRepoCustom } });
     renderApp("/repos/main/acme/payments?tab=settings");
-    const select = await screen.findByLabelText("Model");
-    expect(select).toBeDisabled();
-    expect(select).toHaveDisplayValue("anthropic / claude-opus");
-    // A maintainer is given no choices.
-    expect(within(select).getAllByRole("option")).toHaveLength(1);
-    expect(screen.getByText("Only admins of this repository change the model.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("switch", { name: "Review drafts" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ reviewDrafts: true });
-    expect(fake.find("PUT", settingsPath)[0].body).not.toHaveProperty("model");
+    const box = await card();
+    await userEvent.click(await within(box).findByRole("button", { name: "Give it its own chain" }));
+    await userEvent.click(within(box).getByRole("button", { name: "Remove Claude Sonnet" }));
+    await userEvent.selectOptions(within(box).getByRole("combobox", { name: "Entry to add" }), "Claude Opus (global)");
+    await userEvent.click(within(box).getByRole("button", { name: "Add" }));
+    await userEvent.click(within(box).getByRole("button", { name: "Save chain" }));
+    const [put] = fake.find("PUT", chainPath);
+    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(put.body).toEqual({
+      entries: [
+        { source: "team", id: "t-qwen" },
+        { source: "global", id: "m-opus" },
+      ],
+    });
+    expect(await within(box).findByText("This repository has its own chain.")).toBeInTheDocument();
   });
 
-  it("shows a maintainer the default's model when the repository names none", async () => {
-    fakeApi(routes(repoDetail(repoPayments, "maintainer"), viewer));
+  it("puts a repository's own chain back to inherit with a POST, after a confirmation", async () => {
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const fake = fakeApi({
+      ...routes(repoDetail(repoPayments), ssoAdmin, chainRepoCustom),
+      [`POST ${chainPath}/reset`]: { body: chainRepoInherit },
+    });
     renderApp("/repos/main/acme/payments?tab=settings");
-    expect(await screen.findByLabelText("Model")).toHaveDisplayValue("anthropic / claude-sonnet");
+    const box = await card();
+    expect(await within(box).findByText("This repository has its own chain.")).toBeInTheDocument();
+    await userEvent.click(within(box).getByRole("button", { name: "Inherit again" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("owner team's chain, or the global chain"));
+    const [post] = fake.find("POST", `${chainPath}/reset`);
+    expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(await within(box).findByText("Inherited from the chain of its owner team, Payments.")).toBeInTheDocument();
   });
 
-  it("is disabled for a repository the config sets up", async () => {
-    fakeApi({ ...routes(repoDetail(repoWidgets)), [`GET /api/repositories/main/acme/widgets`]: { body: repoDetail(repoWidgets) } });
-    renderApp("/repos/main/acme/widgets?tab=settings");
-    expect(await screen.findByLabelText("Model")).toBeDisabled();
+  it("keeps a config file's entry movable in a repository's chain, and sends it", async () => {
+    const config = { ...entryConfig, position: 2 };
+    const chain: ChainView = { ...chainRepoCustom, entries: [{ ...entryOpus, position: 1 }, config], choices: [choice(entryOpus), choice(entryConfig)] };
+    const fake = fakeApi({ ...routes(repoDetail(repoPayments), ssoAdmin, chain), [`PUT ${chainPath}`]: { body: chain } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await card();
+    await userEvent.click(await within(box).findByRole("button", { name: "Move openai/gpt-5 up" }));
+    await userEvent.click(within(box).getByRole("button", { name: "Save chain" }));
+    expect(fake.find("PUT", chainPath)[0].body).toEqual({
+      entries: [
+        { source: "global", id: "config" },
+        { source: "global", id: "m-opus" },
+      ],
+    });
   });
 
-  it("says in a maintainer's reset confirmation that the model stays", async () => {
+  it("flags the entries an admin saved that a maintainer may not keep", async () => {
+    const chain: ChainView = { ...chainRepoCustom, entries: [{ ...entryOpus, position: 1 }, { ...entryTeamQwen, position: 2 }], choices: [choice(entryTeamQwen)] };
+    fakeApi(routes(repoDetail(repoPayments, "maintainer"), viewer, chain));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await card();
+    expect(await within(box).findByText("An admin saved this chain.")).toBeInTheDocument();
+    expect(within(box).getByText("You can't keep this entry here. Remove it to save.")).toBeInTheDocument();
+    expect(within(box).getByRole("button", { name: "Save chain" })).toBeDisabled();
+  });
+
+  it("shows a maintainer of another team the chain with no button that changes it", async () => {
+    // The server says read-only: the session doesn't maintain the owner team.
+    fakeApi(routes(repoDetail(repoPayments, "maintainer"), viewer, { ...chainRepoCustom, readOnly: true, choices: [] }));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await card();
+    expect(await within(box).findByText("This repository has its own chain.")).toBeInTheDocument();
+    expect(within(box).queryByRole("button")).not.toBeInTheDocument();
+    expect(box).toHaveTextContent("Only admins and maintainers of the repository's owner team change its chain.");
+  });
+
+  it("shows a viewer the chain, read-only, on the Skills & instructions tab", async () => {
+    fakeApi({
+      ...routes(repoDetail(repoPayments, "viewer"), viewer, { ...chainRepoInherit, readOnly: true, choices: [] }),
+    });
+    renderApp("/repos/main/acme/payments?tab=inputs");
+    const box = await card();
+    expect(await within(box).findByText("Inherited from the chain of its owner team, Payments.")).toBeInTheDocument();
+    expect(names(box)).toEqual(["qwen3.5", "Claude Sonnet"]);
+    expect(within(box).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("clears a global entry's mark with the admin route", async () => {
+    const marked = { ...entryOpus, position: 1, state: "exhausted" as const, class: "quota" as const, until: "2026-11-21T14:00:00Z", canClear: true };
+    const fake = fakeApi({
+      ...routes(repoDetail(repoPayments), ssoAdmin, { ...chainRepoCustom, entries: [marked] }),
+      "DELETE /api/admin/models/m-opus/mark": { status: 204 },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.click(await within(await card()).findByRole("button", { name: "Clear mark of Claude Opus" }));
+    expect(fake.find("DELETE", "/api/admin/models/m-opus/mark")).toHaveLength(1);
+  });
+
+  it("clears a team entry's mark with the route of its team", async () => {
+    const marked = { ...entryTeamQwen, position: 1, state: "key_rejected" as const, class: "auth" as const, canClear: true };
+    const fake = fakeApi({
+      ...routes(repoDetail(repoPayments, "maintainer"), maintainer, { ...chainRepoInherit, entries: [marked] }),
+      "GET /api/me/teams": { body: myTeams },
+      "DELETE /api/teams/2/models/t-qwen/mark": { status: 204 },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.click(await within(await card()).findByRole("button", { name: "Clear mark of qwen3.5" }));
+    await vi.waitFor(() => expect(fake.find("DELETE", "/api/teams/2/models/t-qwen/mark")).toHaveLength(1));
+  });
+
+  it("says in a maintainer's reset confirmation that the chain stays", async () => {
     fakeApi(routes(repoDetail(repoPayments, "maintainer"), viewer));
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderApp("/repos/main/acme/payments?tab=settings");
     await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("who is trusted, the model and the token quota"));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("who is trusted and the token quota"));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("The model chain stays as it is."));
     confirm.mockRestore();
   });
 });
