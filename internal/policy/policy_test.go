@@ -2049,3 +2049,23 @@ func TestFallbackLineInert(t *testing.T) {
 		t.Errorf("Footer = %q, want the mention broken", got)
 	}
 }
+
+// A panel's reason and the fingerprints it merged are redacted like the other
+// finding texts, on a copy: the caller's panel is not changed.
+func TestRedactSkillsRedactsPanel(t *testing.T) {
+	const key = "sk-secret-123"
+	redact := func(t string) string { return strings.ReplaceAll(t, key, "***") }
+	panel := &render.FindingPanel{FoundBy: "both", Reason: "saw " + key, Also: []string{"fp-" + key, "fp2"}}
+	in := []render.Skill{{Name: "security", Findings: []render.Finding{{Title: "t", Panel: panel}}}}
+	out := redactSkills(in, redact)
+	got := out[0].Findings[0].Panel
+	if got == nil || got.Reason != "saw ***" || len(got.Also) != 2 || got.Also[0] != "fp-***" || got.Also[1] != "fp2" || got.FoundBy != "both" {
+		t.Errorf("panel = %+v, want the key redacted", got)
+	}
+	if got == panel {
+		t.Error("the panel was not copied")
+	}
+	if panel.Reason != "saw "+key || panel.Also[0] != "fp-"+key {
+		t.Errorf("the caller's panel changed: %+v", panel)
+	}
+}

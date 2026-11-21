@@ -516,13 +516,18 @@ func hideInFailures(skills []render.Skill, hide func(string) string) []render.Sk
 
 // redactSkills is skills with redact applied to every text in them that came
 // from the review: findings (dismissed ones included), failures, notes,
-// summaries, checks, the confidence reason and file paths. skills is not
-// modified.
+// summaries, checks, the confidence reason, file paths and a panel's reason
+// and merged fingerprints. skills is not modified.
 func redactSkills(skills []render.Skill, redact func(string) string) []render.Skill {
 	finding := func(f render.Finding) render.Finding {
 		f.File, f.Title = redact(f.File), redact(f.Title)
 		f.Explanation, f.SuggestedFix = redact(f.Explanation), redact(f.SuggestedFix)
 		f.Suggestion = redact(f.Suggestion)
+		if f.Panel != nil {
+			fp := *f.Panel
+			fp.Reason, fp.Also = redact(fp.Reason), redactAll(fp.Also, redact)
+			f.Panel = &fp
+		}
 		return f
 	}
 	out := make([]render.Skill, len(skills))
