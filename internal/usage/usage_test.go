@@ -159,13 +159,46 @@ func TestModelRowsNone(t *testing.T) {
 	}
 }
 
+// A negative count drops the whole skill, as FromResult does: the other
+// skills still count.
 func TestModelRowsNegativeDropped(t *testing.T) {
 	body := []byte(`{"skills":[{"name":"a","tokens_by_model":[
-	 {"role":"a","model":"m","tokens":{"input":-1,"output":0}},
-	 {"role":"b","model":"m","tokens":{"input":1,"output":0,"cache_read":-5}},
-	 {"role":"b","model":"n","tokens":{"input":2,"output":0}}]}]}`)
+	 {"role":"a","model":"m","tokens":{"input":1,"output":0}},
+	 {"role":"b","model":"m","tokens":{"input":1,"output":0,"cache_read":-5}}]},
+	 {"name":"c","tokens_by_model":[
+	 {"role":"a","model":"n","tokens":{"input":2,"output":0}}]}]}`)
 	got, err := ModelRows(body, store.Run{})
-	if err != nil || len(got) != 1 || got[0].Model != "n" {
-		t.Errorf("got %+v, %v; want only the valid row", got, err)
+	if err != nil || len(got) != 1 || got[0].Skill != "c" || got[0].Model != "n" {
+		t.Errorf("got %+v, %v; want only skill c", got, err)
+	}
+}
+
+// Only roles a and b count, and only the first row of each role in a skill.
+func TestModelRowsOddRoles(t *testing.T) {
+	body := []byte(`{"skills":[{"name":"a","tokens_by_model":[
+	 {"role":"c","model":"x","tokens":{"input":9,"output":9}},
+	 {"role":"","model":"x","tokens":{"input":9,"output":9}},
+	 {"role":"b","model":"b1","tokens":{"input":2,"output":0}},
+	 {"role":"a","model":"a1","tokens":{"input":1,"output":0}},
+	 {"role":"a","model":"a2","tokens":{"input":3,"output":0}}]}]}`)
+	got, err := ModelRows(body, store.Run{})
+	if err != nil || len(got) != 2 || got[0].Model != "a1" || got[1].Model != "b1" {
+		t.Errorf("got %+v, %v; want a1 then b1", got, err)
+	}
+}
+
+// A merged incremental result skips the impact skill it carried from the
+// base run, as FromResult does; a re-run that named impact keeps it.
+func TestModelRowsMergedIncrementalSkipsImpact(t *testing.T) {
+	body := []byte(`{"merged":true,"incremental":{"reviewed":[],"carried":[],"from":"abc"},"skills":[
+	 {"name":"impact","tokens_by_model":[{"role":"a","model":"m","tokens":{"input":9,"output":9}}]},
+	 {"name":"security","tokens_by_model":[{"role":"a","model":"m","tokens":{"input":1,"output":1}}]}]}`)
+	got, err := ModelRows(body, store.Run{Trigger: store.TriggerPush, Incremental: true})
+	if err != nil || len(got) != 1 || got[0].Skill != "security" {
+		t.Errorf("got %+v, %v; want only security", got, err)
+	}
+	rerun, _ := ModelRows(body, store.Run{Trigger: store.TriggerRerunFailed, SkillSubset: []string{"impact"}})
+	if len(rerun) != 1 || rerun[0].Skill != "impact" {
+		t.Errorf("re-run rows = %+v, want impact", rerun)
 	}
 }

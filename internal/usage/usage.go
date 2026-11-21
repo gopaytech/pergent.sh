@@ -104,7 +104,9 @@ type rawModelResult struct {
 
 // ModelRows returns the per-model tokens of body's skills (tokens_by_model),
 // in the skills' order, A before B; nil for a result without them. It counts
-// the same skills as FromResult. A row with negative counts is left out.
+// the same skills as FromResult, and like it leaves out a whole skill when any
+// of its rows has a negative count. Only roles "a" and "b" count, and only the
+// first row of each role in a skill.
 func ModelRows(body []byte, run store.Run) ([]store.ModelUsage, error) {
 	var res rawModelResult
 	if err := json.Unmarshal(body, &res); err != nil {
@@ -123,13 +125,21 @@ func ModelRows(body []byte, run store.Run) ([]store.ModelUsage, error) {
 			continue
 		}
 		rows := make([]store.ModelUsage, 0, len(s.TokensByModel))
+		bad := false
 		for _, m := range s.TokensByModel {
 			t := m.Tokens
 			if t.Input < 0 || t.Output < 0 || negative(t.Reasoning) || negative(t.CacheRead) || negative(t.CacheWrite) {
+				bad = true
+				break
+			}
+			if (m.Role != "a" && m.Role != "b") || slices.ContainsFunc(rows, func(r store.ModelUsage) bool { return r.Role == m.Role }) {
 				continue
 			}
 			rows = append(rows, store.ModelUsage{Skill: s.Name, Role: m.Role, Provider: m.Provider, Model: m.Model,
 				In: t.Input, Out: t.Output, Reasoning: t.Reasoning, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite})
+		}
+		if bad {
+			continue
 		}
 		// A before B, whatever order the result lists them in.
 		slices.SortStableFunc(rows, func(x, y store.ModelUsage) int { return strings.Compare(x.Role, y.Role) })
