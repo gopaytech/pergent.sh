@@ -463,3 +463,49 @@ func TestLaunchPanelJobKeyB(t *testing.T) {
 		}
 	}
 }
+
+// A panel's 3 Jobs get the rule list as a review Job does: a member is the
+// review Job plus its marks, and pergent's --panel takes the rules too.
+func TestPanelJobsKeepRules(t *testing.T) {
+	withRules := func(p JobParams) JobParams {
+		in := *p.Inputs
+		in.Rules = []byte(`[{"source":"repo","path":"*.go","rule":"x"}]`)
+		p.Inputs = &in
+		p.NoBuiltInRules = true
+		return p
+	}
+	review := withRules(goldenParams())
+	member := review
+	member.SkipSkillVerify = true
+	member.PanelMemberID, member.PanelRole = testMemberID, PanelRoleA
+	got := withoutPanelMarks(t, reviewGolden(t, member, goldenSecrets))
+	if want := withoutPanelMarks(t, reviewGolden(t, review, goldenSecrets)); got != want {
+		t.Errorf("a member Job with rules differs from the review Job by more than the flag and labels:\n%s", got)
+	}
+	for name, p := range map[string]JobParams{"member": member, "merge": withRules(panelParams())} {
+		t.Run(name, func(t *testing.T) {
+			job := BuildJob(p)
+			env := containerByName(t, job.Spec.Template.Spec.Containers, "pergent").Env
+			for k, want := range map[string]string{"PERGENT_RULES": "/in/rules.json", "PERGENT_NO_BUILT_IN_RULES": "true"} {
+				if got, ok := envValue(env, k); !ok || got != want {
+					t.Errorf("%s = %q, %v; want %q", k, got, ok, want)
+				}
+			}
+			var item bool
+			for _, v := range job.Spec.Template.Spec.Volumes {
+				if v.ConfigMap == nil {
+					continue
+				}
+				for _, it := range v.ConfigMap.Items {
+					item = item || (it.Key == "rules.json" && it.Path == "rules.json")
+				}
+			}
+			if !item {
+				t.Error("the inputs volume has no rules.json item")
+			}
+			if cm := BuildConfigMap(p, job); cm.Data["rules.json"] != string(p.Inputs.Rules) {
+				t.Errorf("ConfigMap rules.json = %q", cm.Data["rules.json"])
+			}
+		})
+	}
+}
