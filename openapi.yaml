@@ -8299,7 +8299,7 @@ components:
         also:
           type: array
           items: {type: string}
-          description: Other members that also found it.
+          description: Fingerprints of the other findings merged into this one. A dismissal of any of them dismisses this finding.
         disagreed_by:
           type: string
           description: The member that did not agree.
