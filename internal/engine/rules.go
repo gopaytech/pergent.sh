@@ -70,7 +70,7 @@ func (p *rulesProblem) Error() string { return p.reason }
 
 // addRules builds the run's rule list (the repository file at ref only when
 // withRepo, then the repository's rule sets), puts it in the inputs and sets
-// the run's rules hash.
+// the run's rules hash, which takes in the Jobs image (inputs.RulesHash).
 func (d *dispatcher) addRules(ctx context.Context, src inputs.Source, repo settings.Effective, ref string, withRepo bool, in *inputs.Inputs) error {
 	list, problem, err := ruleList(ctx, src, d.run.MR.ProjectID, ref, repo.RuleSets, d.e.Config, d.e.Store.ResolveRuleSets, withRepo)
 	if err != nil {
@@ -82,6 +82,6 @@ func (d *dispatcher) addRules(ctx context.Context, src inputs.Source, repo setti
 	if in.Rules, err = inputs.EncodeRules(list); err != nil {
 		return err
 	}
-	d.rulesHash = inputs.RulesHash(list, repo.BuiltInRules)
+	d.rulesHash = inputs.RulesHash(list, repo.BuiltInRules, d.e.Config.Jobs.Image)
 	return nil
 }

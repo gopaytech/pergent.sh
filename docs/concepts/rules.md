@@ -69,7 +69,8 @@ A check that silently stops running is close to a false pass, so none of these r
 
 ## Reviews and the rule list
 
-- A review records the hash of its rule list and the built-in switch. When the next push has another hash, every skill with rules on is reviewed in full: none of its files is carried over, and the log says `rules changed`. A skill with `rules: false` carries as before. A review from before rules existed counts as a change, so the first push after the upgrade is a full review for skills with rules on.
+- A review records the hash of its rule list, the built-in switch and `jobs.image`. When the next push has another hash, every skill with rules on is reviewed in full: none of its files is carried over, and the log says `rules changed`. A skill with `rules: false` carries as before. A review from before rules existed counts as a change, so the first push after the upgrade is a full review for skills with rules on.
+- `jobs.image` is in the hash because the built-in texts ship inside the image, so a new image can change them. The first push after you change `jobs.image` is a full review for skills with rules on.
 - Quiet reviews get rules as usual.
 - [API reviews](../setup/review-api.md) read no repository file: they get the default rule sets and the default **Built-in rules** switch.
 - The rule list reaches the review Job as a file behind the environment variable `PERGENT_RULES`, and `PERGENT_NO_BUILT_IN_RULES=true` when the built-ins are off. A pergent image built before rules ignores both and reviews as before. Rules never block, so this is not a false pass. Its result has no `rules` object, and the review page says `This image does not use rules.`

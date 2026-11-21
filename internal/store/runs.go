@@ -133,9 +133,9 @@ type Run struct {
 	// recorded at dispatch; nil before.
 	Incremental bool
 	SkillHashes map[string]string
-	// RulesHash is the hash of the path rule list and built-in switch the run
-	// was given (SetRunRulesHash), nil for a run from before rules or one
-	// that never started.
+	// RulesHash is the hash of the path rule list, built-in switch and Jobs
+	// image the run was given (SetRunRulesHash), nil for a run from before
+	// rules or one that never started.
 	RulesHash *string
 	// Quiet is whether the run was started quiet, recorded when it started
 	// (SetRunQuiet). False for a run from before the column, or one that
