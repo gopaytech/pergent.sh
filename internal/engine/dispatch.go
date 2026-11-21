@@ -609,6 +609,16 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err := e.Store.SetRunEntry(ctx, run.ID, runEntry(d.entry)); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's model entry: %w", err))
 	}
+	// A repository with chain B in effect gets a review panel: the run waits
+	// for its members, whose Jobs start apart. With no chain B this writes
+	// nothing and the review goes on as before.
+	split, err := d.panel(ctx, repo, repoUsedUp, instanceUsedUp)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("start the review panel: %w", err))
+	}
+	if split {
+		return nil
+	}
 
 	token, tokenHash, err := mintToken()
 	if err != nil {

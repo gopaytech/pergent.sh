@@ -315,3 +315,44 @@ func TestDecisionRunsUnderInstanceQuota(t *testing.T) {
 		t.Fatalf("empty chain: decision = %+v", d)
 	}
 }
+
+// Avoid skips an entry on the same provider and model, whatever the case and
+// the key: a panel's member B never runs on the model A runs on. A chain of
+// only that entry is exhausted, never held or waited on.
+func TestResolveAvoid(t *testing.T) {
+	in := input(store.ScopeGlobal, g("a"), g("b"))
+	in.Entries[g("a")] = instances.Model{ID: "a", Name: "n-a", Key: "key-a", TeamsMayUse: true,
+		LLM: config.LLM{Provider: "OpenAI", Model: "GPT-5"}}
+	in.Entries[g("b")] = instances.Model{ID: "b", Name: "n-b", Key: "key-b", TeamsMayUse: true,
+		LLM: config.LLM{Provider: "anthropic", Model: "claude"}}
+	in.Avoid = SameModel{Provider: "openai", Model: "gpt-5"}
+	d := Resolve(in)
+	if d.Ref != g("b") || d.Position != 2 || d.FirstSkip != ReasonSameModel {
+		t.Fatalf("decision = %+v", d)
+	}
+	if len(d.Skips) != 1 || d.Skips[0].Reason != ReasonSameModel || d.Skips[0].Name != "n-a" {
+		t.Fatalf("skips = %+v", d.Skips)
+	}
+
+	only := input(store.ScopeGlobal, g("a"))
+	only.Entries[g("a")] = in.Entries[g("a")]
+	only.Avoid = in.Avoid
+	d = Resolve(only)
+	if !d.Exhausted || d.Hold || d.Wait || d.Runs() || len(d.Skips) != 1 || d.Skips[0].Reason != ReasonSameModel {
+		t.Fatalf("decision = %+v", d)
+	}
+	if got := FailureText(d); !strings.Contains(got, "n-a (the model the other review runs on)") {
+		t.Errorf("failure text = %q", got)
+	}
+
+	// Another model of the same provider runs, and no Avoid avoids nothing.
+	other := only
+	other.Avoid = SameModel{Provider: "openai", Model: "gpt-4"}
+	if d := Resolve(other); !d.Runs() || d.Ref != g("a") {
+		t.Errorf("another model: decision = %+v", d)
+	}
+	other.Avoid = SameModel{}
+	if d := Resolve(other); !d.Runs() || d.Ref != g("a") {
+		t.Errorf("no Avoid: decision = %+v", d)
+	}
+}

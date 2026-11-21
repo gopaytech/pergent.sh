@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/gopaytech/pergent/rule"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -171,4 +173,234 @@ func TestDispatchJobUnchanged(t *testing.T) {
 	env, id := goldenEnv(t, nil)
 	dispatch(t, env)
 	checkDispatchGolden(t, env, id)
+}
+
+// panelFloor sets the first pergent with a review panel for the test.
+func panelFloor(t *testing.T, v string) {
+	t.Helper()
+	config.PanelMinVersion = v
+	t.Cleanup(func() { config.PanelMinVersion = "" })
+}
+
+// saveChainB stores chain B c.
+func saveChainB(t *testing.T, env *testEnv, c store.Chain) {
+	t.Helper()
+	if err := env.Store.SaveChainOf(env.ctx, store.ChainB, c, env.Now()); err != nil {
+		t.Fatalf("SaveChainOf(ChainB): %v", err)
+	}
+}
+
+// globalChainB stores a global chain B of one new global entry, gpt-b with
+// key key-b, and returns its ref.
+func globalChainB(t *testing.T, env *testEnv) store.EntryRef {
+	t.Helper()
+	b := globalRef(t, env, "gpt-b", "key-b")
+	saveChainB(t, env, store.Chain{Scope: store.ScopeGlobal, Entries: []store.EntryRef{b}})
+	return b
+}
+
+// members is the panel_members rows of run id's review.
+func members(t *testing.T, env *testEnv, id string) []store.PanelMember {
+	t.Helper()
+	ms, err := env.Store.PanelMembers(env.ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ms
+}
+
+// wantOnlyA checks run id runs today's review Job, on A's key, with one off
+// row of reason.
+func wantOnlyA(t *testing.T, env *testEnv, id, reason string) {
+	t.Helper()
+	wantJobKey(t, env, id, testLLMKey)
+	if r := env.Run(id); r.State != store.Running || r.JobName != kube.JobName(id) {
+		t.Fatalf("run = %s job %q; want running with its Job", r.State, r.JobName)
+	}
+	ms := members(t, env, id)
+	if len(ms) != 1 || ms[0].State != store.MemberOff || ms[0].FailureReason != reason {
+		t.Fatalf("members = %+v; want one off row %q", ms, reason)
+	}
+	if strings.Contains(env.Logs(), "key-b") || strings.Contains(env.Logs(), testLLMKey) {
+		t.Errorf("a key reached the log:\n%s", env.Logs())
+	}
+}
+
+// With no chain B in effect, even with an image that has the panel, the
+// dispatch is today's byte for byte, and no panel row is written.
+func TestDispatchNoChainBUnchanged(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	env, id := goldenEnv(t, nil)
+	dispatch(t, env)
+	checkDispatchGolden(t, env, id)
+	if ms := members(t, env, id); len(ms) != 0 {
+		t.Errorf("members = %+v; want none", ms)
+	}
+	if r := env.Run(id); r.State != store.Running || r.JobName != kube.JobName(id) {
+		t.Errorf("run = %s job %q; want running with its Job", r.State, r.JobName)
+	}
+}
+
+// A repository that turned chain B off is reviewed as today, whatever its
+// team has: the same dispatch byte for byte, and no row.
+func TestDispatchRepoOffNoPanel(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	env, id := goldenEnv(t, func(env *testEnv) {
+		team := teamOwning(t, env, "Payments")
+		b := addTeamModel(t, env, team, "team-b", "gpt-b", "key-b")
+		saveChainB(t, env, store.Chain{Scope: store.ScopeTeam, TeamID: team, Entries: []store.EntryRef{b}})
+		if err := env.Store.SetRepoPanelOff(env.ctx, testInstance, testProjectPath, env.Now()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	dispatch(t, env)
+	checkDispatchGolden(t, env, id)
+	if ms := members(t, env, id); len(ms) != 0 {
+		t.Errorf("members = %+v; want none", ms)
+	}
+}
+
+// A review with chain B, on an image that has the panel, is split: the run
+// waits for its members with dispatched_at set and member A's entry kept;
+// both members are queued; no Job, ConfigMap, Secret or status yet.
+func TestDispatchSplitsPanel(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	env := newTestEnv(t)
+	globalChainB(t, env)
+	id := dispatchMR(t, env, 3, sha('a'))
+
+	r := env.Run(id)
+	if r.State != store.Waiting || r.SkipReason != store.WaitPanel {
+		t.Fatalf("run = %s/%q; want waiting/%s\n%s", r.State, r.SkipReason, store.WaitPanel, env.Logs())
+	}
+	if !r.DispatchedAt.Equal(env.Now()) || r.JobName != "" {
+		t.Errorf("dispatched at %s, job %q; want now and no Job", r.DispatchedAt, r.JobName)
+	}
+	if r.ModelEntryID != "config" || r.Provider == nil || *r.Provider != "anthropic" {
+		t.Errorf("run entry = %q provider %v; want A's", r.ModelEntryID, r.Provider)
+	}
+	ms := members(t, env, id)
+	if len(ms) != 2 || ms[0].State != store.MemberQueued || ms[1].State != store.MemberQueued ||
+		ms[0].Role == ms[1].Role || ms[0].RunID != id {
+		t.Fatalf("members = %+v; want 2 queued, a and b", ms)
+	}
+	if jobs := env.Jobs(); len(jobs) != 0 {
+		t.Errorf("%d Jobs were created", len(jobs))
+	}
+	if l, err := env.Kube.CoreV1().Secrets(testNamespace).List(env.ctx, metav1.ListOptions{}); err != nil || len(l.Items) != 0 {
+		t.Errorf("secrets = %v, %v; want none", l, err)
+	}
+	if l, err := env.Kube.CoreV1().ConfigMaps(testNamespace).List(env.ctx, metav1.ListOptions{}); err != nil || len(l.Items) != 0 {
+		t.Errorf("config maps = %v, %v; want none", l, err)
+	}
+	if st := env.GitLab.Requests(http.MethodPost, statusPath(sha('a'))); len(st) != 0 {
+		t.Errorf("%d statuses were set", len(st))
+	}
+	if strings.Contains(env.Logs(), "key-b") || strings.Contains(env.Logs(), testLLMKey) {
+		t.Errorf("a key reached the log:\n%s", env.Logs())
+	}
+}
+
+// An image that does not have the panel (the floor unset, a tag below it,
+// or a tag that is not a version) runs A only, with the note.
+func TestDispatchPanelImageTooOld(t *testing.T) {
+	for _, tc := range []struct{ name, floor, image string }{
+		{"no floor", "", testImage},
+		{"floor above the tag", "v0.6.0", testImage},
+		{"tag not a version", "v0.5.0", "ghcr.io/gopaytech/pergent:main"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			panelFloor(t, tc.floor)
+			env := newTestEnv(t)
+			env.Engine.Config.Jobs.Image = tc.image
+			globalChainB(t, env)
+			id := dispatchMR(t, env, 3, sha('a'))
+			wantOnlyA(t, env, id, "the review image does not support it")
+		})
+	}
+}
+
+// A run asked for under a used-up instance quota goes ahead on A's global
+// entry, but B, on global entries only, does not start.
+func TestDispatchPanelQuotaStopsB(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	env := quotaPushEnv(t, 0, 0)
+	instQuota := int64(500)
+	env.Engine.Config.GitLab[0].MonthlyTokenQuota = &instQuota
+	seedQuotaUsage(t, env, 500)
+	globalChainB(t, env)
+	head := sha('a')
+	servePush(env, head)
+	id, _, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(3), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch(t, env)
+	wantOnlyA(t, env, id, "the token quota stopped model B")
+}
+
+// A run asked for under a used-up repository quota goes ahead, but B, which
+// would spend as much again, does not start, on any entry.
+func TestDispatchPanelRepoQuotaStopsB(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	env := quotaPushEnv(t, 100, 100)
+	team := teamOwning(t, env, "Payments")
+	b := addTeamModel(t, env, team, "team-b", "gpt-b", "key-b")
+	saveChainB(t, env, store.Chain{Scope: store.ScopeTeam, TeamID: team, Entries: []store.EntryRef{b}})
+	head := sha('a')
+	servePush(env, head)
+	id, _, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(3), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch(t, env)
+	wantOnlyA(t, env, id, "the token quota stopped model B")
+}
+
+// Chain B's only entry runs on the model A runs on (another key, another
+// case): A only. With a different entry after it, B takes that one.
+func TestDispatchPanelSameModel(t *testing.T) {
+	t.Run("only entry", func(t *testing.T) {
+		panelFloor(t, "v0.5.0")
+		env := newTestEnv(t)
+		same := store.EntryRef{Source: store.SourceGlobal, ID: addModel(t, env, "Anthropic", "Claude-Sonnet-4", "", "key-b")}
+		saveChainB(t, env, store.Chain{Scope: store.ScopeGlobal, Entries: []store.EntryRef{same}})
+		id := dispatchMR(t, env, 3, sha('a'))
+		wantOnlyA(t, env, id, "model B is the model A runs on")
+	})
+	t.Run("another entry left", func(t *testing.T) {
+		panelFloor(t, "v0.5.0")
+		env := newTestEnv(t)
+		same := store.EntryRef{Source: store.SourceGlobal, ID: addModel(t, env, "anthropic", "claude-sonnet-4", "", "key-same")}
+		other := globalRef(t, env, "gpt-b", "key-b")
+		saveChainB(t, env, store.Chain{Scope: store.ScopeGlobal, Entries: []store.EntryRef{same, other}})
+		id := dispatchMR(t, env, 3, sha('a'))
+		if r := env.Run(id); r.State != store.Waiting || r.SkipReason != store.WaitPanel {
+			t.Fatalf("run = %s/%q; want a panel\n%s", r.State, r.SkipReason, env.Logs())
+		}
+	})
+}
+
+// No entry of chain B can be used (no key): A only, with that reason.
+func TestDispatchPanelNoUsableB(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	env := newTestEnv(t)
+	gone := store.EntryRef{Source: store.SourceGlobal, ID: "no-such-entry"}
+	saveChainB(t, env, store.Chain{Scope: store.ScopeGlobal, Entries: []store.EntryRef{gone}})
+	id := dispatchMR(t, env, 3, sha('a'))
+	wantOnlyA(t, env, id, "no entry of chain B can be used")
+}
+
+// Chain B that can't be read never fails or holds the review: it runs A
+// only, with the reason, and the error is logged.
+func TestDispatchPanelChainBUnreadable(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	env := newTestEnv(t)
+	globalChainB(t, env)
+	execSQL(t, env, `ALTER TABLE panel_chains RENAME TO panel_chains_gone`)
+	id := dispatchMR(t, env, 3, sha('a'))
+	wantOnlyA(t, env, id, "chain B could not be read")
+	if !strings.Contains(env.Logs(), "chain B") {
+		t.Errorf("the error was not logged:\n%s", env.Logs())
+	}
 }
