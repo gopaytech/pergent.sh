@@ -164,6 +164,36 @@ func TestMemberHandlerWrongCommit(t *testing.T) {
 	}
 }
 
+// The engine's settle pass ran the same check first and failed the member
+// (ErrNotReported): the answer is still the check's 400, not an error.
+func TestMemberHandlerSettledFirst(t *testing.T) {
+	f := newFakeMembers()
+	f.replErr = store.ErrNotReported
+	e := newMemberEnv(f)
+	rec := e.post(runID, memberID, "Bearer good", resultJSON(base, "deadbeef"))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "a different commit") {
+		t.Fatalf("status = %d %q, want the check's 400", rec.Code, rec.Body.String())
+	}
+}
+
+// CheckStored is the handlers' check of a stored body: it parses and runs
+// checkResult, and gives the failure to record in the result's place.
+func TestCheckStored(t *testing.T) {
+	run := store.Run{BaseSHA: base, HeadSHA: head, SkillSubset: []string{"security"}}
+	if res, f, ok := CheckStored([]byte(completedJSON("security")), run); !ok || res == nil || res.Status != "completed" || f != (store.Failure{}) {
+		t.Errorf("good result = %v, %+v, %v; want ok", res, f, ok)
+	}
+	for body, want := range map[string]string{
+		resultJSON(base, "x"): "the result is for a different commit than the one this run reviews",
+		`{}`:                  "unsupported result schema_version 0 (want 1)",
+	} {
+		res, f, ok := CheckStored([]byte(body), run)
+		if ok || res != nil || f.Reason != unusable+want || f.Step != "delivery" {
+			t.Errorf("CheckStored(%s) = %v, %+v, %v; want %q at delivery", body, res, f, ok, want)
+		}
+	}
+}
+
 // A completed result with a skill the member's Job was not started with, or
 // without one it was, fails the member, with the run's own check against
 // the skills of a whole review (recorded at the split) or of a re-run.

@@ -208,6 +208,28 @@ func checkResult(res *result.Result, run store.Run) string {
 	return checkSkills(res, run)
 }
 
+// CheckStored checks the stored result body of a Job of run as the handlers
+// check a result when it arrives, and returns it parsed. ok is false, with
+// the failure to record in its place, when it does not parse or checkResult
+// refuses it. The engine checks a panel member's stored result with it again
+// before the member counts as done, so a result stored but not yet checked
+// (the handler stores, then checks) never reaches Job P.
+func CheckStored(body []byte, run store.Run) (res *result.Result, f store.Failure, ok bool) {
+	res, err := result.Parse(body)
+	if err != nil {
+		return nil, unusableFailure(err.Error()), false
+	}
+	if reason := checkResult(res, run); reason != "" {
+		return nil, unusableFailure(reason), false
+	}
+	return res, store.Failure{}, true
+}
+
+// unusableFailure is the failure of a result that can't be used.
+func unusableFailure(reason string) store.Failure {
+	return store.Failure{Reason: unusable + reason, Step: "delivery"}
+}
+
 // checkMerge returns why res carries merge fields, or "".
 func checkMerge(res *result.Result) string {
 	if res.Merged || res.MergeNote != "" {

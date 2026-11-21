@@ -41,27 +41,11 @@ func providerError(stored []byte) *result.ProviderError {
 // API review is marked but not retried, since its inputs are gone once its
 // Job has them; it is published as before.
 func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) (handled bool, err error) {
-	if run.ModelEntryID == "" || run.ChainLength < 2 {
+	m, ok := e.refusedMark(store.EntryRef{Source: run.ModelSource, ID: run.ModelEntryID}, run.ChainLength, run.Result)
+	if !ok {
 		return false, nil
 	}
-	pe := providerError(run.Result)
-	if pe == nil {
-		return false, nil
-	}
-	switch pe.Class {
-	case store.ClassQuota, store.ClassBilling, store.ClassAuth:
-	default:
-		// A plain rate limit, or a class this release doesn't know: as
-		// before, no fallback.
-		return false, nil
-	}
-	now := e.now()
-	m := store.Mark{Ref: store.EntryRef{Source: run.ModelSource, ID: run.ModelEntryID}, Class: pe.Class, SetAt: now}
-	if pe.Class != store.ClassAuth {
-		until := now.Add(e.Config.Fallback.Cooldown())
-		m.Until = &until
-	}
-	log = log.With("model_entry", run.ModelEntryID, "class", pe.Class)
+	log = log.With("model_entry", run.ModelEntryID, "class", m.Class)
 	if run.Kind != store.KindMR {
 		if err := e.Store.SetMark(ctx, m); err != nil {
 			return false, fmt.Errorf("mark the model entry: %w", err)
@@ -70,7 +54,7 @@ func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) 
 		// audit entry is written on the first try only.
 		if run.PublishError == "" {
 			log.Warn("the provider refused the review's model entry; it is skipped until the mark ends")
-			e.auditMark(ctx, run, log)
+			e.auditMark(ctx, run, run.ModelEntryName, m.Class, log)
 		}
 		return false, nil
 	}
@@ -85,7 +69,7 @@ func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) 
 		return true, nil
 	}
 	log.Warn("the provider refused the review's model entry; trying the next entry of its chain", "next_run", next)
-	e.auditMark(ctx, run, log)
+	e.auditMark(ctx, run, run.ModelEntryName, m.Class, log)
 	e.Wake()
 	root := run.ID
 	if run.AttemptOf != nil {
@@ -106,19 +90,43 @@ func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) 
 	return true, nil
 }
 
-// auditMark records the mark of run's entry: its name and class, never a
-// key. A failure is logged and changes nothing.
-func (e *Engine) auditMark(ctx context.Context, run store.Run, log *slog.Logger) {
+// refusedMark is the mark of the entry ref when the stored result says the
+// provider refused it: out of quota or credit, or its key rejected. The mark
+// ends after the cooldown, or for auth when its key is edited. ok is false
+// when nothing falls back: no entry, a chain of 1 (it never falls back), no
+// provider_error, or a plain rate limit or a class this release doesn't
+// know. A review and a panel member decide it the same way.
+func (e *Engine) refusedMark(ref store.EntryRef, chainLength int, stored []byte) (m store.Mark, ok bool) {
+	if ref.ID == "" || chainLength < 2 {
+		return store.Mark{}, false
+	}
+	pe := providerError(stored)
+	if pe == nil {
+		return store.Mark{}, false
+	}
+	switch pe.Class {
+	case store.ClassQuota, store.ClassBilling, store.ClassAuth:
+	default:
+		return store.Mark{}, false
+	}
+	now := e.now()
+	m = store.Mark{Ref: ref, Class: pe.Class, SetAt: now}
+	if pe.Class != store.ClassAuth {
+		until := now.Add(e.Config.Fallback.Cooldown())
+		m.Until = &until
+	}
+	return m, true
+}
+
+// auditMark records the mark of an entry of run's review: the entry's name
+// and the class, never a key. A failure is logged and changes nothing.
+func (e *Engine) auditMark(ctx context.Context, run store.Run, entryName, class string, log *slog.Logger) {
 	actx, cancel := settle(ctx)
 	defer cancel()
-	var class string
-	if pe := providerError(run.Result); pe != nil {
-		class = pe.Class
-	}
 	if err := e.Store.Audit(actx, store.AuditEntry{
 		At: e.now(), Actor: fallbackActor, Action: "model_marked",
 		Instance: run.MR.Instance, Project: run.ProjectPath,
-		Detail: fmt.Sprintf("model=%s class=%s", run.ModelEntryName, class),
+		Detail: fmt.Sprintf("model=%s class=%s", entryName, class),
 	}); err != nil {
 		log.Error("recording an audit entry failed", "action", "model_marked", "error", e.redact(err.Error()))
 	}

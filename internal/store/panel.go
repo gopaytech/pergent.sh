@@ -527,6 +527,30 @@ func (s *Store) MembersToSettle(ctx context.Context) ([]PanelMember, error) {
 	return ms, nil
 }
 
+// PanelsToRelease returns the reviews (their first runs) whose run still
+// waits for its members while none of them is live any more: ReleasePanel
+// decides them. A settle pass that stopped between a member's settle and the
+// release finds its review here on the next pass.
+func (s *Store) PanelsToRelease(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT COALESCE(r.attempt_of, r.id)::text FROM runs r
+		WHERE r.state = 'waiting' AND r.skip_reason = 'panel_members'
+		  AND NOT EXISTS (SELECT 1 FROM panel_members m WHERE m.run_id = COALESCE(r.attempt_of, r.id)
+			AND m.state IN ('queued', 'running', 'reported'))`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var root string
+		if err := rows.Scan(&root); err != nil {
+			return nil, err
+		}
+		out = append(out, root)
+	}
+	return out, rows.Err()
+}
+
 // SettleMember moves a reported member to done (it has a result) or failed,
 // and returns the new state. A member that is not reported, or an unknown id,
 // is left alone: the state is "".

@@ -113,7 +113,9 @@ func (h *MemberHandler) stored(w http.ResponseWriter, ctx context.Context, log *
 		reason = checkResult(res, run)
 	}
 	if reason != "" {
-		if err := h.Members.ReplaceMemberWithFailure(ctx, id, store.Failure{Reason: unusable + reason, Step: "delivery"}); err != nil {
+		// ErrNotReported: the engine's settle pass ran the same check on the
+		// stored result first and already failed the member.
+		if err := h.Members.ReplaceMemberWithFailure(ctx, id, unusableFailure(reason)); err != nil && !errors.Is(err, store.ErrNotReported) {
 			log.Error("replace member result with failure", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
@@ -129,7 +131,7 @@ func (h *MemberHandler) stored(w http.ResponseWriter, ctx context.Context, log *
 
 // fail reports the member failed with an unusable result.
 func (h *MemberHandler) fail(w http.ResponseWriter, ctx context.Context, log *slog.Logger, id string, now time.Time, reason string) {
-	if _, err := h.Members.ReportMemberFailure(ctx, id, store.Failure{Reason: unusable + reason, Step: "delivery"}, now); err != nil {
+	if _, err := h.Members.ReportMemberFailure(ctx, id, unusableFailure(reason), now); err != nil {
 		log.Error("report member failure", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

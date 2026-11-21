@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
@@ -687,7 +688,10 @@ func TestE2EPanelMemberLog(t *testing.T) {
 }
 
 // Between the members' results and Job P nothing is posted for a member: no
-// comment, note, thread, approval or status. The run is not written.
+// comment, note, thread, approval or status. Settling writes nothing to the
+// platform: A is done, B failed, and the run is released (queued again, its
+// other fields as the split left them). The dispatch that starts Job P is
+// S3.8's.
 func TestE2EPanelMemberPostsNothing(t *testing.T) {
 	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
 	env := e.env
@@ -707,21 +711,34 @@ func TestE2EPanelMemberPostsNothing(t *testing.T) {
 		watch(t, env)
 		publish(t, env)
 		cleanup(t, env)
-		dispatch(t, env)
 	}
 	for _, r := range env.GitLab.Requests("", "") {
 		if r.Method != http.MethodGet {
 			t.Errorf("%s %s reached the forge; want nothing posted for a member", r.Method, r.Path)
 		}
 	}
-	if got := memberOfRole(t, env, id, "a"); got.State != store.MemberReported || got.Result == nil {
-		t.Errorf("member A = %s; want reported with its result", got.State)
+	if got := memberOfRole(t, env, id, "a"); got.State != store.MemberDone || got.Result == nil {
+		t.Errorf("member A = %s; want done with its result", got.State)
 	}
-	if got := memberOfRole(t, env, id, "b"); !strings.Contains(got.FailureReason, "the result is for a different commit than the one this run reviews") {
-		t.Errorf("member B's failure = %q", got.FailureReason)
+	if got := memberOfRole(t, env, id, "b"); got.State != store.MemberFailed ||
+		!strings.Contains(got.FailureReason, "the result is for a different commit than the one this run reviews") {
+		t.Errorf("member B = %s %q; want failed for the commit", got.State, got.FailureReason)
 	}
-	if after := env.Run(id); !reflect.DeepEqual(before, after) {
-		t.Errorf("the members wrote the run:\n before %+v\n after  %+v", before, after)
+	wantReleased(t, env, id, before)
+}
+
+// wantReleased checks run id was released for Job P: queued again with no
+// skip reason, due now, and otherwise as it was before (no failure, no Job,
+// no result).
+func wantReleased(t *testing.T, env *testEnv, id string, before store.Run) {
+	t.Helper()
+	after := env.Run(id)
+	if after.State != store.Queued || after.SkipReason != "" || !after.NotBefore.IsZero() || after.FailureReason != "" {
+		t.Fatalf("run = %s/%q %q; want released for its merge\n%s", after.State, after.SkipReason, after.FailureReason, env.Logs())
+	}
+	after.State, after.SkipReason, after.NotBefore = before.State, before.SkipReason, before.NotBefore
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("the release wrote more than the run's state:\n before %+v\n after  %+v", before, after)
 	}
 }
 
@@ -888,4 +905,371 @@ func TestE2EPanelCleanupLeavesLivePanel(t *testing.T) {
 	if got := statusesOf(t, env, head); len(got) != 1 || got[0] != "running: "+runningDescription {
 		t.Errorf("statuses = %v; want the running status alone", got)
 	}
+}
+
+// errorResult is a result of head whose review failed with message.
+func errorResult(t *testing.T, head, message string) []byte {
+	t.Helper()
+	b, err := json.Marshal(result.Result{
+		SchemaVersion: result.SchemaVersion, Status: "error", PergentVersion: "0.1.0",
+		Base: sha('b'), Head: head, Error: &result.Error{Code: "review_failed", Message: message},
+		Comment: result.Comment{Markdown: "The review failed."},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// wantNothingPosted checks no request but a read reached the forge.
+func wantNothingPosted(t *testing.T, env *testEnv) {
+	t.Helper()
+	for _, r := range env.GitLab.Requests("", "") {
+		if r.Method != http.MethodGet {
+			t.Errorf("%s %s reached the forge; want nothing posted for a member", r.Method, r.Path)
+		}
+	}
+}
+
+// jobDeadline is the active deadline of member or run id's Job.
+func jobDeadline(t *testing.T, env *testEnv, id string) int64 {
+	t.Helper()
+	job := env.Job(id)
+	if job == nil || job.Spec.ActiveDeadlineSeconds == nil {
+		t.Fatalf("%s has no Job with a deadline", id)
+	}
+	return *job.Spec.ActiveDeadlineSeconds
+}
+
+// B's entry is out of quota: the entry is marked and audited as a run's is,
+// the member is fell_back, and B's next attempt (attempt_of B) runs on B's
+// next entry in a new Job with the full timeout. A is untouched, the run
+// still waits, and nothing is posted, not even a status.
+func TestE2EPanelMemberFallsBack(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	e, _ := newFallbackE2E(t, "team-a")
+	env := e.env
+	refs := savePanelChain(t, env, "team-b", "team-c")
+	head := sha('a')
+	id, a, b := startMembers(t, e, head)
+	deadline := jobDeadline(t, env, b.ID)
+	before := env.Run(id)
+	env.GitLab.Reset()
+
+	if code := e.postMember(t, id, a, clean(t, head)); code != http.StatusOK {
+		t.Fatalf("member A's result: status %d", code)
+	}
+	if code := e.postMember(t, id, b, failedOn(t, head, "quota")); code != http.StatusOK {
+		t.Fatalf("member B's result: status %d\n%s", code, env.Logs())
+	}
+	publish(t, env)
+
+	if got := memberOfRole(t, env, id, "a"); got.ID != a.ID || got.State != store.MemberDone {
+		t.Errorf("member A = %s %s; want the same member, done", got.ID, got.State)
+	}
+	if m, ok := markOf(t, env, refs[0]); !ok || m.Class != store.ClassQuota || m.Until == nil || !m.Until.Equal(env.Now().Add(time.Hour)) {
+		t.Errorf("B's mark = %+v, %v; want quota until now+1h", m, ok)
+	}
+	if _, ok := markOf(t, env, refs[1]); ok {
+		t.Errorf("B's next entry is marked")
+	}
+	entries, err := env.Store.AuditLog(env.ctx, 0, 10)
+	if err != nil || len(entries) == 0 || entries[0].Action != "model_marked" || entries[0].Actor != "pergent" ||
+		entries[0].Detail != "model=team-b class=quota" || entries[0].Project != testProjectPath {
+		t.Errorf("audit = %+v, %v", entries, err)
+	}
+	var next store.PanelMember
+	for _, m := range members(t, env, id) {
+		switch {
+		case m.ID == b.ID && m.State != store.MemberFellBack:
+			t.Errorf("member B's first attempt = %s; want fell_back", m.State)
+		case m.Role == "b" && m.ID != b.ID:
+			next = m
+		}
+	}
+	if next.ID == "" || next.State != store.MemberQueued || next.AttemptOf == nil || *next.AttemptOf != b.ID {
+		t.Fatalf("B's next attempt = %+v; want queued, attempt of B", next)
+	}
+	wantWaiting(t, env, id)
+	if !woken(env) {
+		t.Errorf("the dispatcher was not woken for B's next attempt")
+	}
+
+	dispatch(t, env)
+	next = memberOfRole(t, env, id, "b")
+	wantMemberKey(t, env, next, "key-team-c")
+	if next.Entry.ID != refs[1].ID || next.Entry.Position != 2 || next.Entry.Length != 2 {
+		t.Errorf("B's next entry = %+v; want the second of 2", next.Entry)
+	}
+	if got := jobDeadline(t, env, next.ID); got != deadline {
+		t.Errorf("B's next Job's deadline = %ds; want the full %ds", got, deadline)
+	}
+	if n := len(members(t, env, id)); n != 3 {
+		t.Errorf("%d members; want A and B's 2 attempts", n)
+	}
+	wantNothingPosted(t, env)
+	if after := env.Run(id); !reflect.DeepEqual(before, after) {
+		t.Errorf("the fallback wrote the run:\n before %+v\n after  %+v", before, after)
+	}
+}
+
+// B's next entry is the model A runs on: B skips it and takes the one after.
+func TestE2EPanelBFallsBackToAModel(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	e, _ := newFallbackE2E(t, "team-a")
+	env := e.env
+	team := ownerTeam(t, env)
+	first := addTeamModel(t, env, team, "team-b", "gpt-b", "key-b")
+	same := addTeamModel(t, env, team, "team-same", "GPT-TEAM-A", "key-same")
+	after := addTeamModel(t, env, team, "team-after", "gpt-after", "key-after")
+	saveChainB(t, env, store.Chain{Scope: store.ScopeTeam, TeamID: team, Entries: []store.EntryRef{first, same, after}})
+	head := sha('a')
+	id := splitPanel(t, env, 1, head)
+	dispatch(t, env)
+	b := memberOfRole(t, env, id, "b")
+	wantMemberKey(t, env, b, "key-b")
+
+	if code := e.postMember(t, id, b, failedOn(t, head, "billing")); code != http.StatusOK {
+		t.Fatalf("member B's result: status %d", code)
+	}
+	publish(t, env)
+	dispatch(t, env)
+	next := memberOfRole(t, env, id, "b")
+	if next.ID == b.ID {
+		t.Fatalf("B did not fall back\n%s", env.Logs())
+	}
+	wantMemberKey(t, env, next, "key-after")
+	if next.Entry.ID != after.ID || next.Entry.Position != 3 {
+		t.Errorf("B's next entry = %+v; want the third, past A's model", next.Entry)
+	}
+	if env.Job(memberOfRole(t, env, id, "a").ID) == nil {
+		t.Errorf("member A has no Job")
+	}
+}
+
+// B's only other entry is the model A runs on: B's next attempt can't run
+// and fails; that fails B, not the review, which is released for Job P with
+// A alone.
+func TestE2EPanelBNoneLeft(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	e, _ := newFallbackE2E(t, "team-a")
+	env := e.env
+	team := ownerTeam(t, env)
+	first := addTeamModel(t, env, team, "team-b", "gpt-b", "key-b")
+	same := addTeamModel(t, env, team, "team-same", "gpt-team-a", "key-same")
+	saveChainB(t, env, store.Chain{Scope: store.ScopeTeam, TeamID: team, Entries: []store.EntryRef{first, same}})
+	head := sha('a')
+	id := splitPanel(t, env, 1, head)
+	dispatch(t, env)
+	a, b := memberOfRole(t, env, id, "a"), memberOfRole(t, env, id, "b")
+	before := env.Run(id)
+	env.GitLab.Reset()
+
+	if code := e.postMember(t, id, a, clean(t, head)); code != http.StatusOK {
+		t.Fatalf("member A's result: status %d", code)
+	}
+	if code := e.postMember(t, id, b, failedOn(t, head, "auth")); code != http.StatusOK {
+		t.Fatalf("member B's result: status %d", code)
+	}
+	publish(t, env)
+	wantWaiting(t, env, id)
+	dispatch(t, env)
+	next := memberOfRole(t, env, id, "b")
+	if next.ID == b.ID || next.State != store.MemberReported || next.FailureReason == "" || env.Job(next.ID) != nil {
+		t.Fatalf("B's next attempt = %s %q; want reported failed, with no Job\n%s", next.State, next.FailureReason, env.Logs())
+	}
+	publish(t, env)
+	if got := memberOfRole(t, env, id, "b"); got.State != store.MemberFailed || got.FailureReason != next.FailureReason {
+		t.Errorf("member B = %s %q; want failed with its reason kept", got.State, got.FailureReason)
+	}
+	if got := memberOfRole(t, env, id, "a"); got.ID != a.ID || got.State != store.MemberDone {
+		t.Errorf("member A = %s; want done", got.State)
+	}
+	wantReleased(t, env, id, before)
+	wantNothingPosted(t, env)
+}
+
+// Both members fail (A's review failed, B's result is for another commit):
+// the review is published as failed with both reasons in the same pass. The
+// status is the failure status, nothing is approved, and success is never
+// set.
+func TestE2EPanelBothFail(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, a, b := startMembers(t, e, head)
+
+	if code := e.postMember(t, id, a, errorResult(t, head, "the model gave no answer")); code != http.StatusOK {
+		t.Fatalf("member A's result: status %d\n%s", code, env.Logs())
+	}
+	if code := e.postMember(t, id, b, clean(t, sha('f'))); code != http.StatusBadRequest {
+		t.Fatalf("member B's result: status %d; want 400", code)
+	}
+	publish(t, env)
+
+	for _, role := range []string{"a", "b"} {
+		if got := memberOfRole(t, env, id, role); got.State != store.MemberFailed {
+			t.Errorf("member %s = %s; want failed", role, got.State)
+		}
+	}
+	wantPublished(t, env, id)
+	r := env.Run(id)
+	want := "both review panel members failed: A: the model gave no answer; B: " + unusable +
+		"the result is for a different commit than the one this run reviews"
+	if r.FailureReason != want || r.Result != nil {
+		t.Errorf("run failure = %q; want %q", r.FailureReason, want)
+	}
+	if body := createdComment(t, env, 1); !strings.Contains(body, "the model gave no answer") ||
+		!strings.Contains(body, "the result is for a different commit") {
+		t.Errorf("the comment lacks both reasons:\n%s", body)
+	}
+	got := statusesOf(t, env, head)
+	if len(got) == 0 || !strings.HasPrefix(got[len(got)-1], "failed: ") {
+		t.Errorf("statuses = %v; want the failure status last", got)
+	}
+	for _, s := range got {
+		if strings.HasPrefix(s, "success") {
+			t.Errorf("statuses = %v; a failed panel set success", got)
+		}
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 0 {
+		t.Errorf("%d approvals; want none", n)
+	}
+	// Nothing more on the next pass.
+	env.GitLab.Reset()
+	publish(t, env)
+	wantNothingPosted(t, env)
+}
+
+// A's review fails and B's passes: the review is released for Job P, B done
+// and A failed with its reason. The release fires once: a second settle
+// pass changes nothing and wakes nothing.
+func TestE2EPanelAFailsBPasses(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, a, b := startMembers(t, e, head)
+	before := env.Run(id)
+	env.GitLab.Reset()
+
+	if code := e.postMember(t, id, a, errorResult(t, head, "")); code != http.StatusOK {
+		t.Fatalf("member A's result: status %d", code)
+	}
+	if code := e.postMember(t, id, b, clean(t, head)); code != http.StatusOK {
+		t.Fatalf("member B's result: status %d", code)
+	}
+	woken(env)
+	publish(t, env)
+	if got := memberOfRole(t, env, id, "a"); got.ID != a.ID || got.State != store.MemberFailed || got.FailureReason != reasonMemberError || got.Result != nil {
+		t.Errorf("member A = %s %q; want failed with the review's failure", got.State, got.FailureReason)
+	}
+	if got := memberOfRole(t, env, id, "b"); got.ID != b.ID || got.State != store.MemberDone || got.Result == nil {
+		t.Errorf("member B = %s; want done with its result", got.State)
+	}
+	wantReleased(t, env, id, before)
+	if !woken(env) {
+		t.Errorf("the dispatcher was not woken for Job P")
+	}
+
+	released := env.Run(id)
+	ms := members(t, env, id)
+	publish(t, env)
+	if again := env.Run(id); !reflect.DeepEqual(released, again) {
+		t.Errorf("a second pass changed the run:\n before %+v\n after  %+v", released, again)
+	}
+	if again := members(t, env, id); !reflect.DeepEqual(ms, again) {
+		t.Errorf("a second pass changed the members")
+	}
+	if woken(env) {
+		t.Errorf("a second pass woke the engine again")
+	}
+	wantNothingPosted(t, env)
+}
+
+// The result handler stores a result, then checks it. A result stored but
+// not yet checked is checked again when its member is settled: one that
+// fails the check fails the member with the check's reason and never
+// becomes done; a good one is done.
+func TestE2EPanelSettleChecksResult(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, a, b := startMembers(t, e, head)
+	// Stored as the handler stores them, before its check.
+	for _, c := range []struct {
+		m    store.PanelMember
+		body []byte
+	}{{a, clean(t, sha('f'))}, {b, clean(t, head)}} {
+		token := string(env.Secret(c.m.ID).Data["result-token"])
+		if out, err := env.Store.StoreMemberResult(env.ctx, id, c.m.ID, token, c.body, env.Now()); err != nil || out != store.ResultStored {
+			t.Fatalf("StoreMemberResult = %v, %v", out, err)
+		}
+	}
+
+	publish(t, env)
+	got := memberOfRole(t, env, id, "a")
+	if got.State != store.MemberFailed || got.Result != nil || got.FailureStep != "delivery" ||
+		got.FailureReason != unusable+"the result is for a different commit than the one this run reviews" {
+		t.Errorf("member A = %s %q at %q; want failed by the check", got.State, got.FailureReason, got.FailureStep)
+	}
+	if got := memberOfRole(t, env, id, "b"); got.State != store.MemberDone || got.Result == nil {
+		t.Errorf("member B = %s; want done", got.State)
+	}
+	if r := env.Run(id); r.State != store.Queued {
+		t.Errorf("run = %s; want released with B alone", r.State)
+	}
+}
+
+// The review's skills change between the split and a member's start (a
+// library skill is edited, or one is added): the member stops before its
+// Job with the inputs-changed reason, as its result would fail its check.
+func TestE2EPanelMemberSkillsChanged(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		change func(env *testEnv)
+	}{
+		{"edited", func(env *testEnv) {
+			if _, err := env.Store.UpdateLibrarySkill(env.ctx, "security", "---\nname: security\n---\nLook again.\n", "test", 1, env.Now()); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"added", func(env *testEnv) { env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n") }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+			env := e.env
+			id := splitPanel(t, env, 1, sha('a'))
+			c.change(env)
+
+			dispatch(t, env)
+			for _, role := range []string{"a", "b"} {
+				m := memberOfRole(t, env, id, role)
+				if m.State != store.MemberReported || m.FailureReason != reasonInputsChanged || env.Job(m.ID) != nil {
+					t.Errorf("member %s = %s %q; want failed before its Job, inputs changed\n%s", role, m.State, m.FailureReason, env.Logs())
+				}
+			}
+		})
+	}
+}
+
+// Member A falls back along chain A the same way; B is untouched.
+func TestE2EPanelAFallsBack(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a", "team-a2"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, a, b := startMembers(t, e, head)
+	if code := e.postMember(t, id, a, failedOn(t, head, "quota")); code != http.StatusOK {
+		t.Fatalf("member A's result: status %d", code)
+	}
+	publish(t, env)
+	dispatch(t, env)
+	next := memberOfRole(t, env, id, "a")
+	if next.ID == a.ID || next.AttemptOf == nil || *next.AttemptOf != a.ID {
+		t.Fatalf("A's next attempt = %+v; want an attempt of A", next)
+	}
+	wantMemberKey(t, env, next, "key-team-a2")
+	if got := memberOfRole(t, env, id, "b"); got.ID != b.ID || got.State != store.MemberRunning {
+		t.Errorf("member B = %s; want the same member, running", got.State)
+	}
+	wantWaiting(t, env, id)
 }

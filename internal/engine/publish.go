@@ -70,6 +70,11 @@ func publishBackoff(attempts int) time.Duration {
 // store gives up after the 10th attempt). One run's trouble never stops the
 // others; the returned error is a failure to list the runs.
 func (e *Engine) PublishOnce(ctx context.Context) error {
+	// A panel's members first: a review whose members both failed is
+	// published below in this pass.
+	if err := e.settleMembers(ctx); err != nil {
+		e.log().Warn("couldn't settle the review panels' members; trying again on the next pass", "error", e.redact(err.Error()))
+	}
 	runs, err := e.Store.RunsToPublish(ctx, e.now(), publishBatch)
 	if err != nil {
 		return fmt.Errorf("publish: list reported runs: %w", err)

@@ -712,6 +712,42 @@ func TestReleasePanelWaitsForLive(t *testing.T) {
 	}
 }
 
+// A waiting review is to release once none of its members is live, and no
+// longer once it is released. Another waiting review with live members, and
+// a held run that is not a panel, are not listed.
+func TestPanelsToRelease(t *testing.T) {
+	s := newStore(t)
+	id := panelRun(t, s, mr1, "a1")
+	other := panelRun(t, s, mr2, "b1")
+	heldRun(t, s, MRKey{Instance: mr1.Instance, ProjectID: 9, IID: 9}, "c1", "ci")
+	want := func(when string, roots ...string) {
+		t.Helper()
+		got, err := s.PanelsToRelease(ctx)
+		if err != nil || !slices.Equal(got, roots) {
+			t.Errorf("%s: PanelsToRelease = %v, %v; want %v", when, got, err, roots)
+		}
+	}
+	want("all queued")
+	doneMember(t, s, memberOf(t, s, id, "a").ID, `{}`)
+	b := memberOf(t, s, id, "b")
+	dispatchMember(t, s, b.ID, "tok-b")
+	if ok, err := s.ReportMemberFailure(ctx, b.ID, Failure{Reason: "broke"}, t0); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	want("b reported, not settled")
+	if st, err := s.SettleMember(ctx, b.ID); err != nil || st != MemberFailed {
+		t.Fatal(st, err)
+	}
+	want("both settled", id)
+	if released, _, err := s.ReleasePanel(ctx, id, t0); err != nil || !released {
+		t.Fatal(released, err)
+	}
+	want("released")
+	if r := getRun(t, s, other); r.State != Waiting {
+		t.Errorf("the other review = %s; want still waiting", r.State)
+	}
+}
+
 func TestMembersToSettle(t *testing.T) {
 	s := newStore(t)
 	id := panelRun(t, s, mr1, "a1")
