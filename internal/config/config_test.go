@@ -1892,3 +1892,57 @@ func TestConfigQuotaCooldown(t *testing.T) {
 		t.Errorf("Cooldown() of none = %v", got)
 	}
 }
+
+// The tag of the Jobs image, when it names a pergent version.
+func TestImageTag(t *testing.T) {
+	for image, want := range map[string]string{
+		"ghcr.io/gopaytech/pergent:v0.5.0":               "v0.5.0",
+		"ghcr.io/gopaytech/pergent:0.4.0":                "0.4.0",
+		"ghcr.io/gopaytech/pergent:v0.4.0@sha256:abc123": "v0.4.0",
+		"host:5000/pergent:v0.4.0":                       "v0.4.0",
+		"ghcr.io/gopaytech/pergent@sha256:abc123":        "",
+		"host:5000/pergent":                              "",
+		"host:5000/pergent@sha256:abc123":                "",
+		"pergent":                                        "",
+		"ghcr.io/gopaytech/pergent:latest":               "latest",
+		"ghcr.io/gopaytech/pergent:main-4f2a":            "main-4f2a",
+		"":                                               "",
+	} {
+		if got := ImageTag(image); got != want {
+			t.Errorf("ImageTag(%q) = %q, want %q", image, got, want)
+		}
+	}
+}
+
+func setPanelMin(t *testing.T, v string) {
+	t.Helper()
+	PanelMinVersion = v
+	t.Cleanup(func() { PanelMinVersion = "" })
+}
+
+// With no floor, no image passes; with one, only a tag that is a version at
+// or above it does.
+func TestPanelImage(t *testing.T) {
+	const none = "no review image supports a review panel yet"
+	for _, tc := range []struct {
+		min, image string
+		ok         bool
+		reason     string // a substring; "" means no refusal
+	}{
+		{"", "ghcr.io/x/pergent:v0.12.0", false, none},
+		{"", "ghcr.io/x/pergent:v99.0.0", false, none},
+		{"", "", false, none},
+		{"v0.12.0", "ghcr.io/x/pergent:v0.12.0", true, ""},
+		{"v0.12.0", "ghcr.io/x/pergent:v0.11.0", false, "v0.11.0"},
+		{"v0.12.0", "ghcr.io/x/pergent:main", false, "not a version"},
+		{"v0.12.0", "ghcr.io/x/pergent@sha256:abc123", false, "no tag"},
+		{"v0.12.0", "host:5000/pergent:v0.12.0", true, ""},
+		{"v0.12.0", "host:5000/pergent", false, "no tag"},
+	} {
+		setPanelMin(t, tc.min)
+		ok, reason := PanelImage(tc.image)
+		if ok != tc.ok || (tc.ok && reason != "") || (!tc.ok && !strings.Contains(reason, tc.reason)) {
+			t.Errorf("PanelImage(%q) with floor %q = %v, %q; want %v, %q", tc.image, tc.min, ok, reason, tc.ok, tc.reason)
+		}
+	}
+}

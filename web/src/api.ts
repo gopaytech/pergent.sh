@@ -368,6 +368,8 @@ export type RepositoryDetailView = {
   // (GET .../chain has the chain); "" when the chain is empty or that entry
   // was removed. Never a base URL or key.
   model: string;
+  // panel is the review panel: whether a chain B is in effect, and its mode.
+  panel: PanelView;
   // quota is this month's tokens against the quotas; null for anyone but an
   // admin, and when the usage could not be read.
   quota: QuotaView | null;
@@ -883,9 +885,19 @@ export type ChainView = {
   team: string;
   readOnly: boolean;
   savedByAdmin: boolean;
+  // mode is a repository's chain B mode (GET .../panel-chain and its writes
+  // only): inherit, custom (its own) or off (no panel). Absent on chain A.
+  mode?: PanelMode;
   entries: ChainEntryView[];
   choices: ChainEntryView[];
 };
+
+// PanelMode is how a repository gets its chain B.
+export type PanelMode = "inherit" | "custom" | "off";
+
+// PanelView is a repository's review panel: on when a chain B is in effect;
+// a and b name position 1 of each chain while on. Never a key or a URL.
+export type PanelView = { on: boolean; mode: PanelMode; a?: string; b?: string };
 
 // ChainRef names an entry in the body of a chain's PUT.
 export type ChainRef = { source: EntrySource; id: string };
@@ -1419,6 +1431,13 @@ export const paths = {
   // The repository's model chain: GET, PUT {entries}; POST .../reset to inherit again.
   apiRepoChain: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/chain`,
   apiRepoChainReset: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/chain/reset`,
+  // The repository's chain B (the review panel): GET, PUT {entries}; POST .../reset to inherit, .../off for no panel.
+  apiRepoPanelChain: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/panel-chain`,
+  apiRepoPanelChainReset: (instance: string, project: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/panel-chain/reset`,
+  apiRepoPanelChainOff: (instance: string, project: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/panel-chain/off`,
+  apiTeamPanelChain: (id: number) => `/api/teams/${seg(String(id))}/panel-chain`,
   // The team pages of the user area, and the team routes.
   team: (id: number) => `/teams/${seg(String(id))}`,
   apiTeamModels: (id: number) => `/api/teams/${seg(String(id))}/models`,

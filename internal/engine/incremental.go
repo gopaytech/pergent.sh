@@ -9,10 +9,10 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/gopaytech/pergent/render"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -120,20 +120,8 @@ func modelChanged(last store.Run, provider, model string) bool {
 // with no tag (a digest) or a tag that is not a version is not known to be
 // older.
 func imagePinnedBeforeCarried(image string) bool {
-	supports, known := result.CarriedSupport(imageTag(image))
+	supports, known := result.CarriedSupport(config.ImageTag(image))
 	return known && !supports
-}
-
-// imageTag is the tag of an image reference, or "" when it has none. A digest
-// after the tag is ignored; a colon before the last slash is a registry port,
-// not a tag.
-func imageTag(image string) string {
-	image, _, _ = strings.Cut(image, "@")
-	i := strings.LastIndex(image, ":")
-	if i < 0 || strings.Contains(image[i:], "/") {
-		return ""
-	}
-	return image[i+1:]
 }
 
 // setIncremental records, once the inputs are fitted, whether the run reviews
