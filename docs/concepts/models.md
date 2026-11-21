@@ -47,6 +47,10 @@ An `llm:` block in the config file adds one entry, `config`, shown as "from the 
 
 See [Config reference](../reference/configuration.md).
 
+## Chain B
+
+A second chain, chain B, is for the [review panel](review-panel.md). It is experimental, and reviews do not use it yet. Its settings are separate from chain A and follow the same rights.
+
 ## When a model can't be used
 
 | Case | What happens |

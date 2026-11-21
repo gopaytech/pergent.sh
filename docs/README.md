@@ -28,6 +28,7 @@
 | [Commands](concepts/commands.md) | `@<bot> review`, `review failed`, `dismiss` |
 | [How approval works](concepts/approval.md) | When pergent.sh approves, and when it takes it back |
 | [Models](concepts/models.md) | The list of models, the default, and a model per repository |
+| [Review panel (experimental)](concepts/review-panel.md) | Chain B, the second model chain (off by default; reviews do not use it yet) |
 | [Usage](concepts/usage.md) | Where the model tokens go |
 | [Metrics](concepts/metrics.md) | Prometheus metrics |
 | [Skill results](concepts/skill-results.md) | What became of each skill's findings |
