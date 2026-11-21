@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**Review panels run.** A repository with a chain B in effect runs each review as a panel: member Jobs A and B in parallel, then a merge Job P, which alone publishes ([Review panel](concepts/review-panel.md)). It is experimental and off by default. No release supports a panel yet, so nothing changes in a review until one does.
+
+- **Migration `0049_panel_members.sql`** runs at startup. It adds tables and drops nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database. It never claims a waiting panel run.
+- **Rolling deploy.** During a rolling deploy, an old pod can start or re-run a waiting panel run. Its members are then superseded, and the review runs as one review. This needs a chain B in effect, so it does not happen while chain B is off.
+- **Metrics.** A member's fallback to its next entry is not counted in `pergent_model_fallback_total`. Members are not runs, so `pergent_reviews_total` counts a panel review once.
+- **Instance token quota.** With a panel, some tokens can count under the wrong source: [Monthly token quota](concepts/token-quota.md).
+- **Rolling back.** Turn chain B off at every level and wait until no review shows a running panel first.
+
 **Path rules.** A rule is a checklist for a kind of file, added to the review that already runs on it, never blocking: [Path rules](concepts/rules.md). The built-in list is empty in this release, so nothing changes until a repository adds `.pergent/rules.yaml` or uses a rule set.
 
 - **Migration `0047`** runs at startup. It adds the table `rule_sets`, NULL columns `rule_sets` and `built_in_rules` on `repo_defaults` and `dashboard_repos`, and `runs.rules_hash`, dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them.

@@ -42,6 +42,15 @@ Each repository has two medians: one for full reviews and one for incremental re
 
 A review that used more than three times the median of its kind is listed, costliest first, up to 20.
 
+## Review panels
+
+A [review panel](review-panel.md) has 3 Jobs. The cost of a review is the total of all 3:
+
+- **Per model.** Tokens are counted per model, as for a review that fell back: each model of member A, member B and Job P has its own row.
+- **Members** count on the run that split the review (the run that started the panel). Job P counts on its own run.
+- A review's page shows the whole cost: [Dashboard](dashboard.md).
+- Member fallbacks are not in `pergent_model_fallback_total`.
+
 ## CSV export
 
 Both pages have a **Download CSV** link: `GET /api/admin/usage.csv?days=N`, with `instance` and `project` for one repository.
