@@ -609,18 +609,35 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "listing a review's runs", err)
 		return
 	}
-	idx := slices.IndexFunc(digests, func(x store.RunDigest) bool { return x.ID == run.ID })
-	if idx < 0 {
-		notFound(w)
-		return
-	}
-	j := judge(digests[idx])
+	var digest store.RunDigest
 	var prev *store.RunDigest
-	if idx > 0 {
-		prev = &digests[idx-1]
+	if idx := slices.IndexFunc(digests, func(x store.RunDigest) bool { return x.ID == run.ID }); idx >= 0 {
+		digest = digests[idx]
+		if idx > 0 {
+			prev = &digests[idx-1]
+		}
+	} else {
+		// An attempt dropped for the next entry of its chain is no row of
+		// the review list, but its review's attempts link to it: it is read
+		// on its own, after the review's runs created before it.
+		var found bool
+		if digest, found, err = d.Store.RunDigest(ctx, run.ID); err != nil {
+			d.failed(w, r, "loading a run", err)
+			return
+		}
+		if !found || digest.Outcome != store.OutcomeFellBack {
+			notFound(w)
+			return
+		}
+		for i := range digests {
+			if digests[i].CreatedAt.Before(digest.CreatedAt) {
+				prev = &digests[i]
+			}
+		}
 	}
+	j := judge(digest)
 	view := RunDetailView{
-		Run: runSummary(digests[idx], prev, j), Instance: run.MR.Instance, Project: run.ProjectPath, Number: run.MR.IID,
+		Run: runSummary(digest, prev, j), Instance: run.MR.Instance, Project: run.ProjectPath, Number: run.MR.IID,
 		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model, Provider: run.Provider, MaxTurns: run.MaxTurns, Quiet: run.Quiet,
 		CIJobs: ciResultViews(run.CIJobs),
 		Files:  FilesView{Reviewed: []string{}, Skipped: []SkippedFile{}, NotReviewed: []NotReviewedFile{}},

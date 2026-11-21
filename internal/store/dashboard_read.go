@@ -257,6 +257,20 @@ func (s *Store) MRRunDigests(ctx context.Context, mr MRKey, v Visibility) ([]Run
 		ORDER BY r.created_at, r.id`, append([]any{mr.Instance, mr.ProjectID, mr.IID}, args...)...)
 }
 
+// RunDigest returns run id's digest, an attempt dropped for the next entry
+// of its chain included, which MRRunDigests leaves out; found is false for
+// no such run. Who may read it is the caller's to check.
+func (s *Store) RunDigest(ctx context.Context, id string) (RunDigest, bool, error) {
+	if !validUUID(id) {
+		return RunDigest{}, false, nil
+	}
+	ds, err := s.queryDigests(ctx, `SELECT `+digestColumns+` FROM runs r WHERE r.id = $1::uuid`, id)
+	if err != nil || len(ds) == 0 {
+		return RunDigest{}, false, err
+	}
+	return ds[0], true, nil
+}
+
 // ProjectByPath returns the stored project whose path is project (matched
 // ignoring case) on instance; ok is false when there is none.
 func (s *Store) ProjectByPath(ctx context.Context, instance, project string) (Project, bool, error) {

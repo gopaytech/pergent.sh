@@ -341,3 +341,24 @@ func sameFallbacks(got, want []FallbackTotal) bool {
 	slices.SortFunc(want, cmp)
 	return slices.Equal(got, want)
 }
+
+// A dropped attempt is left out of the review list, but RunDigest reads it on
+// its own, as fell_back, for the run page the attempts link to.
+func TestRunDigestOfDroppedAttempt(t *testing.T) {
+	s := newStore(t)
+	from := reported(t, s, mr1, "a1", `{}`)
+	if _, created, err := s.EnqueueAttempt(ctx, getRun(t, s, from), quotaMark("m1")); err != nil || !created {
+		t.Fatalf("EnqueueAttempt = %v, %v", created, err)
+	}
+	list, err := s.MRRunDigests(ctx, mr1, Visibility{All: true})
+	if err != nil || slices.ContainsFunc(list, func(d RunDigest) bool { return d.ID == from }) {
+		t.Fatalf("MRRunDigests = %+v, %v; want the dropped attempt left out", list, err)
+	}
+	d, found, err := s.RunDigest(ctx, from)
+	if err != nil || !found || d.ID != from || d.Outcome != OutcomeFellBack {
+		t.Errorf("RunDigest = %+v, %v, %v; want the dropped attempt, fell_back", d, found, err)
+	}
+	if _, found, err := s.RunDigest(ctx, "not-a-uuid"); err != nil || found {
+		t.Errorf("RunDigest of a bad id = %v, %v", found, err)
+	}
+}
