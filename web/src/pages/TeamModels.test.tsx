@@ -27,6 +27,7 @@ const routes = (me = maintainer, models: TeamModelsView = teamModelsPayments, ch
   "GET /api/me/teams": { body: myTeams },
   "GET /api/teams/2/models": { body: models },
   "GET /api/teams/2/chain": { body: chain },
+  "GET /api/teams/2/panel-chain": { body: { ...chainTeam, source: "global", team: "", entries: [] } },
 });
 
 // What a viewer of Payments is sent: no base URL, no edit, a read-only chain.
@@ -202,5 +203,50 @@ describe("TeamModels", () => {
     renderApp("/teams/2");
     expect(await entry("<b>x</b>")).toBeInTheDocument();
     expect(document.querySelector("main b b")).toBeNull();
+  });
+});
+
+describe("TeamModels: team chain B", () => {
+  const panel: ChainView = { ...chainTeam, entries: [{ ...entrySonnet, position: 1 }], choices: [choice(entrySonnet)] };
+
+  it("shows the global chain B while the team has none, and saves its own with a PUT", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/teams/2/panel-chain": { body: { ...panel, source: "global", team: "", entries: [] } },
+      "PUT /api/teams/2/panel-chain": { body: panel },
+    });
+    renderApp("/teams/2");
+    const card = await screen.findByRole("region", { name: "Team chain B (review panel)" });
+    expect(await within(card).findByText(/no chain B of its own/)).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Make a chain B" }));
+    await userEvent.selectOptions(within(card).getByRole("combobox", { name: "Entry to add" }), `global:${entrySonnet.id}`);
+    await userEvent.click(within(card).getByRole("button", { name: "Add" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Save chain" }));
+    expect(fake.find("PUT", "/api/teams/2/panel-chain")[0].body).toEqual({ entries: [{ source: "global", id: entrySonnet.id }] });
+    expect(await within(card).findByText("Saved.")).toBeInTheDocument();
+  });
+
+  it("shows the message of a refused save", async () => {
+    fakeApi({
+      ...routes(),
+      "GET /api/teams/2/panel-chain": { body: panel },
+      "PUT /api/teams/2/panel-chain": { status: 400, body: { error: "no review image supports a review panel yet" } },
+    });
+    renderApp("/teams/2");
+    const card = await screen.findByRole("region", { name: "Team chain B (review panel)" });
+    await userEvent.click(await within(card).findByRole("button", { name: "Remove Claude Sonnet" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Save chain" }));
+    expect(await within(card).findByText(/no review image supports a review panel yet/)).toBeInTheDocument();
+  });
+
+  it("is read-only for a viewer", async () => {
+    fakeApi({
+      ...routes(),
+      "GET /api/teams/2/panel-chain": { body: { ...panel, readOnly: true, choices: [] } },
+    });
+    renderApp("/teams/2");
+    const card = await screen.findByRole("region", { name: "Team chain B (review panel)" });
+    expect(await within(card).findByText("Claude Sonnet")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Save chain" })).not.toBeInTheDocument();
   });
 });

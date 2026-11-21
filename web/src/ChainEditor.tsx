@@ -49,6 +49,7 @@ export default function ChainEditor({
   readOnly,
   allowEmpty,
   busy,
+  label = "Model chain",
   onSave,
   onClear,
 }: {
@@ -58,6 +59,8 @@ export default function ChainEditor({
   // allowEmpty lets an empty chain be saved (a team's: no chain of its own).
   allowEmpty?: boolean;
   busy?: boolean;
+  // label names the list; chain B's editor says so.
+  label?: string;
   onSave: (entries: ChainRef[]) => void;
   onClear: (entry: ChainEntryView) => void;
 }) {
@@ -92,7 +95,7 @@ export default function ChainEditor({
 
   return (
     <div>
-      <div role="list" aria-label="Model chain">
+      <div role="list" aria-label={label}>
         {draft.map((e, i) => (
           <div className="link-row" role="listitem" key={refKey(e)}>
             <div className="link-head">

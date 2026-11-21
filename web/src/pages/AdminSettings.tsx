@@ -15,6 +15,7 @@ import {
   type ModelsAdminView,
 } from "../api";
 import ChainEditor from "../ChainEditor";
+import PanelChainCard from "../PanelChainCard";
 import CommentLayoutEditor from "../CommentLayoutEditor";
 import { useWrite } from "../layout/write";
 import MarkBanner, { markText } from "../MarkBanner";
@@ -656,6 +657,14 @@ function Models({ v }: { v: ModelsAdminView }) {
         ))}
       </section>
       <GlobalChain />
+      <PanelChainCard
+        title="Global chain B (review panel)"
+        intro="With a chain B, each review also runs on its first entry, and the two results are put together. A repository with no chain B of its own, and an owner team with none, uses this one. Save it with no entries for none."
+        path="/api/admin/panel-chain"
+        queryKey={["admin-panel-chain"]}
+        clearPath={(e) => paths.apiAdminModelMark(e.id)}
+        also={[["repo-panel-chain"], ["team-panel-chain"], ["repo"]]}
+      />
       <AddModelForm<ModelAdminView>
         path="/api/admin/models"
         teamsMayUse

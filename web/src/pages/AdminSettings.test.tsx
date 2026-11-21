@@ -31,6 +31,7 @@ const routes = (me = ssoAdmin) => ({
   "GET /api/skills": { body: librarySkills },
   "GET /api/admin/models": { body: models },
   "GET /api/admin/chain": { body: { ...chainGlobal, entries: [entrySonnet] } },
+  "GET /api/admin/panel-chain": { body: { ...chainGlobal, entries: [] } },
 });
 
 describe("AdminSettings comment footer", () => {
@@ -1120,5 +1121,39 @@ describe("AdminSettings access", () => {
     expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
     expect(fake.find("GET", "/api/admin/defaults")).toHaveLength(0);
     expect(fake.find("GET", "/api/admin/models")).toHaveLength(0);
+  });
+});
+
+describe("AdminSettings global chain B", () => {
+  const panel: ChainView = { ...chainGlobal, entries: [], choices: [choice(entrySonnet), choice(entryOpus)] };
+
+  it("saves chain B with a PUT, and an empty one is allowed", async () => {
+    const saved: ChainView = { ...panel, entries: [{ ...entryOpus, position: 1 }] };
+    const fake = fakeApi({
+      ...routes(operator),
+      "GET /api/admin/panel-chain": { body: panel },
+      "PUT /api/admin/panel-chain": { body: saved },
+    });
+    renderApp("/admin/settings");
+    const card = await screen.findByRole("region", { name: "Global chain B (review panel)" });
+    await userEvent.selectOptions(await within(card).findByRole("combobox", { name: "Entry to add" }), `global:${entryOpus.id}`);
+    await userEvent.click(within(card).getByRole("button", { name: "Add" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Save chain" }));
+    expect(fake.find("PUT", "/api/admin/panel-chain")[0].body).toEqual({ entries: [{ source: "global", id: entryOpus.id }] });
+    expect(await within(card).findByText("Saved.")).toBeInTheDocument();
+  });
+
+  it("shows the message of a refused save", async () => {
+    fakeApi({
+      ...routes(operator),
+      "GET /api/admin/panel-chain": { body: panel },
+      "PUT /api/admin/panel-chain": { status: 400, body: { error: "no review image supports a review panel yet" } },
+    });
+    renderApp("/admin/settings");
+    const card = await screen.findByRole("region", { name: "Global chain B (review panel)" });
+    await userEvent.selectOptions(await within(card).findByRole("combobox", { name: "Entry to add" }), `global:${entryOpus.id}`);
+    await userEvent.click(within(card).getByRole("button", { name: "Add" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Save chain" }));
+    expect(await within(card).findByText(/no review image supports a review panel yet/)).toBeInTheDocument();
   });
 });
