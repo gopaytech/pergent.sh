@@ -59,6 +59,9 @@ type Deps struct {
 	// code graph (the engine). Nil, when the install keeps no graphs: the
 	// routes are absent.
 	Graphs callback.GraphResults
+	// Panel serves a panel's merge Job its member results. Nil until the
+	// engine supports panels: the route is absent.
+	Panel callback.PanelResults
 	// ReviewAPI serves /v1/, the review API. Nil, when the dashboard is off:
 	// the paths are absent.
 	ReviewAPI *reviewapi.Handler
@@ -77,6 +80,8 @@ type Deps struct {
 //     when ReadinessScans is set;
 //   - POST /graphs/{id}/result: a graph build Job's graph, and GET
 //     /runs/{id}/graph: a review Job's code graph, when Graphs is set;
+//   - GET /runs/{id}/panel/{role}: a panel member's result for the merge
+//     Job, when Panel is set;
 //   - GET /healthz: 200 "ok";
 //   - /v1/: the review API (reviewapi.Handler), when ReviewAPI is set and
 //     dashboard.url is configured;
@@ -113,6 +118,9 @@ func Routes(d Deps) *http.ServeMux {
 	if d.Graphs != nil {
 		mux.Handle("POST /graphs/{id}/result", &callback.GraphHandler{Graphs: d.Graphs, Log: d.Log})
 		mux.Handle("GET /runs/{id}/graph", &callback.RunGraphHandler{Graphs: d.Graphs, Log: d.Log})
+	}
+	if d.Panel != nil {
+		mux.Handle("GET /runs/{id}/panel/{role}", &callback.PanelHandler{Panel: d.Panel, Log: d.Log})
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
