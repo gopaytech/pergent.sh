@@ -244,7 +244,8 @@ export type RunDetailView = {
 
 // RunPanelView is a review panel on its run's page. off says why it did not
 // start (the lists are then empty); otherwise its members, the entries Job P
-// judged with on this run, and the tokens of each model counted on this run.
+// judged with on this run, and the tokens of each model in the whole review
+// (every member attempt and every Job P attempt).
 export type RunPanelView = {
   off?: string;
   members: PanelMemberView[];
@@ -275,11 +276,14 @@ export type MemberAttemptView = {
 
 export type PanelJudgeView = { role: PanelRole; entry: string; provider: string; model: string };
 
-// ModelCostView is the tokens one model used: part "member" (a member's
-// review) or "merge" (Job P).
+// ModelCostView is the tokens one model used in the review: part "member"
+// (a member's review) or "merge" (Job P); run is the run they count on and
+// member the member attempt ("" for a merge).
 export type ModelCostView = {
   part: "member" | "merge";
   role: PanelRole;
+  run: string;
+  member: string;
   entry: string;
   provider: string;
   model: string;

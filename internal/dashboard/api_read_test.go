@@ -2006,10 +2006,10 @@ func TestRunPagePanel(t *testing.T) {
 			{Role: "b", Entry: "gpt", Provider: "openai", Model: "gpt-5"},
 		},
 		Cost: []ModelCostView{
-			{Part: "member", Role: "a", Entry: "qwen", Provider: "alibaba", Model: "qwen3", In: 150, Out: 15},
-			{Part: "member", Role: "b", Entry: "gpt", Provider: "openai", Model: "gpt-5", In: 20, Out: 2},
-			{Part: "merge", Role: "a", Entry: "qwen", Provider: "alibaba", Model: "qwen3", In: 30, Out: 3},
-			{Part: "merge", Role: "b", Entry: "gpt", Provider: "openai", Model: "gpt-5", In: 7, Out: 1},
+			{Part: "member", Role: "a", Run: run, Member: a2, Entry: "qwen", Provider: "alibaba", Model: "qwen3", In: 150, Out: 15},
+			{Part: "member", Role: "b", Run: run, Member: b1, Entry: "gpt", Provider: "openai", Model: "gpt-5", In: 20, Out: 2},
+			{Part: "merge", Role: "a", Run: run, Entry: "qwen", Provider: "alibaba", Model: "qwen3", In: 30, Out: 3},
+			{Part: "merge", Role: "b", Run: run, Entry: "gpt", Provider: "openai", Model: "gpt-5", In: 7, Out: 1},
 		},
 	}
 	if !reflect.DeepEqual(*v.Panel, want) {
@@ -2028,6 +2028,62 @@ func TestRunPagePanel(t *testing.T) {
 		if strings.Contains(body, s) {
 			t.Errorf("the run page shows %q: %s", s, body)
 		}
+	}
+}
+
+// After Job P fell back, every attempt's page shows the review's whole
+// cost: the members' tokens (they count on the run that was split) and the
+// merge of each Job P attempt, each with the run or member it counts on.
+// Another review's tokens are not in it, and each run's own tokens stay its
+// own.
+func TestRunPagePanelCostAfterJudgeRetry(t *testing.T) {
+	e := newEnv(t, nil)
+	now := e.clock.now()
+	split := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), state: store.Superseded, outcome: OutcomeFellBack,
+		reason: store.ClassQuota, at: now.Add(-2 * time.Hour)})
+	retry := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a')),
+		outcome: OutcomeApproved, approved: true, at: now.Add(-30 * time.Minute)})
+	e.exec(`UPDATE runs SET attempt_of = $2::uuid WHERE id = $1::uuid`, retry, split)
+	a := e.addMember(split, memberFix{role: "a", state: "done", entry: "sonnet", provider: "anthropic", model: "claude-sonnet-4",
+		position: 1, at: now.Add(-100 * time.Minute)})
+	b := e.addMember(split, memberFix{role: "b", state: "done", entry: "gpt", provider: "openai", model: "gpt-5",
+		position: 1, at: now.Add(-99 * time.Minute)})
+	e.addModelUsage(split, a, "a", "code-review", "sonnet", "anthropic", "claude-sonnet-4", 100, 10)
+	e.addModelUsage(split, b, "b", "code-review", "gpt", "openai", "gpt-5", 50, 5)
+	e.addModelUsage(split, "", "a", "code-review", "sonnet", "anthropic", "claude-sonnet-4", 30, 3)
+	e.addModelUsage(retry, "", "a", "code-review", "qwen", "alibaba", "qwen3", 20, 2)
+	if err := e.st.RecordUsage(ctx, retry, []store.SkillUsage{usageSkill("code-review", "no_blocking_issues", 20, 2)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	other := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
+	om := e.addMember(other, memberFix{role: "a", state: "done", entry: "sonnet", position: 1, at: now})
+	e.addModelUsage(other, om, "a", "code-review", "sonnet", "anthropic", "claude-sonnet-4", 999, 99)
+	e.addModelUsage(other, "", "a", "code-review", "sonnet", "anthropic", "claude-sonnet-4", 999, 99)
+
+	want := []ModelCostView{
+		{Part: "member", Role: "a", Run: split, Member: a, Entry: "sonnet", Provider: "anthropic", Model: "claude-sonnet-4", In: 100, Out: 10},
+		{Part: "member", Role: "b", Run: split, Member: b, Entry: "gpt", Provider: "openai", Model: "gpt-5", In: 50, Out: 5},
+		{Part: "merge", Role: "a", Run: split, Entry: "sonnet", Provider: "anthropic", Model: "claude-sonnet-4", In: 30, Out: 3},
+		{Part: "merge", Role: "a", Run: retry, Entry: "qwen", Provider: "alibaba", Model: "qwen3", In: 20, Out: 2},
+	}
+	c := e.userOnMain(false, "acme/widgets")
+	for _, id := range []string{retry, split} {
+		v := getJSON[RunDetailView](e, c, "/api/runs/"+id)
+		if v.Panel == nil || !reflect.DeepEqual(v.Panel.Cost, want) {
+			t.Errorf("run %s cost = %+v\nwant %+v", id, v.Panel, want)
+			continue
+		}
+		var in, out int64
+		for _, x := range v.Panel.Cost {
+			in, out = in+x.In, out+x.Out
+		}
+		if in != 200 || out != 20 {
+			t.Errorf("run %s total = %d in, %d out; want 200, 20", id, in, out)
+		}
+	}
+	// The run's own tokens are still its own.
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+retry); v.Tokens != (TokensView{In: 20, Out: 2}) {
+		t.Errorf("retry tokens = %+v; want its own, 20 and 2", v.Tokens)
 	}
 }
 

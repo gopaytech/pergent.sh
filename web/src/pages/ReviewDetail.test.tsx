@@ -903,9 +903,9 @@ describe("ReviewDetail: review panel", () => {
       ],
       judges: [{ role: "a", entry: "qwen", provider: "alibaba", model: "qwen3" }],
       cost: [
-        { part: "member", role: "a", entry: "qwen", provider: "alibaba", model: "qwen3", in: 150000, out: 15000 },
-        { part: "member", role: "b", entry: "gpt", provider: "openai", model: "gpt-5", in: 20000, out: 2000 },
-        { part: "merge", role: "a", entry: "qwen", provider: "alibaba", model: "qwen3", in: 30000, out: 3000 },
+        { part: "member", role: "a", run: newest, member: a2, entry: "qwen", provider: "alibaba", model: "qwen3", in: 150000, out: 15000 },
+        { part: "member", role: "b", run: newest, member: b1, entry: "gpt", provider: "openai", model: "gpt-5", in: 20000, out: 2000 },
+        { part: "merge", role: "a", run: newest, member: "", entry: "qwen", provider: "alibaba", model: "qwen3", in: 30000, out: 3000 },
       ],
     },
   };
@@ -927,7 +927,7 @@ describe("ReviewDetail: review panel", () => {
     const rows = within(cost).getAllByRole("row");
     // The header, one row per model and part, and the total.
     expect(rows).toHaveLength(5);
-    expect(within(rows[1]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Member A", "qwen", "alibaba / qwen3", "150k", "15k"]);
+    expect(within(rows[1]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Member A, attempt 2", "qwen", "alibaba / qwen3", "150k", "15k"]);
     expect(within(rows[2]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Member B", "gpt", "openai / gpt-5", "20k", "2k"]);
     expect(within(rows[3]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Merge (judge A)", "qwen", "alibaba / qwen3", "30k", "3k"]);
     expect(within(rows[4]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Total", "", "", "200k", "20k"]);
@@ -965,6 +965,68 @@ describe("ReviewDetail: review panel", () => {
     expect(panel).toHaveTextContent("<i>qwen3</i>");
     expect([...container.querySelectorAll("b")].some((b) => b.textContent === "sonnet")).toBe(false);
     expect(container.querySelector("i")).toBeNull();
+  });
+
+  it("labels each model's tokens with the attempt they count on, and totals the whole review", async () => {
+    const split = "33333333-3333-3333-3333-333333333333";
+    const run = structuredClone(panelRun);
+    run.attempts = [
+      { runId: split, name: "sonnet", position: 1, outcome: "fell_back", reason: "quota" },
+      { runId: newest, name: "qwen", position: 2, outcome: "blocking", reason: "" },
+    ];
+    run.panel!.cost = [
+      { part: "member", role: "a", run: split, member: a1, entry: "sonnet", provider: "anthropic", model: "claude-sonnet", in: 1000, out: 100 },
+      { part: "member", role: "b", run: split, member: b1, entry: "gpt", provider: "openai", model: "gpt-5", in: 2000, out: 200 },
+      { part: "merge", role: "a", run: split, member: "", entry: "sonnet", provider: "anthropic", model: "claude-sonnet", in: 300, out: 30 },
+      { part: "merge", role: "a", run: newest, member: "", entry: "qwen", provider: "alibaba", model: "qwen3", in: 700, out: 70 },
+    ];
+    renderAndWait(run);
+    const panel = await screen.findByRole("region", { name: "Review panel" });
+    const rows = within(within(panel).getByRole("table", { name: "Tokens per model" })).getAllByRole("row");
+    const labels = rows.slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+    expect(labels).toEqual([
+      "Member A, attempt 1",
+      "Member B",
+      "Merge (judge A), attempt 1",
+      "Merge (judge A), attempt 2 (this run)",
+      "Total",
+    ]);
+    expect(within(rows[5]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Total", "", "", "4k", "400"]);
+  });
+
+  it("shows an A-only review: B never started, with why, and no entry number", async () => {
+    const run = structuredClone(panelRun);
+    run.panel!.members[1].attempts = [
+      { id: b1, entry: "", position: 0, provider: "", model: "", state: "failed", failure: "chain B has no usable entry", step: "" },
+    ];
+    run.panel!.judges = [];
+    run.panel!.cost = run.panel!.cost.filter((c) => c.role === "a");
+    renderAndWait(run);
+    const panel = await screen.findByRole("region", { name: "Review panel" });
+    const b = within(within(panel).getByRole("list", { name: "Member B attempts" })).getByRole("listitem");
+    expect(b).toHaveTextContent(/^Attempt 1: not started · failed: chain B has no usable entry/);
+    expect(b).not.toHaveTextContent("(entry");
+    expect(panel).not.toHaveTextContent("Judged by");
+    await userEvent.click(within(b).getByRole("button", { name: "Log of member B, attempt 1" }));
+    expect(await within(b).findByText("No log was kept for this member.")).toBeInTheDocument();
+  });
+
+  it("shows a review whose members both failed, with no judges and no tokens", async () => {
+    const run = structuredClone(panelRun);
+    run.panel = {
+      members: [
+        { role: "a", attempts: [{ id: a1, entry: "sonnet", position: 1, provider: "anthropic", model: "claude-sonnet", state: "failed", failure: "timed out", step: "review" }] },
+        { role: "b", attempts: [{ id: b1, entry: "gpt", position: 1, provider: "openai", model: "gpt-5", state: "failed", failure: "clone failed", step: "clone" }] },
+      ],
+      judges: [],
+      cost: [],
+    };
+    renderAndWait(run);
+    const panel = await screen.findByRole("region", { name: "Review panel" });
+    expect(within(panel).getByRole("list", { name: "Member A attempts" })).toHaveTextContent("failed at review: timed out");
+    expect(within(panel).getByRole("list", { name: "Member B attempts" })).toHaveTextContent("failed at clone: clone failed");
+    expect(within(panel).queryByRole("table")).not.toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("Judged by");
   });
 
   it("says why the panel did not start", async () => {

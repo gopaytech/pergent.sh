@@ -7547,8 +7547,8 @@ components:
     RunPanelView:
       description: A review panel on its run's page. When it did not start, `off` says why and the lists are
         empty. Otherwise its members, the entries Job P judged with on this run, and the tokens of each model
-        that count on this run (the members' on the run that was split, Job P's on its own run). Names are
-        entry and model names, never a key.
+        in the whole review (every member attempt and every Job P attempt), the same on each attempt's page.
+        The run's own tokens stay in `tokens`. Names are entry and model names, never a key.
       type: object
       required: [members, judges, cost]
       properties:
@@ -7566,7 +7566,8 @@ components:
         cost:
           type: array
           items: {$ref: '#/components/schemas/ModelCostView'}
-          description: Members first, then by role, entry, provider and model. The page adds them up for the total.
+          description: Members first (by role, then attempt), then each Job P attempt's merge by run and role.
+            The page adds them up for the review's total.
     PanelMemberView:
       description: Member A or B of a panel review.
       type: object
@@ -7612,9 +7613,9 @@ components:
         provider: {type: string}
         model: {type: string}
     ModelCostView:
-      description: The tokens one model used on this run.
+      description: The tokens one model used in the review.
       type: object
-      required: [part, role, entry, provider, model, in, out]
+      required: [part, role, run, member, entry, provider, model, in, out]
       properties:
         part:
           type: string
@@ -7623,6 +7624,13 @@ components:
         role:
           type: string
           enum: [a, b]
+        run:
+          type: string
+          format: uuid
+          description: The run the tokens count on, a run of `attempts` (the members' count on the run that was split).
+        member:
+          type: string
+          description: The member attempt of a member's tokens, as `members` lists it; empty for a merge.
         entry: {type: string}
         provider: {type: string}
         model: {type: string}

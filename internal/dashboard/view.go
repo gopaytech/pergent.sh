@@ -253,8 +253,9 @@ type RunDetailView struct {
 }
 
 // RunPanelView is a panel review on its run's page: why it did not start
-// (Off), or its members, the entries Job P judged with, and the tokens per
-// model. (A repository's panel is PanelView.)
+// (Off), or its members, the entries Job P judged with on this run, and the
+// tokens per model of the whole review, the same on each attempt's page.
+// (A repository's panel is PanelView.)
 type RunPanelView struct {
 	Off     string            `json:"off,omitempty"`
 	Members []PanelMemberView `json:"members"`
@@ -296,12 +297,15 @@ type PanelJudgeView struct {
 	Model    string `json:"model"`
 }
 
-// ModelCostView is the tokens one model used on this run: Part is "member"
-// (a member's review) or "merge" (Job P), Role "a" or "b", Entry the entry's
-// name.
+// ModelCostView is the tokens one model used in the review: Part is
+// "member" (a member's review) or "merge" (Job P), Role "a" or "b", Run the
+// run they count on, Member the member attempt ("" for a merge), Entry the
+// entry's name.
 type ModelCostView struct {
 	Part     string `json:"part"`
 	Role     string `json:"role"`
+	Run      string `json:"run"`
+	Member   string `json:"member"`
 	Entry    string `json:"entry"`
 	Provider string `json:"provider"`
 	Model    string `json:"model"`

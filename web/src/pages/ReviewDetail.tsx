@@ -453,14 +453,28 @@ function attemptState(a: MemberAttemptView) {
   return `${state}${a.step ? ` at ${a.step}` : ""}: ${a.failure}`;
 }
 
-// costLabel says which Job a model's tokens were used in.
-const costLabel = (c: ModelCostView) => (c.part === "member" ? `Member ${roleName(c.role)}` : `Merge (judge ${roleName(c.role)})`);
+// costLabel says which Job a model's tokens were used in: the member and,
+// when it had more than one, its attempt; or Job P's role and, in a review
+// of more than one attempt, which attempt (run) it was.
+function costLabel(c: ModelCostView, panel: RunPanelView, runId: string, attempts: RunDetailView["attempts"]) {
+  if (c.part === "member") {
+    const tries = panel.members.find((m) => m.role === c.role)?.attempts ?? [];
+    const n = tries.findIndex((a) => a.id === c.member);
+    return `Member ${roleName(c.role)}${tries.length > 1 && n >= 0 ? `, attempt ${n + 1}` : ""}`;
+  }
+  const label = `Merge (judge ${roleName(c.role)})`;
+  if (attempts.length === 0) return label;
+  const n = attempts.findIndex((a) => a.runId === c.run);
+  const which = n >= 0 ? `attempt ${n + 1}` : "another attempt";
+  return `${label}, ${which}${c.run === runId ? " (this run)" : ""}`;
+}
 
 // Panel is a panel review on its run's page: why it did not start, or its
 // members A and B with each attempt (and its log), the entries Job P judged
-// with, and the tokens of each model on this run with their total. Names
-// are entry and model names, shown as text.
-function Panel({ runId, panel }: { runId: string; panel: RunPanelView }) {
+// with on this run, and the tokens of each model in the whole review with
+// their total (the same on each attempt's page). Names are entry and model
+// names, shown as text.
+function Panel({ runId, panel, attempts }: { runId: string; panel: RunPanelView; attempts: RunDetailView["attempts"] }) {
   if (panel.off !== undefined) {
     return (
       <section className="card" aria-label="Review panel">
@@ -504,8 +518,8 @@ function Panel({ runId, panel }: { runId: string; panel: RunPanelView }) {
           </thead>
           <tbody>
             {panel.cost.map((c) => (
-              <tr key={`${c.part}/${c.role}/${c.entry}/${c.provider}/${c.model}`}>
-                <td>{costLabel(c)}</td>
+              <tr key={`${c.part}/${c.role}/${c.run}/${c.member}/${c.entry}/${c.provider}/${c.model}`}>
+                <td>{costLabel(c, panel, runId, attempts)}</td>
                 <td>{c.entry}</td>
                 <td className="mono">{modelText(c.provider, c.model)}</td>
                 <td>{count(c.in)}</td>
@@ -535,7 +549,9 @@ function MemberAttempt({ runId, role, n, attempt }: { runId: string; role: Panel
   const model = attempt.model === "" && attempt.provider === "" ? "" : ` · ${modelText(attempt.provider || null, attempt.model || null)}`;
   return (
     <li>
-      Attempt {n}: {attempt.entry || "not started"} (entry {attempt.position}){model} · {attemptState(attempt)}{" "}
+      Attempt {n}: {attempt.entry || "not started"}
+      {attempt.position > 0 && ` (entry ${attempt.position})`}
+      {model} · {attemptState(attempt)}{" "}
       <button
         type="button"
         className="btn small"
@@ -546,7 +562,11 @@ function MemberAttempt({ runId, role, n, attempt }: { runId: string; role: Panel
         {open ? "Hide log" : "Log"}
       </button>
       {open && (
-        <RunLog logPath={paths.apiRunMemberLog(runId, attempt.id)} diagnosticsPath={paths.apiRunMemberDiagnostics(runId, attempt.id)} />
+        <RunLog
+          logPath={paths.apiRunMemberLog(runId, attempt.id)}
+          diagnosticsPath={paths.apiRunMemberDiagnostics(runId, attempt.id)}
+          what="member"
+        />
       )}
     </li>
   );
@@ -573,7 +593,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
   return (
     <>
       {(view.ciJobs !== null || view.ciDeadline !== null) && <CIJobs jobs={view.ciJobs ?? []} deadline={view.ciDeadline} />}
-      {view.panel && <Panel runId={id} panel={view.panel} />}
+      {view.panel && <Panel runId={id} panel={view.panel} attempts={view.attempts} />}
       <section className="card" aria-label="Skills">
         <h2>Skills</h2>
         {view.skills.length === 0 && (

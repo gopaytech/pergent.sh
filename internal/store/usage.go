@@ -260,31 +260,39 @@ func (s *Store) RunUsage(ctx context.Context, id string) (in, out int64, found b
 	return in, out, recorded != nil && *recorded, err
 }
 
-// ModelCost is what one model used on a run of a panel review: the sum of
-// its run_usage_models rows of one part ("member" or "merge"), role ("a" or
-// "b") and entry.
+// ModelCost is what one model used in a panel review: the sum of its
+// run_usage_models rows of one part ("member" or "merge"), role ("a" or
+// "b"), entry, and the run (RunID) or member attempt (MemberID, "" for a
+// merge row) they count on.
 type ModelCost struct {
-	Part, Role, Entry, Provider, Model string
-	In, Out                            int64
+	Part, Role, RunID, MemberID, Entry, Provider, Model string
+	In, Out                                             int64
 }
 
-// RunModelCosts returns what each model used on run id, from the rows that
-// count on it: the members' on the run that was split, Job P's on its own
-// run. Members first, then by role, entry, provider and model. A run with
-// none, or a malformed id, has none.
-func (s *Store) RunModelCosts(ctx context.Context, id string) ([]ModelCost, error) {
+// ReviewModelCosts returns what each model used in the panel review of run
+// id (its first run or a later attempt): every member attempt's rows (they
+// count on the run that was split) and the merge rows of every run of the
+// review (each Job P attempt). Members first, by role and attempt, then the
+// merges by run and role. A review with none, or a malformed id, has none.
+func (s *Store) ReviewModelCosts(ctx context.Context, id string) ([]ModelCost, error) {
 	if !validUUID(id) {
 		return nil, nil
 	}
-	// Each part by its own index: a member's rows by its id, Job P's by run.
-	rows, err := s.pool.Query(ctx, `SELECT part, role, entry_name, provider, model, sum(tokens_in)::bigint, sum(tokens_out)::bigint
-		FROM (SELECT * FROM run_usage_models WHERE part = 'member' AND run_id = $1::uuid
-				AND member_id IN (SELECT m.id FROM panel_members m
-					WHERE m.run_id = (SELECT COALESCE(attempt_of, id) FROM runs WHERE id = $1::uuid))
+	// Each part by its own index: members by their id, merges by run.
+	rows, err := s.pool.Query(ctx, `WITH review AS (SELECT COALESCE(attempt_of, id) AS root FROM runs WHERE id = $1::uuid)
+		SELECT part, role, run_id::text, COALESCE(member_id::text, ''), entry_name, provider, model,
+			sum(tokens_in)::bigint, sum(tokens_out)::bigint
+		FROM (SELECT u.part, u.role, u.run_id, u.member_id, u.entry_name, u.provider, u.model, u.tokens_in, u.tokens_out,
+				m.created_at AS at
+			FROM run_usage_models u JOIN panel_members m ON m.id = u.member_id
+			WHERE u.part = 'member' AND m.run_id = (SELECT root FROM review)
 			UNION ALL
-			SELECT * FROM run_usage_models WHERE part = 'merge' AND run_id = $1::uuid) u
-		GROUP BY part, role, entry_name, provider, model
-		ORDER BY part = 'merge', role, entry_name, provider, model`, id)
+			SELECT u.part, u.role, u.run_id, u.member_id, u.entry_name, u.provider, u.model, u.tokens_in, u.tokens_out,
+				r.created_at AS at
+			FROM run_usage_models u JOIN runs r ON r.id = u.run_id
+			WHERE u.part = 'merge' AND (r.id = (SELECT root FROM review) OR r.attempt_of = (SELECT root FROM review))) x
+		GROUP BY part, role, run_id, member_id, entry_name, provider, model
+		ORDER BY part = 'merge', CASE WHEN part = 'member' THEN role END, min(at), run_id, role, entry_name, provider, model`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +300,7 @@ func (s *Store) RunModelCosts(ctx context.Context, id string) ([]ModelCost, erro
 	var out []ModelCost
 	for rows.Next() {
 		var c ModelCost
-		if err := rows.Scan(&c.Part, &c.Role, &c.Entry, &c.Provider, &c.Model, &c.In, &c.Out); err != nil {
+		if err := rows.Scan(&c.Part, &c.Role, &c.RunID, &c.MemberID, &c.Entry, &c.Provider, &c.Model, &c.In, &c.Out); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

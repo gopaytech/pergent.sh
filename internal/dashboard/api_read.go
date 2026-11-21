@@ -852,8 +852,10 @@ func (d *Dashboard) panelMembers(ctx context.Context, run store.Run) ([]store.Pa
 	return members, nil
 }
 
-// panelOf is the panel of run's page: its members, judges and the tokens
-// of each model on this run; or why its panel did not start; nil for a run
+// panelOf is the panel of run's page: its members, the judges of this run
+// and the tokens of each model in the whole review (every member attempt
+// and every Job P attempt, the same on each attempt's page; each run's own
+// tokens stay in its Tokens); or why its panel did not start; nil for a run
 // that is no panel review. Model names are shown as the run's own model is,
 // never a key. The tokens never break the page: when they can't be read,
 // the page shows none.
@@ -896,14 +898,14 @@ func (d *Dashboard) panelOf(ctx context.Context, run store.Run) (*RunPanelView, 
 			p.Judges = append(p.Judges, PanelJudgeView{Role: role, Entry: e.Name, Provider: models[role].Provider, Model: models[role].Model})
 		}
 	}
-	costs, err := d.Store.RunModelCosts(ctx, run.ID)
+	costs, err := d.Store.ReviewModelCosts(ctx, run.ID)
 	if err != nil {
 		d.Log.Warn("dashboard: reading a panel's tokens per model failed", "run", run.ID, "error", err.Error())
 		return p, nil
 	}
 	for _, c := range costs {
-		p.Cost = append(p.Cost, ModelCostView{Part: c.Part, Role: c.Role, Entry: c.Entry, Provider: c.Provider, Model: c.Model,
-			In: c.In, Out: c.Out})
+		p.Cost = append(p.Cost, ModelCostView{Part: c.Part, Role: c.Role, Run: c.RunID, Member: c.MemberID, Entry: c.Entry,
+			Provider: c.Provider, Model: c.Model, In: c.In, Out: c.Out})
 	}
 	return p, nil
 }
