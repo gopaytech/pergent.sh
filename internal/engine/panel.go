@@ -457,12 +457,19 @@ func (e *Engine) settleMember(ctx context.Context, m store.PanelMember) error {
 			}
 			// An API review's member does not fall back: its entry is
 			// marked as the review's would be, and it fails, which leaves
-			// Job P the other member.
-			if err := e.markOnly(ctx, run, m.Entry.Name, mark, true, log.With("model_entry", m.Entry.ID, "class", mark.Class)); err != nil {
+			// Job P the other member. The audit entry is written once, by
+			// the settle that fails the member: a settle tried again after
+			// an error marks the entry again, and audits nothing more.
+			mlog := log.With("model_entry", m.Entry.ID, "class", mark.Class)
+			if err := e.markOnly(ctx, run, m.Entry.Name, mark, false, mlog); err != nil {
 				return err
 			}
 			f := store.Failure{Reason: reasonMemberRefused + chain.ReasonWords(mark.Class)}
-			if err := e.Store.ReplaceMemberWithFailure(ctx, m.ID, f); err != nil && !errors.Is(err, store.ErrNotReported) {
+			switch err := e.Store.ReplaceMemberWithFailure(ctx, m.ID, f); {
+			case err == nil:
+				mlog.Warn("the provider refused the review's model entry; it is skipped until the mark ends")
+				e.auditMark(ctx, run, m.Entry.Name, mark.Class, mlog)
+			case !errors.Is(err, store.ErrNotReported):
 				return fmt.Errorf("fail the member's result: %w", err)
 			}
 		}
@@ -525,9 +532,10 @@ func (p mergePlan) key(role string) string { return p.judges[role].model.Key }
 // chain, skipping what earlier attempts of P fell back from on that role; a
 // role with no done member, or no entry left, does not judge, and pergent's
 // merge goes on without that half. No judge runs (--panel-no-judge) when no
-// role can judge, when the repository's token quota is used up, or when the
-// instance's is used up and a judge entry is global. d.entry names model A
-// and its key for the Job. err is a store error.
+// role can judge, when the repository's token quota (an API client's
+// monthly budget) is used up, or when the instance's is used up and a judge
+// entry is global. d.entry names model A and its key for the Job. err is a
+// store error.
 func (d *dispatcher) resolveMerge(ctx context.Context, repo settings.Effective, repoUsedUp, instanceUsedUp bool) error {
 	done := map[string]*store.PanelMember{}
 	for i := range d.members {
@@ -557,7 +565,7 @@ func (d *dispatcher) resolveMerge(ctx context.Context, repo settings.Effective, 
 			plan.judges[role] = j
 		}
 	}
-	plan.a, plan.b = d.roleLLM(plan, kube.PanelRoleA, inA.Entries), d.roleLLM(plan, kube.PanelRoleB, inA.Entries)
+	plan.a, plan.b = d.roleLLM(plan, kube.PanelRoleA, inA.Entries), d.roleLLM(plan, kube.PanelRoleB, inB.Entries)
 	if plan.a.Provider == "" {
 		plan.a = plan.b
 	}
@@ -572,6 +580,8 @@ func (d *dispatcher) resolveMerge(ctx context.Context, repo settings.Effective, 
 	switch {
 	case len(plan.judges) == 0:
 		why = "no judge entry can be used"
+	case repoUsedUp && d.api:
+		why = "the client's monthly token budget is used up"
 	case repoUsedUp:
 		why = "the repository's token quota is used up"
 	case instanceUsedUp && global:
