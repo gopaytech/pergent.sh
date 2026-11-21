@@ -36,10 +36,6 @@ type fakeMembers struct {
 	replErr  error
 }
 
-func (f *fakeMembers) PanelMembers(_ context.Context, id string) ([]store.PanelMember, error) {
-	return f.members[id], nil
-}
-
 func (f *fakeMembers) PanelRun(_ context.Context, root string) (store.Run, bool, error) {
 	if root != f.run.ID {
 		return store.Run{}, false, nil
@@ -47,11 +43,11 @@ func (f *fakeMembers) PanelRun(_ context.Context, root string) (store.Run, bool,
 	return f.run, f.waits, nil
 }
 
-func (f *fakeMembers) StoreMemberResult(_ context.Context, id, token string, body []byte, _ time.Time) (store.ResultOutcome, error) {
+func (f *fakeMembers) StoreMemberResult(_ context.Context, runID, id, token string, body []byte, _ time.Time) (store.ResultOutcome, error) {
 	if f.storeErr != nil {
 		return 0, f.storeErr
 	}
-	if id != memberID || token != f.token {
+	if !f.memberOf(runID, id) || token != f.token {
 		return store.ResultUnauthorized, nil
 	}
 	if f.outcome == store.ResultStored {
@@ -68,6 +64,16 @@ func (f *fakeMembers) ReportMemberFailure(_ context.Context, id string, fail sto
 func (f *fakeMembers) ReplaceMemberWithFailure(_ context.Context, id string, fail store.Failure) error {
 	f.replaced = append(f.replaced, fail)
 	return f.replErr
+}
+
+// memberOf reports whether member id is one of run runID's.
+func (f *fakeMembers) memberOf(runID, id string) bool {
+	for _, m := range f.members[runID] {
+		if m.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func newFakeMembers() *fakeMembers {
@@ -158,19 +164,32 @@ func TestMemberHandlerWrongCommit(t *testing.T) {
 	}
 }
 
-// A completed result with a skill the member's Job was not started with
-// fails the member, with the run's own check.
+// A completed result with a skill the member's Job was not started with, or
+// without one it was, fails the member, with the run's own check against
+// the skills of a whole review (recorded at the split) or of a re-run.
 func TestMemberHandlerUnknownSkill(t *testing.T) {
-	f := newFakeMembers()
-	f.run.SkillSubset = []string{"security"}
-	e := newMemberEnv(f)
-	rec := e.post(runID, memberID, "Bearer good", completedJSON("security", "style"))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
-	}
-	want := unusable + "the result has skills the Job was not started with"
-	if len(f.replaced) != 1 || f.replaced[0].Reason != want {
-		t.Errorf("replaced = %+v; want %q", f.replaced, want)
+	whole := func(r *store.Run) { r.SkillSources = map[string]string{"security": "library"} }
+	subset := func(r *store.Run) { r.SkillSubset = []string{"security"} }
+	for name, set := range map[string]func(*store.Run){"whole review": whole, "re-run": subset} {
+		for body, want := range map[string]string{
+			completedJSON("security", "style"): "the result has skills the Job was not started with",
+			completedJSON("style"):             `the result lacks the skills the Job was started with ("security")`,
+		} {
+			f := newFakeMembers()
+			set(&f.run)
+			e := newMemberEnv(f)
+			if rec := e.post(runID, memberID, "Bearer good", body); rec.Code != http.StatusBadRequest {
+				t.Errorf("%s %s: status = %d, want 400", name, body, rec.Code)
+			}
+			if len(f.replaced) != 1 || f.replaced[0].Reason != unusable+want {
+				t.Errorf("%s: replaced = %+v; want %q", name, f.replaced, want)
+			}
+		}
+		f := newFakeMembers()
+		set(&f.run)
+		if rec := newMemberEnv(f).post(runID, memberID, "Bearer good", completedJSON("security")); rec.Code != http.StatusOK || len(f.replaced) != 0 {
+			t.Errorf("%s: the right skills = %d, replaced %+v; want 200", name, rec.Code, f.replaced)
+		}
 	}
 }
 
@@ -282,6 +301,11 @@ func TestCheckResultUnchanged(t *testing.T) {
 		if got := checkResult(res, run); got != want {
 			t.Errorf("checkResult(%s) = %q, want %q", body, got, want)
 		}
+	}
+	// A whole review: the skills recorded at dispatch (or at the split).
+	whole := store.Run{BaseSHA: base, HeadSHA: head, SkillSources: map[string]string{"security": "library"}}
+	if got := checkResult(parseOrFail(t, completedJSON("security", "style")), whole); got != "the result has skills the Job was not started with" {
+		t.Errorf("whole review, extra skill: %q", got)
 	}
 	merged := parseOrFail(t, completedJSON("security"))
 	merged.Merged = true

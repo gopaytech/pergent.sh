@@ -447,7 +447,7 @@ func TestDispatchReleasedPanelNotSplitAgain(t *testing.T) {
 	dispatch(t, env)
 	for _, m := range members(t, env, id) {
 		token := string(env.Secret(m.ID).Data["result-token"])
-		if out, err := env.Store.StoreMemberResult(env.ctx, m.ID, token, resultFor(t, head, reviewed("no_blocking_issues", "a.go")), env.Now()); err != nil || out != store.ResultStored {
+		if out, err := env.Store.StoreMemberResult(env.ctx, m.RunID, m.ID, token, resultFor(t, head, reviewed("no_blocking_issues", "a.go")), env.Now()); err != nil || out != store.ResultStored {
 			t.Fatalf("StoreMemberResult = %v, %v", out, err)
 		}
 		if st, err := env.Store.SettleMember(env.ctx, m.ID); err != nil || st != store.MemberDone {

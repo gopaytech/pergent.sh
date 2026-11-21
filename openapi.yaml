@@ -319,7 +319,7 @@ paths:
         '200':
           description: The result was recorded (or dropped, for a superseded run). No body.
         '400':
-          description: The body could not be read, is not JSON, or is not a usable result. The run is recorded as failed.
+          description: The body could not be read (nothing is recorded), or it is not JSON or not a usable result (the run is recorded as failed).
           content:
             text/plain:
               schema: {type: string}
@@ -386,7 +386,7 @@ paths:
         '200':
           description: The result was recorded (or dropped, for a superseded member). No body.
         '400':
-          description: The body could not be read, is not JSON, or is not a usable result. The member is recorded as failed.
+          description: The body could not be read (nothing is recorded), or it is not JSON or not a usable result (the member is recorded as failed, never the run).
           content:
             text/plain:
               schema: {type: string}

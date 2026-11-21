@@ -14,9 +14,8 @@ import (
 
 // MemberResults is the part of the store the member handler needs.
 type MemberResults interface {
-	PanelMembers(ctx context.Context, id string) ([]store.PanelMember, error)
 	PanelRun(ctx context.Context, root string) (store.Run, bool, error)
-	StoreMemberResult(ctx context.Context, id, token string, body []byte, now time.Time) (store.ResultOutcome, error)
+	StoreMemberResult(ctx context.Context, runID, id, token string, body []byte, now time.Time) (store.ResultOutcome, error)
 	ReportMemberFailure(ctx context.Context, id string, f store.Failure, now time.Time) (bool, error)
 	ReplaceMemberWithFailure(ctx context.Context, id string, f store.Failure) error
 }
@@ -61,22 +60,11 @@ func (h *MemberHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	log := h.log().With("run", runID, "member", id)
-	// The member must be one of the run's: its Job's URL names the run the
-	// member belongs to. Any other is the bad token's 401.
-	mine, err := h.memberOf(ctx, runID, id)
-	if err != nil {
-		log.Error("read the panel's members", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if !mine {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	now := h.now()
-	// The token is checked first, on the raw body (StoreMemberResult).
-	outcome, err := h.Members.StoreMemberResult(ctx, id, token, body, now)
+	// The token is checked first, on the raw body, and with it that the
+	// member is the run's: its Job's URL names the run the member belongs
+	// to (StoreMemberResult). Every refusal takes the same steps there.
+	outcome, err := h.Members.StoreMemberResult(ctx, runID, id, token, body, now)
 	switch {
 	case errors.Is(err, store.ErrInvalidResult):
 		h.fail(w, ctx, log, id, now, "the body is not valid JSON")
@@ -100,21 +88,6 @@ func (h *MemberHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Error("unknown result outcome", "outcome", int(outcome))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
-}
-
-// memberOf reports whether member id belongs to the review whose first run
-// is runID.
-func (h *MemberHandler) memberOf(ctx context.Context, runID, id string) (bool, error) {
-	ms, err := h.Members.PanelMembers(ctx, runID)
-	if err != nil {
-		return false, err
-	}
-	for _, m := range ms {
-		if m.ID == id && m.RunID == runID {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // stored checks a member result that was just stored and turns an unusable

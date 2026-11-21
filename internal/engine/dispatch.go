@@ -692,7 +692,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	// A repository with chain B in effect gets a review panel: the run waits
 	// for its members, whose Jobs start apart. With no chain B this writes
 	// nothing and the review goes on as before.
-	split, err := d.panel(ctx, mr, repo, repoUsedUp, instanceUsedUp)
+	split, err := d.panel(ctx, mr, in, repo, repoUsedUp, instanceUsedUp)
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("start the review panel: %w", err))
 	}
@@ -850,7 +850,22 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 	// For the dashboard, best effort: the model, where each skill came from
 	// and the library version of each library skill. The hash of each skill
 	// goes along: the next push carries nothing for a skill that changed.
-	sources, versions := in.Sources, in.Versions
+	sources, versions, hashes := d.runInputs(in)
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, repo.MaxTurns, sources, versions, hashes); err != nil {
+		d.log.Info("couldn't record the review's model, step limit and skills for the dashboard", "error", d.redact(err.Error()))
+	}
+
+	if err := e.setStatus(ctx, plat, run, forge.StatusRunning, d.runningText()); err != nil {
+		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
+	}
+	return nil
+}
+
+// runInputs is what a run records of the skills of its inputs in: where each
+// came from, the library version of each library skill and the hash of each.
+// A re-run of some skills records the whole review's.
+func (d *dispatcher) runInputs(in *inputs.Inputs) (sources map[string]string, versions map[string]int, hashes map[string]string) {
+	sources, versions = in.Sources, in.Versions
 	if len(d.keptSources) > 0 {
 		// A re-run of some skills shows the whole review's sources and
 		// versions.
@@ -869,7 +884,7 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 			versions[name] = v
 		}
 	}
-	hashes := skillHashes(in.Skills)
+	hashes = skillHashes(in.Skills)
 	if len(d.keptHashes) > 0 {
 		hashes = map[string]string{}
 		for name, h := range d.keptHashes {
@@ -879,14 +894,7 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 			hashes[name] = h
 		}
 	}
-	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, repo.MaxTurns, sources, versions, hashes); err != nil {
-		d.log.Info("couldn't record the review's model, step limit and skills for the dashboard", "error", d.redact(err.Error()))
-	}
-
-	if err := e.setStatus(ctx, plat, run, forge.StatusRunning, d.runningText()); err != nil {
-		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
-	}
-	return nil
+	return sources, versions, hashes
 }
 
 // subset reduces the inputs of a run that reviews some of the skills (a

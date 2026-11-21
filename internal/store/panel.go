@@ -157,15 +157,23 @@ func reviewOf(ctx context.Context, tx pgx.Tx, id string) (mr MRKey, root string,
 	return mr, root, err == nil, err
 }
 
+// PanelSplit is what a run records when it is split into a panel: the merge
+// request's base and start SHAs, which both members review, and its inputs
+// as SetRunInputs records them for a review, which their results are
+// checked against.
+type PanelSplit struct {
+	BaseSHA, StartSHA string
+	Inputs            RunInputs
+}
+
 // StartPanel makes the claimed, not dispatched run runID a panel review: it
-// waits (WaitPanel) with dispatched_at now and the merge request's base and
-// start SHAs (the base both members review, and their results are checked
-// against), and one queued member per role is added, in one transaction. started is false when the run is no longer
+// waits (WaitPanel) with dispatched_at now and what split holds, and one
+// queued member per role is added, in one transaction. started is false when the run is no longer
 // claimed (superseded meanwhile), or was dispatched before: a run released
 // for Job P keeps its dispatched_at, so a review is split once. The members belong to the review's first
 // run, and the review's off row, from an earlier attempt, is dropped: the
 // panel did start.
-func (s *Store) StartPanel(ctx context.Context, runID, baseSHA, startSHA string, now time.Time) (started bool, err error) {
+func (s *Store) StartPanel(ctx context.Context, runID string, split PanelSplit, now time.Time) (started bool, err error) {
 	if !validUUID(runID) {
 		return false, nil
 	}
@@ -184,12 +192,15 @@ func (s *Store) StartPanel(ctx context.Context, runID, baseSHA, startSHA string,
 	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'waiting', skip_reason = $2, dispatched_at = $3,
 		base_sha = $4, start_sha = $5
-		WHERE id = $1::uuid AND state = 'running' AND job_name = '' AND dispatched_at IS NULL`, runID, WaitPanel, now, baseSHA, startSHA)
+		WHERE id = $1::uuid AND state = 'running' AND job_name = '' AND dispatched_at IS NULL`, runID, WaitPanel, now, split.BaseSHA, split.StartSHA)
 	if err != nil {
 		return false, err
 	}
 	if tag.RowsAffected() != 1 {
 		return false, nil
+	}
+	if err := setRunInputs(ctx, tx, runID, split.Inputs); err != nil {
+		return false, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM panel_members WHERE run_id = $1::uuid AND state = 'off'`, root); err != nil {
 		return false, err
@@ -356,11 +367,14 @@ func (s *Store) PostponeMember(ctx context.Context, id string, notBefore time.Ti
 	return err
 }
 
-// StoreMemberResult accepts the result a member's Job posted. The token is
-// checked as StoreResult checks it: against the stored SHA-256 in constant
-// time, not expired, and single use by the member's state. The outcome, in
-// order:
-//   - ResultUnauthorized: unknown member, no token, wrong token or expired;
+// StoreMemberResult accepts the result a member's Job posted on the route of
+// run runID (the review's first run). The token is checked as StoreResult
+// checks it: against the stored SHA-256 in constant time, not expired, and
+// single use by the member's state. It is checked first, in the same one
+// read for a member of another run, an unknown member and a known one: each
+// refusal hashes the token and compares it. The outcome, in order:
+//   - ResultUnauthorized: unknown member, a member of another run, no token,
+//     wrong token or expired;
 //   - ResultDiscarded: the member is superseded, or its run no longer waits
 //     for it (superseded, or released for Job P: a late second post after
 //     the release is discarded, not a conflict); the result is dropped;
@@ -368,49 +382,42 @@ func (s *Store) PostponeMember(ctx context.Context, id string, notBefore time.Ti
 //     running;
 //   - ErrInvalidResult: body is not valid JSON; nothing is stored;
 //   - ResultStored: the member is now reported.
-func (s *Store) StoreMemberResult(ctx context.Context, id, token string, body []byte, now time.Time) (ResultOutcome, error) {
-	if !validUUID(id) {
+func (s *Store) StoreMemberResult(ctx context.Context, runID, id, token string, body []byte, now time.Time) (ResultOutcome, error) {
+	presented := sha256.Sum256([]byte(token))
+	if !validUUID(id) || !validUUID(runID) {
+		subtle.ConstantTimeCompare(presented[:], noToken[:])
 		return ResultUnauthorized, nil
 	}
+	if ok, err := memberTokenOK(ctx, s.pool, runID, id, presented[:], now, ""); err != nil || !ok {
+		return ResultUnauthorized, err
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
-	var root string
-	err = tx.QueryRow(ctx, `SELECT run_id::text FROM panel_members WHERE id = $1::uuid`, id).Scan(&root)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ResultUnauthorized, nil
-	}
-	if err != nil {
-		return 0, err
-	}
-	_, waits, err := lockWaitingRun(ctx, tx, root, "SHARE")
+	_, waits, err := lockWaitingRun(ctx, tx, runID, "SHARE")
 	if err != nil {
 		return 0, err
 	}
 	var (
-		stored  []byte
-		expires *time.Time
 		state   string
 		hasRes  bool
 		failure string
 	)
-	err = tx.QueryRow(ctx, `SELECT token_hash, token_expires_at, state, result IS NOT NULL, failure_reason
-		FROM panel_members WHERE id = $1::uuid FOR UPDATE`, id).Scan(&stored, &expires, &state, &hasRes, &failure)
+	// Read again under the member's lock, token included: it was good above.
+	if ok, err := memberTokenOK(ctx, tx, runID, id, presented[:], now, " FOR UPDATE"); err != nil || !ok {
+		return ResultUnauthorized, err
+	}
+	err = tx.QueryRow(ctx, `SELECT state, result IS NOT NULL, failure_reason
+		FROM panel_members WHERE id = $1::uuid`, id).Scan(&state, &hasRes, &failure)
 	if errors.Is(err, pgx.ErrNoRows) { // its run was deleted meanwhile
 		return ResultUnauthorized, nil
 	}
 	if err != nil {
 		return 0, err
-	}
-	presented := sha256.Sum256([]byte(token))
-	if stored == nil || subtle.ConstantTimeCompare(presented[:], stored) != 1 {
-		return ResultUnauthorized, nil
-	}
-	if expires == nil || now.After(*expires) {
-		return ResultUnauthorized, nil
 	}
 
 	switch {
@@ -430,6 +437,37 @@ func (s *Store) StoreMemberResult(ctx context.Context, id, token string, body []
 		return 0, err
 	}
 	return ResultStored, nil
+}
+
+// rowQuerier reads one row: the pool, or a transaction.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// noToken is compared against when there is no stored token, so a refusal
+// takes the same steps whether or not the member exists.
+var noToken [sha256.Size]byte
+
+// memberTokenOK reports whether presented is the SHA-256 of member id's
+// live token, the member being one of run runID's. lock is appended to the
+// read (" FOR UPDATE" in a transaction). A member that is not there is
+// compared against noToken, as one with a wrong token is.
+func memberTokenOK(ctx context.Context, q rowQuerier, runID, id string, presented []byte, now time.Time, lock string) (bool, error) {
+	var (
+		stored  []byte
+		expires *time.Time
+	)
+	err := q.QueryRow(ctx, `SELECT token_hash, token_expires_at FROM panel_members
+		WHERE id = $1::uuid AND run_id = $2::uuid`+lock, id, runID).Scan(&stored, &expires)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, err
+	}
+	want := stored
+	if len(want) != sha256.Size {
+		want = noToken[:]
+	}
+	same := subtle.ConstantTimeCompare(presented, want) == 1
+	return same && stored != nil && expires != nil && !now.After(*expires), nil
 }
 
 // ReportMemberFailure records that a queued or running member will never

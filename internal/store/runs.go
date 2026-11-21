@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // MRKey identifies a merge request.
@@ -811,6 +812,26 @@ func (s *Store) SetRunInputs(ctx context.Context, id, model string, maxTurns int
 	if !validUUID(id) {
 		return fmt.Errorf("store: run %q not found", id)
 	}
+	return setRunInputs(ctx, s.pool, id, RunInputs{Model: model, MaxTurns: maxTurns, Sources: sources, Versions: versions, Hashes: hashes})
+}
+
+// RunInputs is what SetRunInputs records of a run's Job.
+type RunInputs struct {
+	Model    string
+	MaxTurns int
+	Sources  map[string]string
+	Versions map[string]int
+	Hashes   map[string]string
+}
+
+// execer runs one statement: the pool, or a transaction.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// setRunInputs is SetRunInputs on db.
+func setRunInputs(ctx context.Context, db execer, id string, in RunInputs) error {
+	sources, versions, hashes := in.Sources, in.Versions, in.Hashes
 	if sources == nil {
 		sources = map[string]string{}
 	}
@@ -833,12 +854,12 @@ func (s *Store) SetRunInputs(ctx context.Context, id, model string, maxTurns int
 		return err
 	}
 	var turns *int
-	if maxTurns > 0 {
-		turns = &maxTurns
+	if in.MaxTurns > 0 {
+		turns = &in.MaxTurns
 	}
-	_, err = s.pool.Exec(ctx, `UPDATE runs SET model = $2, max_turns = $3, skill_sources = $4::jsonb, skill_versions = $5::jsonb,
+	_, err = db.Exec(ctx, `UPDATE runs SET model = $2, max_turns = $3, skill_sources = $4::jsonb, skill_versions = $5::jsonb,
 			skill_hashes = $6::jsonb
-		WHERE id = $1::uuid`, id, cutText(model), turns, string(b), string(v), string(h))
+		WHERE id = $1::uuid`, id, cutText(in.Model), turns, string(b), string(v), string(h))
 	return err
 }
 

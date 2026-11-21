@@ -204,7 +204,7 @@ func panelRun(t *testing.T, s *Store, mr MRKey, head string) string {
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	started, err := s.StartPanel(ctx, id, "base-sha", "start-sha", t0)
+	started, err := s.StartPanel(ctx, id, testSplit, t0)
 	if err != nil || !started {
 		t.Fatalf("StartPanel = %v, %v", started, err)
 	}
@@ -246,7 +246,7 @@ func dispatchMember(t *testing.T, s *Store, id, token string) {
 func doneMember(t *testing.T, s *Store, id, body string) {
 	t.Helper()
 	dispatchMember(t, s, id, "tok-"+id)
-	if out, err := s.StoreMemberResult(ctx, id, "tok-"+id, []byte(body), t0.Add(time.Minute)); err != nil || out != ResultStored {
+	if out, err := s.StoreMemberResult(ctx, rootOf(t, s, id), id, "tok-"+id, []byte(body), t0.Add(time.Minute)); err != nil || out != ResultStored {
 		t.Fatalf("StoreMemberResult = %v, %v", out, err)
 	}
 	if st, err := s.SettleMember(ctx, id); err != nil || st != MemberDone {
@@ -289,6 +289,10 @@ func TestStartPanelWaitsAndQueuesMembers(t *testing.T) {
 	if r.BaseSHA != "base-sha" || r.StartSHA != "start-sha" {
 		t.Errorf("run base %q start %q; want the split's", r.BaseSHA, r.StartSHA)
 	}
+	if r.SkillSources["security"] != "library" || r.SkillVersions["security"] != 3 || r.SkillHashes["security"] != "h1" ||
+		r.Model == nil || *r.Model != "gpt-a" || r.MaxTurns == nil || *r.MaxTurns != 40 {
+		t.Errorf("run inputs = %v %v %v %v %v; want the split's", r.Model, r.MaxTurns, r.SkillSources, r.SkillVersions, r.SkillHashes)
+	}
 	ms, err := s.PanelMembers(ctx, id)
 	if err != nil || len(ms) != 2 {
 		t.Fatalf("PanelMembers = %+v, %v; want 2", ms, err)
@@ -304,7 +308,7 @@ func TestStartPanelWaitsAndQueuesMembers(t *testing.T) {
 		t.Errorf("roles = %v; want a and b", roles)
 	}
 	// A second start finds the run waiting, not claimed.
-	if started, err := s.StartPanel(ctx, id, "base-sha", "start-sha", t0); err != nil || started {
+	if started, err := s.StartPanel(ctx, id, testSplit, t0); err != nil || started {
 		t.Errorf("second StartPanel = %v, %v; want false", started, err)
 	}
 	// The previous release never claims a waiting run.
@@ -320,7 +324,7 @@ func TestStartPanelSupersededRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	enqueue(t, s, mr1, "a2")
-	if started, err := s.StartPanel(ctx, id, "base-sha", "start-sha", t0); err != nil || started {
+	if started, err := s.StartPanel(ctx, id, testSplit, t0); err != nil || started {
 		t.Errorf("StartPanel of a superseded run = %v, %v; want false", started, err)
 	}
 	if ms, err := s.PanelMembers(ctx, id); err != nil || len(ms) != 0 {
@@ -328,10 +332,10 @@ func TestStartPanelSupersededRun(t *testing.T) {
 	}
 	// A run with a Job is not split either.
 	d := dispatched(t, s, mr2, "b1", "tok")
-	if started, err := s.StartPanel(ctx, d, "base-sha", "start-sha", t0); err != nil || started {
+	if started, err := s.StartPanel(ctx, d, testSplit, t0); err != nil || started {
 		t.Errorf("StartPanel of a dispatched run = %v, %v; want false", started, err)
 	}
-	if started, err := s.StartPanel(ctx, "not-a-uuid", "base-sha", "start-sha", t0); err != nil || started {
+	if started, err := s.StartPanel(ctx, "not-a-uuid", testSplit, t0); err != nil || started {
 		t.Errorf("StartPanel of a bad id = %v, %v; want false", started, err)
 	}
 }
@@ -498,28 +502,35 @@ func TestMemberResultToken(t *testing.T) {
 		{"unknown member", "00000000-0000-0000-0000-000000000000", "tok-a", t0},
 		{"bad id", "x", "tok-a", t0},
 	} {
-		if out, err := s.StoreMemberResult(ctx, c.id, c.token, []byte(`{}`), c.at); err != nil || out != ResultUnauthorized {
+		if out, err := s.StoreMemberResult(ctx, id, c.id, c.token, []byte(`{}`), c.at); err != nil || out != ResultUnauthorized {
 			t.Errorf("%s: StoreMemberResult = %v, %v; want unauthorized", c.name, out, err)
 		}
 	}
-	if out, err := s.StoreMemberResult(ctx, a.ID, "tok-a", []byte(`not json`), t0); !errors.Is(err, ErrInvalidResult) {
+	// The right token on another run's route, or a bad run id.
+	other := panelRun(t, s, mr2, "b1")
+	for _, run := range []string{other, "x"} {
+		if out, err := s.StoreMemberResult(ctx, run, a.ID, "tok-a", []byte(`{}`), t0); err != nil || out != ResultUnauthorized {
+			t.Errorf("run %s: StoreMemberResult = %v, %v; want unauthorized", run, out, err)
+		}
+	}
+	if out, err := s.StoreMemberResult(ctx, a.RunID, a.ID, "tok-a", []byte(`not json`), t0); !errors.Is(err, ErrInvalidResult) {
 		t.Errorf("bad body = %v, %v; want ErrInvalidResult", out, err)
 	}
-	if out, err := s.StoreMemberResult(ctx, a.ID, "tok-a", []byte(`{"x":1}`), t0.Add(time.Minute)); err != nil || out != ResultStored {
+	if out, err := s.StoreMemberResult(ctx, a.RunID, a.ID, "tok-a", []byte(`{"x":1}`), t0.Add(time.Minute)); err != nil || out != ResultStored {
 		t.Fatalf("StoreMemberResult = %v, %v; want stored", out, err)
 	}
 	got := memberOf(t, s, id, "a")
 	if got.State != MemberReported || string(got.Result) != `{"x": 1}` || !got.ReportedAt.Equal(t0.Add(time.Minute)) {
 		t.Errorf("member = %s %s %v; want reported with the result", got.State, got.Result, got.ReportedAt)
 	}
-	if out, err := s.StoreMemberResult(ctx, a.ID, "tok-a", []byte(`{}`), t0.Add(2*time.Minute)); err != nil || out != ResultConflict {
+	if out, err := s.StoreMemberResult(ctx, a.RunID, a.ID, "tok-a", []byte(`{}`), t0.Add(2*time.Minute)); err != nil || out != ResultConflict {
 		t.Errorf("second post = %v, %v; want conflict", out, err)
 	}
 	// A failed member takes no result either.
 	if ok, err := s.ReportMemberFailure(ctx, b.ID, Failure{Reason: "boom"}, t0); err != nil || !ok {
 		t.Fatalf("ReportMemberFailure = %v, %v", ok, err)
 	}
-	if out, err := s.StoreMemberResult(ctx, b.ID, "tok-b", []byte(`{}`), t0); err != nil || out != ResultConflict {
+	if out, err := s.StoreMemberResult(ctx, b.RunID, b.ID, "tok-b", []byte(`{}`), t0); err != nil || out != ResultConflict {
 		t.Errorf("post after a failure = %v, %v; want conflict", out, err)
 	}
 	if ok, err := s.ReportMemberFailure(ctx, a.ID, Failure{Reason: "late"}, t0); err != nil || ok {
@@ -541,13 +552,13 @@ func TestMemberResultDiscardedAfterSupersede(t *testing.T) {
 	}
 	enqueue(t, s, mr1, "a2")
 	// The sweep has not run yet: the member is still running, its run gone.
-	if out, err := s.StoreMemberResult(ctx, a.ID, "tok-a", []byte(`{}`), t0); err != nil || out != ResultDiscarded {
+	if out, err := s.StoreMemberResult(ctx, a.RunID, a.ID, "tok-a", []byte(`{}`), t0); err != nil || out != ResultDiscarded {
 		t.Errorf("StoreMemberResult with the run gone = %v, %v; want discarded", out, err)
 	}
 	if n, err := s.SupersedeOrphanMembers(ctx); err != nil || n != 2 {
 		t.Fatalf("SupersedeOrphanMembers = %d, %v; want 2", n, err)
 	}
-	if out, err := s.StoreMemberResult(ctx, b.ID, "tok-b", []byte(`{}`), t0); err != nil || out != ResultDiscarded {
+	if out, err := s.StoreMemberResult(ctx, b.RunID, b.ID, "tok-b", []byte(`{}`), t0); err != nil || out != ResultDiscarded {
 		t.Errorf("StoreMemberResult of a superseded member = %v, %v; want discarded", out, err)
 	}
 	if got := memberOf(t, s, id, "a"); got.Result != nil || got.State != MemberSuperseded {
@@ -709,7 +720,7 @@ func TestMembersToSettle(t *testing.T) {
 	if _, err := s.MarkMemberDispatched(ctx, b.ID, "job-b", hash("tok-b"), t0.Add(time.Hour), t0); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := s.StoreMemberResult(ctx, a.ID, "tok-a", []byte(`{}`), t0); err != nil || out != ResultStored {
+	if out, err := s.StoreMemberResult(ctx, a.RunID, a.ID, "tok-a", []byte(`{}`), t0); err != nil || out != ResultStored {
 		t.Fatal(out, err)
 	}
 	if st, err := s.SettleMember(ctx, b.ID); err != nil || st != "" {
@@ -841,7 +852,7 @@ func TestPanelMemberResult(t *testing.T) {
 	if _, err := s.MarkMemberDispatched(ctx, b.ID, "job-b", hash("tok-b"), t0.Add(time.Hour), t0); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := s.StoreMemberResult(ctx, a.ID, "tok-a", []byte(`{"role":"a"}`), t0); err != nil || out != ResultStored {
+	if out, err := s.StoreMemberResult(ctx, a.RunID, a.ID, "tok-a", []byte(`{"role":"a"}`), t0); err != nil || out != ResultStored {
 		t.Fatal(out, err)
 	}
 	if ok, err := s.ReportMemberFailure(ctx, b.ID, Failure{Reason: "b broke"}, t0); err != nil || !ok {
@@ -967,7 +978,7 @@ func TestRecordPanelOffOnce(t *testing.T) {
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	if started, err := s.StartPanel(ctx, next, "base-sha", "start-sha", t0); err != nil || !started {
+	if started, err := s.StartPanel(ctx, next, testSplit, t0); err != nil || !started {
 		t.Fatalf("StartPanel of the later attempt = %v, %v", started, err)
 	}
 	if got := memberStates(t, s, id); !slices.Equal(got["a"], []MemberState{MemberQueued}) || !slices.Equal(got["b"], []MemberState{MemberQueued}) {
@@ -1123,7 +1134,7 @@ func TestMemberDispatchAndResultRaces(t *testing.T) {
 			wg.Add(1)
 			go func(j int) {
 				defer wg.Done()
-				outs[j], errs[j] = s.StoreMemberResult(ctx, a.ID, "tok-a", []byte(`{}`), t0)
+				outs[j], errs[j] = s.StoreMemberResult(ctx, a.RunID, a.ID, "tok-a", []byte(`{}`), t0)
 			}(j)
 		}
 		wg.Wait()
@@ -1152,7 +1163,7 @@ func apiPanelRun(t *testing.T, s *Store, clientID int64, subject string) string 
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	if started, err := s.StartPanel(ctx, id, "base-sha", "start-sha", t0); err != nil || !started {
+	if started, err := s.StartPanel(ctx, id, testSplit, t0); err != nil || !started {
 		t.Fatalf("StartPanel = %v, %v", started, err)
 	}
 	return id
@@ -1359,7 +1370,7 @@ func TestStartPanelOncePerReview(t *testing.T) {
 	if got, err := s.ClaimQueued(ctx, 10, t0); err != nil || len(got) != 1 {
 		t.Fatal(runIDs(got), err)
 	}
-	if started, err := s.StartPanel(ctx, id, "base-sha", "start-sha", t0.Add(time.Minute)); err != nil || started {
+	if started, err := s.StartPanel(ctx, id, testSplit, t0.Add(time.Minute)); err != nil || started {
 		t.Errorf("StartPanel of a released run = %v, %v; want not started", started, err)
 	}
 	if r := getRun(t, s, id); r.State != Running || r.SkipReason != "" || !r.DispatchedAt.Equal(t0) {
@@ -1382,7 +1393,7 @@ func TestReleasePanelByLaterAttempt(t *testing.T) {
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	if started, err := s.StartPanel(ctx, next, "base-sha", "start-sha", t0); err != nil || !started {
+	if started, err := s.StartPanel(ctx, next, testSplit, t0); err != nil || !started {
 		t.Fatalf("StartPanel = %v, %v", started, err)
 	}
 	byRoot, err := s.PanelMembers(ctx, root)
@@ -1451,4 +1462,20 @@ func TestMembersToLog(t *testing.T) {
 			t.Errorf("a member with no Job is listed")
 		}
 	}
+}
+
+// testSplit is the split a test panel records.
+var testSplit = PanelSplit{BaseSHA: "base-sha", StartSHA: "start-sha", Inputs: RunInputs{
+	Model: "gpt-a", MaxTurns: 40, Sources: map[string]string{"security": "library"},
+	Versions: map[string]int{"security": 3}, Hashes: map[string]string{"security": "h1"},
+}}
+
+// rootOf is the review's first run of member id.
+func rootOf(t *testing.T, s *Store, id string) string {
+	t.Helper()
+	var root string
+	if err := s.pool.QueryRow(ctx, `SELECT run_id::text FROM panel_members WHERE id = $1::uuid`, id).Scan(&root); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }

@@ -1060,7 +1060,7 @@ func TestStartButtonRefusesPanel(t *testing.T) {
 			if _, err := e.db.Exec(ctx, `UPDATE runs SET state = 'running', skip_reason = '' WHERE id = $1::uuid`, id); err != nil {
 				t.Fatal(err)
 			}
-			if started, err := e.st.StartPanel(ctx, id, "base-sha", "start-sha", time.Now()); err != nil || !started {
+			if started, err := e.st.StartPanel(ctx, id, store.PanelSplit{BaseSHA: "base-sha", StartSHA: "start-sha"}, time.Now()); err != nil || !started {
 				t.Fatalf("StartPanel = %v, %v", started, err)
 			}
 		}

@@ -22,6 +22,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/kube"
+	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -182,7 +183,7 @@ func TestE2EPanelMembersStart(t *testing.T) {
 		}
 		// The Secret's token is the member's own.
 		token := string(sec.Data["result-token"])
-		if out, err := env.Store.StoreMemberResult(env.ctx, m.ID, token, clean(t, head), env.Now()); err != nil || out != store.ResultStored {
+		if out, err := env.Store.StoreMemberResult(env.ctx, m.RunID, m.ID, token, clean(t, head), env.Now()); err != nil || out != store.ResultStored {
 			t.Errorf("member %s's result = %v, %v; want stored", role, out, err)
 		}
 	}
@@ -369,7 +370,7 @@ func TestE2EPanelMaxRunning(t *testing.T) {
 		}
 	}
 	token := string(env.Secret(started.ID).Data["result-token"])
-	if out, err := env.Store.StoreMemberResult(env.ctx, started.ID, token, clean(t, head), env.Now()); err != nil || out != store.ResultStored {
+	if out, err := env.Store.StoreMemberResult(env.ctx, started.RunID, started.ID, token, clean(t, head), env.Now()); err != nil || out != store.ResultStored {
 		t.Fatalf("StoreMemberResult = %v, %v", out, err)
 	}
 	dispatch(t, env)
@@ -795,5 +796,96 @@ func TestE2EPanelMemberSplitBase(t *testing.T) {
 		if got := memberOfRole(t, env, id, role); got.State != store.MemberReported || got.Result == nil || got.FailureReason != "" {
 			t.Errorf("member %s = %s %q; want reported with its result", role, got.State, got.FailureReason)
 		}
+	}
+}
+
+// unusable is how the callback starts the failure of a result it can't use.
+const unusable = "pergent sent a result pergent.sh couldn't use: "
+
+// skillsResult is a clean completed result of head by the named skills.
+func skillsResult(t *testing.T, head string, names ...string) []byte {
+	t.Helper()
+	var skills []result.Skill
+	for _, n := range names {
+		skills = append(skills, result.Skill{Name: n, Verdict: "no_blocking_issues", Files: result.Files{Reviewed: []string{"a.go"}}})
+	}
+	return resultFor(t, head, skills...)
+}
+
+// A whole review of 2 skills is split: the run records its skills as a
+// review does, and each member's result is checked against them. A member
+// with a skill more, or one less, fails; the right set is accepted. A
+// member's result on another review's route is refused.
+func TestE2EPanelMemberSkills(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
+	head := sha('a')
+	// Both reviews are split by the same dispatch pass.
+	servePublish(env, 2, head)
+	two := env.Enqueue(2, head)
+	one := splitPanel(t, env, 1, head)
+	for _, id := range []string{one, two} {
+		if r := env.Run(id); r.State != store.Waiting || r.SkipReason != store.WaitPanel {
+			t.Fatalf("run %s = %s/%q; want a panel", id, r.State, r.SkipReason)
+		}
+		if r := env.Run(id); r.SkillSources["security"] != "library" || r.SkillSources["style"] != "library" || len(r.SkillSources) != 2 ||
+			len(r.SkillHashes) != 2 || r.SkillSubset != nil {
+			t.Fatalf("run %s skills = %v %v %v; want the 2 skills recorded at the split", id, r.SkillSources, r.SkillHashes, r.SkillSubset)
+		}
+	}
+	dispatch(t, env)
+	a1, b1 := memberOfRole(t, env, one, "a"), memberOfRole(t, env, one, "b")
+	a2, b2 := memberOfRole(t, env, two, "a"), memberOfRole(t, env, two, "b")
+
+	if code := e.postMember(t, one, a1, skillsResult(t, head, "security", "style", "extra")); code != http.StatusBadRequest {
+		t.Errorf("a skill more: status %d; want 400", code)
+	}
+	wantMemberFailure(t, env, one, a1, unusable+"the result has skills the Job was not started with", "delivery")
+	if code := e.postMember(t, two, a2, skillsResult(t, head, "security")); code != http.StatusBadRequest {
+		t.Errorf("a skill less: status %d; want 400", code)
+	}
+	wantMemberFailure(t, env, two, a2, unusable+`the result lacks the skills the Job was started with ("style")`, "delivery")
+	if code := e.postMember(t, one, b1, skillsResult(t, head, "style", "security")); code != http.StatusOK {
+		t.Errorf("the right skills: status %d; want 200", code)
+	}
+	if got := memberOfRole(t, env, one, "b"); got.State != store.MemberReported || got.Result == nil || got.FailureReason != "" {
+		t.Errorf("member B = %s %q; want reported with its result", got.State, got.FailureReason)
+	}
+	// B of review 2 with its own token, on review 1's route.
+	if code := e.postMember(t, one, b2, skillsResult(t, head, "security", "style")); code != http.StatusUnauthorized {
+		t.Errorf("another review's route: status %d; want 401", code)
+	}
+	if got := memberOfRole(t, env, two, "b"); got.State != store.MemberRunning || got.Result != nil {
+		t.Errorf("member B of review 2 = %s; want still running with no result", got.State)
+	}
+	for _, id := range []string{one, two} {
+		wantWaiting(t, env, id)
+	}
+}
+
+// The sweep leaves a live panel alone: its run waits, so its members keep
+// their Jobs and no status is set.
+func TestE2EPanelCleanupLeavesLivePanel(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id, a, b := startMembers(t, e, head)
+	cleanup(t, env)
+	cleanup(t, env)
+	for _, m := range []store.PanelMember{a, b} {
+		if env.Job(m.ID) == nil {
+			t.Errorf("member %s's Job was deleted", m.Role)
+		}
+		if got := memberOfRole(t, env, id, m.Role); got.State != store.MemberRunning {
+			t.Errorf("member %s = %s; want running", m.Role, got.State)
+		}
+	}
+	if left, err := env.Store.MembersToCleanUp(env.ctx); err != nil || len(left) != 0 {
+		t.Errorf("members to clean up = %d, %v; want none", len(left), err)
+	}
+	wantWaiting(t, env, id)
+	if got := statusesOf(t, env, head); len(got) != 1 || got[0] != "running: "+runningDescription {
+		t.Errorf("statuses = %v; want the running status alone", got)
 	}
 }
