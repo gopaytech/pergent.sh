@@ -350,7 +350,7 @@ func ModelRows(body []byte, run store.Run) ([]store.ModelUsage, error)
 **Files:**
 - Modify: `internal/kube/job.go:86-135` (`JobParams`, `Secrets`), `:186-200` (labels), `:269-464` (`BuildJob`), `:525-540` (`BuildSecret`)
 - Create: `internal/kube/panel.go` (the `panel-inputs` init container), `internal/kube/testdata/review-job.golden.json`
-- Modify: `cmd/pergent-sh/graph.go` (a `get-panel` subcommand sharing `get-graph`'s fetch code: size cap 10 MiB, file mode 0600, always exit 0, a 404 or a failure after 3 tries writes no file)
+- Modify: `cmd/pergent-sh/graph.go` (a `get-panel` subcommand sharing `get-graph`'s fetch code: size cap 10 MiB, file mode 0644 (the pergent container runs as another user; owner ruling), always exit 0, a 404 or a failure after 3 tries writes no file)
 - Test: `internal/kube/job_test.go`, `internal/kube/panel_test.go`, `cmd/pergent-sh/graph_test.go`
 
 **Interfaces:**
