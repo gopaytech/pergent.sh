@@ -38,7 +38,7 @@ func TestAPIReviewRules(t *testing.T) {
 		t.Errorf("PERGENT_NO_BUILT_IN_RULES = %q, %v", v, ok)
 	}
 	r := env.Run(id)
-	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, false) {
+	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, false, testImage) {
 		t.Errorf("rules_hash = %v", r.RulesHash)
 	}
 	noGitLab(t, env)

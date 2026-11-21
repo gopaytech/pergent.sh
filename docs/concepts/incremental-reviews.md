@@ -10,7 +10,7 @@ A review is incremental when all of these hold. Otherwise it is a full review, a
 - The forge lists the files changed between the two heads.
 - That review was made by pergent v0.5.2 or later.
 - The model is unchanged: a different provider or model makes the next review a full one ([Models](models.md#a-change-of-model)).
-- The [path rules](rules.md) are unchanged: a new rule list or built-in switch reviews every skill with rules on in full (`rules changed`). A skill with `rules: false` still carries.
+- The [path rules](rules.md) are unchanged: a new rule list, built-in switch or `jobs.image` reviews every skill with rules on in full (`rules changed`). A skill with `rules: false` still carries.
 
 A file is carried over, per skill, only when that skill reviewed it last time, the push didn't change it, and it has no open blocking finding. A file whose review failed, a new file, and every file of a new or edited skill are reviewed again. Open blocking findings are always checked again.
 
@@ -21,4 +21,4 @@ A file is carried over, per skill, only when that skill reviewed it last time, t
 - An edit to one file can break another file that didn't change. That goes unnoticed until a full review (`@<bot> review`). The model can read the other file, but nothing sends it there.
 - Teams that amend or rebase get no speed-up yet: those pushes are full reviews.
 
-**Turning it off.** The switch is **Incremental reviews** in a repository's Settings, the default under **Admin → Settings**, or `repositories[].incremental_reviews` in the config ([Config reference](../reference/configuration.md)). With it off, every push is a full review.
+**Turning it off.** The switch is **Incremental reviews** in a repository's Settings, the default on the admin **Settings** page, or `repositories[].incremental_reviews` in the config ([Config reference](../reference/configuration.md)). With it off, every push is a full review.

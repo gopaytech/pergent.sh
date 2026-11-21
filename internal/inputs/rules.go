@@ -50,11 +50,12 @@ func RuleList(repo []rule.Entry, sets []NamedRuleSet) ([]rule.Entry, error) {
 	return list, nil
 }
 
-// RulesHash is the hash a run records for its rule list and built-in switch:
-// a new hash makes the next push review every skill with rules in full.
-// (The Jobs image joins it once built-in texts ship inside the image.)
-func RulesHash(list []rule.Entry, builtIn bool) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("rules %s built-in %t", rule.Hash(list), builtIn)))
+// RulesHash is the hash a run records for its rule list, built-in switch and
+// Jobs image: a new hash makes the next push review every skill with rules in
+// full. The image is in it because the built-in texts ship inside the image,
+// so a new image can change them, and an older image reads no rules at all.
+func RulesHash(list []rule.Entry, builtIn bool, image string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("rules %s built-in %t image %q", rule.Hash(list), builtIn, image)))
 	return hex.EncodeToString(sum[:])
 }
 

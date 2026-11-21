@@ -40,6 +40,7 @@ import type {
   UserView,
   RuleSet,
   RuleSetDetail,
+  BuiltInRule,
 } from "../api";
 
 // An SSO account an admin made an admin.
@@ -1126,6 +1127,13 @@ export const ruleSetGoAPI: RuleSetDetail = {
   content: 'rules:\n  - path: "internal/api/**/*.go"\n    rule: Every handler must defer tx.Rollback().\n  - path: "**/*.pb.go"\n    off: true\n',
   notes: [],
 };
+
+// Two built-in rules as /api/built-in-rules sends them: one row per rule, a
+// {a,b} glob already split into its globs.
+export const builtInRules: BuiltInRule[] = [
+  { name: "github_workflows", paths: [".github/workflows/**/*.yaml", ".github/workflows/**/*.yml"], rule: "Pin every action to a commit." },
+  { name: "ts_js", paths: ["**/*.ts", "**/*.js"], rule: "Check for floating promises." },
+];
 
 // Chain B of acme/payments while nothing is set anywhere: no entries.
 export const panelRepoInherit: ChainView = {

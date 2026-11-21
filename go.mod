@@ -4,7 +4,7 @@ go 1.24.8
 
 require (
 	github.com/coreos/go-oidc/v3 v3.17.0
-	github.com/gopaytech/pergent v0.10.1-0.20261121085840-a111eee5aecd
+	github.com/gopaytech/pergent v0.10.1-0.20261121144850-8d9986138537
 	github.com/jackc/pgx/v5 v5.7.6
 	golang.org/x/crypto v0.37.0
 	golang.org/x/oauth2 v0.28.0

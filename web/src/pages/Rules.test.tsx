@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { ruleSetGoAPI, ruleSets, ssoAdmin, viewer } from "../test/fixtures";
+import { builtInRules, ruleSetGoAPI, ruleSets, ssoAdmin, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -75,12 +75,23 @@ describe("Rules", () => {
     fakeApi({
       "GET /api/me": { body: viewer },
       "GET /api/rule-sets": { body: ruleSets },
-      "GET /api/built-in-rules": { body: [{ name: "go", path: "*.go", off: false, rule: "Check typed nil." }] },
+      "GET /api/built-in-rules": { body: builtInRules },
     });
     renderApp("/rules");
     await userEvent.click(await screen.findByRole("tab", { name: "Built-in" }));
-    expect(await screen.findByText("Check typed nil.")).toBeInTheDocument();
-    expect(screen.getByText("*.go")).toBeInTheDocument();
+    // One row per rule, with all its globs and its text once.
+    const rows = (await screen.findByRole("region", { name: "Built-in rules" })).querySelectorAll("[data-built-in]");
+    expect([...rows].map((r) => r.getAttribute("data-built-in"))).toEqual(["github_workflows", "ts_js"]);
+    const ts = rows[1] as HTMLElement;
+    expect(within(ts).getByText("ts_js")).toBeInTheDocument();
+    expect(within(ts).getByText("**/*.ts")).toBeInTheDocument();
+    expect(within(ts).getByText("**/*.js")).toBeInTheDocument();
+    expect(within(ts).getAllByText("Check for floating promises.")).toHaveLength(1);
+    expect(screen.getAllByText("Check for floating promises.")).toHaveLength(1);
+    expect(within(rows[0] as HTMLElement).getByText(".github/workflows/**/*.yml")).toBeInTheDocument();
+    // The texts are adapted from open-code-review, and keep its license.
+    expect(screen.getByRole("link", { name: "alibaba/open-code-review" })).toHaveAttribute("href", "https://github.com/alibaba/open-code-review");
+    expect(screen.getByText(/Apache-2\.0/)).toBeInTheDocument();
   });
 });
 
