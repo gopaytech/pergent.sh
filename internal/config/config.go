@@ -25,6 +25,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/ci"
 	"github.com/gopaytech/pergent.sh/internal/links"
+	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -1403,4 +1404,42 @@ func ValidTokenQuota(q int64) bool {
 // empty (follow visibility) or one of the three values.
 func validInstanceTrust(m string) bool {
 	return m == "" || m == TrustFollowVisibility || m == TrustOn || m == TrustOff
+}
+
+// PanelMinVersion is the first pergent release with `agent --panel`, as
+// "vX.Y.Z". "" (no release has it yet) refuses every image. The owner sets
+// it at release time, with defaultImage.
+var PanelMinVersion = ""
+
+// ImageTag is the tag of an image reference, or "" when it has none. A digest
+// after the tag is ignored; a colon before the last slash is a registry port,
+// not a tag.
+func ImageTag(image string) string {
+	image, _, _ = strings.Cut(image, "@")
+	i := strings.LastIndex(image, ":")
+	if i < 0 || strings.Contains(image[i:], "/") {
+		return ""
+	}
+	return image[i+1:]
+}
+
+// PanelImage says whether image runs a pergent with --panel: its tag is a
+// version (result.VersionAtLeast rules) at or above PanelMinVersion. reason is
+// the refusal's text, "" when it passes.
+func PanelImage(image string) (ok bool, reason string) {
+	if PanelMinVersion == "" {
+		return false, "no review image supports a review panel yet"
+	}
+	tag := ImageTag(image)
+	if tag == "" {
+		return false, fmt.Sprintf("image %q has no tag, so its pergent version is not known; a review panel needs %s or later", image, PanelMinVersion)
+	}
+	atLeast, known := result.VersionAtLeast(tag, PanelMinVersion)
+	if !known {
+		return false, fmt.Sprintf("image tag %q is not a version (vX.Y.Z); a review panel needs %s or later", tag, PanelMinVersion)
+	}
+	if !atLeast {
+		return false, fmt.Sprintf("image tag %q is older than %s, the first pergent with a review panel", tag, PanelMinVersion)
+	}
+	return true, ""
 }

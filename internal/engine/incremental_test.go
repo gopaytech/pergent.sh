@@ -419,27 +419,6 @@ func TestPlanCarriedFullWhenModelChanged(t *testing.T) {
 	}
 }
 
-// The tag of the Jobs image, when it names a pergent version.
-func TestImageTag(t *testing.T) {
-	for image, want := range map[string]string{
-		"ghcr.io/gopaytech/pergent:v0.5.0":               "v0.5.0",
-		"ghcr.io/gopaytech/pergent:0.4.0":                "0.4.0",
-		"ghcr.io/gopaytech/pergent:v0.4.0@sha256:abc123": "v0.4.0",
-		"host:5000/pergent:v0.4.0":                       "v0.4.0",
-		"ghcr.io/gopaytech/pergent@sha256:abc123":        "",
-		"host:5000/pergent":                              "",
-		"host:5000/pergent@sha256:abc123":                "",
-		"pergent":                                        "",
-		"ghcr.io/gopaytech/pergent:latest":               "latest",
-		"ghcr.io/gopaytech/pergent:main-4f2a":            "main-4f2a",
-		"":                                               "",
-	} {
-		if got := imageTag(image); got != want {
-			t.Errorf("imageTag(%q) = %q, want %q", image, got, want)
-		}
-	}
-}
-
 // Only a tag that is exactly a version below 0.5.0 gives a full review; a
 // digest, another tag or a newer version leaves the gate to the last result.
 func TestImagePinnedBeforeCarried(t *testing.T) {

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
-import { api, isStatus, paths, safeHref, type InputsView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
+import { api, isStatus, paths, safeHref, type InputsView, type PanelView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
 import { useWrite } from "../layout/write";
 import { QuotaLine } from "../quota";
 import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, ago, platformName, skillOrigin } from "../ui";
@@ -54,6 +54,7 @@ export default function RepositoryDetail() {
         {platformName(repo.platform)} · {repo.instance} ·{" "}
         {repo.source === "config" ? "managed by config" : repo.paused ? "paused in the dashboard" : "switched on in the dashboard"}
       </div>
+      <div className="sub spaced">{panelText(view.panel)}</div>
       {repo.paused && (
         <div className="alert" role="note" aria-label="Paused">
           <span className="prose">
@@ -109,6 +110,9 @@ export default function RepositoryDetail() {
     </div>
   );
 }
+
+// panelText is the panel line: on with the first entry of each chain, or off.
+const panelText = (p: PanelView) => (p.on ? `Panel: on (A: ${p.a ?? "none"}, B: ${p.b ?? "none"})` : "Panel: off");
 
 // CodeGraph is the repository's Code graph switch and the stored graph's
 // status. Off is the default and costs nothing; turning it off deletes the

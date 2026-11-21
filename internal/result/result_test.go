@@ -877,6 +877,45 @@ func TestSupportsCarried(t *testing.T) {
 	}
 }
 
+func TestVersionAtLeast(t *testing.T) {
+	for _, tc := range []struct {
+		version, min   string
+		atLeast, known bool
+	}{
+		{"v0.12.0", "v0.12.0", true, true},
+		{"0.11.9", "v0.12.0", false, true},
+		{"v1.0.0", "v0.12.0", true, true},
+		{"v0.12.1", "0.12.0", true, true},
+		{"main", "v0.12.0", false, false},
+		{"0.12", "v0.12.0", false, false},
+		{"0.12.0-rc1", "v0.12.0", false, false},
+		{"", "v0.12.0", false, false},
+		{"v0.12.0", "", false, false},
+	} {
+		atLeast, known := VersionAtLeast(tc.version, tc.min)
+		if atLeast != tc.atLeast || known != tc.known {
+			t.Errorf("VersionAtLeast(%q, %q) = %v, %v; want %v, %v", tc.version, tc.min, atLeast, known, tc.atLeast, tc.known)
+		}
+	}
+}
+
+// CarriedSupport keeps its table: a version is known only as major.minor.patch.
+func TestCarriedSupportUnchanged(t *testing.T) {
+	for _, tc := range []struct {
+		version         string
+		supports, known bool
+	}{
+		{"0.5.0", true, true}, {"v0.5.0", true, true}, {"0.10.0", true, true}, {"1.0.0", true, true}, {"0.4.9", false, true},
+		{"0.5.0-rc1", false, false}, {"v1.2.3-beta.1", false, false}, {"0.5.0+build", false, false}, {"dev", false, false},
+		{"", false, false}, {"0.5", false, false}, {"0.5.x", false, false}, {"1.2.3.4", false, false}, {"0.-5.0", false, false},
+	} {
+		supports, known := CarriedSupport(tc.version)
+		if supports != tc.supports || known != tc.known {
+			t.Errorf("CarriedSupport(%q) = %v, %v; want %v, %v", tc.version, supports, known, tc.supports, tc.known)
+		}
+	}
+}
+
 // A model that reads a carried file can report its finding again. The merge
 // keeps one of them, or the result would grow with every push.
 func TestMergeIncrementalSkipsRepeatedFinding(t *testing.T) {

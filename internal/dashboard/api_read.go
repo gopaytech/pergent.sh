@@ -1000,6 +1000,12 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if project, ok := strings.CutSuffix(rest, "/panel-chain"); ok {
+		if repo, ok := find(project); ok {
+			d.repositoryPanelChain(w, r, se, repo)
+			return
+		}
+	}
 	if project, ok := strings.CutSuffix(rest, "/ci-job-names"); ok {
 		if repo, ok := find(project); ok {
 			d.ciJobNames(w, r, repo)
@@ -1050,12 +1056,12 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
-	model, err := d.chainModelLabel(ctx, repo)
+	model, panel, err := d.repoChainSummary(ctx, repo)
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
-		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model,
+		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model, Panel: panel,
 		Quota: d.quotaView(ctx, se, repo), Graph: gv}, nil
 }
 

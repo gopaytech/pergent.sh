@@ -13,6 +13,7 @@ import {
   entryTeamQwen,
   librarySkills,
   maintainer,
+  panelRepoInherit,
   myTeams,
   repoDetail,
   repoGadgets,
@@ -40,6 +41,8 @@ const base = {
   "GET /api/repositories/main/acme/widgets/teams": { body: repoTeams },
   "GET /api/repositories/main/acme/payments/chain": { body: chainRepoInherit },
   "GET /api/repositories/main/acme/widgets/chain": { body: chainRepoInherit },
+  "GET /api/repositories/main/acme/payments/panel-chain": { body: panelRepoInherit },
+  "GET /api/repositories/main/acme/widgets/panel-chain": { body: panelRepoInherit },
 };
 
 const teamsSection = () => screen.findByRole("region", { name: "Teams" });
