@@ -217,7 +217,11 @@ export type RunDetailView = {
     reviewed: string[];
     skipped: { path: string; rule: string }[];
     notReviewed: { path: string; cause: string }[];
+    // rules is the path rule each reviewed file was checked with.
+    rules: FileRule[];
   };
+  // rulesUsed: the image that reviewed uses path rules (an older one does not).
+  rulesUsed: boolean;
   skills: SkillView[];
   // latestDecided: this is the run dismiss and restore act on (the change's
   // newest published or decided review), the only one that shows dismissals.
@@ -354,6 +358,10 @@ export type RepoSettings = {
   // monthlyTokenQuota is the tokens (in plus out) the repository's reviews may
   // use in a UTC month; null is none of its own. Only an admin is sent it.
   monthlyTokenQuota?: SettingView<number | null>;
+  // ruleSets is null for the default list, otherwise the library rule sets
+  // in match order. builtInRules is the Built-in rules switch.
+  ruleSets: SettingView<string[] | null>;
+  builtInRules: SettingView<boolean>;
 };
 
 export type RepositoryDetailView = {
@@ -638,6 +646,8 @@ export type SettingsUpdate = Partial<{
   trustedAuthors: TrustedAuthor[] | null;
   // Admins only, like the two above: tokens per UTC month, or null for none.
   monthlyTokenQuota: number | null;
+  ruleSets: string[] | null;
+  builtInRules: boolean | null;
 }>;
 
 // InputSkill is one skill of the set a review would run. source is
@@ -663,7 +673,41 @@ export type InputsView = {
   skills: InputSkill[];
   detected: DetectedSkill[];
   instructions: string;
+  // rules is the path rule list a review of the default branch would get.
+  rules: RulesView;
 };
+
+// FileRule is the rule a reviewed file was checked with: "repo:<glob>",
+// "dashboard:<set>:<glob>" or "built-in:<name>".
+export type FileRule = { path: string; rule: string };
+
+// RuleEntry is one entry of a rule list; source is "repo" or
+// "dashboard:<set>", rule is "" for an off entry.
+export type RuleEntry = { source: string; path: string; off: boolean; rule: string };
+
+// RulesView is a review's rule list; problem is why a review would fail on
+// its rules (entries is then empty).
+export type RulesView = { builtIn: boolean; entries: RuleEntry[]; problem: string };
+
+// RuleSet is one rule set of the library; source "config" is the config
+// file's, read-only here (version 0).
+export type RuleSet = {
+  name: string;
+  version: number;
+  updatedAt: string;
+  entries: number;
+  source: "dashboard" | "config";
+  inDefaults: boolean;
+};
+
+// RuleSetDetail is a rule set with its text and the editor's notes.
+export type RuleSetDetail = RuleSet & { content: string; notes: string[] };
+
+// RuleSetWritten answers a save: the new version and the notes on the text.
+export type RuleSetWritten = { version: number; notes: string[] };
+
+// BuiltInRule is one of pergent's built-in path rules.
+export type BuiltInRule = { name: string; path: string; off: boolean; rule: string };
 
 // skillBudget is what a review takes of library skill text, in bytes
 // (inputs.ConfigMapLimit): saving a list over it is refused.
@@ -793,9 +837,13 @@ export type DefaultValues = {
   // repository, in a UTC day: 1 to 1000.
   rerunLimitPerMR: number;
   rerunLimitPerRepo: number;
+  // Whether a repository that sets none gets pergent's built-in path rules.
+  builtInRules: boolean;
 };
 
 export type DefaultsView = DefaultValues & {
+  // ruleSets is the default rule-set list, in match order. Empty means none.
+  ruleSets: string[];
   // skills is the default list: the library skills a repository reviews when
   // its own skills setting is null. Empty means none.
   skills: string[];
@@ -1473,6 +1521,11 @@ export const paths = {
   apiSkillVersion: (name: string, version: number) => `/api/skills/${seg(name)}/versions/${seg(String(version))}`,
   apiAdminSkill: (name: string) => `/api/admin/skills/${seg(name)}`,
   apiAdminSkillCopy: (name: string) => `/api/admin/skills/${seg(name)}/copy`,
+  // The rule library: the client page is under /rules/view/ for the same
+  // reason as a skill's.
+  ruleSet: (name: string) => `/rules/view/${seg(name)}`,
+  apiRuleSet: (name: string) => `/api/rule-sets/${seg(name)}`,
+  apiAdminRuleSet: (name: string) => `/api/admin/rule-sets/${seg(name)}`,
   // The page that checks one installed skill's source for updates.
   skillUpdates: (name: string) => `/skills/updates${query([["skill", name]])}`,
   apiSkillFetches: "/api/admin/skill-fetches",

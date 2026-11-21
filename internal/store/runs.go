@@ -133,6 +133,10 @@ type Run struct {
 	// recorded at dispatch; nil before.
 	Incremental bool
 	SkillHashes map[string]string
+	// RulesHash is the hash of the path rule list and built-in switch the run
+	// was given (SetRunRulesHash), nil for a run from before rules or one
+	// that never started.
+	RulesHash *string
 	// Quiet is whether the run was started quiet, recorded when it started
 	// (SetRunQuiet). False for a run from before the column, or one that
 	// never started: the column is NULL there.
@@ -280,7 +284,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen, quota_checked, kind, api_client_id,
 	ci_checked, ci_deadline, ci_jobs, attempt_of::text, COALESCE(chain_position, 0), COALESCE(chain_length, 0),
 	COALESCE(model_source, ''), model_team_id, COALESCE(model_entry_id, ''), COALESCE(model_entry_name, ''),
-	COALESCE(status_ref, 0), fallback_class`
+	COALESCE(status_ref, 0), fallback_class, rules_hash`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -299,7 +303,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider,
 		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen, &r.QuotaChecked, &r.Kind, &r.APIClientID,
 		&r.CIChecked, &r.CIDeadline, &ciJobs, &r.AttemptOf, &r.ChainPosition, &r.ChainLength,
-		&r.ModelSource, &r.ModelTeamID, &r.ModelEntryID, &r.ModelEntryName, &r.StatusRef, &r.FallbackClass)
+		&r.ModelSource, &r.ModelTeamID, &r.ModelEntryID, &r.ModelEntryName, &r.StatusRef, &r.FallbackClass, &r.RulesHash)
 	if err != nil {
 		return Run{}, err
 	}
@@ -1220,6 +1224,14 @@ func (s *Store) SetRunQuiet(ctx context.Context, runID string, quiet bool) error
 func (s *Store) SetRunModel(ctx context.Context, runID, provider, model string) error {
 	return s.mustUpdate(ctx, runID, `UPDATE runs SET provider = $2, model = $3
 		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, cutText(provider), cutText(model))
+}
+
+// SetRunRulesHash records the hash of the rule list a run being dispatched
+// (queued or running) is given, before its Job starts: the next push compares
+// it with its own to decide what it may carry. Any other run is an error.
+func (s *Store) SetRunRulesHash(ctx context.Context, runID, hash string) error {
+	return s.mustUpdate(ctx, runID, `UPDATE runs SET rules_hash = $2
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, hash)
 }
 
 // SetRunLayout records the comment layout of a run being dispatched (queued

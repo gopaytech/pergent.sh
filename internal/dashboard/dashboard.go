@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopaytech/pergent/rule"
+
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
@@ -213,10 +215,13 @@ type Dashboard struct {
 	now             func() time.Time
 	// idp is the client for the identity provider (idpClient), oidc its last
 	// discovery document.
-	idp     *http.Client
-	oidc    *oidcCache
-	inputs  *inputsCache
-	catalog *catalogCache
+	idp    *http.Client
+	oidc   *oidcCache
+	inputs *inputsCache
+	// builtInRules is pergent's built-in path rule list, rule.Builtin; tests
+	// replace it.
+	builtInRules func() []rule.Entry
+	catalog      *catalogCache
 	// linkInfo keeps what the list of repositories to link read about each.
 	linkInfo linkInfoCache
 	// adminRoutes are the patterns Handler registered through adminRoute: a
@@ -258,8 +263,9 @@ func New(o Options) (*Dashboard, error) {
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		idp: idpClient(o.HTTPClient), oidc: &oidcCache{},
-		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
-		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}
+		inputs:       &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
+		builtInRules: rule.Builtin,
+		catalog:      &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}
 	auth.settings = d.signInSettings
 	auth.idpClient = func() *http.Client { return d.idp }
 	return d, nil
@@ -306,6 +312,7 @@ func (d *Dashboard) Handler() http.Handler {
 	d.operatorRoutes(mux)
 	d.readRoutes(mux)
 	d.skillWriteRoutes(mux)
+	d.ruleSetRoutes(mux)
 	d.skillFetchRoutes(mux)
 	d.apiClientRoutes(mux)
 	d.apiClientReviewRoutes(mux)

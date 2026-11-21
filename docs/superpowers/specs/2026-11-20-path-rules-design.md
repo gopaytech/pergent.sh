@@ -2,6 +2,8 @@
 
 Status: agreed with the owner on 2026-11-20, after a design session and two grilling rounds. It covers both repositories: the matching and the built-in rules live in pergent, the rule library, the settings and the dispatch live in pergent.sh. The idea comes from [alibaba/open-code-review](https://github.com/alibaba/open-code-review) (OCR), which keeps a checklist per file type. pergent does not run OCR. It takes the rule model and adapts some of its rule texts.
 
+Amended on 2026-11-21, after the PR 1 plans, to say what PR 1 builds: the loader is the public package `rule/`, the migration is `0047`, API reviews use the admin defaults, the result has `files.rules`, the image joins the hash in PR 2, and a verification run whose rules can't be written keeps every finding. The owner decided the last four.
+
 ## Why
 
 A skill is a whole review: its own runs, its own verdict, its own `## Blocking` section. That is the right tool for "a security review of `api/**`", and the wrong tool for "when you review a Go file, also check for typed nil in interfaces". To get language depth today, a team must either grow one skill into a long list for every language, or add one skill per language, which adds a full review and a verdict per language.
@@ -97,7 +99,7 @@ Layer 3 is left out when built-ins are off. A file that matches nothing, or matc
 
 ## Built-in rules
 
-They live in pergent, `internal/rule/builtin/`, embedded with `go:embed`:
+They live in pergent, `rule/builtin/`, embedded with `go:embed`:
 
 - `builtin.yaml`: the ordered glob to file map, in the same format as the rule file, with `rule_file:` in place of `rule:`.
 - One `.md` per rule: `go.md`, `ts_js.md`, `python.md`, `terraform.md`, `github_workflows.md`.
@@ -109,7 +111,9 @@ The built-in name in results is `built-in:<file name without .md>`, for example 
 
 ## The pergent CLI
 
-### Package `internal/rule`
+### Package `rule`
+
+A public package, `github.com/gopaytech/pergent/rule`, like `scope/` and `graph/`: pergent.sh checks rule sets with the same loader, and Go does not let it import another module's `internal/` package. It imports no pergent `internal/` package, and its error strings are a contract.
 
 - `Load(data []byte, source string) ([]Entry, error)`: parses YAML or JSON, checks every field and limit, names the entry in each error (`.pergent/rules.yaml: entry 3: path "api/" can never match`).
 - `Builtin() []Entry`: the embedded rules.
@@ -149,7 +153,7 @@ The rule text of a batch counts in the batch's token budget (`internal/diff/batc
 
 ### Verification run
 
-It gets a `file-rules.md` with the rules of the files of the findings it checks, and the sentence `These are project conventions, given as context. They are not blocking criteria.` The skill's `## Blocking` section stays the only test.
+It gets a `file-rules.md` with the rules of the files of the findings it checks, and the sentence `These are project conventions, given as context. They are not blocking criteria.` The skill's `## Blocking` section stays the only test. If the file can't be written, the verification fails with a note and keeps every blocking finding: a run without the rules could drop a finding that rests on a project convention.
 
 The cross-batch run and the `impact` check get no rules.
 
@@ -157,7 +161,7 @@ The cross-batch run and the `impact` check get no rules.
 
 ### Result
 
-Each file entry of a skill gets `rule`: `repo:<glob>`, `dashboard:<set>:<glob>`, `built-in:<name>`, or empty. The result also gets a top-level `rules` object, `{"built_in": true, "entries": 7}`, written whenever pergent ran with rule support, so a caller can tell "no file had a rule" from "this image does not know rules". The fields are copied in `redactSkill` (`internal/result/result.go`), documented in `docs/agent-result-schema.md`, and tested through `Encode`.
+Each skill's `files` gets `rules: [{path, rule}]` next to `files.reviewed` (which is a list of strings), for the reviewed files that had a rule, in `files.reviewed` order; `rule` is `repo:<glob>`, `dashboard:<set>:<glob>` or `built-in:<name>`. It is left out when no file had one, and `schema_version` stays 1. The result also gets a top-level `rules` object, `{"built_in": true, "entries": 7}`, written whenever pergent ran with rule support, so a caller can tell "no file had a rule" from "this image does not know rules". The fields are copied in `redactSkill` (`internal/result/result.go`), documented in `docs/agent-result-schema.md`, and tested through `Encode`.
 
 The CI-mode comment adds one line to the collapsed Files block: `Rules: built-in:go (12 files) · repo internal/api/**/*.go (3 files)`. No line when no file had a rule.
 
@@ -165,7 +169,7 @@ The CI-mode comment adds one line to the collapsed Files block: `Rules: built-in
 
 ### Data
 
-Migration `0046_rule_sets.sql` (or the next free number when the plan is written). It only adds.
+Migration `0047_rule_sets.sql` (`0046` was taken by the time the plan was written). It only adds.
 
 - `rule_sets`: `name` (primary key, same pattern as skill names), `content` (the YAML), `version`, `created_at`, `updated_at`. At most 200 sets.
 - Settings, through `settings.Effective` with `Overridden`, the admin defaults and the config file:
@@ -173,7 +177,7 @@ Migration `0046_rule_sets.sql` (or the next free number when the plan is written
   - `built_in_rules`: bool, default `true`.
 - `runs.rules_hash`: the hash of the list the run was given.
 
-A set is checked with `rule.Load` and the skill library's secret check when it is saved. A bad set is refused with the entry named. Deleting a set that a repository or the default list names is refused with 409, as for skills. The config file can define sets (`rule_sets:` at the top level) and name them per repository (`repositories[].rule_sets`, `repositories[].built_in_rules`).
+A set is checked with `rule.Load` and the skill library's secret check when it is saved. A bad set is refused with the entry named. Deleting a set that a repository or the default list names is refused with 409, as for skills. The config file can define sets (`rule_sets:` at the top level) and name them per repository (`repositories[].rule_sets`, `repositories[].built_in_rules`). A config-file set is read-only in the dashboard and wins over a stored set of the same name. A repository the dashboard manages and the default list name library sets; config-file repositories name either.
 
 ### Dispatch
 
@@ -182,9 +186,9 @@ In `engine/dispatch.go`, next to `inputs.ResolveSkills`:
 1. Read `.pergent/rules.yaml` at the same ref as the repository skills (`mr.StartSHA`, the target side). A missing file is fine. A malformed one fails the run with `<path>: <problem>`, and the repository shows under "Needs attention".
 2. Append the entries of each rule set the repository uses, in order. A named set that is not in the library fails the run, as a missing library skill does.
 3. Put the list in the Job's inputs as a file and point `PERGENT_RULES` at it. It counts in the inputs size limit (`inputs.go`). Set `PERGENT_NO_BUILT_IN_RULES=true` when the setting is off. Both are environment variables, not flags, so an older image ignores them, as with `PERGENT_GRAPH` (`internal/kube/job.go`).
-4. Compute the hash over the list, the built-in switch and the configured `jobs.image`, and store it on the run. The image is in the hash because the built-in texts ship inside it: a new image can change them.
+4. Compute the hash over the list and the built-in switch, and store it on the run. In PR 2 the configured `jobs.image` joins the hash, because the built-in texts then ship inside the image and a new image can change them. PR 1 has no built-in text, so the image stays out of it.
 
-Review API runs do the same, reading the repository file at the ref their skills use.
+Review API runs read no repository file: they have no repository ref, their files come from the client and they call no forge. They get the admin default rule-set list and the default built-in switch, and store the hash as above.
 
 ### Incremental reviews
 
@@ -209,7 +213,7 @@ If `rules_hash` differs from the last review's, every skill with rules on is rev
 
 | PR | pergent | pergent.sh |
 |---|---|---|
-| 1 | `internal/rule`, `--rules`, `--no-built-in-rules`, the `rules` frontmatter field, batch and verification attachments, the result field, an empty built-in list | Rule sets, settings, dispatch, the hash, the dashboard, docs except the upgrade note |
+| 1 | `rule/` (public), `--rules`, `--no-built-in-rules`, the `rules` frontmatter field, batch and verification attachments, the result field, an empty built-in list | Rule sets, settings, dispatch, the hash, the dashboard, docs except the upgrade note |
 | 2 | The 5 built-in texts, `LICENSE`, `NOTICE` | The Built-in tab content and the upgrade note |
 
 PR 2 merges only after the quality harness runs the same changes with built-ins on and off and shows more confirmed bugs, no higher false-positive rate, and the token cost per review.
@@ -232,7 +236,7 @@ PR 2 merges only after the quality harness runs the same changes with built-ins 
 
 pergent:
 
-- `internal/rule`: first match across the 3 layers, `off`, unknown fields, both `rule` and `off`, every limit, patterns that can never match, the built-ins load, no built-in text contains "blocking", the hash is stable for the same list.
+- `rule`: first match across the 3 layers, `off`, unknown fields, both `rule` and `off`, every limit, patterns that can never match, the built-ins load, no built-in text contains "blocking", the hash is stable for the same list.
 - `internal/review`: a batch with mixed types gets one section per rule; a skill with `rules: false` gets no file; the cross-batch run gets none; the verification run gets the rules of its findings' files; rule text counts in batch sizing; a write failure makes the batch not reviewed.
 - `internal/skill`: `rules` defaults to true, `false` works, a non-bool is an error.
 - `result`: `rule` survives `Encode` and `redactSkill`.

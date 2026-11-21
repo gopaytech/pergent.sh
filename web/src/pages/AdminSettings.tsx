@@ -11,6 +11,7 @@ import {
   type CommentFooterView,
   type DefaultsView,
   type LibrarySkill,
+  type RuleSet,
   type ModelAdminView,
   type ModelsAdminView,
 } from "../api";
@@ -18,6 +19,7 @@ import ChainEditor from "../ChainEditor";
 import PanelChainCard from "../PanelChainCard";
 import CommentLayoutEditor from "../CommentLayoutEditor";
 import { useWrite } from "../layout/write";
+import RuleSetPicker from "../RuleSetPicker";
 import MarkBanner, { markText } from "../MarkBanner";
 import { AddModelForm, EditModelForm } from "../ModelForms";
 import { ErrorBox, Loading, Switch, bytesText, noFill, secretText } from "../ui";
@@ -149,19 +151,23 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [capMR, setCapMR] = useState(String(v.rerunLimitPerMR));
   const [capRepo, setCapRepo] = useState(String(v.rerunLimitPerRepo));
   const [skills, setSkills] = useState(v.skills);
+  const [builtInRules, setBuiltInRules] = useState(v.builtInRules);
+  const [defaultRuleSets, setDefaultRuleSets] = useState(v.ruleSets ?? []);
   const cfg = v.config;
   const pinned = (key: string) => v.pinned[key] === true;
   const [problem, setProblem] = useState("");
   const [note, setNote] = useState("");
   const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
+  const ruleLibrary = useQuery({ queryKey: ["rule-sets"], queryFn: () => api.get<RuleSet[]>("/api/rule-sets") });
   const save = useMutation({
     mutationFn: (body: Record<string, unknown>) => write<DefaultsView>("PUT", "/api/admin/defaults", body),
     onMutate: () => setNote(""),
     onSuccess: (saved) => {
       client.setQueryData(["admin-defaults"], saved);
       // The library's "default" marks and the repository pages' default list
-      // come from /api/skills.
+      // come from /api/skills, and the rule library's from /api/rule-sets.
       client.invalidateQueries({ queryKey: ["skills"] });
+      client.invalidateQueries({ queryKey: ["rule-sets"] });
       setNote("Defaults saved.");
     },
   });
@@ -208,6 +214,10 @@ function Defaults({ v }: { v: DefaultsView }) {
       rerunLimitPerRepo: cap(caps[1], cfg.rerunLimitPerRepo),
       // Left out when the library couldn't be read, the stored list is kept.
       ...(library.isSuccess ? { skills: library.data.map((s) => s.name).filter((n) => skills.includes(n)) } : {}),
+      builtInRules: orNull(builtInRules, cfg.builtInRules),
+      // Left out when the rule library couldn't be read, the stored list is
+      // kept. A name no longer in the library is dropped, as for skills.
+      ...(ruleLibrary.isSuccess ? { ruleSets: defaultRuleSets.filter((n) => ruleLibrary.data.some((s) => s.name === n)) } : {}),
     });
   };
   return (
@@ -543,6 +553,44 @@ function Defaults({ v }: { v: DefaultsView }) {
           selected={skills}
           disabled={save.isPending}
           onChange={setSkills}
+        />
+      )}
+      <div className="set">
+        <div>
+          <div className="name">Built-in rules</div>
+          <div className="help">
+            pergent's own path rules, after a repository's and its rule sets'. A repository that sets none gets this.
+            <FromConfig
+              field="Built-in rules"
+              pinned={pinned("builtInRules")}
+              shown={onOff(cfg.builtInRules)}
+              disabled={save.isPending}
+              onUse={() => setBuiltInRules(cfg.builtInRules)}
+            />
+          </div>
+        </div>
+        <div>
+          <Switch label="Built-in rules" checked={builtInRules} disabled={save.isPending} onChange={setBuiltInRules} />
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">Default rule sets</div>
+          <div className="help">
+            The rule sets, in match order, of a repository that doesn't choose its own. The first entry that matches a file gives
+            it its rule.
+          </div>
+        </div>
+      </div>
+      {ruleLibrary.isPending && <Loading />}
+      {ruleLibrary.isError && <ErrorBox error={ruleLibrary.error} />}
+      {ruleLibrary.isSuccess && (
+        <RuleSetPicker
+          label="Default rule sets"
+          library={ruleLibrary.data}
+          selected={defaultRuleSets}
+          disabled={save.isPending}
+          onChange={setDefaultRuleSets}
         />
       )}
       {save.isError && <ErrorBox error={save.error} />}

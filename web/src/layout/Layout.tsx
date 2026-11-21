@@ -17,6 +17,7 @@ const userItems: NavItem[] = [
   { to: "/repos", label: "Repositories", icon: "📁" },
   { to: "/reviews", label: "Reviews", icon: "🔍" },
   { to: "/skills", label: "Skills", icon: "🧩" },
+  { to: "/rules", label: "Rules", icon: "📏" },
   // Every account past the waiting page is on a team (an admin sees them all).
   { to: "/teams", label: "Teams", icon: "👥" },
 ];

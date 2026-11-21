@@ -196,6 +196,9 @@ type dispatcher struct {
 	// cis is where the CI wait's store calls go; nil is the engine's Store.
 	// Tests set it.
 	cis ciStore
+	// rulesHash is the hash of the run's rule list and built-in switch, set
+	// once the list is built; the next push compares it with its own.
+	rulesHash string
 }
 
 func (d *dispatcher) dispatch(ctx context.Context) error {
@@ -435,6 +438,19 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if len(in.Skills) == 0 {
 		return d.skipNoSkills(ctx, plat, repo)
 	}
+	// The rules are read at the same ref as the repository skills, never at
+	// the change's head, so a change cannot edit its own rules.
+	if err := d.addRules(ctx, source{plat.Forge}, repo, mr.StartSHA, true, in); err != nil {
+		var se *sourceError
+		if errors.As(err, &se) {
+			return d.retry(ctx, fmt.Errorf("read the rules: %w", err))
+		}
+		var bad *rulesProblem
+		if errors.As(err, &bad) {
+			return d.failRules(ctx, repo.Instance, repo.Project, bad.reason)
+		}
+		return d.retry(ctx, err)
+	}
 	if _, clash := in.Skills[impactSkill]; clash && d.mayLink(plat, repo) {
 		// The name belongs to the linked repositories' check while they are
 		// linked: a skill of that name is never run in its place, where its
@@ -583,6 +599,11 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err := e.Store.SetRunModel(ctx, run.ID, d.provider, d.model); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's model: %w", err))
 	}
+	// And the rules hash: a lost write would make the next push carry files
+	// reviewed under other rules.
+	if err := e.Store.SetRunRulesHash(ctx, run.ID, d.rulesHash); err != nil {
+		return d.retry(ctx, fmt.Errorf("record the review's rules: %w", err))
+	}
 	// And the entry: a later attempt skips it, and the footer and the
 	// review page name it.
 	if err := e.Store.SetRunEntry(ctx, run.ID, runEntry(d.entry)); err != nil {
@@ -643,6 +664,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		Inputs:         in,
 		LinkedClones:   links.Clones,
 		CheckDeleted:   repo.CheckDeleted,
+		NoBuiltInRules: !repo.BuiltInRules,
 		Instance:       run.MR.Instance,
 		ProjectID:      run.MR.ProjectID,
 		IID:            run.MR.IID,
@@ -677,6 +699,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	// A Job started: the repository has skills and every one is there.
 	e.clearAttention(ctx, repo.Instance, repo.Project, attSkillMissing)
 	e.clearAttention(ctx, repo.Instance, repo.Project, attNoSkills)
+	e.clearAttention(ctx, repo.Instance, repo.Project, attRulesInvalid)
 	// For the dashboard, best effort: the model, where each skill came from
 	// and the library version of each library skill. The hash of each skill
 	// goes along: the next push carries nothing for a skill that changed.

@@ -19,6 +19,8 @@ import Repositories from "./pages/Repositories";
 import RepositoryDetail from "./pages/RepositoryDetail";
 import ReviewDetail from "./pages/ReviewDetail";
 import Reviews from "./pages/Reviews";
+import RuleSetEditor, { NewRuleSet } from "./pages/RuleSetEditor";
+import Rules from "./pages/Rules";
 import SignedOut from "./pages/SignedOut";
 import SignIn from "./pages/SignIn";
 import SkillEditor, { NewSkill } from "./pages/SkillEditor";
@@ -128,6 +130,16 @@ export default function App() {
           }
         />
         <Route path="skills/view/:name" element={<SkillEditor />} />
+        <Route path="rules" element={<Rules />} />
+        <Route
+          path="rules/new"
+          element={
+            <AdminOnly>
+              <NewRuleSet />
+            </AdminOnly>
+          }
+        />
+        <Route path="rules/view/:name" element={<RuleSetEditor />} />
         {/* The session's own teams; the admins' Teams page is /admin/teams. */}
         <Route path="teams" element={<MyTeams />} />
         <Route path="teams/:id" element={<TeamModels />} />

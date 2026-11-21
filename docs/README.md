@@ -25,6 +25,7 @@
 | --- | --- |
 | [Dashboard](concepts/dashboard.md) | Sign-in, teams, repositories, readiness, audit log |
 | [Skills and instructions](concepts/skills.md) | How a review picks its skills, and the skill library |
+| [Path rules](concepts/rules.md) | Checklists per kind of file, added to the review that runs on it, never blocking |
 | [Commands](concepts/commands.md) | `@<bot> review`, `review failed`, `dismiss` |
 | [How approval works](concepts/approval.md) | When pergent.sh approves, and when it takes it back |
 | [Models](concepts/models.md) | Global and team models, model chains, and the backup model when a key is out of quota or credit |

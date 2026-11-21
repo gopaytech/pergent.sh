@@ -309,10 +309,10 @@ func newPlanFixture(t *testing.T) *planFixture {
 		t.Fatal(err)
 	}
 	return &planFixture{
-		d:        &dispatcher{e: &Engine{Config: &config.Config{}}, run: store.Run{HeadSHA: sha('2'), TargetBranch: "main"}},
+		d:        &dispatcher{e: &Engine{Config: &config.Config{}}, run: store.Run{HeadSHA: sha('2'), TargetBranch: "main"}, rulesHash: "h1"},
 		plat:     Platform{Forge: forgeWithInline{Inline: &fakeInline{changed: []string{"a.go"}}}},
 		repo:     settings.Effective{IncrementalReviews: true},
-		last:     store.Run{HeadSHA: sha('1'), TargetBranch: "main", Result: body},
+		last:     store.Run{HeadSHA: sha('1'), TargetBranch: "main", Result: body, RulesHash: strPtr("h1")},
 		haveLast: true,
 		in:       &inputs.Inputs{Skills: map[string][]byte{"security": []byte("Look.\n")}},
 	}

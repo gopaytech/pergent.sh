@@ -33,7 +33,7 @@ Repository skills and instructions are read from the target branch at the merge 
 
 Everyone with a team can read the library (**Skills** in the dashboard). Any admin writes it; maintainers and viewers only read. Every change applies to the next review, with no restart.
 
-- **Write** a skill with **New skill**. The name is fixed after it is created and matches `[A-Za-z0-9][A-Za-z0-9._-]*`; a frontmatter `name`, when present, must equal it. The text is at most 128 KiB, its frontmatter must parse (`paths` and `exclude` are lists of strings, each pattern valid for pergent: bad glob syntax or one that can never match, such as `api/`, is refused and named; `cross_batch` is true or false; other fields are ignored), and it must not contain a secret pergent.sh holds (a token, a key, a webhook or OAuth secret, the LLM key): the save is refused with `the skill contains a secret pergent.sh holds`, naming no value. The library holds at most 200 skills.
+- **Write** a skill with **New skill**. The name is fixed after it is created and matches `[A-Za-z0-9][A-Za-z0-9._-]*`; a frontmatter `name`, when present, must equal it. The text is at most 128 KiB, its frontmatter must parse (`paths` and `exclude` are lists of strings, each pattern valid for pergent: bad glob syntax or one that can never match, such as `api/`, is refused and named; `cross_batch` and `rules` are true or false; other fields are ignored), and it must not contain a secret pergent.sh holds (a token, a key, a webhook or OAuth secret, the LLM key): the save is refused with `the skill contains a secret pergent.sh holds`, naming no value. The library holds at most 200 skills.
 - **Add to default skills** is a box on New skill and on Install, off at first, so a new skill reaches no repository until an admin chooses it.
 - **Edit** works on a written skill. A save carries the version you opened: if another admin saved meanwhile, it is refused with 409 `this skill changed since you opened it`. An installed skill can't be edited (409 `an installed skill can't be edited; copy it`): **Copy** makes a new written skill under a new name, with its frontmatter `name` set to it.
 - **Versions.** Every save, install and update adds a version, kept for good. The skill's page lists them, read-only. A name that is deleted and created again continues its numbering.
@@ -92,3 +92,7 @@ When a run ends up with no skill at all (the default list is empty and the repos
 - Adding a skill to the default list (or to the repository) and re-running the review (a push, or `@<bot> review`) fixes it. **Add repository** warns when the default list is empty.
 
 Without the dashboard (`dashboard.url` unset) the library can't be managed, but reviews still read it and the default list from the database. A fresh install has an empty library, so its repositories review with repository skills only.
+
+## Path rules and `rules: false`
+
+Every skill gets the [path rules](rules.md) of the files in its batches unless its frontmatter says `rules: false`. Only a YAML bool is taken: `rules: yes` or `rules: "false"` is refused when the skill is saved, and pergent refuses it when the skill loads. A skill with `rules: false` gets no rules in any run, and its files still carry over when the rules change.

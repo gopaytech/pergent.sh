@@ -32,6 +32,16 @@ func SkillName(content []byte, fallback string) (string, error) {
 	return name, nil
 }
 
+// SkillRules reports whether a skill gets path rules: false only for
+// frontmatter rules: false.
+func SkillRules(content []byte) (bool, error) {
+	fm, err := parseFrontmatter(content)
+	if err != nil {
+		return true, err
+	}
+	return fm.Rules == nil || *fm.Rules, nil
+}
+
 // SkillScope returns the `paths` and `exclude` globs of a skill's frontmatter:
 // the files a review gives the skill. Both are nil when the skill has none.
 func SkillScope(content []byte) (paths, exclude []string, err error) {
@@ -47,12 +57,13 @@ type frontmatter struct {
 	Paths      []string `yaml:"paths"`
 	Exclude    []string `yaml:"exclude"`
 	CrossBatch bool     `yaml:"cross_batch"`
+	Rules      *bool    `yaml:"rules"`
 }
 
 // parseFrontmatter reads a leading `---\n…\n---` block. Content without one
 // (including an unclosed block) has no frontmatter. `name`, `paths`, `exclude`
-// and `cross_batch` are read and typed (a string list, a string list, a
-// boolean); other fields are ignored.
+// `cross_batch` and `rules` are read and typed (a string list, a string list,
+// booleans); other fields are ignored.
 func parseFrontmatter(content []byte) (frontmatter, error) {
 	var fm frontmatter
 	s := string(content)
@@ -103,6 +114,12 @@ func decodeFrontmatter(block []byte, fm *frontmatter) error {
 	if v, ok := loose["cross_batch"]; ok && v != nil {
 		if _, isBool := v.(bool); !isBool {
 			return fmt.Errorf("cross_batch must be true or false")
+		}
+	}
+	// pergent refuses anything but a YAML bool for rules, null included.
+	if v, ok := loose["rules"]; ok {
+		if _, isBool := v.(bool); !isBool {
+			return fmt.Errorf("rules must be true or false")
 		}
 	}
 	return yaml.Unmarshal(block, fm)

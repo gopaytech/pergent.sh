@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Path rules.** A rule is a checklist for a kind of file, added to the review that already runs on it, never blocking: [Path rules](concepts/rules.md). The built-in list is empty in this release, so nothing changes until a repository adds `.pergent/rules.yaml` or uses a rule set.
+
+- **Migration `0047`** runs at startup. It adds the table `rule_sets`, NULL columns `rule_sets` and `built_in_rules` on `repo_defaults` and `dashboard_repos`, and `runs.rules_hash`, dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them.
+- **New config keys** `rule_sets`, `repositories[].rule_sets` and `repositories[].built_in_rules`. An older release refuses unknown keys, so take them out of the config before you roll back.
+- The first push of each change after the upgrade is a full review for skills with rules on: no earlier review recorded a rules hash.
+- A skill whose frontmatter has `rules` that is not a YAML bool (`yes`, `"false"`) is now refused when it is saved; one already in the library fails the reviews that use it with pergent's message.
+- The review Job gets the list as `PERGENT_RULES` and `PERGENT_NO_BUILT_IN_RULES`. A pergent image built before rules ignores both and reviews as before; the review page then says `This image does not use rules.`
+- The audit log has `rule_set_created`, `rule_set_updated` and `rule_set_deleted`; **Needs attention** has `rules_invalid`. The API has `/api/rule-sets`, `/api/built-in-rules` and `/api/admin/rule-sets`, the settings `ruleSets` and `builtInRules`, and new fields `InputsView.rules`, `FilesView.rules` and `RunDetailView.rulesUsed`.
+
 **Teams can add their own models, and a review can move to a backup model.** Each review runs on the first usable entry of a model chain: the repository's own, its owner team's or the global one. When the provider says an entry is out of quota, out of credit or rejects its key, the review starts again on the next entry: [Models](concepts/models.md). Nothing changes after the upgrade. Every review runs on the model it used before, and nothing falls back until a chain has a second entry.
 
 - **Migrations `0045` and `0046`** run at startup. Back up Postgres first. They add 4 tables (`team_models`, `model_chains`, `model_chain_entries`, `model_entry_marks`) and columns with a default or NULL (`llm_models.name` and `teams_may_use`, `team_repos.owner`, `dashboard_repos.chain_mode`, `model_chains.saved_by_admin`, and columns on `runs` and `run_usage`). One step is not an addition: `0045` drops the unique rule on the provider, model and base URL of `llm_models`, so one model can have several keys. That only relaxes a rule, and the previous release still runs on the migrated database. Existing entries are named `provider/model`, and a second copy of the same pair `provider/model (2)`. A repository that picked a model gets a chain of that one entry, saved by an admin, so it runs as before.

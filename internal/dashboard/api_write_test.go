@@ -988,7 +988,7 @@ func TestMaxTurnsSetting(t *testing.T) {
 func TestParseDefaultsMaxTurns(t *testing.T) {
 	d := &Dashboard{}
 	parse := func(body string) (store.RepoDefaults, string) {
-		next, _, msg := d.parseDefaults(httptest.NewRequest("PUT", "/api/admin/defaults", strings.NewReader(body)), nil)
+		next, _, msg := d.parseDefaults(httptest.NewRequest("PUT", "/api/admin/defaults", strings.NewReader(body)), nil, nil)
 		return next, msg
 	}
 	if next, msg := parse(`{"maxTurns":80}`); msg != "" || next.MaxTurns == nil || *next.MaxTurns != 80 {
