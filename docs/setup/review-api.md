@@ -472,7 +472,8 @@ Wait the `Retry-After` seconds after a `429`, then try again; do not retry at on
 - **Review panel.** If chain B is set, an API review can run as a [review panel](../concepts/review-panel.md): members A and B, then Job P. Then:
   - The review keeps its stored files until **Job P starts**, not until the first Job starts, because each member needs them.
   - An API panel's chain B is the **global** one. A client has no chain B of its own.
-  - API members **do not fall back**: a member whose provider refuses its model fails. Job P may use the next entry of a chain.
+  - API members **do not fall back**: a member whose provider refuses its model fails.
+  - Job P may **judge** with the next entry of a chain, when a done member's entry was marked or removed since it ran. Job P itself **does not fall back**: when a judge's provider refuses its model, that entry is marked and the review is published as it is.
   - A queued API review past the **Monthly token budget** fails at `starting`, as above, **unless it is a panel that has split already**: its members and Job P still run, and Job P runs with no judge.
   - The `usage` of a panel review is the total of A, B and Job P.
 

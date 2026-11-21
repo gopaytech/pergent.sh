@@ -21,7 +21,7 @@ A repository with chain B in effect runs its review as a panel of 3 Jobs:
 ## The members
 
 - **Fallback per member.** If a member's model is out of quota or its key is rejected, that member starts again on the next entry of its own chain. Each attempt gets the full timeout. The members do not fall back for each other.
-- **B skips A's model.** Member B never runs on the model member A runs on. It takes the next entry of chain B.
+- **B skips A's model.** When member B is dispatched, it never takes the model member A runs on. It takes the next entry of chain B. A does not skip B's model: if A falls back later, A can run on the model B runs on.
 - **One member fails.** Job P goes on with the one result.
 - **Both members fail.** The review fails.
 
