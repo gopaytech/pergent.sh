@@ -1924,6 +1924,36 @@ func TestClaimQueuedSkipsInstances(t *testing.T) {
 	}
 }
 
+// A due run whose key another transaction holds (KEY SHARE, as a write of
+// a row that references the run takes) is claimed, not skipped. A run that
+// another claim or a delete locked is still skipped.
+func TestClaimQueuedTakesKeyShared(t *testing.T) {
+	s := newStore(t)
+	shared := enqueue(t, s, mr1, sha('a'))
+	locked := enqueue(t, s, MRKey{mr1.Instance, mr1.ProjectID, mr1.IID + 1}, sha('b'))
+	holder, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx) //nolint:errcheck // rolled back below
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1::uuid FOR KEY SHARE`, shared); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1::uuid FOR UPDATE`, locked); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ClaimQueued(ctx, 10, t0)
+	if err != nil || len(got) != 1 || got[0].ID != shared {
+		t.Fatalf("ClaimQueued = %v, %v; want the key-shared run alone", runIDs(got), err)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.ClaimQueued(ctx, 10, t0); err != nil || len(got) != 1 || got[0].ID != locked {
+		t.Fatalf("ClaimQueued after the lock = %v, %v; want the locked run", runIDs(got), err)
+	}
+}
+
 // Queued runs are counted per instance, for the instances asked about.
 func TestCountQueuedByInstance(t *testing.T) {
 	s := newStore(t)

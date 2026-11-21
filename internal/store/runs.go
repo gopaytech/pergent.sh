@@ -691,7 +691,10 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip 
 	}
 	// A query with a window function can't lock rows, so the runs it picks
 	// are locked by the select around it, which checks the claim's conditions
-	// again: a run claimed meanwhile is skipped as before.
+	// again: a run claimed meanwhile is skipped as before. The lock is NO KEY
+	// UPDATE, which is all the claim's update needs: a write that only holds
+	// the run's key (KEY SHARE, as a row that references the run takes, such
+	// as a panel member's usage) does not make the claim skip a due run.
 	rows, err := s.pool.Query(ctx, `UPDATE runs SET state = 'running', claimed_at = $2 WHERE id IN (
 			SELECT id FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
 			  AND instance <> ALL($3::text[])
@@ -705,7 +708,7 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip 
 				   OR q.n + (SELECT count(*) FROM runs x WHERE x.api_client_id = q.api_client_id
 						AND (x.state = 'running' OR (x.state = 'waiting' AND x.skip_reason = 'panel_members')))
 					<= (SELECT c.max_in_flight FROM api_clients c WHERE c.id = q.api_client_id))
-			ORDER BY created_at, id LIMIT $1 FOR UPDATE OF runs SKIP LOCKED)
+			ORDER BY created_at, id LIMIT $1 FOR NO KEY UPDATE OF runs SKIP LOCKED)
 		RETURNING `+runColumns, limit, now, skip)
 	if err != nil {
 		return nil, err
