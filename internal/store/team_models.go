@@ -95,9 +95,9 @@ func (s *Store) UpdateTeamModel(ctx context.Context, teamID int64, id string, na
 }
 
 // DeleteTeamModel removes an entry of teamID, takes it out of every chain
-// that names it and drops its mark, in one transaction, and returns the
-// chains it changed as they are now. A team with no such entry is
-// ErrModelNotFound.
+// that names it (chain A and chain B) and drops its mark, in one
+// transaction, and returns the chain A chains it changed as they are now. A
+// team with no such entry is ErrModelNotFound.
 func (s *Store) DeleteTeamModel(ctx context.Context, teamID int64, id string) (removedFrom []Chain, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -112,8 +112,12 @@ func (s *Store) DeleteTeamModel(ctx context.Context, teamID int64, id string) (r
 	if tag.RowsAffected() == 0 {
 		return nil, ErrModelNotFound
 	}
-	chains, err := removeFromChains(ctx, tx, SourceTeam, []string{id}, time.Now())
+	at := time.Now()
+	chains, err := removeFromChains(ctx, tx, ChainA, SourceTeam, []string{id}, at)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := removeFromChains(ctx, tx, ChainB, SourceTeam, []string{id}, at); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM model_entry_marks WHERE source = $1 AND model_id = $2`, SourceTeam, id); err != nil {
