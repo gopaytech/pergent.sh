@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Path rules.** A rule is a checklist for a kind of file, added to the review that already runs on it, never blocking: [Path rules](concepts/rules.md). The built-in list is empty in this release, so nothing changes until a repository adds `.pergent/rules.yaml` or uses a rule set.
+
+- **Migration `0047`** runs at startup. It adds the table `rule_sets`, NULL columns `rule_sets` and `built_in_rules` on `repo_defaults` and `dashboard_repos`, and `runs.rules_hash`, dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them.
+- **New config keys** `rule_sets`, `repositories[].rule_sets` and `repositories[].built_in_rules`. An older release refuses unknown keys, so take them out of the config before you roll back.
+- The first push of each change after the upgrade is a full review for skills with rules on: no earlier review recorded a rules hash.
+- A skill whose frontmatter has `rules` that is not a YAML bool (`yes`, `"false"`) is now refused when it is saved; one already in the library fails the reviews that use it with pergent's message.
+- The review Job gets the list as `PERGENT_RULES` and `PERGENT_NO_BUILT_IN_RULES`. A pergent image built before rules ignores both and reviews as before; the review page then says `This image does not use rules.`
+- The audit log has `rule_set_created`, `rule_set_updated` and `rule_set_deleted`; **Needs attention** has `rules_invalid`. The API has `/api/rule-sets`, `/api/built-in-rules` and `/api/admin/rule-sets`, the settings `ruleSets` and `builtInRules`, and new fields `InputsView.rules`, `FilesView.rules` and `RunDetailView.rulesUsed`.
+
 **Repositories can turn on a code graph.** It is off by default, per repository, and nothing changes until both the install and a repository turn it on: [Code graph](concepts/code-graph.md). It is experimental: in our tests it did not lower the cost and did not find more bugs, so keep it off unless you are measuring it.
 
 - **Migration `0044`** runs at startup. It adds one column with a default (`dashboard_repos.graph_context`, `false`) and one table (`repo_graphs`), dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores both.
