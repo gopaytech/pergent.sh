@@ -1289,3 +1289,64 @@ func TestDeleteAPIClientStopsPanel(t *testing.T) {
 		t.Errorf("another client's members = %+v, %v; want both", ms, err)
 	}
 }
+
+// A run released for Job P is claimed again with its dispatched_at kept: it is
+// not split a second time.
+func TestStartPanelOncePerReview(t *testing.T) {
+	s := newStore(t)
+	id := panelRun(t, s, mr1, "a1")
+	doneMember(t, s, memberOf(t, s, id, "a").ID, `{}`)
+	failedMember(t, s, memberOf(t, s, id, "b").ID, "B broke")
+	if released, _, err := s.ReleasePanel(ctx, id, t0); err != nil || !released {
+		t.Fatal(released, err)
+	}
+	if got, err := s.ClaimQueued(ctx, 10, t0); err != nil || len(got) != 1 {
+		t.Fatal(runIDs(got), err)
+	}
+	if started, err := s.StartPanel(ctx, id, t0.Add(time.Minute)); err != nil || started {
+		t.Errorf("StartPanel of a released run = %v, %v; want not started", started, err)
+	}
+	if r := getRun(t, s, id); r.State != Running || r.SkipReason != "" || !r.DispatchedAt.Equal(t0) {
+		t.Errorf("run = %s %q dispatched %v; want still claimed for Job P", r.State, r.SkipReason, r.DispatchedAt)
+	}
+	if got := memberStates(t, s, id); !slices.Equal(got["a"], []MemberState{MemberDone}) || !slices.Equal(got["b"], []MemberState{MemberFailed}) {
+		t.Errorf("states = %v; want the first panel only", got)
+	}
+}
+
+// A panel started on a later attempt is read and released by that attempt's
+// id as well as by the first run's.
+func TestReleasePanelByLaterAttempt(t *testing.T) {
+	s := newStore(t)
+	root := reported(t, s, mr1, "a1", `{}`)
+	next, created, err := s.EnqueueAttempt(ctx, getRun(t, s, root), quotaMark("m1"))
+	if err != nil || !created {
+		t.Fatal(next, created, err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if started, err := s.StartPanel(ctx, next, t0); err != nil || !started {
+		t.Fatalf("StartPanel = %v, %v", started, err)
+	}
+	byRoot, err := s.PanelMembers(ctx, root)
+	if err != nil || len(byRoot) != 2 {
+		t.Fatalf("PanelMembers(root) = %+v, %v; want 2", byRoot, err)
+	}
+	byNext, err := s.PanelMembers(ctx, next)
+	if err != nil || len(byNext) != 2 || byNext[0].ID != byRoot[0].ID || byNext[1].ID != byRoot[1].ID {
+		t.Fatalf("PanelMembers(later attempt) = %+v, %v; want the root's members", byNext, err)
+	}
+	doneMember(t, s, memberOf(t, s, next, "a").ID, `{}`)
+	doneMember(t, s, memberOf(t, s, next, "b").ID, `{}`)
+	released, failed, err := s.ReleasePanel(ctx, next, t0)
+	if err != nil || !released || failed {
+		t.Fatalf("ReleasePanel(later attempt) = %v, %v, %v; want released", released, failed, err)
+	}
+	if r := getRun(t, s, next); r.State != Queued || r.SkipReason != "" {
+		t.Errorf("later attempt = %s %q; want queued again", r.State, r.SkipReason)
+	}
+	if r := getRun(t, s, root); r.State != Superseded {
+		t.Errorf("first run = %s; want left superseded", r.State)
+	}
+}

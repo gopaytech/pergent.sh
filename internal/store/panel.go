@@ -160,7 +160,8 @@ func reviewOf(ctx context.Context, tx pgx.Tx, id string) (mr MRKey, root string,
 // StartPanel makes the claimed, not dispatched run runID a panel review: it
 // waits (WaitPanel) with dispatched_at now, and one queued member per role is
 // added, in one transaction. started is false when the run is no longer
-// claimed (superseded meanwhile). The members belong to the review's first
+// claimed (superseded meanwhile), or was dispatched before: a run released
+// for Job P keeps its dispatched_at, so a review is split once. The members belong to the review's first
 // run, and the review's off row, from an earlier attempt, is dropped: the
 // panel did start.
 func (s *Store) StartPanel(ctx context.Context, runID string, now time.Time) (started bool, err error) {
@@ -181,7 +182,7 @@ func (s *Store) StartPanel(ctx context.Context, runID string, now time.Time) (st
 		return false, err
 	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'waiting', skip_reason = $2, dispatched_at = $3
-		WHERE id = $1::uuid AND state = 'running' AND job_name = ''`, runID, WaitPanel, now)
+		WHERE id = $1::uuid AND state = 'running' AND job_name = '' AND dispatched_at IS NULL`, runID, WaitPanel, now)
 	if err != nil {
 		return false, err
 	}
@@ -202,7 +203,9 @@ func (s *Store) StartPanel(ctx context.Context, runID string, now time.Time) (st
 
 // RecordPanelOff keeps why the run's panel could not start (its one 'off' row,
 // of the review's first run). A second call replaces the reason. An unknown
-// run is an error.
+// run is an error. Call it only when the review has no live members: the
+// off row is for a review that runs as one review. StartPanel removes an off
+// row; nothing here removes members.
 func (s *Store) RecordPanelOff(ctx context.Context, runID, reason string) error {
 	if !validUUID(runID) {
 		return fmt.Errorf("store: run %q not found", runID)
@@ -220,14 +223,15 @@ func (s *Store) RecordPanelOff(ctx context.Context, runID, reason string) error 
 	return nil
 }
 
-// PanelMembers returns the members of the review whose first run is root,
-// its off row too, oldest first.
-func (s *Store) PanelMembers(ctx context.Context, root string) ([]PanelMember, error) {
-	if !validUUID(root) {
+// PanelMembers returns the members of the review of run id (its first run or
+// a later attempt), its off row too, oldest first.
+func (s *Store) PanelMembers(ctx context.Context, id string) ([]PanelMember, error) {
+	if !validUUID(id) {
 		return nil, nil
 	}
-	return s.queryMembers(ctx, `SELECT `+memberColumns+` FROM panel_members WHERE run_id = $1::uuid
-		ORDER BY created_at, id`, root)
+	return s.queryMembers(ctx, `SELECT `+memberColumns+` FROM panel_members
+		WHERE run_id = (SELECT COALESCE(attempt_of, id) FROM runs WHERE id = $1::uuid)
+		ORDER BY created_at, id`, id)
 }
 
 // ClaimQueuedMembers moves up to limit queued members that are due at now,
@@ -335,7 +339,8 @@ func (s *Store) PostponeMember(ctx context.Context, id string, notBefore time.Ti
 // order:
 //   - ResultUnauthorized: unknown member, no token, wrong token or expired;
 //   - ResultDiscarded: the member is superseded, or its run no longer waits
-//     for it; the result is dropped;
+//     for it (superseded, or released for Job P: a late second post after
+//     the release is discarded, not a conflict); the result is dropped;
 //   - ResultConflict: the member already has a result or failure, or is not
 //     running;
 //   - ErrInvalidResult: body is not valid JSON; nothing is stored;
@@ -540,8 +545,8 @@ func (s *Store) EnqueueMemberAttempt(ctx context.Context, from PanelMember, m Ma
 	return id, true, nil
 }
 
-// ReleasePanel acts when every role of the review whose first run is root has
-// a done or failed member and none is live: with at least one done, the
+// ReleasePanel acts when every role of the review of run root (its first run
+// or a later attempt) has a done or failed member and none is live: with at least one done, the
 // waiting run is queued again (no skip reason, not_before NULL); with both
 // failed it is reported with both reasons. Otherwise nothing changes.
 func (s *Store) ReleasePanel(ctx context.Context, root string, now time.Time) (released, failed bool, err error) {
@@ -554,7 +559,7 @@ func (s *Store) ReleasePanel(ctx context.Context, root string, now time.Time) (r
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
-	mr, _, found, err := reviewOf(ctx, tx, root)
+	mr, root, found, err := reviewOf(ctx, tx, root)
 	if err != nil || !found {
 		return false, false, err
 	}
