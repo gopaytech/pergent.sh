@@ -1076,3 +1076,216 @@ func TestMemberDispatchAndResultRaces(t *testing.T) {
 		}
 	}
 }
+
+// heldRun gives a run of head on mr held for reason: a waiting run that is no
+// panel's.
+func heldRun(t *testing.T, s *Store, mr MRKey, head, reason string) string {
+	t.Helper()
+	id := enqueue(t, s, mr, head)
+	if ok, err := s.HoldRun(ctx, id, reason); err != nil || !ok {
+		t.Fatalf("HoldRun = %v, %v", ok, err)
+	}
+	return id
+}
+
+// apiPanelRun gives client's API review of subject made a panel review. Any
+// other queued run is claimed with it.
+func apiPanelRun(t *testing.T, s *Store, clientID int64, subject string) string {
+	t.Helper()
+	id := enqueueAPI(t, s, apiRequest(clientID, "acme", subject))
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if started, err := s.StartPanel(ctx, id, t0); err != nil || !started {
+		t.Fatalf("StartPanel = %v, %v", started, err)
+	}
+	return id
+}
+
+// A start finds a panel's waiting run on its way and leaves it as it is; a
+// held run is started as before.
+func TestStartRunLeavesPanelAlone(t *testing.T) {
+	s := newStore(t)
+	panel := panelRun(t, s, mr1, "a1")
+	held := heldRun(t, s, mr2, "b1", WaitUntrusted)
+
+	id, started, err := s.StartRun(ctx, mr1, "acme/widgets", "a1", "main")
+	if err != nil || id != panel || started {
+		t.Fatalf("StartRun(panel) = %s, %v, %v; want %s, false", id, started, err, panel)
+	}
+	if r := getRun(t, s, panel); r.State != Waiting || r.SkipReason != WaitPanel || r.Trigger != TriggerPush {
+		t.Errorf("panel run = %s %q %s; want still waiting for its members", r.State, r.SkipReason, r.Trigger)
+	}
+	if got := memberStates(t, s, panel); !slices.Equal(got["a"], []MemberState{MemberQueued}) ||
+		!slices.Equal(got["b"], []MemberState{MemberQueued}) {
+		t.Errorf("members = %v; want both still queued", got)
+	}
+
+	id, started, err = s.StartRun(ctx, mr2, "acme/widgets", "b1", "main")
+	if err != nil || id != held || !started {
+		t.Fatalf("StartRun(held) = %s, %v, %v; want %s, true", id, started, err, held)
+	}
+	if r := getRun(t, s, held); r.State != Queued || r.Trigger != TriggerStart {
+		t.Errorf("held run = %s %s; want queued as a start", r.State, r.Trigger)
+	}
+}
+
+// A re-run while the members run lands on the panel's run; a held run is
+// replaced by a new one as before.
+func TestRerunWhilePanelRuns(t *testing.T) {
+	s := newStore(t)
+	panel := panelRun(t, s, mr1, "a1")
+	held := heldRun(t, s, mr2, "b1", WaitUntrusted)
+
+	if active, err := s.ReviewActiveForRerun(ctx, mr1, "a1", "main", true); err != nil || !active {
+		t.Errorf("ReviewActiveForRerun(panel) = %v, %v; want true", active, err)
+	}
+	if active, err := s.ReviewActiveForStart(ctx, mr1, "a1", "main"); err != nil || !active {
+		t.Errorf("ReviewActiveForStart(panel) = %v, %v; want true", active, err)
+	}
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "a1", "main", TriggerRerun, nil, nil, true, false)
+	if err != nil || id != panel || created {
+		t.Fatalf("EnqueueRerun(panel) = %s, %v, %v; want %s, false", id, created, err, panel)
+	}
+	if r := getRun(t, s, panel); r.State != Waiting || r.SkipReason != WaitPanel {
+		t.Errorf("panel run = %s %q; want still waiting for its members", r.State, r.SkipReason)
+	}
+
+	if active, err := s.ReviewActiveForRerun(ctx, mr2, "b1", "main", true); err != nil || active {
+		t.Errorf("ReviewActiveForRerun(held) = %v, %v; want false", active, err)
+	}
+	if active, err := s.ReviewActiveForStart(ctx, mr2, "b1", "main"); err != nil || active {
+		t.Errorf("ReviewActiveForStart(held) = %v, %v; want false", active, err)
+	}
+	id, created, err = s.EnqueueRerun(ctx, mr2, "acme/widgets", "b1", "main", TriggerRerun, nil, nil, true, false)
+	if err != nil || id == held || !created {
+		t.Fatalf("EnqueueRerun(held) = %s, %v, %v; want a new run", id, created, err)
+	}
+	if r := getRun(t, s, held); r.State != Superseded {
+		t.Errorf("held run = %s; want superseded by the re-run", r.State)
+	}
+}
+
+// The changes waiting for a start leave out a panel waiting for its members.
+func TestWaitingChangesHidesPanel(t *testing.T) {
+	s := newStore(t)
+	panelRun(t, s, mr1, "a1")
+	heldRun(t, s, mr2, "b1", WaitUntrusted)
+	got, err := s.WaitingChanges(ctx, mr1.Instance, "acme/widgets")
+	if err != nil || len(got) != 1 || got[0].IID != mr2.IID || got[0].Reason != WaitUntrusted {
+		t.Errorf("WaitingChanges = %+v, %v; want only !%d", got, err, mr2.IID)
+	}
+}
+
+// The dashboard reads a panel waiting for its members as running, and a held
+// run as waiting.
+func TestDashboardOutcomePanelRunning(t *testing.T) {
+	s := newStore(t)
+	panel := panelRun(t, s, mr1, "a1")
+	held := heldRun(t, s, mr2, "b1", WaitUntrusted)
+	for id, want := range map[string]string{panel: "running", held: "waiting"} {
+		d, found, err := s.RunDigest(ctx, id)
+		if err != nil || !found || d.State != Waiting || d.Outcome != want {
+			t.Errorf("RunDigest(%s) = %s %q, %v, %v; want waiting, %q", id, d.State, d.Outcome, found, err, want)
+		}
+	}
+	for _, c := range []struct {
+		outcome string
+		want    []string
+	}{{"running", []string{panel}}, {"waiting", []string{held}}} {
+		ds, err := s.ReviewDigests(ctx, ReviewFilter{Visible: Visibility{All: true}, Outcome: c.outcome, Limit: 10})
+		var ids []string
+		for _, d := range ds {
+			ids = append(ids, d.ID)
+		}
+		if err != nil || !slices.Equal(ids, c.want) {
+			t.Errorf("ReviewDigests(%s) = %v, %v; want %v", c.outcome, ids, err, c.want)
+		}
+	}
+}
+
+// The v1 status of a panel review in its members is running; a held review is
+// in none of the statuses, as before.
+func TestAPIStatusPanelRunning(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "fastgateway")
+	panel := apiPanelRun(t, s, c.ID, "route:1")
+	held := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:2"))
+	if ok, err := s.HoldRun(ctx, held, WaitQuota); err != nil || !ok {
+		t.Fatalf("HoldRun = %v, %v", ok, err)
+	}
+	for status, want := range map[string][]string{"running": {panel}, "queued": nil, "completed": nil, "failed": nil, "superseded": nil} {
+		rs, err := s.APIReviews(ctx, APIReviewFilter{ClientID: c.ID, Status: status})
+		var ids []string
+		for _, r := range rs {
+			ids = append(ids, r.Run.ID)
+		}
+		if err != nil || !slices.Equal(ids, want) {
+			t.Errorf("APIReviews(%s) = %v, %v; want %v", status, ids, err, want)
+		}
+	}
+}
+
+// A client's panel waiting for its members is a review in flight: with
+// max_in_flight 1 the client's next review stays queued. A held review is
+// not in flight, as before. The members' Jobs hold jobs.max_running slots
+// (CountRunning); the waiting run holds none.
+func TestClaimQueuedCountsPanelInFlight(t *testing.T) {
+	s := newStore(t)
+	a := newAPIClient(t, s, "client-a")
+	b := newAPIClient(t, s, "client-b")
+	setMaxInFlight(t, s, "client-a", 1)
+	setMaxInFlight(t, s, "client-b", 1)
+	panel := apiPanelRun(t, s, a.ID, "s1")
+	held := enqueueAPI(t, s, apiRequest(b.ID, "acme", "s1"))
+	if ok, err := s.HoldRun(ctx, held, WaitQuota); err != nil || !ok {
+		t.Fatalf("HoldRun = %v, %v", ok, err)
+	}
+	a2 := enqueueAPI(t, s, apiRequest(a.ID, "acme", "s2"))
+	b2 := enqueueAPI(t, s, apiRequest(b.ID, "acme", "s2"))
+
+	got, err := s.ClaimQueued(ctx, 10, time.Now().Add(time.Hour))
+	if err != nil || !slices.Equal(runIDs(got), []string{b2}) {
+		t.Fatalf("ClaimQueued = %v, %v; want only %s: a's panel is in flight", runIDs(got), err, b2)
+	}
+	if st := getRun(t, s, a2).State; st != Queued {
+		t.Errorf("a's next review = %s, want queued", st)
+	}
+
+	// Both members are claimed: each is counted once, the waiting run not.
+	dispatchMember(t, s, memberOf(t, s, panel, "a").ID, "tok-a")
+	if n, err := s.CountRunning(ctx); err != nil || n != 3 {
+		t.Errorf("CountRunning = %d, %v; want 3 (b's claimed review and 2 members)", n, err)
+	}
+}
+
+// Removing a client stops its panels: the running members' Jobs are named
+// and the members go with the runs.
+func TestDeleteAPIClientStopsPanel(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "fastgateway")
+	other := newAPIClient(t, s, "other")
+	panel := apiPanelRun(t, s, c.ID, "route:1")
+	otherPanel := apiPanelRun(t, s, other.ID, "route:1")
+	ma, mb := memberOf(t, s, panel, "a"), memberOf(t, s, panel, "b")
+	dispatchMember(t, s, ma.ID, "tok-a")
+	dispatchMember(t, s, memberOf(t, s, otherPanel, "a").ID, "tok-other")
+	// Member b is claimed, not dispatched: it has no Job yet.
+
+	jobs, found, err := s.DeleteAPIClient(ctx, "fastgateway")
+	if err != nil || !found {
+		t.Fatalf("DeleteAPIClient = %v, %v, %v", jobs, found, err)
+	}
+	if !slices.Equal(jobs, []string{"job-tok-a"}) {
+		t.Errorf("jobs = %v, want [job-tok-a]", jobs)
+	}
+	if ms, err := s.PanelMembers(ctx, panel); err != nil || len(ms) != 0 {
+		t.Errorf("members after the delete = %+v, %v; want none", ms, err)
+	}
+	if _, err := s.MarkMemberDispatched(ctx, mb.ID, "job-late", hash("late"), t0.Add(time.Hour), t0); !errors.Is(err, ErrNotRunning) {
+		t.Errorf("a late dispatch = %v, want ErrNotRunning", err)
+	}
+	if ms, err := s.PanelMembers(ctx, otherPanel); err != nil || len(ms) != 2 {
+		t.Errorf("another client's members = %+v, %v; want both", ms, err)
+	}
+}

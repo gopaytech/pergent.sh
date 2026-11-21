@@ -222,11 +222,13 @@ func (s *Store) UpdateAPIClient(ctx context.Context, name string, apply func(*AP
 
 // DeleteAPIClient removes a client and, with it, its keys, its reviews, their
 // usage and callbacks, and its callback_failing item. found is false when
-// there is no such client. jobs are the Job names of its reviews that were
-// running, nil when there are none. Its queued and running runs are locked
-// (FOR UPDATE) before the delete: ClaimQueued skips a locked queued run, and a
-// MarkDispatched on a locked run waits for the delete, then matches no row,
-// so no run gets a Job that jobs does not name.
+// there is no such client. jobs are the Job names of its reviews, and of the
+// members of its panels, that were running, nil when there are none. Its
+// queued and running runs, and its panels waiting for their members, are
+// locked (FOR UPDATE) before the delete: ClaimQueued skips a locked queued
+// run, and a MarkDispatched (or MarkMemberDispatched) on a locked run waits
+// for the delete, then matches no row, so no run or member gets a Job that
+// jobs does not name.
 func (s *Store) DeleteAPIClient(ctx context.Context, name string) (jobs []string, found bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -234,7 +236,8 @@ func (s *Store) DeleteAPIClient(ctx context.Context, name string) (jobs []string
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 	rows, err := tx.Query(ctx, `SELECT r.state, r.job_name FROM runs r JOIN api_clients c ON c.id = r.api_client_id
-		WHERE c.name = $1 AND r.state IN ('queued', 'running') ORDER BY r.created_at, r.id FOR UPDATE OF r`, name)
+		WHERE c.name = $1 AND (r.state IN ('queued', 'running') OR (r.state = 'waiting' AND r.skip_reason = 'panel_members'))
+		ORDER BY r.created_at, r.id FOR UPDATE OF r`, name)
 	if err != nil {
 		return nil, false, err
 	}
@@ -247,6 +250,27 @@ func (s *Store) DeleteAPIClient(ctx context.Context, name string) (jobs []string
 		if state == string(Running) && job != "" {
 			jobs = append(jobs, job)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	// A member gets a Job only while its run waits, and those runs are locked:
+	// read after the lock, this names every member's Job. The members go with
+	// their runs.
+	rows, err = tx.Query(ctx, `SELECT m.job_name FROM panel_members m JOIN runs r ON r.id = m.run_id
+		JOIN api_clients c ON c.id = r.api_client_id
+		WHERE c.name = $1 AND m.state = 'running' AND m.job_name <> ''
+		ORDER BY m.created_at, m.id`, name)
+	if err != nil {
+		return nil, false, err
+	}
+	for rows.Next() {
+		var job string
+		if err := rows.Scan(&job); err != nil {
+			rows.Close()
+			return nil, false, err
+		}
+		jobs = append(jobs, job)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, err

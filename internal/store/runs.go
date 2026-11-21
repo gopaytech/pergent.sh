@@ -676,7 +676,8 @@ func (s *Store) CountRunning(ctx context.Context) (int, error) {
 // runs that have to wait for an instance take no slot from the others.
 //
 // An API review is claimed only while its client has fewer than its
-// max_in_flight reviews running, counting those this claim takes: its due
+// max_in_flight reviews running (a panel waiting for its members is one
+// review running), counting those this claim takes: its due
 // reviews are numbered oldest first, and those past the cap stay queued and
 // take no slot either. A merge request's run is never held by it.
 func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip ...string) ([]Run, error) {
@@ -699,7 +700,8 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip 
 					FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
 					  AND instance <> ALL($3::text[])) q
 				WHERE q.kind = 'mr'
-				   OR q.n + (SELECT count(*) FROM runs x WHERE x.api_client_id = q.api_client_id AND x.state = 'running')
+				   OR q.n + (SELECT count(*) FROM runs x WHERE x.api_client_id = q.api_client_id
+						AND (x.state = 'running' OR (x.state = 'waiting' AND x.skip_reason = 'panel_members')))
 					<= (SELECT c.max_in_flight FROM api_clients c WHERE c.id = q.api_client_id))
 			ORDER BY created_at, id LIMIT $1 FOR UPDATE OF runs SKIP LOCKED)
 		RETURNING `+runColumns, limit, now, skip)
@@ -871,20 +873,25 @@ func (s *Store) HoldRun(ctx context.Context, id, reason string) (ok bool, err er
 	return tag.RowsAffected() == 1, nil
 }
 
+// panelWaitingSQL is a panel review's run while its members run: live, and on
+// its way.
+const panelWaitingSQL = `(state = 'waiting' AND skip_reason = 'panel_members')`
+
 // liveRerunRunSQL finds the run of a head and target that EnqueueRerun leaves
-// as it is ($6 is replace): queued, running or reported, but not, with
-// replace, a push's run that hasn't been dispatched or reviews only some files.
+// as it is ($6 is replace): queued, running, reported or a panel waiting for
+// its members, but not, with replace, a push's run that hasn't been
+// dispatched or reviews only some files.
 const liveRerunRunSQL = `SELECT id::text FROM runs
 	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-	  AND state IN ('queued', 'running', 'reported')
+	  AND (state IN ('queued', 'running', 'reported') OR ` + panelWaitingSQL + `)
 	  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`
 
-// liveStartRunSQL finds a live (queued, running or reported) run of a head and
-// target, which StartRun reaches only when no waiting run or undispatched
-// push run of it was there to start.
+// liveStartRunSQL finds a live (queued, running, reported or a panel waiting
+// for its members) run of a head and target, which StartRun reaches only when
+// no waiting run or undispatched push run of it was there to start.
 const liveStartRunSQL = `SELECT id::text FROM runs
 	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-	  AND state IN ('queued', 'running', 'reported')`
+	  AND (state IN ('queued', 'running', 'reported') OR ` + panelWaitingSQL + `)`
 
 // undispatchedPushRunSQL is the condition of a push's run that is queued or
 // claimed and not dispatched yet, which StartRun turns into a start.
@@ -924,7 +931,8 @@ func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, tar
 }
 
 // StartRun starts the review of headSHA onto targetBranch of an untrusted
-// author's merge request. A waiting run of that head and target becomes a
+// author's merge request. A waiting run of that head and target (not a
+// panel waiting for its members, which is on its way) becomes a
 // queued run with TriggerStart (started is true, id is that run's), and so
 // does a push's run of it not dispatched yet, queued or claimed (being
 // checked): the dispatcher's hold then leaves it alone, and so does its CI
@@ -946,7 +954,7 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL, quota_checked = true,
 			ci_checked = ci_checked OR skip_reason = 'ci_pending'
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state = 'waiting'
+		  AND state = 'waiting' AND skip_reason <> 'panel_members'
 		RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
@@ -1717,10 +1725,11 @@ type WaitingChange struct {
 // WaitingChanges returns the merge requests of project (its path, matched
 // ignoring case) on instance whose newest live run waits, newest first, at
 // most 100. A waiting run with a newer one (left by a release that didn't
-// know waiting runs) isn't listed.
+// know waiting runs) isn't listed, nor is a panel waiting for its members.
 func (s *Store) WaitingChanges(ctx context.Context, instance, project string) ([]WaitingChange, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.mr_iid, r.head_sha, r.title, r.author, r.web_url, r.created_at, r.skip_reason FROM runs r
 		WHERE r.instance = $1 AND lower(r.project_path) = lower($2) AND r.state = 'waiting'
+		  AND r.skip_reason <> 'panel_members'
 		  AND NOT EXISTS (SELECT 1 FROM runs n
 			WHERE n.instance = r.instance AND n.project_id = r.project_id AND n.mr_iid = r.mr_iid
 			  AND n.state <> 'superseded' AND (n.created_at, n.id) > (r.created_at, r.id))

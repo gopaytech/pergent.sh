@@ -112,14 +112,14 @@ func visibleCond(v Visibility, n int) (string, []any) {
 // "unknown": nothing is guessed. A skipped run (no skills) has its own
 // outcome, "skipped": it was not reviewed, and it is neither running,
 // failed nor superseded. A run dropped for the next entry of its chain is
-// "fell_back".
+// "fell_back". A panel waiting for its members is running.
 const outcomeSQL = `(CASE r.state
 	WHEN 'queued' THEN 'running'
 	WHEN 'running' THEN 'running'
 	WHEN 'reported' THEN CASE WHEN r.failure_reason <> '' THEN 'failed' ELSE 'running' END
 	WHEN 'superseded' THEN CASE WHEN r.outcome = 'fell_back' THEN 'fell_back' ELSE 'superseded' END
 	WHEN 'skipped' THEN 'skipped'
-	WHEN 'waiting' THEN 'waiting'
+	WHEN 'waiting' THEN CASE WHEN r.skip_reason = 'panel_members' THEN 'running' ELSE 'waiting' END
 	WHEN 'publish_failed' THEN 'failed'
 	ELSE COALESCE(NULLIF(r.outcome, ''), 'unknown') END)`
 
