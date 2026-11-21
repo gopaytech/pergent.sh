@@ -711,7 +711,7 @@ export const teamPayments: TeamView = {
   id: 2,
   name: "Payments",
   members: [{ accountId: 5, username: "dev-user@example.com", email: "dev-user@example.com", role: "maintainer" }],
-  repos: [{ instance: "main", project: "acme/payments" }],
+  repos: [{ instance: "main", project: "acme/payments", owner: true }],
 };
 
 export const teamEmpty: TeamView = {

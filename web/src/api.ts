@@ -905,10 +905,6 @@ export type ChainRef = { source: EntrySource; id: string };
 // ChainUpdate is the body of PUT .../chain: the entries in order.
 export type ChainUpdate = { entries: ChainRef[] };
 
-// ModelInUseView is the body of the 409 a removal gets while repositories
-// name the model.
-export type ModelInUseView = { error: string; repositories: RepoRef[] };
-
 // APILimits are a client's caps on its requests (APILimitsView).
 export type APILimits = {
   maxRequestBytes: number;
@@ -1152,7 +1148,10 @@ export type TeamMemberView = { accountId: number; username: string; email: strin
 
 // TeamRepoView is a repository a team covers; project "" covers every
 // repository of the instance.
-export type TeamRepoView = { instance: string; project: string };
+// owner is the owner tick: the team whose models and chain the repository (or,
+// for an instance entry, each repository of the instance with no owner of
+// its own) uses. A team's save replaces the ticks too: a missing one is false.
+export type TeamRepoView = { instance: string; project: string; owner: boolean };
 
 // TeamView is one team. A team has no role of its own: each member has one.
 export type TeamView = {
