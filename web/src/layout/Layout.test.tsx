@@ -15,7 +15,7 @@ afterEach(() => {
 const users = [userDev];
 const base = { "GET /api/overview?days=7": { body: overview } };
 const adminPages = ["Users", "Teams", "Integrations", "Settings", "Usage", "Audit log"];
-const userPages = ["Overview", "Repositories", "Reviews", "Skills"];
+const userPages = ["Overview", "Repositories", "Reviews", "Skills", "Teams"];
 
 // linkNames are the menu's links by their label, without the icon and the badge.
 const linkNames = (nav: HTMLElement) =>
@@ -34,9 +34,12 @@ describe("Layout: the user area", () => {
     const nav = await screen.findByRole("navigation", { name: "Main" });
     expect(linkNames(nav)).toEqual(userPages);
     expect(within(nav).queryByRole("link", { name: "API clients" })).not.toBeInTheDocument();
-    for (const label of [...adminPages, "Admin", "Admin area", "User pages"]) {
+    // Teams is the user area's page of the user's own teams, not the admins'.
+    expect(within(nav).getByRole("link", { name: "Teams" })).toHaveAttribute("href", "/teams");
+    for (const label of [...adminPages.filter((p) => p !== "Teams"), "Admin", "Admin area", "User pages"]) {
       expect(within(nav).queryByRole("link", { name: label })).not.toBeInTheDocument();
     }
+    expect(within(nav).getAllByRole("link").filter((a) => a.getAttribute("href")?.startsWith("/admin"))).toEqual([]);
     expect(screen.getByText(/dev-user/)).toHaveTextContent("dev-user · user");
   });
 
@@ -45,10 +48,11 @@ describe("Layout: the user area", () => {
     renderApp("/");
     const nav = await screen.findByRole("navigation", { name: "Main" });
     // API clients sit right after Repositories, for an admin only.
-    expect(linkNames(nav)).toEqual(["Overview", "Repositories", "API clients", "Reviews", "Skills", "Admin area"]);
+    expect(linkNames(nav)).toEqual(["Overview", "Repositories", "API clients", "Reviews", "Skills", "Teams", "Admin area"]);
     expect(within(nav).getByRole("link", { name: "API clients" })).toHaveAttribute("href", "/api-clients");
     expect(within(nav).getByRole("link", { name: "Admin area" })).toHaveAttribute("href", "/admin");
-    for (const label of adminPages) expect(within(nav).queryByRole("link", { name: label })).not.toBeInTheDocument();
+    for (const label of adminPages.filter((p) => p !== "Teams")) expect(within(nav).queryByRole("link", { name: label })).not.toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "Teams" })).toHaveAttribute("href", "/teams");
     expect(screen.getByText(/^sso-admin/)).toHaveTextContent("sso-admin · admin");
   });
 
@@ -157,7 +161,7 @@ describe("Layout: the admin area", () => {
 describe("the old admin addresses", () => {
   it("send an admin to the page under /admin", async () => {
     fakeApi({ "GET /api/me": { body: operator } });
-    for (const page of ["users", "teams", "integrations", "settings", "audit"]) {
+    for (const page of ["users", "integrations", "settings", "audit"]) {
       const { unmount } = renderApp(`/${page}`);
       await vi.waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(new RegExp(`^/admin/${page}$`)));
       unmount();
@@ -166,13 +170,25 @@ describe("the old admin addresses", () => {
 
   it("are not found for a user, and ask the admin API nothing", async () => {
     const fake = fakeApi({ "GET /api/me": { body: viewer } });
-    for (const page of ["users", "teams", "integrations", "settings", "audit"]) {
+    for (const page of ["users", "integrations", "settings", "audit"]) {
       const { unmount } = renderApp(`/${page}`);
       expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
       expect(screen.getByTestId("location")).toHaveTextContent(new RegExp(`^/${page}$`));
       unmount();
     }
     expect(fake.calls.map((c) => c.url).filter((u) => u !== "/api/me")).toEqual([]);
+  });
+});
+
+describe("/teams", () => {
+  it("is the user area's list of the session's teams, for an admin too: no longer a way to /admin/teams", async () => {
+    for (const me of [viewer, operator]) {
+      fakeApi({ "GET /api/me": { body: me }, "GET /api/me/teams": { body: [] } });
+      const { unmount } = renderApp("/teams");
+      expect(await screen.findByRole("heading", { name: "Teams" })).toBeInTheDocument();
+      expect(screen.getByTestId("location")).toHaveTextContent(/^\/teams$/);
+      unmount();
+    }
   });
 });
 

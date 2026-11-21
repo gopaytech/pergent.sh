@@ -3,18 +3,23 @@ import { useState, type FormEvent } from "react";
 
 import {
   api,
-  ApiError,
+  paths,
   skillBudget,
+  type ChainEntryView,
+  type ChainRef,
+  type ChainView,
   type CommentFooterView,
   type DefaultsView,
   type LibrarySkill,
   type ModelAdminView,
-  type ModelInUseView,
   type ModelsAdminView,
 } from "../api";
+import ChainEditor from "../ChainEditor";
 import CommentLayoutEditor from "../CommentLayoutEditor";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Switch, bytesText, noFill, secretFill, secretText } from "../ui";
+import MarkBanner, { markText } from "../MarkBanner";
+import { AddModelForm, EditModelForm } from "../ModelForms";
+import { ErrorBox, Loading, Switch, bytesText, noFill, secretText } from "../ui";
 
 // AdminSettings holds what an admin sets for the whole of pergent.sh: the
 // defaults a repository switched on in the dashboard gets, and the list of
@@ -621,34 +626,23 @@ function SkillPicker({
 // --- the models ---
 
 const modelsKey = ["admin-models"];
+const chainKey = ["admin-chain"];
 
-const labelOf = (m: { provider: string; model: string }) => `${m.provider} / ${m.model}`;
-const repoText = (r: { instance: string; project: string }) => `${r.instance}: ${r.project}`;
 const repositoriesText = (n: number) => `${n} ${n === 1 ? "repository" : "repositories"}`;
 
-// providers are the opencode provider IDs offered in the list. Any other
-// ID can still be typed under "Other".
-const providers: [string, string][] = [
-  ["anthropic", "Anthropic (Claude)"],
-  ["openai", "OpenAI"],
-  ["google", "Google (Gemini)"],
-  ["deepseek", "DeepSeek"],
-  ["openrouter", "OpenRouter"],
-  ["groq", "Groq"],
-  ["mistral", "Mistral"],
-  ["xai", "xAI (Grok)"],
-];
-
-// Models is the list reviews can run on: the default, the ones a repository
-// can be given, and the form to add one. Keys are write-only: they are sent
-// when typed and never shown.
+// Models is the list reviews can run on: the default, the global chain, and
+// the form to add an entry. Keys are write-only: they are sent when typed
+// and never shown.
 function Models({ v }: { v: ModelsAdminView }) {
+  const client = useQueryClient();
   return (
     <>
       <section className="card" aria-label="Models">
         <h2>Models</h2>
+        <MarkBanner entries={v.models} />
         <div className="pad meta">
-          A repository runs on the default model unless an admin of the repository picks another one on its Settings tab.
+          Reviews run on the global chain below, unless a repository's owner team or the repository has a chain of its own. A
+          team chain may use only the entries with teams may use on.
         </div>
         {!v.canSetDefault && (
           <div className="pad meta">
@@ -661,34 +655,37 @@ function Models({ v }: { v: ModelsAdminView }) {
           <ModelRow key={m.id} m={m} canSetDefault={v.canSetDefault} following={v.followingDefault} />
         ))}
       </section>
-      <AddModel />
+      <GlobalChain />
+      <AddModelForm<ModelAdminView>
+        path="/api/admin/models"
+        teamsMayUse
+        onAdded={() => {
+          // The first entry is the default: the list says which.
+          client.invalidateQueries({ queryKey: modelsKey });
+          client.invalidateQueries({ queryKey: chainKey });
+          client.invalidateQueries({ queryKey: ["repo"] });
+        }}
+      />
     </>
   );
-}
-
-// inUseBody is the 409 body of a removal of a model that repositories name,
-// or null for any other failure.
-function inUseBody(err: unknown): ModelInUseView | null {
-  if (!(err instanceof ApiError) || err.status !== 409) return null;
-  const b = err.body as Partial<ModelInUseView> | undefined;
-  if (!b || !Array.isArray(b.repositories)) return null;
-  return { error: err.message, repositories: b.repositories };
 }
 
 function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDefault: boolean; following: number }) {
   const client = useQueryClient();
   const write = useWrite();
   const [editing, setEditing] = useState(false);
-  const label = labelOf(m);
-  // A change of the list moves what the repository pages offer.
+  // A change of the list moves what the chains and repository pages show.
   const changed = () => {
     client.invalidateQueries({ queryKey: modelsKey });
+    client.invalidateQueries({ queryKey: chainKey });
     client.invalidateQueries({ queryKey: ["repo"] });
+    client.invalidateQueries({ queryKey: ["repo-chain"] });
   };
   const makeDefault = useMutation({
     mutationFn: () => write<ModelsAdminView>("POST", `/api/admin/models/${encodeURIComponent(m.id)}/default`, {}),
     onSuccess: (list) => {
       client.setQueryData(modelsKey, list);
+      client.invalidateQueries({ queryKey: chainKey });
       client.invalidateQueries({ queryKey: ["repo"] });
     },
   });
@@ -696,261 +693,152 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
     mutationFn: () => write<void>("DELETE", `/api/admin/models/${encodeURIComponent(m.id)}`),
     onSuccess: changed,
   });
-  const inUse = remove.isError ? inUseBody(remove.error) : null;
+  // The PUT needs the base URL: it is sent as it is.
+  const forTeams = useMutation({
+    mutationFn: (on: boolean) => write<ModelAdminView>("PUT", `/api/admin/models/${encodeURIComponent(m.id)}`, { baseURL: m.baseURL, teamsMayUse: on }),
+    onSuccess: changed,
+  });
+  const clear = useMutation({
+    mutationFn: () => write<void>("DELETE", paths.apiAdminModelMark(m.id)),
+    onSuccess: changed,
+  });
   const fromConfig = m.source === "config";
-  const busy = makeDefault.isPending || remove.isPending;
+  const busy = makeDefault.isPending || remove.isPending || forTeams.isPending;
+  const confirmRemove = () => {
+    const chains = m.usedIn.length > 0 ? ` These chains name it and will skip it: ${m.usedIn.join(", ")}.` : "";
+    if (window.confirm(`Remove ${m.name} from the list? Its key is deleted.${chains}`)) remove.mutate();
+  };
   return (
-    <div className="pad stack" role="group" aria-label={label}>
+    <div className="pad stack" role="group" aria-label={m.name}>
       <div className="row">
-        <b className="grow mono">{label}</b>
+        <b className="grow">{m.name}</b>
         {m.default && <span className="badge">default</span>}
         {fromConfig && <span className="badge cfg">from the config file</span>}
       </div>
+      <div className="meta mono">
+        {m.provider} / {m.model}
+      </div>
       {m.baseURL && <div className="meta">Base URL {m.baseURL}</div>}
       <div className="meta">Key {secretText(m.key)}</div>
-      {m.repositories.length > 0 && <div className="meta">Used by {m.repositories.map(repoText).join(", ")}</div>}
+      {m.usedIn.length > 0 && <div className="meta">In chains: {m.usedIn.join(", ")}</div>}
       {m.default && following > 0 && (
         <div className="meta">
           {repositoriesText(following)} name no model and follow it.
         </div>
       )}
+      {m.mark?.live && (
+        <div className="row">
+          <span className="grow meta warn-text">Marked: {markText(m.mark)}</span>
+          <button type="button" className="btn small" aria-label={`Clear mark of ${m.name}`} disabled={clear.isPending} onClick={() => clear.mutate()}>
+            Clear mark
+          </button>
+        </div>
+      )}
+      {!fromConfig && (
+        <label className="link-block">
+          <Switch label={`Teams may use ${m.name}`} checked={m.teamsMayUse} disabled={busy} onChange={(on) => forTeams.mutate(on)} />
+          <span>Teams may use it</span>
+        </label>
+      )}
       {!fromConfig && !editing && (
         <div className="actions-row">
-          <button type="button" className="btn small" aria-label={`Edit ${label}`} disabled={busy} onClick={() => setEditing(true)}>
+          <button type="button" className="btn small" aria-label={`Edit ${m.name}`} disabled={busy} onClick={() => setEditing(true)}>
             Edit
           </button>
           {canSetDefault && !m.default && (
             <button
               type="button"
               className="btn small"
-              aria-label={`Set ${label} as default`}
+              aria-label={`Set ${m.name} as default`}
               disabled={busy}
               onClick={() => {
                 const moved =
                   following === 0
                     ? "No repository follows the default today."
                     : `The ${repositoriesText(following)} that name no model will review with it from now on.`;
-                if (window.confirm(`Make ${label} the default model? ${moved}`)) makeDefault.mutate();
+                if (window.confirm(`Make ${m.name} the default model? ${moved}`)) makeDefault.mutate();
               }}
             >
               Set as default
             </button>
           )}
           {!m.default && (
-            <button
-              type="button"
-              className="btn small"
-              aria-label={`Remove ${label}`}
-              disabled={busy}
-              onClick={() => {
-                if (window.confirm(`Remove ${label} from the list? Its key is deleted.`)) remove.mutate();
-              }}
-            >
+            <button type="button" className="btn small" aria-label={`Remove ${m.name}`} disabled={busy} onClick={confirmRemove}>
               Remove
             </button>
           )}
         </div>
       )}
       {!fromConfig && m.default && !editing && <div className="meta">Make another model the default to remove this one.</div>}
-      {editing && <EditModel m={m} onDone={() => setEditing(false)} onSaved={changed} />}
+      {editing && (
+        <EditModelForm m={m} path={`/api/admin/models/${encodeURIComponent(m.id)}`} onDone={() => setEditing(false)} onSaved={changed} />
+      )}
       {makeDefault.isError && <ErrorBox error={makeDefault.error} />}
-      {remove.isError &&
-        (inUse ? (
-          <div className="error" role="alert">
-            {label} is in use. Change the model of these repositories first:
-            <ul>
-              {inUse.repositories.map((r) => (
-                <li key={repoText(r)}>{repoText(r)}</li>
-              ))}
-            </ul>
-          </div>
-        ) : (
-          <ErrorBox error={remove.error} />
-        ))}
+      {remove.isError && <ErrorBox error={remove.error} />}
+      {forTeams.isError && <ErrorBox error={forTeams.error} />}
+      {clear.isError && <ErrorBox error={clear.error} />}
     </div>
   );
 }
 
-// EditModel changes the base URL of an entry and, when typed, its key. The
-// provider and model never change: another one is a new entry.
-function EditModel({ m, onDone, onSaved }: { m: ModelAdminView; onDone: () => void; onSaved: () => void }) {
-  const write = useWrite();
-  const label = labelOf(m);
-  const [baseURL, setBaseURL] = useState(m.baseURL);
-  const [key, setKey] = useState("");
-  // With a key stored, its input waits for Replace; with none, it is offered.
-  const [replacing, setReplacing] = useState(false);
-  const askKey = !m.key.set || replacing;
-  const save = useMutation({
-    mutationFn: (body: Record<string, string>) => write<ModelAdminView>("PUT", `/api/admin/models/${encodeURIComponent(m.id)}`, body),
-    // The closure holds the key: drop it with the input, not after 5 minutes.
-    gcTime: 0,
-    onSuccess: () => {
-      setKey("");
-      onSaved();
-      onDone();
-    },
-  });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    // An empty base URL clears it; a key goes only when one was typed.
-    save.mutate({ baseURL: baseURL.trim(), ...(askKey && key !== "" ? { apiKey: key } : {}) });
-  };
-  const id = `model-${m.id}`;
-  return (
-    <form className="stack" aria-label={`Edit ${label}`} onSubmit={submit}>
-      <label htmlFor={`${id}-base-url`}>Base URL</label>
-      <input
-        id={`${id}-base-url`}
-        type="text"
-        {...noFill}
-        spellCheck={false}
-        placeholder="the provider's own"
-        value={baseURL}
-        onChange={(e) => setBaseURL(e.target.value)}
-      />
-      <div className="meta">Empty uses the provider's own API. Set it for a proxy or an OpenAI-compatible server.</div>
-      <div className="name">API key</div>
-      <div className="meta">{secretText(m.key)}</div>
-      {askKey ? (
-        <input
-          type="password"
-          aria-label="New API key"
-          {...secretFill}
-          spellCheck={false}
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-        />
-      ) : (
-        <div>
-          <button type="button" className="btn small" onClick={() => setReplacing(true)}>
-            Replace
-          </button>
-        </div>
-      )}
-      {save.isError && <ErrorBox error={save.error} />}
-      <div className="actions-row">
-        <button type="submit" className="btn primary small" disabled={save.isPending}>
-          Save
-        </button>
-        <button type="button" className="btn small" disabled={save.isPending} onClick={onDone}>
-          Cancel
-        </button>
-      </div>
-    </form>
-  );
-}
-
-// AddModel adds an entry to the list. The key is write-only: it is sent
-// once and the input is emptied.
-function AddModel() {
+// GlobalChain is the chain reviews use when neither a repository nor its
+// owner team has one: the config file's entries in front, then the
+// dashboard's in the order the admin puts them. Position 1 is the default.
+function GlobalChain() {
   const client = useQueryClient();
   const write = useWrite();
-  const [choice, setChoice] = useState("");
-  const [otherID, setOtherID] = useState("");
-  const [model, setModel] = useState("");
-  const [baseURL, setBaseURL] = useState("");
-  const [key, setKey] = useState("");
+  const chain = useQuery({ queryKey: chainKey, queryFn: () => api.get<ChainView>("/api/admin/chain") });
   const [note, setNote] = useState("");
-  const add = useMutation({
-    mutationFn: (body: Record<string, string>) => write<ModelAdminView>("POST", "/api/admin/models", body),
-    // The closure holds the key: drop it with the input, not after 5 minutes.
-    gcTime: 0,
+  const changed = () => {
+    client.invalidateQueries({ queryKey: modelsKey });
+    client.invalidateQueries({ queryKey: ["repo"] });
+    client.invalidateQueries({ queryKey: ["repo-chain"] });
+  };
+  const save = useMutation({
+    mutationFn: (entries: ChainRef[]) => write<ChainView>("PUT", "/api/admin/chain", { entries }),
     onMutate: () => setNote(""),
-    onSuccess: (added) => {
-      setChoice("");
-      setOtherID("");
-      setModel("");
-      setBaseURL("");
-      setKey("");
-      setNote(`Added ${labelOf(added)}.`);
-      // The first entry is the default: the list says which.
-      client.invalidateQueries({ queryKey: modelsKey });
-      client.invalidateQueries({ queryKey: ["repo"] });
+    onSuccess: (next) => {
+      client.setQueryData(chainKey, next);
+      changed();
+      setNote("Saved.");
     },
   });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    add.mutate({
-      provider: (choice === "other" ? otherID : choice).trim(),
-      model: model.trim(),
-      baseURL: baseURL.trim(),
-      apiKey: key,
-    });
-  };
+  const clear = useMutation({
+    mutationFn: (e: ChainEntryView) => write<void>("DELETE", paths.apiAdminModelMark(e.id)),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: chainKey });
+      changed();
+    },
+  });
   return (
-    <form className="card pad stack" aria-label="Add a model" onSubmit={submit}>
-      <h2>Add a model</h2>
-      <label htmlFor="llm-provider">Provider</label>
-      <select id="llm-provider" value={choice} onChange={(e) => setChoice(e.target.value)} required>
-        <option value="" disabled>
-          Choose a provider
-        </option>
-        {providers.map(([id, name]) => (
-          <option key={id} value={id}>
-            {name}
-          </option>
-        ))}
-        <option value="other">Other (type its ID)</option>
-      </select>
-      {choice === "other" && (
-        <>
-          <label htmlFor="llm-provider-id">Provider ID</label>
-          <input
-            id="llm-provider-id"
-            type="text"
-            {...noFill}
-            spellCheck={false}
-            value={otherID}
-            onChange={(e) => setOtherID(e.target.value)}
-            required
-          />
-          <div className="meta">The provider's ID in opencode. With a Base URL, it is any OpenAI-compatible server.</div>
-        </>
+    <section className="card" aria-label="Global chain">
+      <h2>Global chain</h2>
+      <div className="pad meta">
+        Reviews try the entries in this order. When the provider says an entry is out of quota or credit, or rejects its key, the
+        review starts again on the next one. The first entry is the default.
+      </div>
+      {chain.isPending && <Loading />}
+      {chain.isError && <ErrorBox error={chain.error} />}
+      {chain.isSuccess && (
+        <ChainEditor
+          // A new answer from the server starts the editor again from it.
+          key={JSON.stringify(chain.data)}
+          value={chain.data}
+          choices={chain.data.choices}
+          readOnly={chain.data.readOnly}
+          allowEmpty
+          busy={save.isPending}
+          onSave={(entries) => save.mutate(entries)}
+          onClear={(e) => clear.mutate(e)}
+        />
       )}
-      <label htmlFor="llm-model">Model</label>
-      <input
-        id="llm-model"
-        type="text"
-        {...noFill}
-        spellCheck={false}
-        value={model}
-        onChange={(e) => setModel(e.target.value)}
-        required
-      />
-      <div className="meta">The model's ID as the provider names it.</div>
-      <label htmlFor="llm-base-url">Base URL</label>
-      <input
-        id="llm-base-url"
-        type="text"
-        {...noFill}
-        spellCheck={false}
-        placeholder="the provider's own"
-        value={baseURL}
-        onChange={(e) => setBaseURL(e.target.value)}
-      />
-      <div className="meta">Empty uses the provider's own API. Set it for a proxy or an OpenAI-compatible server.</div>
-      <label htmlFor="llm-api-key">API key</label>
-      <input
-        id="llm-api-key"
-        type="password"
-        {...secretFill}
-        spellCheck={false}
-        value={key}
-        onChange={(e) => setKey(e.target.value)}
-        required
-      />
-      {add.isError && <ErrorBox error={add.error} />}
       {note && (
-        <div className="note" role="status">
+        <div className="pad note" role="status">
           {note}
         </div>
       )}
-      <div className="actions-row">
-        <button type="submit" className="btn primary" disabled={add.isPending}>
-          Add model
-        </button>
-      </div>
-    </form>
+      {save.isError && <ErrorBox error={save.error} />}
+      {clear.isError && <ErrorBox error={clear.error} />}
+    </section>
   );
 }

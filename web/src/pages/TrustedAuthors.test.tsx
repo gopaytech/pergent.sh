@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RepositoryDetailView } from "../api";
 import { fakeApi } from "../test/fakeApi";
 import {
+  chainRepoInherit,
   instanceDashboardGitLab,
   instanceGitLab,
   librarySkills,
@@ -32,6 +33,7 @@ const settingsRoutes = (detail: RepositoryDetailView) => ({
   "GET /api/skills": { body: librarySkills },
   "GET /api/repositories/main/acme/payments/inputs": { body: noInputs },
   "GET /api/repositories/main/acme/payments/teams": { body: { teams: [] } },
+  "GET /api/repositories/main/acme/payments/chain": { body: chainRepoInherit },
   "PUT /api/repositories/main/acme/payments/settings": { body: detail },
 });
 

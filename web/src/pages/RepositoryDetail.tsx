@@ -8,6 +8,7 @@ import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, ago, platformName, ski
 import AttentionRows from "./Attention";
 import PastDismissals from "./PastDismissals";
 import Readiness from "./Readiness";
+import RepoModelChain from "./RepoModelChain";
 import ReviewList from "./ReviewList";
 import SettingsTab from "./RepositorySettings";
 import SkillResults from "./SkillResults";
@@ -94,6 +95,9 @@ export default function RepositoryDetail() {
           />
         )}
         {tab === "inputs" && <Inputs instance={repo.instance} project={repo.project} />}
+        {/* A viewer has no Settings tab, where the model chain is: it is
+            shown here, with what else a review would get. */}
+        {tab === "inputs" && view.role === "viewer" && <RepoModelChain instance={repo.instance} project={repo.project} />}
         {tab === "readiness" && <Readiness instance={repo.instance} project={repo.project} />}
         {tab === "setup" && (
           <section className="card" aria-label="Setup checks">
