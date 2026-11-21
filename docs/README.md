@@ -27,7 +27,7 @@
 | [Skills and instructions](concepts/skills.md) | How a review picks its skills, and the skill library |
 | [Commands](concepts/commands.md) | `@<bot> review`, `review failed`, `dismiss` |
 | [How approval works](concepts/approval.md) | When pergent.sh approves, and when it takes it back |
-| [Models](concepts/models.md) | The list of models, the default, and a model per repository |
+| [Models](concepts/models.md) | Global and team models, model chains, and the backup model when a key is out of quota or credit |
 | [Usage](concepts/usage.md) | Where the model tokens go |
 | [Metrics](concepts/metrics.md) | Prometheus metrics |
 | [Skill results](concepts/skill-results.md) | What became of each skill's findings |
