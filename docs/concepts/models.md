@@ -54,8 +54,6 @@ fallback:
 
 Each backup needs its own `api_key_env`, in the Secret like the main key. See [Config reference](../reference/configuration.md).
 
-## When a model can't be used
-
 ## The global chain and the default
 
 Admins change the global chain on the admin **Settings** page, under **Global chain**. It holds global entries only.
