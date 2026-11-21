@@ -11,8 +11,10 @@ Tests for the store and the end-to-end flow need a PostgreSQL database; they ski
 ```bash
 docker run -d --name pergent-sh-pg -e POSTGRES_PASSWORD=pergent -e POSTGRES_DB=pergent_test -p 55432:5432 postgres:16
 export PERGENT_SH_TEST_DATABASE_URL='postgres://postgres:pergent@localhost:55432/pergent_test?sslmode=disable'
-go test -count=1 ./...
+go test -count=1 -timeout 30m ./...
 ```
+
+With the database, `internal/engine` alone takes several minutes, so `-timeout 30m` keeps it under the limit (the default is 10 minutes per package).
 
 All other tests need no external service. Release images are built by the `release` workflow when a `v*.*.*` tag is pushed and published as `ghcr.io/gopaytech/pergent.sh:<tag>` for linux/amd64 and linux/arm64. The `ci` workflow also publishes `ghcr.io/gopaytech/pergent.sh:main` and `:sha-<short sha>` (both platforms) on every push to `main`, after the test and chart jobs pass; `latest` is only set by releases.
 
