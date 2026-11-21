@@ -12,7 +12,7 @@ Who approves is a choice of three:
 
 ## 1. Create the review App
 
-In the organization's settings, **Developer settings → GitHub Apps → New GitHub App**:
+In the organization's settings, open **Developer settings**, then **GitHub Apps**, then **New GitHub App**:
 
 - **Webhook:** active. URL `<public_url>/webhooks/github/<instance name>`, for example `https://pergent.example.com/webhooks/github/gh`. Once the instance is added, its card under **Integrations** shows this URL with a copy button. Secret: a random string (`openssl rand -hex 32`); you enter it as the instance's webhook secret in the dashboard, or, for an instance in the config file, put it in the Secret as the instance's `webhook_secret_env`.
 - **Repository permissions:**
@@ -32,11 +32,11 @@ Create it, note its **App ID** and generate a **private key** (a `.pem` file).
 
 Changing who approves (another App, the review App, a bot user) doesn't withdraw approvals the old approver left. Turn approval off for the repositories first and wait until their approvals are withdrawn, or dismiss them by hand.
 
-**An existing review App** needs one change to run commands: under **Permissions & events → Subscribe to events**, tick **Issue comment** and save. It asks for no new permission, as it already has the ones above. Without the event the App still reviews, but no command is ever received.
+**An existing review App** needs one change to run commands: under **Subscribe to events** in **Permissions & events**, tick **Issue comment** and save. It asks for no new permission, as it already has the ones above. Without the event the App still reviews, but no command is ever received.
 
 **An existing review App** that should read [CI jobs](../concepts/ci-jobs.md) can add **Actions: Read-only** (needed only by repositories whose CI jobs read `log` or `report` from GitHub Actions) and the optional **Check run** event, under **Permissions & events**. GitHub applies a new permission to an installation only after its owner accepts it. Nothing changes for a repository that doesn't choose CI jobs. The dashboard's readiness warns, for repositories that have CI jobs, while an installation lacks either one.
 
-**Administration: Read** is optional too. To turn it on, open **Permissions & events → Repository permissions**, set **Administration** to **Read-only** and save; the owner of each installation then has to accept the new permission. The [readiness scan](../concepts/dashboard.md#readiness-scan) uses it for the rows "Approvals needed to merge", "Default branch protected" and "Required checks before merge". Reviews never need it.
+**Administration: Read** is optional too. To turn it on, open **Repository permissions** in **Permissions & events**, set **Administration** to **Read-only** and save; the owner of each installation then has to accept the new permission. The [readiness scan](../concepts/dashboard.md#readiness-scan) uses it for the rows "Approvals needed to merge", "Default branch protected" and "Required checks before merge". Reviews never need it.
 
 ## 2. Create the approve App (optional)
 
@@ -54,7 +54,7 @@ Install the App (both Apps, with a separate approve App) on the organization, on
 
 ## 4. Add the instance
 
-In the dashboard, an admin adds the instance under **Integrations → Add GitHub instance**: the API URL, the review App's ID and private key (pasted whole), **Approve with** (the review App, the default; a separate approve App, which asks for its ID and private key too; or a bot user's token), the webhook secret ([Instances and secrets in the dashboard](../concepts/dashboard.md#instances-and-secrets-in-the-dashboard)).
+In the dashboard, an admin adds the instance with **Add GitHub instance** on **Integrations**: the API URL, the review App's ID and private key (pasted whole), **Approve with** (the review App, the default; a separate approve App, which asks for its ID and private key too; or a bot user's token), the webhook secret ([Instances and secrets in the dashboard](../concepts/dashboard.md#instances-and-secrets-in-the-dashboard)).
 
 To keep the instance in the config file instead, put the keys in the Secret and name them in the config:
 
@@ -98,10 +98,10 @@ At startup pergent.sh reads each App's slug (`GET /app`) and its bot user (`GET 
 
 The status of a review is a Check Run named `pergent` on the reviewed head commit, created by the review App:
 
-- `in_progress` ("pergent review running") when the Job starts;
+- `in_progress` ("pergent review running") when the Job starts, and `retrying on backup model (2 of 3)` while a review tries the next entry of its [model chain](../concepts/models.md#attempts);
 - then `completed` with the conclusion `success`, `failure`, `neutral` (a failed review with `failure_status: neutral`) or `cancelled` (the run was superseded: a newer push or a new target branch replaced it, or the pull request was closed). A review that couldn't be posted after 10 attempts ends as `failure`, or as `neutral` with `failure_status: neutral` when it has no blocking findings, titled "pergent couldn't post its review".
 
-Its title is the status description from [How approval works](../concepts/approval.md) and its summary points to the pull request comment; the findings are in the comment and, when [inline findings](../concepts/inline-findings.md) are on, in threads on the diff. Every change is a new Check Run with the same name, and GitHub shows the latest. To make merging wait for the review, add `pergent` as a required status check in the branch's protection rule or ruleset, and **pin it to the review App**: otherwise GitHub accepts a check named `pergent` from any source, and a workflow or another App could satisfy it. In a branch protection rule, set the check's source to the review App instead of "Any source"; in a ruleset, choose the review App as the check's integration. See [Branch protection](#branch-protection).
+Its title is the status description from [How approval works](../concepts/approval.md) and its summary points to the pull request comment; the findings are in the comment and, when [inline findings](../concepts/inline-findings.md) are on, in threads on the diff. Each review changes its own Check Run in place, through all its attempts, so a fallback to a backup model shows as one check. A new push or a re-run gets a new Check Run with the same name, and GitHub shows the latest. When the Check Run is gone (GitHub answers 404), pergent.sh creates a new one. To make merging wait for the review, add `pergent` as a required status check in the branch's protection rule or ruleset, and **pin it to the review App**: otherwise GitHub accepts a check named `pergent` from any source, and a workflow or another App could satisfy it. In a branch protection rule, set the check's source to the review App instead of "Any source"; in a ruleset, choose the review App as the check's integration. See [Branch protection](#branch-protection).
 
 ## Branch protection
 

@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+**Teams can add their own models, and a review can move to a backup model.** Each review runs on the first usable entry of a model chain: the repository's own, its owner team's or the global one. When the provider says an entry is out of quota, out of credit or rejects its key, the review starts again on the next entry: [Models](concepts/models.md). Nothing changes after the upgrade. Every review runs on the model it used before, and nothing falls back until a chain has a second entry.
+
+- **Migrations `0045` and `0046`** run at startup. Back up Postgres first. They add 4 tables (`team_models`, `model_chains`, `model_chain_entries`, `model_entry_marks`) and columns with a default or NULL (`llm_models.name` and `teams_may_use`, `team_repos.owner`, `dashboard_repos.chain_mode`, `model_chains.saved_by_admin`, and columns on `runs` and `run_usage`). One step is not an addition: `0045` drops the unique rule on the provider, model and base URL of `llm_models`, so one model can have several keys. That only relaxes a rule, and the previous release still runs on the migrated database. Existing entries are named `provider/model`, and a second copy of the same pair `provider/model (2)`. A repository that picked a model gets a chain of that one entry, saved by an admin, so it runs as before.
+- **Fallback needs a pergent image that reports `provider_error`.** pergent v0.10.0, the default `jobs.image`, does not. The release notes name the first pergent release that does. With an older image nothing falls back and no entry is marked.
+- **New config keys:** `llm.fallbacks` (up to 4 backup entries after `config`) and `fallback.quota_cooldown` (default `1h`): [Config reference](reference/configuration.md). The previous release refuses a config key it doesn't know.
+- **Breaking, dashboard API.** The web app changes in the same release.
+  - `PUT /api/repositories/{instance}/{project}/settings` refuses the `model` key with 400 `a repository's model is its model chain now: PUT .../chain, or POST .../chain/reset to inherit`. The settings view and **Reset to defaults** no longer have it. `RepositoryDetailView` loses `modelChoices`, and its `model` is the first entry of the chain in effect.
+  - A repository's chain is `GET` and `PUT .../chain`. Going back to inheriting is `POST .../chain/reset`, because `DELETE` on a repository is the admins' **Remove**.
+  - `DELETE /api/admin/models/{id}` no longer refuses a model that repositories or chains use. Those chains keep the entry and skip it as removed. The default is still refused.
+  - `POST /api/admin/models` needs a `name`. The same provider, model and base URL twice is no longer refused.
+  - `/teams` is now the user area's **Teams** page, for every user. It no longer sends an admin to `/admin/teams`: update old bookmarks.
+- **Team maintainers can now spend money.** They add their team's own models and keys, and can put a global entry in their chains only where an admin turned on **Teams may use it** (off by default). A team's entries run only for the repositories it owns, and an admin ticks the owner on the admin **Teams** page.
+- **The instance token quota counts global keys only.** Under a used-up instance quota, a review runs on a team entry when its chain has one, and the re-run button, the `review` command and **Start review** start it instead of refusing: [Monthly token quota](concepts/token-quota.md). The repository quota counts every token, as before.
+- **GitHub:** every status write of a review changes one `pergent` Check Run in place, the cancel of a superseded review included. Before, each write created a new Check Run.
+- **Metrics:** `pergent_model_fallback_total` and `pergent_model_entry_exhausted`, and a **Model chains** row in the example Grafana dashboard. A dropped attempt is left out of `pergent_reviews_total`, `pergent_reviews_no_result_total` and `pergent_skill_runs_total`, and kept in `pergent_tokens_total`: [Metrics](concepts/metrics.md).
+- **API:** the new outcome `fell_back`; `RunDetailView` has `entry` and `attempts`; `UsageRepositoryRowView` has `globalTokens` and `teamTokens`. The new routes are in [HTTP routes](reference/http-routes.md).
+- **The audit log** has `chain_changed`, `teams_may_use_changed`, `owner_set`, `owner_cleared`, `team_model_added`, `team_model_updated`, `team_model_removed`, `team_models_deleted`, `model_marked` (by `pergent`) and `model_mark_cleared`. Model entries name the entry.
+- **To roll back, first remove `llm.fallbacks` and `fallback.quota_cooldown` from the config.** The previous release ignores the new tables and columns:
+  - a repository whose chain starts with a team entry, and every repository that follows a team chain, runs on the global default until the next upgrade. A repository chain that starts with a global entry runs on that entry;
+  - nothing falls back, and each earlier attempt of a review shows as a run of its own;
+  - saving a team in the previous release clears that team's owner ticks;
+  - the instance quota counts tokens on team keys again.
+
 **Repositories, teams and the instance can save a chain B.** It is the second model chain of a review panel: [Review panel](concepts/review-panel.md). It is experimental and off by default. Reviews do not use it yet, so nothing changes in a review.
 
 - **Migration `0048`** runs at startup. It adds two tables (`panel_chains`, `panel_chain_entries`) and one column with a default (`dashboard_repos.panel_chain_mode`), dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them.
@@ -92,13 +115,13 @@ Migrations `0036` and `0037` run at startup. They add columns (nullable, or with
 
 ## Upgrading to 0.15.0
 
-**Review comments end with a short text.** By default it links to pergent.sh. An admin can change it under **Admin → Settings**: [The footer text](concepts/comment-layout.md#the-footer-text). Existing comments change the next time they are updated.
+**Review comments end with a short text.** By default it links to pergent.sh. An admin can change it on the admin **Settings** page: [The footer text](concepts/comment-layout.md#the-footer-text). Existing comments change the next time they are updated.
 
 Migration `0034` runs at startup and only adds a table, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database, and to roll back nothing needs removing from the config: there is no new config key. It ignores the table, so its comments have no footer text.
 
 ## Upgrading to 0.14.0
 
-**Reviews can run on a model from a list.** An admin keeps the list under **Admin → Settings**, picks the default, and can give a repository a model of its own: [Models](concepts/models.md).
+**Reviews can run on a model from a list.** An admin keeps the list on the admin **Settings** page, picks the default, and can give a repository a model of its own: [Models](concepts/models.md).
 
 Migration `0033` runs at startup and only adds a table and columns, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database.
 
@@ -111,7 +134,7 @@ Migration `0033` runs at startup and only adds a table and columns, so back up P
 
 ## Upgrading to 0.13.0
 
-**Admins can see where the model tokens went.** [Usage](concepts/usage.md) is new, under **Admin → Usage**, and the Skill results tab has a cost section for admins. Nothing new appears for other people, and nothing needs turning on; only the review page's token count changes for everyone (below).
+**Admins can see where the model tokens went.** [Usage](concepts/usage.md) is new, on the admin **Usage** page, and the Skill results tab has a cost section for admins. Nothing new appears for other people, and nothing needs turning on; only the review page's token count changes for everyone (below).
 
 Migration `0032` runs at startup and adds a table and a column, dropping nothing, so back up Postgres first, as for any migration. 0.12.0 keeps working on the migrated database: it ignores both.
 
@@ -123,7 +146,7 @@ Migration `0032` runs at startup and adds a table and a column, dropping nothing
 
 ## Upgrading to 0.12.0
 
-**Public repositories stop reviewing strangers' changes automatically.** [Trusted authors](concepts/trusted-authors.md) is new and on for public repositories by default: a change from an author without write access, and not on the repository's allowlist, waits until someone with write access starts its review. Private and internal repositories are unchanged. To keep reviewing every author on an instance, set it to **always off**: `trusted_authors_only: off` under the instance in the config, or **Admin → Integrations** for an instance added in the dashboard.
+**Public repositories stop reviewing strangers' changes automatically.** [Trusted authors](concepts/trusted-authors.md) is new and on for public repositories by default: a change from an author without write access, and not on the repository's allowlist, waits until someone with write access starts its review. Private and internal repositories are unchanged. To keep reviewing every author on an instance, set it to **always off**: `trusted_authors_only: off` under the instance in the config, or the admin **Integrations** page for an instance added in the dashboard.
 
 Migration `0031` runs at startup and adds a run state, a run trigger and nullable or defaulted columns, dropping nothing, so back up Postgres first, as for any migration. 0.11.x keeps working on the migrated database: it never starts a waiting run, and shows one as `unknown`.
 
@@ -147,8 +170,8 @@ This release changes how people sign in and what they can reach, and it changes 
 
 1. **Upgrade.** Back up Postgres first. Migrations `0027` and `0028` run at startup and add columns and rows, dropping nothing, and every session ends, so everyone signs in again.
 2. **Sign in as a local admin** at `/admin/sign-in` (the page for local admins; `/sign-in` has no password form). Your local admins and their passwords are unchanged. If you only ever signed in with GitHub or GitLab you may not know the `admin` password: it was logged once, when the account was made, and may be gone. Set a new one from inside the pod with `admin reset-password` ([Lost password](concepts/dashboard.md#lost-password)) before you start.
-3. **Set up sign-in** under **Admin → Integrations → Sign-in**, or `dashboard.sign_in` in the config file. This can't be done before the upgrade.
-4. **Add people** under **Admin → Users → Add user** (an email, and the teams they should be on), or from **Admin → Teams**.
+3. **Set up sign-in** in the **Sign-in** section of the admin **Integrations** page, or `dashboard.sign_in` in the config file. This can't be done before the upgrade.
+4. **Add people** with **Add user** on the admin **Users** page (an email, and the teams they should be on), or from the admin **Teams** page.
 
 What is gone, and what changes:
 
@@ -223,10 +246,10 @@ Nothing to do. The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.3`, w
 
 0.7.0 reviews only what a push changed, and tells each review what people rejected before. See [Incremental reviews](concepts/incremental-reviews.md) and [Learn from dismissals](concepts/learn-from-dismissals.md).
 
-1. **Pushes are incremental by default**, also on repositories already running. Turn it off per repository with **Incremental reviews** in its Settings, or with `incremental_reviews: false` in the config, or change the default under **Admin → Settings**. The accepted cost: an edit that breaks an untouched file can go unnoticed until a full review (`@<bot> review`), and a team that rebases or amends gets no speed-up yet.
+1. **Pushes are incremental by default**, also on repositories already running. Turn it off per repository with **Incremental reviews** in its Settings, or with `incremental_reviews: false` in the config, or change the default on the admin **Settings** page. The accepted cost: an edit that breaks an untouched file can go unnoticed until a full review (`@<bot> review`), and a team that rebases or amends gets no speed-up yet.
 2. **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.2`.** A config that pins an older pergent keeps full reviews, because only pergent v0.5.2 and later report a version that allows it: v0.5.0 and v0.5.1 report 0.3.0. This is read from the image's tag (`v0.4.0`, also in front of a digest), so it holds even after running a newer pergent. An image pinned by digest alone to an older pergent can't be told apart, and neither can a tag that is not a plain version (`:prod`, `v0.4.0-fork`): turn **Incremental reviews** off first.
 3. **The first push after the upgrade is a full review**, because the last result comes from an older pergent and has no skill hashes. Incremental reviews start with the next push.
-4. **Reviews learn from dismissals by default**, also on repositories already running. See [Learn from dismissals](concepts/learn-from-dismissals.md). Turn it off per repository with **Learn from dismissals** in its Settings, or with `learn_from_dismissals: false` in the config, or change the default under **Admin → Settings**. Dismissals made before the upgrade count only when they were blocking: those always came from a maintainer. Older suggestion dismissals don't, because who made them wasn't stored. The feature needs pergent v0.5.0 or later in the Job; an older image ignores what it is given.
+4. **Reviews learn from dismissals by default**, also on repositories already running. See [Learn from dismissals](concepts/learn-from-dismissals.md). Turn it off per repository with **Learn from dismissals** in its Settings, or with `learn_from_dismissals: false` in the config, or change the default on the admin **Settings** page. Dismissals made before the upgrade count only when they were blocking: those always came from a maintainer. Older suggestion dismissals don't, because who made them wasn't stored. The feature needs pergent v0.5.0 or later in the Job; an older image ignores what it is given.
 5. **Migrations `0020`, `0021`, `0022` and `0023` run at startup.** `0020` adds nullable columns and one `runs` column that is `NOT NULL DEFAULT false`. `0021` adds nullable columns. `0022` adds columns to `dismissals` that have a default, and an index, and marks the existing blocking dismissals as teaching. A step at startup then fills in the skill, file and title of dismissals from the last 90 days only, from the stored results; an older row, or one whose review has no stored result, never teaches. `0023` adds a column with a default to `inline_threads`. So 0.6.2 keeps working on a migrated database.
 6. **To roll back to 0.6.2, first remove `incremental_reviews` and `learn_from_dismissals` from the config**, because 0.6.2 refuses unknown config keys, and let running reviews finish first: an incremental result is a partial one until 0.7.0 merges it, and 0.6.2 would publish it as a whole review. Results stored by 0.7.0 are complete, merged results.
 
@@ -234,7 +257,7 @@ Nothing to do. The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.3`, w
 
 0.6.2 limits who can use [commands](concepts/commands.md).
 
-1. **Commands are now limited to the change's author and the repository's maintainers and owners**, also on repositories already running. Before, anyone with write access could re-run a review or dismiss a suggestion. To let anyone with write access use them, as before, turn the setting off per repository (**Only the author and maintainers use commands** in its Settings, or `commands_author_and_maintainers_only: false` in the config), or change the default under **Admin → Settings**.
+1. **Commands are now limited to the change's author and the repository's maintainers and owners**, also on repositories already running. Before, anyone with write access could re-run a review or dismiss a suggestion. To let anyone with write access use them, as before, turn the setting off per repository (**Only the author and maintainers use commands** in its Settings, or `commands_author_and_maintainers_only: false` in the config), or change the default on the admin **Settings** page.
 2. **Migration `0019` runs at startup.** It adds nullable columns only, so 0.6.1 keeps working on a migrated database.
 3. **A change's author with only read access**, for example someone opening a PR from a fork, can now re-run and dismiss suggestions in both modes, within the re-run caps.
 4. **Refusals about who may now write `command_refused` audit entries** in both modes.
@@ -242,10 +265,10 @@ Nothing to do. The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.3`, w
 
 ## Upgrading to 0.6.1
 
-0.6.1 fixes the timeout default and how Admin → Settings follows the config.
+0.6.1 fixes the timeout default and how the admin **Settings** page follows the config.
 
 1. **The default `jobs.timeout` is 30 minutes** (it was 10). Each run may take 40 steps since 0.5.4, and 10 minutes was too short for large reviews. A config that sets `jobs.timeout` keeps its value. pergent.sh now logs a warning at startup when a timeout in the config file allows less than 30 seconds a step (timeouts set in the dashboard are not checked; see 2).
-2. **Admin → Settings saved before 0.6.1 pins every default.** That includes the old 10-minute timeout. Open Admin → Settings: a default saved there shows "Saved here; the config says …". Click **Use config value** on the ones that should follow the config, then save. Saving once lets every default equal to the config's value follow it again; **Use config value** is needed only where the saved value differs, such as the old 600-second timeout.
+2. **The admin Settings page saved before 0.6.1 pins every default.** That includes the old 10-minute timeout. Open the admin **Settings** page: a default saved there shows "Saved here; the config says …". Click **Use config value** on the ones that should follow the config, then save. Saving once lets every default equal to the config's value follow it again; **Use config value** is needed only where the saved value differs, such as the old 600-second timeout.
 3. **Migration `0018` runs at startup.** It adds one column with a default, so 0.6.0 keeps working on a migrated database.
 
 ## Upgrading to 0.6.0
@@ -320,4 +343,4 @@ To upgrade:
 
 1. Before you upgrade, save the text of every skill in your old `skills:` value, and note which repositories listed `skills`.
 2. Remove `skills:` from your values and `skills_dir` from your config, and upgrade.
-3. Sign in as an admin. Create the skills again under **Skills → New skill**, or install them from git ([Installing from git](concepts/skills.md#installing-from-git)), tick **Add to default skills** for the ones every repository should run, and set a repository's own list under its **Settings** where it had one. The overview's setup checklist shows what is left.
+3. Sign in as an admin. Create the skills again with **New skill** on **Skills**, or install them from git ([Installing from git](concepts/skills.md#installing-from-git)), tick **Add to default skills** for the ones every repository should run, and set a repository's own list under its **Settings** where it had one. The overview's setup checklist shows what is left.
