@@ -48,7 +48,7 @@ pergent.sh runs [pergent](https://github.com/gopaytech/pergent) code reviews on 
 - 🧠 **[Learn from dismissals](docs/concepts/learn-from-dismissals.md):** reviews are told what people rejected before, and why.
 - 🤫 **[Quiet reviews](docs/concepts/quiet-reviews.md):** fewer nitpicks and shorter comments, the same blocking findings.
 - 🎛️ **[Comment layout](docs/concepts/comment-layout.md):** each repository chooses what its review comment shows.
-- 🤖 **[Models](docs/concepts/models.md):** a list of models, a default, and a model per repository.
+- 🤖 **[Models](docs/concepts/models.md):** global and team models, a model chain per repository, team or install, and a backup model when a key is out of quota or credit.
 
 **Control and cost**
 

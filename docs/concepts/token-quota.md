@@ -10,12 +10,12 @@ Only admins set or change a quota. Maintainers and viewers see neither the field
 
 | Quota | In the dashboard | In the config | Empty means |
 | --- | --- | --- | --- |
-| An instance's | **Admin → Integrations**, the instance's card | `gitlab[].monthly_token_quota`, `github[].monthly_token_quota` | Unlimited |
+| An instance's | The instance's card on the admin **Integrations** page | `gitlab[].monthly_token_quota`, `github[].monthly_token_quota` | Unlimited |
 | A repository's | The repository's **Settings** | `repositories[].monthly_token_quota` | Limited only by its instance's quota |
 
 - A quota is a whole number of tokens, from 1 to 1,000,000,000,000,000. Zero and negative numbers are refused. To stop a repository's reviews, switch it off.
 - **A repository's quota sits inside its instance's.** A review starts only if the repository has room under its own quota (if it has one) **and** the instance has room under the instance's (if it has one). The two are separate numbers: a repository's quota doesn't default to the instance's, and may be larger than it (then the instance's is the one that bites).
-- When the instance's quota runs out, every repository on it is held, including those with room left under their own quota.
+- **The instance's quota covers the global keys only.** When it runs out, reviews skip the global entries of their [model chain](models.md) and run on a team's own entry when the chain has one. A review with only global entries left is held, including on a repository with room left under its own quota. The repository's quota counts every token, on team keys too, and holds the whole review.
 - **The config file wins.** An instance or repository whose quota is set in the config shows it read-only in the dashboard, as for [Trusted authors](trusted-authors.md). For an instance in the config the dashboard route answers 409.
 - A maintainer's **Reset to defaults** on a repository leaves its quota as it is. An admin's reset clears it.
 - Changes are recorded in the [audit log](dashboard.md#audit-log): an instance's as `instance_updated` with the detail `monthly_token_quota=<n>` or `monthly_token_quota=none`, a repository's as `settings_updated` with the detail `monthlyTokenQuota=<n>` or `monthlyTokenQuota=none`.
@@ -24,14 +24,15 @@ Only admins set or change a quota. Maintainers and viewers see neither the field
 
 - **Input plus output tokens**, the same measure as [Usage](usage.md). Cache and reasoning tokens are not added.
 - The tokens of reviews that **finished in the current calendar month, in UTC**. A review that started on the 31st and finished on the 1st counts in the new month.
-- A repository's usage is its own reviews. An instance's usage is all its repositories', switched-off and removed ones included: those tokens were spent.
+- A repository's usage is its own reviews, on any key. An instance's usage is all its repositories' tokens on global keys, switched-off and removed ones included: those tokens were spent. Tokens on a team's own keys are not in the instance's usage.
+- An attempt dropped for the next entry of its chain counts too, on the entry that used the tokens ([Attempts](models.md#attempts)).
 - A review that a quota held costs nothing, so it counts nothing.
 
 ## When a quota is used up
 
 The check is "usage so far this month is below the quota". Usage exactly at the quota counts as used up.
 
-**A push** (and the full review pergent.sh queues by itself when an incremental result can't be merged) is held, just before a Job would be created:
+**A push** (and the full review pergent.sh queues by itself when an incremental result can't be merged) is held, just before a Job would be created, when the repository's quota is used up, or when the instance's is and no team entry is left in the chain:
 
 - no Job and no LLM call;
 - a pending status on the head, set again on each new head: `Monthly token quota used up. An admin can start the review in the dashboard.` A required pergent check keeps the change unmergeable, and the change is never approved;
@@ -40,7 +41,7 @@ The check is "usage so far this month is below the quota". Usage exactly at the 
 
 Trust is checked before the quota: an untrusted author's change waits for [trust](trusted-authors.md) first and doesn't touch the quota.
 
-**A request by hand** (`@<bot> review`, `@<bot> review failed`, or a maintainer's **Re-run** or **Start review**) is refused, and nothing is queued, so it uses no re-run cap:
+**A request by hand** (`@<bot> review`, `@<bot> review failed`, or a maintainer's **Re-run** or **Start review**) is refused when the repository's quota is used up. When only the instance's quota is used up, pergent.sh first asks the chain, with the rules a review uses: if a team entry is left, the review starts and runs on it. Otherwise it is refused. A refused request queues nothing, so it uses no re-run cap:
 
 - a comment gets 👎 and the reason `the monthly token quota is used up`. The note above is the reply only the first time that month for that change (it shares the once-a-month flag with the held pushes); later refusals get 👎 alone;
 - a button answers 409 `the monthly token quota is used up`, shown beside the button;
@@ -49,7 +50,7 @@ Trust is checked before the quota: an untrusted author's change waits for [trust
 - a change waiting for trust that someone with write access tries to start stays waiting for trust;
 - when the usage can't be read, the request is answered as failed and nothing is queued.
 
-**An admin** pressing **Start review** or **Re-run** in the dashboard starts a review whatever the quotas say. Its tokens count like any other. The caps are as for any start or re-run. Starting a held change reviews the whole current head.
+**An admin** pressing **Start review** or **Re-run** in the dashboard starts a review whatever the quotas say. Under a used-up instance quota it runs on a team entry when one is left, and on a global entry otherwise. Its tokens count like any other. The caps are as for any start or re-run. Starting a held change reviews the whole current head.
 
 ## The 1st of the month
 
@@ -57,7 +58,7 @@ Usage is counted from the 1st, so the quota has room again with nothing to reset
 
 ## What the dashboard shows
 
-Admins only. The repository page shows `Tokens this month: <used> of <quota>` with a bar for a repository with a quota, and the instance's line under it when the instance has one. **Integrations** shows the same on each instance with a quota. The bar is **amber from 80%** and **red when used up**. A repository or instance with no quota shows its usage without a bar. The [Usage](usage.md) pages show rolling days and have no quota column.
+Admins only. The repository page shows `Tokens this month: <used> of <quota>` with a bar for a repository with a quota, and the instance's line under it when the instance has one. The instance's line, here and on **Integrations**, counts global keys only, as its quota does. **Integrations** shows the same on each instance with a quota. The bar is **amber from 80%** and **red when used up**. A repository or instance with no quota shows its usage without a bar. The [Usage](usage.md) pages show rolling days and have no quota column.
 
 ## Good to know
 
