@@ -19,7 +19,7 @@ When it is on, pergent.sh sets the environment variable `PERGENT_CHECK_DELETED=t
 
 ## It needs a newer pergent image
 
-The switch is pergent's `--check-deleted`. pergent v0.10.0 or newer reads it, and v0.10.0 is pergent.sh's default image. An older image ignores the variable and reviews as it always did, so turning the setting on with an old image does no harm and does nothing. A config that sets its own `jobs.image` needs v0.10.0 or newer to use the setting ([Config reference](../reference/configuration.md)).
+The switch is pergent's `--check-deleted`. pergent v0.10.0 or newer reads it, and pergent.sh's default image is v0.11.0. An older image ignores the variable and reviews as it always did, so turning the setting on with an old image does no harm and does nothing. A config that sets its own `jobs.image` needs v0.10.0 or newer to use the setting ([Config reference](../reference/configuration.md)).
 
 ## What it does
 
