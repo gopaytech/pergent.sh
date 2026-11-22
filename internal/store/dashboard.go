@@ -546,7 +546,7 @@ func (s *Store) SetDashboardRepoEnabled(ctx context.Context, instance, project s
 }
 
 // RemoveDashboardRepo deletes the dashboard repository project on instance
-// (matched ignoring case), paused or not, its own chain A and chain B and
+// (matched ignoring case), paused or not, its own chain A and reviewer chains and
 // the team links to it, in one transaction. A team's link to the whole instance and links to the same path
 // on another instance stay. found is false, and nothing is deleted, when
 // there is no such row.
@@ -570,7 +570,7 @@ func (s *Store) RemoveDashboardRepo(ctx context.Context, instance, project strin
 	}
 	// Its own chain goes with its settings: the resolver reads a chain row
 	// whatever the repository's row says, so one added again would run on it.
-	for _, set := range []ChainSet{ChainA, ChainB} {
+	for _, set := range []ChainSet{ChainA, ChainReviewers} {
 		if _, err := tx.Exec(ctx, `DELETE FROM `+set.chains+` WHERE scope = 'repo' AND instance = $1 AND lower(project) = lower($2)`,
 			instance, project); err != nil {
 			return false, err

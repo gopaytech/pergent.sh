@@ -304,7 +304,7 @@ func (s *Store) OwnerTeam(ctx context.Context, instance, project string) (teamID
 
 // DeleteTeam removes a team with its members, repositories, entries, chain
 // and the marks of its entries (not the accounts), and takes its entries out
-// of the repository chains (chain A and chain B) that name them; ok is false when there is no such team. When check is not nil
+// of the repository chains (chain A and the reviewer chains) that name them; ok is false when there is no such team. When check is not nil
 // it is handed the team under the lock UpdateTeam takes, so what it decides
 // on can't change before the team goes; an error from it keeps the team and
 // is returned.
@@ -341,7 +341,7 @@ func (s *Store) DeleteTeam(ctx context.Context, id int64, check func(Team) error
 		return false, err
 	}
 	at := time.Now()
-	for _, set := range []ChainSet{ChainA, ChainB} {
+	for _, set := range []ChainSet{ChainA, ChainReviewers} {
 		if _, err := removeFromChains(ctx, tx, set, SourceTeam, modelIDs, at); err != nil {
 			return false, err
 		}

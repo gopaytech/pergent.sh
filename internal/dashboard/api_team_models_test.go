@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,6 +277,50 @@ func TestDeleteTeamAudits(t *testing.T) {
 	}
 	if got := te.reg.TeamModels(te.payments); len(got) != 0 {
 		t.Errorf("registry still holds %+v", got)
+	}
+}
+
+// [P10] Removing a team entry names the reviewer chains it left, after
+// chain A's, once per repository; with none naming it the line is as before.
+func TestDeleteTeamModelAuditNamesReviewerChains(t *testing.T) {
+	te := newTeamsEnv(t)
+	one := te.addTeamModel(te.maintainer, te.payments, "one", teamKeyOne)
+	two := te.addTeamModel(te.maintainer, te.payments, "two", teamKeyTwo)
+	decode[ChainView](t, te.sendJSON(te.maintainer, "PUT", teamURL(te.payments, "/chain"), entryBody("team/"+one.ID, "team/"+two.ID)), "PUT team chain", http.StatusOK)
+	One, Two := store.EntryRef{Source: store.SourceTeam, ID: one.ID}, store.EntryRef{Source: store.SourceTeam, ID: two.ID}
+	if _, err := te.st.SaveReviewers(ctx, store.ReviewersSave{Instance: "main", Project: "acme/payments",
+		Extra: [][]store.EntryRef{{One, Two}}, Judge: []store.EntryRef{One}}, te.clock.now()); err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, te.send(te.maintainer, "DELETE", teamURL(te.payments, "/models/"+one.ID), ""), "remove one", http.StatusNoContent)
+	wantCode(t, te.send(te.maintainer, "DELETE", teamURL(te.payments, "/models/"+two.ID), ""), "remove two", http.StatusNoContent)
+	got := auditDetails(te.env, "team_model_removed")
+	if want := []string{
+		"Payments: one (openai / gpt-one), removed from team Payments, removed from reviewer chains: main/acme/payments",
+		"Payments: two (openai / gpt-two), removed from team Payments, removed from reviewer chains: main/acme/payments",
+	}; !slices.Equal(got, want) {
+		t.Errorf("team_model_removed = %q; want %q", got, want)
+	}
+	for _, d := range got {
+		if strings.Contains(d, "chain B") {
+			t.Errorf("audit detail %q names chain B", d)
+		}
+	}
+	var lines []string
+	for _, l := range strings.Split(te.logs.String(), "\n") {
+		if strings.Contains(l, `msg="dashboard: team model removed"`) {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != 2 || !strings.Contains(lines[0], " chains=1 reviewer_chains=2 by=") ||
+		!strings.Contains(lines[1], " chains=1 reviewer_chains=1 by=") || strings.Contains(strings.Join(lines, ""), "panel_chains") {
+		t.Errorf("team model removed lines = %q", lines)
+	}
+	// With no reviewer chain naming it, the line is as before.
+	three := te.addTeamModel(te.maintainer, te.payments, "three", teamKeyOne)
+	wantCode(t, te.send(te.maintainer, "DELETE", teamURL(te.payments, "/models/"+three.ID), ""), "remove three", http.StatusNoContent)
+	if got := auditDetails(te.env, "team_model_removed"); got[2] != "Payments: three (openai / gpt-three)" {
+		t.Errorf("team_model_removed = %q", got[2])
 	}
 }
 

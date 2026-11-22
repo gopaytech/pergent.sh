@@ -26,27 +26,32 @@ const (
 type EntryRef struct{ Source, ID string }
 
 // Chain is an ordered list of entries, Entries[0] being position 1. TeamID is
-// set for ScopeTeam, Instance and Project for ScopeRepo. SavedByAdmin is
-// whether an admin saved it last: a repository chain an admin saved may name
-// global entries teams may not use.
+// set for ScopeTeam, Instance and Project for ScopeRepo. Slot is set for
+// ChainReviewers only (SlotOf(n) or SlotJudge). SavedByAdmin is whether an
+// admin saved it last: a repository chain an admin saved may name global
+// entries teams may not use.
 type Chain struct {
 	ID                int64
 	Scope             string
 	TeamID            int64
 	Instance, Project string
+	Slot              string
 	Entries           []EntryRef
 	SavedByAdmin      bool
 	UpdatedAt         time.Time
 }
 
 // ChainSet is which chain a chain row belongs to: ChainA, the review's model
-// chain, or ChainB, a review panel's second chain. Its table and column names
-// are fixed here and never come from input; the chain SQL is built from them.
-type ChainSet struct{ chains, entries, mode string }
+// chain (reviewer 1), ChainB, a review panel's second chain, or
+// ChainReviewers, a repository's reviewers 2 to 5 and its judge. Its table
+// and column names are fixed here and never come from input; the chain SQL
+// is built from them. slot is the SQL that reads a row's slot, an empty
+// text literal for a set with none.
+type ChainSet struct{ chains, entries, mode, slot string }
 
 var (
-	ChainA = ChainSet{chains: "model_chains", entries: "model_chain_entries", mode: "chain_mode"}
-	ChainB = ChainSet{chains: "panel_chains", entries: "panel_chain_entries", mode: "panel_chain_mode"}
+	ChainA = ChainSet{chains: "model_chains", entries: "model_chain_entries", mode: "chain_mode", slot: "''"}
+	ChainB = ChainSet{chains: "panel_chains", entries: "panel_chain_entries", mode: "panel_chain_mode", slot: "''"}
 )
 
 // A repository's chain B mode (DashboardRepo.PanelChainMode).
@@ -63,14 +68,14 @@ type rowsQuerier interface {
 // loadChains reads the chains of set matching where (on the set's chains
 // table as c, with args), by ID, with their entries in position order.
 func loadChains(ctx context.Context, q rowsQuerier, set ChainSet, where string, args ...any) ([]Chain, error) {
-	rows, err := q.Query(ctx, `SELECT c.id, c.scope, COALESCE(c.team_id, 0), c.instance, c.project, c.saved_by_admin, c.updated_at
+	rows, err := q.Query(ctx, `SELECT c.id, c.scope, COALESCE(c.team_id, 0), c.instance, c.project, `+set.slot+`, c.saved_by_admin, c.updated_at
 		FROM `+set.chains+` c `+where+` ORDER BY c.id`, args...)
 	if err != nil {
 		return nil, err
 	}
 	chains, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Chain, error) {
 		var c Chain
-		err := row.Scan(&c.ID, &c.Scope, &c.TeamID, &c.Instance, &c.Project, &c.SavedByAdmin, &c.UpdatedAt)
+		err := row.Scan(&c.ID, &c.Scope, &c.TeamID, &c.Instance, &c.Project, &c.Slot, &c.SavedByAdmin, &c.UpdatedAt)
 		return c, err
 	})
 	if err != nil || len(chains) == 0 {
@@ -135,16 +140,17 @@ func syncRepoModelID(ctx context.Context, tx pgx.Tx, c Chain) error {
 // removeFromChains takes the entries of source with the given IDs out of
 // every chain of set that names them, the later entries moved up, and
 // returns those chains as they are now. The chains are locked first. A caller
-// runs it once per set, ChainA first.
+// runs it once per set, ChainA first. For ChainReviewers each repository it
+// touched is then compacted (compactReviewers): a chain that lost its last
+// entry is returned with no entries, the others with the slot they moved to.
 func removeFromChains(ctx context.Context, tx pgx.Tx, set ChainSet, source string, ids []string, at time.Time) ([]Chain, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	naming := `id IN (SELECT chain_id FROM ` + set.entries + ` WHERE source = $1 AND model_id = ANY($2))`
-	// A chain B write locks the repository's row before its chain
-	// (lockRepoRow), so this does too: an emptied repository chain B
-	// changes the row's mode below.
-	if set == ChainB {
+	// A reviewer chains write locks the repository's row before its chains
+	// (lockRepoRow), so this does too.
+	if set == ChainReviewers {
 		if _, err := tx.Exec(ctx, `SELECT 1 FROM dashboard_repos d WHERE EXISTS (SELECT 1 FROM `+set.chains+` c
 			WHERE c.scope = 'repo' AND c.instance = d.instance AND lower(c.project) = lower(d.project) AND c.`+naming+`)
 			ORDER BY d.instance, lower(d.project) FOR UPDATE OF d`, source, ids); err != nil {
@@ -171,19 +177,6 @@ func removeFromChains(ctx context.Context, tx pgx.Tx, set ChainSet, source strin
 			}
 		}
 		c.Entries, c.UpdatedAt = kept, at
-		// An empty repository chain B means off (RepoPanelMode), so one
-		// that loses its last entry goes: the repository inherits, as an
-		// empty chain A does, its mode too.
-		if set == ChainB && c.Scope == ScopeRepo && len(kept) == 0 {
-			if _, err := tx.Exec(ctx, `DELETE FROM `+set.chains+` WHERE id = $1`, c.ID); err != nil {
-				return nil, err
-			}
-			if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET `+set.mode+` = 'inherit'
-				WHERE instance = $1 AND lower(project) = lower($2) AND `+set.mode+` = 'custom'`, c.Instance, c.Project); err != nil {
-				return nil, err
-			}
-			continue
-		}
 		if err := writeChainEntries(ctx, tx, set, c.ID, kept); err != nil {
 			return nil, err
 		}
@@ -194,6 +187,11 @@ func removeFromChains(ctx context.Context, tx pgx.Tx, set ChainSet, source strin
 			if err := syncRepoModelID(ctx, tx, *c); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if set == ChainReviewers {
+		if err := compactRemoved(ctx, tx, chains, at); err != nil {
+			return nil, err
 		}
 	}
 	return chains, nil
@@ -298,19 +296,8 @@ func (s *Store) SaveChainOf(ctx context.Context, set ChainSet, c Chain, at time.
 			return err
 		}
 	}
-	// Entries before the chain, the order DeleteTeamModel takes them in.
-	for _, e := range c.Entries {
-		if e.Source != SourceTeam {
-			continue
-		}
-		var found string
-		err := tx.QueryRow(ctx, `SELECT id FROM team_models WHERE id = $1 FOR KEY SHARE`, e.ID).Scan(&found)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrModelNotFound
-		}
-		if err != nil {
-			return err
-		}
+	if err := lockTeamEntries(ctx, tx, c.Entries); err != nil {
+		return err
 	}
 	// A chain B repository save locks the repository's row before the chain,
 	// as an off does (setRepoPanelMode). A repository with no row (one the
@@ -432,9 +419,31 @@ func (s *Store) SetRepoPanelOff(ctx context.Context, instance, project string, a
 	return tx.Commit(ctx)
 }
 
-// lockRepoRow locks the repository's dashboard row, the first thing a chain
-// B write to the repository does, so a save and an off one after the other
-// never leave mode off with a chain B row. found is false with no row.
+// lockTeamEntries takes KEY SHARE on each team entry of entries, so none can
+// be removed before the transaction ends; one that is not there is
+// ErrModelNotFound. A chain write takes the entries before the chain, the
+// order DeleteTeamModel takes them in.
+func lockTeamEntries(ctx context.Context, tx pgx.Tx, entries []EntryRef) error {
+	for _, e := range entries {
+		if e.Source != SourceTeam {
+			continue
+		}
+		var found string
+		err := tx.QueryRow(ctx, `SELECT id FROM team_models WHERE id = $1 FOR KEY SHARE`, e.ID).Scan(&found)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrModelNotFound
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lockRepoRow locks the repository's dashboard row, which a chain B or
+// reviewer chains write takes before the chains, so a save and an off one
+// after the other never leave mode off with a chain B row. found is false
+// with no row.
 func lockRepoRow(ctx context.Context, tx pgx.Tx, instance, project string) (found bool, err error) {
 	rows, err := tx.Query(ctx, `SELECT 1 FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2) FOR UPDATE`,
 		instance, project)
