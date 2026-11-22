@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -109,5 +110,129 @@ func TestModelLimitsMigrationPreviousReleaseInsert(t *testing.T) {
 	var owner *int64
 	if err := s.pool.QueryRow(ctx, `SELECT owner_team_id FROM run_usage WHERE run_id = $1::uuid`, id).Scan(&owner); err != nil || owner != nil {
 		t.Errorf("owner_team_id = %v, %v; want NULL", owner, err)
+	}
+}
+
+// ownRepo makes team cover (instance, project) alone, with the owner tick.
+func ownRepo(t *testing.T, s *Store, team int64, instance, project string) {
+	t.Helper()
+	if err := setOwner(t, s, team, TeamRepo{Instance: instance, Project: project, Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ownerOf is the owner_team_id of run id's run_usage rows (nil: none). Every
+// row of a run has the same.
+func ownerOf(t *testing.T, s *Store, id string) *int64 {
+	t.Helper()
+	var owner *int64
+	if err := s.pool.QueryRow(ctx, `SELECT owner_team_id FROM run_usage WHERE run_id = $1::uuid LIMIT 1`, id).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	return owner
+}
+
+func wantOwner(t *testing.T, what string, got *int64, want int64) {
+	t.Helper()
+	if (want == 0) != (got == nil) || (got != nil && *got != want) {
+		t.Errorf("%s: owner_team_id = %v, want %d (0: none)", what, got, want)
+	}
+}
+
+// A usage row keeps the owner team of its repository when it is written: the
+// repository's own owner, else its instance's, else none. A repository that
+// moves to another team leaves its earlier rows with the old one.
+func TestUsageRecordsOwnerTeam(t *testing.T) {
+	s := newStore(t)
+	row := skillRow("security", "no_blocking_issues", 1, 1)
+	none := seedUsage(t, s, usageMR(7, 1), t0, TriggerPush, false, "gpt", row)
+
+	platform, payments, moved := newTeam(t, s, "Platform"), newTeam(t, s, "Payments"), newTeam(t, s, "Moved")
+	ownRepo(t, s, platform, mr1.Instance, "")
+	byInstance := seedUsage(t, s, usageMR(7, 2), t0, TriggerPush, false, "gpt", row)
+	ownRepo(t, s, payments, mr1.Instance, "ACME/p7") // seedUsage writes project_path acme/p7
+	byRepo := seedUsage(t, s, usageMR(7, 3), t0, TriggerPush, false, "gpt", row)
+	if err := setOwner(t, s, payments); err != nil {
+		t.Fatal(err)
+	}
+	ownRepo(t, s, moved, mr1.Instance, "acme/p7")
+	after := seedUsage(t, s, usageMR(7, 4), t0, TriggerPush, false, "gpt", row)
+
+	wantOwner(t, "no owner", ownerOf(t, s, none), 0)
+	wantOwner(t, "the instance's owner", ownerOf(t, s, byInstance), platform)
+	wantOwner(t, "the repository's own owner, ignoring case", ownerOf(t, s, byRepo), payments)
+	wantOwner(t, "after the move", ownerOf(t, s, after), moved)
+	// The earlier row stays with the team it had.
+	wantOwner(t, "before the move, read again", ownerOf(t, s, byRepo), payments)
+}
+
+// judgedPanel is a panel review of head on mr1 taken to the end: members A
+// (global m1) and B (team t1 of team 4) report their usage, the run is
+// released, and Job P, judging with both, reports its own with a row per
+// model. It returns the run.
+func judgedPanel(t *testing.T, s *Store, head string) string {
+	t.Helper()
+	id, a, b := panelMembersWithEntries(t, s, head)
+	doneMember(t, s, a.ID, `{"status":"completed"}`)
+	doneMember(t, s, b.ID, `{"status":"completed"}`)
+	if err := s.RecordMemberUsage(ctx, a.ID, []SkillUsage{{Skill: "security", In: 100, Out: 10}, {Skill: "style", In: 7, Out: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordMemberUsage(ctx, b.ID, []SkillUsage{{Skill: "security", In: 50, Out: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	if released, _, err := s.ReleasePanel(ctx, id, t0); err != nil || !released {
+		t.Fatalf("ReleasePanel = %v, %v", released, err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPanelJudge(ctx, id, "a", RunEntry{Source: SourceGlobal, ID: "m1", Name: "main", Length: 1}, "openai", "gpt-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPanelJudge(ctx, id, "b", RunEntry{Source: SourceTeam, ID: "t1", Name: "team-b", TeamID: 4, Length: 1}, "anthropic", "sonnet-b"); err != nil {
+		t.Fatal(err)
+	}
+	token := "p-" + head
+	if err := s.MarkDispatched(ctx, id, "job-p-"+head, "base-sha", "start-sha", hash(token), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.StoreResult(ctx, id, token, []byte(`{}`), t0.Add(2*time.Minute)); err != nil || out != ResultStored {
+		t.Fatal(out, err)
+	}
+	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "security", Verdict: "has_blocking_issues", In: 20, Out: 2}},
+		[]ModelUsage{
+			{Skill: "security", Role: "a", Provider: "openai", Model: "gpt-a", In: 12, Out: 1},
+			{Skill: "security", Role: "b", Provider: "anthropic", Model: "sonnet-b", In: 8, Out: 1},
+		}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// A panel's rows, members and Job P's, keep the owner team too.
+func TestPanelUsageRecordsOwnerTeam(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	ownRepo(t, s, team, mr1.Instance, "acme/widgets")
+	id := judgedPanel(t, s, "a1")
+	wantOwner(t, "run_usage", ownerOf(t, s, id), team)
+	rows, err := s.pool.Query(ctx, `SELECT part, owner_team_id FROM run_usage_models WHERE run_id = $1::uuid`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var part string
+		var owner *int64
+		if err := rows.Scan(&part, &owner); err != nil {
+			t.Fatal(err)
+		}
+		wantOwner(t, part+" row", owner, team)
+		n++
+	}
+	if n != 5 { // A: 2 skills, B: 1, P: 2 roles
+		t.Errorf("%d model rows, want 5", n)
 	}
 }
