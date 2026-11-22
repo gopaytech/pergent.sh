@@ -89,8 +89,8 @@ describe("Rules", () => {
     expect(within(ts).getAllByText("Check for floating promises.")).toHaveLength(1);
     expect(screen.getAllByText("Check for floating promises.")).toHaveLength(1);
     expect(within(rows[0] as HTMLElement).getByText(".github/workflows/**/*.yml")).toBeInTheDocument();
-    // They are opt-in, and the tab says where to turn them on.
-    expect(screen.getByText(/They are off by default: turn them on with Built-in rules/)).toBeInTheDocument();
+    // They are chosen per repository, and the tab says where.
+    expect(screen.getByText(/A repository gets none until you choose them: tick the ones it needs under Built-in rules on the repository's Settings/)).toBeInTheDocument();
     // The texts are adapted from open-code-review, and keep its license.
     expect(screen.getByRole("link", { name: "alibaba/open-code-review" })).toHaveAttribute("href", "https://github.com/alibaba/open-code-review");
     expect(screen.getByText(/Apache-2\.0/)).toBeInTheDocument();

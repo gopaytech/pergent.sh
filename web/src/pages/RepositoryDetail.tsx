@@ -340,7 +340,7 @@ function RuleList({ rules }: { rules: InputsView["rules"] }) {
           {!e.off && <pre className="doc">{e.rule}</pre>}
         </details>
       ))}
-      <div className="pad meta">{rules.builtIn ? "Then pergent's built-in rules." : "Built-in rules are off."}</div>
+      <div className="pad meta">{rules.builtIn.length > 0 ? `Then pergent's built-in rules: ${rules.builtIn.join(", ")}.` : "No built-in rules."}</div>
     </section>
   );
 }

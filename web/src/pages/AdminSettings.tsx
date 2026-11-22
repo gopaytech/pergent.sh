@@ -151,7 +151,6 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [capMR, setCapMR] = useState(String(v.rerunLimitPerMR));
   const [capRepo, setCapRepo] = useState(String(v.rerunLimitPerRepo));
   const [skills, setSkills] = useState(v.skills);
-  const [builtInRules, setBuiltInRules] = useState(v.builtInRules);
   const [defaultRuleSets, setDefaultRuleSets] = useState(v.ruleSets ?? []);
   const cfg = v.config;
   const pinned = (key: string) => v.pinned[key] === true;
@@ -214,7 +213,6 @@ function Defaults({ v }: { v: DefaultsView }) {
       rerunLimitPerRepo: cap(caps[1], cfg.rerunLimitPerRepo),
       // Left out when the library couldn't be read, the stored list is kept.
       ...(library.isSuccess ? { skills: library.data.map((s) => s.name).filter((n) => skills.includes(n)) } : {}),
-      builtInRules: orNull(builtInRules, cfg.builtInRules),
       // Left out when the rule library couldn't be read, the stored list is
       // kept. A name no longer in the library is dropped, as for skills.
       ...(ruleLibrary.isSuccess ? { ruleSets: defaultRuleSets.filter((n) => ruleLibrary.data.some((s) => s.name === n)) } : {}),
@@ -555,25 +553,6 @@ function Defaults({ v }: { v: DefaultsView }) {
           onChange={setSkills}
         />
       )}
-      <div className="set">
-        <div>
-          <div className="name">Built-in rules</div>
-          <div className="help">
-            pergent's own path rules, after a repository's and its rule sets'. Off unless turned on here or on a repository. A
-            repository that sets none gets this.
-            <FromConfig
-              field="Built-in rules"
-              pinned={pinned("builtInRules")}
-              shown={onOff(cfg.builtInRules)}
-              disabled={save.isPending}
-              onUse={() => setBuiltInRules(cfg.builtInRules)}
-            />
-          </div>
-        </div>
-        <div>
-          <Switch label="Built-in rules" checked={builtInRules} disabled={save.isPending} onChange={setBuiltInRules} />
-        </div>
-      </div>
       <div className="set">
         <div>
           <div className="name">Default rule sets</div>

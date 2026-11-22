@@ -1113,6 +1113,29 @@ details.skill-doc[open] summary::before {
   gap: 4px 8px;
 }
 
+/* The built-in rule picker on a repository's Settings: a search, the count
+   and Select none on one line, then the rules in a list that scrolls on its
+   own, so 67 rows don't push the rest of the page down. */
+.built-in-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.built-in-bar .meta {
+  white-space: nowrap;
+}
+
+ul.built-in-pick {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 360px;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--line);
+}
+
 /* --- tables --- */
 
 .table {
