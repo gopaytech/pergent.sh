@@ -382,14 +382,18 @@ describe("AdminSettings defaults", () => {
     });
   });
 
-  it("sets the default rule sets in order and the Built-in rules switch", async () => {
+  it("sets the default rule sets in order and turns the Built-in rules switch on", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
     renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
-    await userEvent.click(within(form).getByRole("switch", { name: "Built-in rules" }));
+    // Built-in rules are opt-in: the switch starts off.
+    const builtIn = within(form).getByRole("switch", { name: "Built-in rules" });
+    expect(builtIn).not.toBeChecked();
+    expect(within(form).getByText(/Off unless turned on here or on a repository\./)).toBeInTheDocument();
+    await userEvent.click(builtIn);
     await userEvent.selectOptions(await within(form).findByRole("combobox", { name: "Add a rule set" }), "go-api");
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
-    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ builtInRules: false, ruleSets: ["go-api"] });
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ builtInRules: true, ruleSets: ["go-api"] });
   });
 
   it("says under each default what the config gives", async () => {

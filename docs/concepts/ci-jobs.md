@@ -97,7 +97,7 @@ Each job ends as one of:
 - **Cleaning.** Colour codes are removed. Secrets of known shapes (not everything) are removed by pergent.sh, and pergent removes them again.
 - **Data, not instructions.** Logs and reports come from running the change's own code, so its author controls them. The model is told to use them to find where to look and what not to repeat, never to report a CI result itself as a finding, and never to let a passed job excuse a problem. The verification run does not get the file. These are instructions in the prompt, so a malicious log can still influence the review.
 - **What is kept.** pergent.sh's own code never puts log or report text in the comment, the logs, `runs.ci_jobs` (the per-job snapshot) or the dashboard. The dashboard shows each job's result, what was read, its size and whether it was cut. The text is in the Job's input ConfigMap while the review runs, and is removed with the Job. The model can quote the text in a finding or a summary, and then it appears in the comment like any other model text.
-- **It needs a newer pergent image.** The model sees the results only with a pergent image that reads `--ci-results`. An older image ignores the file and reviews as before, and the gate still applies, because pergent.sh decides it. The release notes name the version.
+- **It needs pergent v0.11.0 or newer.** The model sees the results only with a pergent image that reads `--ci-results`: v0.11.0, the default `jobs.image`, is the first. An older `jobs.image` ignores the file and reviews as before, and the gate still applies, because pergent.sh decides it.
 
 ## The model provider
 

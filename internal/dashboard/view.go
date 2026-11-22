@@ -986,7 +986,7 @@ type DefaultsView struct {
 	// repository whose own ruleSets is null. Empty means none.
 	RuleSets []string `json:"ruleSets"`
 	// BuiltInRules is whether a repository that sets none gets pergent's
-	// built-in path rules.
+	// built-in path rules; false until an admin turns it on.
 	BuiltInRules bool `json:"builtInRules"`
 	// Config holds the values the config gives (jobs.* and the built-in
 	// defaults), before anything saved here. Skills has no config value.

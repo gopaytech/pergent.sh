@@ -134,7 +134,7 @@ Why an entry is skipped, as the failure text and the pages say it: `out of quota
 
 ### The pergent image
 
-Fallback needs a pergent image that reports `provider_error` in its result. pergent v0.10.0 does not. The release notes of pergent.sh name the first pergent release that does. With an older image, nothing falls back and no entry is marked: a review fails as before.
+Fallback needs a pergent image that reports `provider_error` in its result. pergent v0.11.0, the default `jobs.image`, is the first release that does. With an older `jobs.image`, nothing falls back and no entry is marked: a review fails as before.
 
 ### Marks
 

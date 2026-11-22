@@ -18,7 +18,7 @@ With the switch off, nothing changes: pergent.sh builds no graph, stores none, a
 ## Turn it on
 
 1. The install must keep graphs: set `graphs.enabled: true` in the Helm chart. It needs the dashboard (`config.dashboard.url`). The chart then makes a PersistentVolumeClaim (`graphs.persistence.size`, default `5Gi`; `graphs.persistence.storageClass`), mounts it on the pergent.sh pod only, and sets `PERGENT_SH_GRAPHS_DIR` and `PERGENT_SH_GRAPH_IMAGE`.
-2. The review Job gives pergent the graph in the environment variable `PERGENT_GRAPH`, not as a flag. A pergent image older than the change that reads `PERGENT_GRAPH` (v0.10.0, the default review image, is one) ignores the variable: the review runs as it would without a graph, and the build still runs and stores graphs. A pergent image that reads it uses the graph.
+2. The review Job gives pergent the graph in the environment variable `PERGENT_GRAPH`, not as a flag. pergent v0.11.0, the default review image, is the first release that reads it and uses the graph. An older `jobs.image` ignores the variable: the review runs as it would without a graph, and the build still runs and stores graphs.
 3. On the repository's page, open **Settings** and tick **Build and use a code graph**. Maintainers and admins of the repository can change it. A repository from the config file has no switch: it is always off.
 
 The same page shows the stored graph: its branch and commit, nodes, edges and size, when it was built, a build that is queued or running, and why the last build failed. Never the graph itself.

@@ -559,7 +559,8 @@ function Defaults({ v }: { v: DefaultsView }) {
         <div>
           <div className="name">Built-in rules</div>
           <div className="help">
-            pergent's own path rules, after a repository's and its rule sets'. A repository that sets none gets this.
+            pergent's own path rules, after a repository's and its rule sets'. Off unless turned on here or on a repository. A
+            repository that sets none gets this.
             <FromConfig
               field="Built-in rules"
               pinned={pinned("builtInRules")}

@@ -890,7 +890,8 @@ export type DefaultValues = {
   // repository, in a UTC day: 1 to 1000.
   rerunLimitPerMR: number;
   rerunLimitPerRepo: number;
-  // Whether a repository that sets none gets pergent's built-in path rules.
+  // Whether a repository that sets none gets pergent's built-in path rules
+  // (false until an admin turns it on).
   builtInRules: boolean;
 };
 

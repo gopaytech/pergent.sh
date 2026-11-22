@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: pergent.sh
-  version: 0.17.1
+  version: 0.18.0
   summary: HTTP routes of the pergent.sh server.
   description: |
     pergent.sh runs pergent code reviews as Kubernetes Jobs. It serves one port,
@@ -5890,7 +5890,7 @@ components:
           description: The library rule sets the repository uses, in match order. Null is the default list; an empty list is 400.
         builtInRules:
           type: [boolean, 'null']
-          description: Whether pergent's built-in path rules come after the repository's and the sets'. Null follows the default (on).
+          description: Whether pergent's built-in path rules come after the repository's and the sets'. Null follows the default, which is off until an admin turns it on.
     StartRequest:
       type: object
       required: [head]
@@ -5994,7 +5994,7 @@ components:
           description: The default rule-set list, in match order. A missing key keeps the list; null or [] is none.
         builtInRules:
           type: [boolean, 'null']
-          description: The default Built-in rules switch. Null is on.
+          description: The default Built-in rules switch. Null is off.
         commentLayout:
           type: [array, 'null']
           description: |

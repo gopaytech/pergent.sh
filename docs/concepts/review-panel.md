@@ -1,6 +1,6 @@
 # Review panel (experimental)
 
-**Status: experimental, off by default.** A repository with no chain B in effect reviews as before, byte for byte. No release supports a panel yet (see [The image check](#the-image-check)), so nothing changes until one does.
+**Status: experimental, off by default.** A repository with no chain B in effect reviews as before, byte for byte. This release accepts no review image for a panel yet, the default pergent v0.11.0 included (see [The image check](#the-image-check)), so nothing changes until a later release turns panels on.
 
 A review panel runs each review on two model chains and puts the two results together. Chain A is the [model chain](models.md) you know. Chain B is the second chain.
 
@@ -54,7 +54,7 @@ Chain B is a list of models, like chain A. Its first entry is the second model o
 
 | Where | Page | Who changes it |
 | --- | --- | --- |
-| Instance | **Admin → Settings**, card **Global chain B (review panel)** | Admins |
+| Instance | The admin **Settings** page, card **Global chain B (review panel)** | Admins |
 | Team | The team's page under **Teams** (`/teams/<id>`), card **Team chain B (review panel)** | Admins and maintainers of the team |
 | Repository | The repository's **Settings** tab (for a viewer, **Skills & instructions**), card **Chain B (review panel)** | Admins and maintainers of the owner team |
 

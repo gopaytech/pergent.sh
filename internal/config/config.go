@@ -31,7 +31,7 @@ import (
 
 const (
 	defaultListen      = ":8080"
-	defaultImage       = "ghcr.io/gopaytech/pergent:v0.10.0"
+	defaultImage       = "ghcr.io/gopaytech/pergent:v0.11.0"
 	defaultMaxRunning  = 5
 	defaultWorkSize    = "20Gi"
 	defaultTimeout     = 30 * time.Minute
@@ -268,7 +268,7 @@ type Repository struct {
 	Skills, RepoSkills []string
 	// RuleSets names the rule sets the repository uses, in match order (nil:
 	// the default list). BuiltInRules is the Built-in rules switch (nil: the
-	// default).
+	// default, off).
 	RuleSets      []string
 	BuiltInRules  *bool
 	FailureStatus FailureStatus

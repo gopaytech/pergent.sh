@@ -31,7 +31,7 @@ For each changed file in a skill's batch, pergent walks one ordered list and tak
 
 1. The repository's `.pergent/rules.yaml`, in file order. It is read from the **target branch**, the same commit as the repository's skills, so a change cannot edit its own rules.
 2. The entries of each rule set the repository uses, set by set in the repository's order.
-3. pergent's built-in rules, unless **Built-in rules** is off.
+3. pergent's built-in rules, only when **Built-in rules** is on. It is off by default.
 
 A file that matches nothing, or matches an `off` entry, gets no rule. The skill still reviews it with its own text.
 
@@ -39,7 +39,9 @@ A file that matches nothing, or matches an `off` entry, gets no rule. The skill 
 
 pergent ships built-in rules for 67 file types, adapted from [alibaba/open-code-review](https://github.com/alibaba/open-code-review) (Apache-2.0). They cover common languages, config files, schemas and templates. pergent's [Path rules](https://github.com/gopaytech/pergent/blob/master/docs/concepts/rules.md) page says which file types they cover, the order they match in and what was changed from open-code-review. The texts are in pergent's `rule/builtin/` folder. An entry of the repository or of a rule set for the same file wins over a built-in.
 
-- **A review uses the built-in rules of the pergent in `jobs.image`**, because the review Job runs that pergent. The default `jobs.image`, pergent v0.10.0, reads no rules at all. Until `jobs.image` is a pergent release with rule support, a review gets no rule, built-in or from a team. The release notes name the first pergent release with it.
+**Built-in rules are opt-in.** A repository gets them only when **Built-in rules** is on: on the repository's **Settings**, in `repositories[].built_in_rules: true`, or as the default for every repository on the admin **Settings** page. A repository that sets nothing at any of these levels gets none, and its Job runs with `PERGENT_NO_BUILT_IN_RULES=true`. The repository's own `.pergent/rules.yaml` and its rule sets do not depend on this switch.
+
+- **A review uses the built-in rules of the pergent in `jobs.image`**, because the review Job runs that pergent. The default `jobs.image`, pergent v0.11.0, is the first pergent release that reads rules. A `jobs.image` older than v0.11.0 reads no rules at all: its reviews get no rule, built-in or from a team.
 - The **Built-in** tab of the **Rules** page shows one row per rule: its name, its globs in match order and its text. It shows the rules of the pergent version this pergent.sh is built with. That can differ from the one in `jobs.image`. Copy a text from it into a rule set to change it.
 - Each rule adds its text to every batch run with a matching file, and rule text counts in batch sizing. So built-in rules make each run longer and can split a change into more batches.
 
@@ -57,7 +59,7 @@ Rule sets are on the **Rules** page. Everyone signed in reads them; admins creat
 | Setting | Where | Default |
 |---|---|---|
 | **Rule sets used for this repository** | A repository's **Settings**, or `repositories[].rule_sets` | The default list: **Default rule sets** on the admin **Settings** page |
-| **Built-in rules** | A repository's **Settings**, the default on the admin **Settings** page, or `repositories[].built_in_rules` | On |
+| **Built-in rules** | A repository's **Settings**, the default on the admin **Settings** page, or `repositories[].built_in_rules` | Off |
 
 A skill with `rules: false` in its frontmatter gets no rules in any run ([Skills and instructions](skills.md)).
 
@@ -79,5 +81,5 @@ A check that silently stops running is close to a false pass, so none of these r
 - `jobs.image` is in the hash because the built-in texts ship inside the image, so a new image can change them. The first push after you change `jobs.image` is a full review for skills with rules on.
 - Quiet reviews get rules as usual.
 - [API reviews](../setup/review-api.md) read no repository file: they get the default rule sets and the default **Built-in rules** switch.
-- The rule list reaches the review Job as a file behind the environment variable `PERGENT_RULES`, and `PERGENT_NO_BUILT_IN_RULES=true` when the built-ins are off. A pergent image built before rules ignores both and reviews as before. Rules never block, so this is not a false pass. Its result has no `rules` object, and the review page says `This image does not use rules.`
+- The rule list reaches the review Job as a file behind the environment variable `PERGENT_RULES`, and `PERGENT_NO_BUILT_IN_RULES=true` when the built-ins are off. A pergent image older than v0.11.0 ignores both and reviews as before. Rules never block, so this is not a false pass. Its result has no `rules` object, and the review page says `This image does not use rules.`
 - The review page shows the rule each reviewed file was checked with, and the comment's **Files** block ends with one line that counts the files per rule.

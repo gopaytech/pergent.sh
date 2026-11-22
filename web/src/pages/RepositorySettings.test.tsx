@@ -478,13 +478,15 @@ describe("RepositorySettings: path rules", () => {
     expect(fake.find("PUT", settingsPath)[0].body).toEqual({ ruleSets: null });
   });
 
-  it("sends only builtInRules when the switch changes", async () => {
+  it("sends only builtInRules when the switch is turned on", async () => {
     const fake = fakeApi({ ...base, "GET /api/rule-sets": { body: ruleSets }, [`PUT ${settingsPath}`]: { body: repoDetail(repoPayments) } });
     renderApp("/repos/main/acme/payments?tab=settings");
+    // Built-in rules are opt-in: a repository that sets nothing has them off.
     const toggle = await screen.findByRole("switch", { name: "Built-in rules" });
-    expect(toggle).toBeChecked();
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(/Off by default: turn it on to use them\./)).toBeInTheDocument();
     await userEvent.click(toggle);
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ builtInRules: false });
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ builtInRules: true });
   });
 });
