@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -299,5 +300,86 @@ func TestDeleteTeamDropsItsLimits(t *testing.T) {
 	}
 	if got, err := s.ModelLimits(ctx); err != nil || len(got) != 1 || got[0].TeamID != 0 {
 		t.Errorf("ModelLimits = %+v, %v; want the model limit alone", got, err)
+	}
+}
+
+// entryUsage records a review of a new change on mr1's project that ran on
+// ref and reported in and out tokens at at (at most t0 + 1h, the token's
+// expiry). It returns the run.
+func entryUsage(t *testing.T, s *Store, ref EntryRef, at time.Time, in, out int64) string {
+	t.Helper()
+	n := usageSeq.Add(1)
+	head := fmt.Sprintf("limit%d", n)
+	mr := MRKey{Instance: mr1.Instance, ProjectID: mr1.ProjectID, IID: 1000 + n}
+	id := dispatched(t, s, mr, head, "tok-"+head)
+	if ref.ID != "" {
+		if err := s.SetRunEntry(ctx, id, RunEntry{Source: ref.Source, ID: ref.ID, Name: "n-" + ref.ID, Position: 1, Length: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if res, err := s.StoreResult(ctx, id, "tok-"+head, []byte(`{"schema_version":1,"status":"completed","skills":[]}`), at); err != nil || res != ResultStored {
+		t.Fatalf("StoreResult = %v, %v", res, err)
+	}
+	if err := s.RecordUsage(ctx, id, []SkillUsage{skillRow("security", "no_blocking_issues", in, out)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// The sums: per entry and owner team, from the 1st of the month in UTC on; a
+// row with no owner team counts under 0; a run that recorded no entry counts
+// on none.
+func TestEntryTokensSince(t *testing.T) {
+	s := newStore(t)
+	since := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	g := EntryRef{Source: SourceGlobal, ID: "m1"}
+	tm := EntryRef{Source: SourceTeam, ID: "t9"}
+	entryUsage(t, s, g, t0, 3, 0) // before the team owned the repository
+	team := newTeam(t, s, "Payments")
+	ownRepo(t, s, team, mr1.Instance, "acme/widgets")
+	entryUsage(t, s, g, t0, 10, 5)
+	entryUsage(t, s, tm, t0, 7, 0)
+	entryUsage(t, s, g, since, 1, 0)                    // the first second of the month counts
+	entryUsage(t, s, g, since.Add(-time.Second), 99, 0) // the last second of the month before does not
+	entryUsage(t, s, EntryRef{}, t0, 50, 0)             // no entry
+
+	got, err := s.EntryTokensSince(ctx, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []EntryTokens{
+		{Ref: g, Tokens: 3},
+		{Ref: g, OwnerTeam: team, Tokens: 16},
+		{Ref: tm, OwnerTeam: team, Tokens: 7},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("EntryTokensSince = %+v; want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %+v; want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// A panel counts each Job on its own entry: the members on theirs, Job P's
+// roles on their judges'. Its run_usage rows, the total of all 3 Jobs, are
+// not counted again on the run's entry.
+func TestEntryTokensSincePanel(t *testing.T) {
+	s := newStore(t)
+	id := judgedPanel(t, s, "a1")
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET model_source = 'global', model_entry_id = 'm1' WHERE id = $1::uuid`, id); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.EntryTokensSince(ctx, t0.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []EntryTokens{
+		{Ref: EntryRef{Source: SourceGlobal, ID: "m1"}, Tokens: 110 + 8 + 13}, // A's 2 skills, P's role a
+		{Ref: EntryRef{Source: SourceTeam, ID: "t1"}, Tokens: 55 + 9},         // B, P's role b
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("EntryTokensSince = %+v; want %+v", got, want)
 	}
 }

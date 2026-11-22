@@ -65,3 +65,55 @@ func (s *Store) ClearModelLimit(ctx context.Context, ref EntryRef, team int64) (
 	}
 	return old, true, nil
 }
+
+// EntryTokens is what one chain entry used in the repositories of one owner
+// team (OwnerTeam 0: rows with none, API reviews among them).
+type EntryTokens struct {
+	Ref       EntryRef
+	OwnerTeam int64
+	Tokens    int64
+}
+
+// entryTokensSQL sums the tokens (in plus out) reported from $1 on, per
+// entry and owner team. A run with rows per model (a review panel's members
+// and Job P) counts from those, each on its own entry (panel_members,
+// panel_judges), and its run_usage rows, the panel's total, are left out.
+// Any other run counts its run_usage rows on the run's entry. A run with no
+// entry (before chains) counts on none, and so do Job P's tokens when its
+// result split none per model. A pinned Review API review counts on its
+// entry only once its run records the entry; Task 12 makes the dispatcher
+// record it (today a pinned API run records no entry).
+const entryTokensSQL = `SELECT source, entry_id, COALESCE(owner_team_id, 0), sum(tokens)::bigint FROM (
+		SELECT COALESCE(r.model_source, 'global') AS source, r.model_entry_id AS entry_id, u.owner_team_id,
+			u.tokens_in + u.tokens_out AS tokens
+		FROM run_usage u JOIN runs r ON r.id = u.run_id
+		WHERE u.reported_at >= $1 AND COALESCE(r.model_entry_id, '') <> ''
+		  AND NOT EXISTS (SELECT 1 FROM run_usage_models m WHERE m.run_id = u.run_id)
+		UNION ALL
+		SELECT p.model_source, p.model_entry_id, m.owner_team_id, m.tokens_in + m.tokens_out
+		FROM run_usage_models m JOIN panel_members p ON p.id = m.member_id
+		WHERE m.part = 'member' AND m.reported_at >= $1 AND p.model_entry_id <> ''
+		UNION ALL
+		SELECT j.model_source, j.model_entry_id, m.owner_team_id, m.tokens_in + m.tokens_out
+		FROM run_usage_models m JOIN panel_judges j ON j.run_id = m.run_id AND j.role = m.role
+		WHERE m.part = 'merge' AND m.reported_at >= $1 AND j.model_entry_id <> '') x
+	GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`
+
+// EntryTokensSince returns what each entry used from since on, by reported
+// time (entryTokensSQL), by source, entry and owner team.
+func (s *Store) EntryTokensSince(ctx context.Context, since time.Time) ([]EntryTokens, error) {
+	rows, err := s.pool.Query(ctx, entryTokensSQL, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EntryTokens
+	for rows.Next() {
+		var e EntryTokens
+		if err := rows.Scan(&e.Ref.Source, &e.Ref.ID, &e.OwnerTeam, &e.Tokens); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
