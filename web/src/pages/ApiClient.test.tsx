@@ -222,7 +222,7 @@ describe("API client: settings", () => {
       expect.stringContaining("Its keys stop at once, its running reviews end with no callback, and its reviews and dismissals are deleted."),
     );
     expect(fake.find("DELETE", url)).toHaveLength(1);
-    expect(await screen.findByTestId("location")).toHaveTextContent(/^\/api-clients$/);
+    await vi.waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(/^\/api-clients$/));
     expect(await screen.findByText(/No API clients yet/)).toBeInTheDocument();
   });
 

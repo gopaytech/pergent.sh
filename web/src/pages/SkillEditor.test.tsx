@@ -24,7 +24,7 @@ describe("SkillEditor: new", () => {
     const [post] = fake.find("POST", "/api/admin/skills");
     expect(post.body).toEqual({ name: "my-skill", content: "Review {the code.", addToDefaults: false });
     expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
-    expect(await screen.findByTestId("location")).toHaveTextContent("/skills");
+    await vi.waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/skills"));
   });
 
   it("sends addToDefaults when the box is ticked", async () => {
