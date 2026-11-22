@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The dashboard no longer has a Code graph switch.** The code graph is experimental, so a repository turns it on with `PUT /api/repositories/{instance}/{project}/graph` only: [Code graph](concepts/code-graph.md). A repository that has it on keeps it on.
+
 **Built-in rules are a list each repository chooses**, in place of one switch for all 67: [Path rules](concepts/rules.md#built-in-rules). A repository picks only the rules it needs, which keeps the token cost down.
 
 - **Migration `0050_built_in_rule_names.sql`** runs at startup. Back up Postgres first, as for any migration. It adds `dashboard_repos.built_in_rule_names` and `runs.built_in_rules_note`, both NULL, and drops nothing. A repository with **Built-in rules** on gets every built-in rule of pergent v0.11.0; one with it off or unset gets none. The old switches, `dashboard_repos.built_in_rules` and `repo_defaults.built_in_rules`, stay as they were and are no longer read or written, so the previous release keeps working on the migrated database and reads its own switches again after a rollback.

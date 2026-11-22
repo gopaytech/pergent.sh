@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 
 import {
   api,
@@ -163,7 +163,47 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
       {/* Which teams cover a repository is an admin's to say, also for a
           repository the config sets up: it is not one of its settings. */}
       {view.role === "admin" && <RepoTeams instance={repo.instance} project={repo.project} />}
+      {/* Last, so nothing else on the tab sits under it. Pausing is the
+          switch on Repositories; the config removes its own repositories. */}
+      {view.role === "admin" && repo.source === "dashboard" && <RemoveRepository instance={repo.instance} project={repo.project} />}
     </>
+  );
+}
+
+// RemoveRepository deletes a repository from pergent for good, after a
+// confirm, and goes back to the list.
+function RemoveRepository({ instance, project }: { instance: string; project: string }) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const navigate = useNavigate();
+  const remove = useMutation({
+    mutationFn: () => write<RepositoryDetailView>("DELETE", paths.apiRepo(instance, project)),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["repositories"] });
+      navigate("/repos");
+    },
+  });
+  const ask = () => {
+    if (
+      window.confirm(
+        `Remove ${project} from pergent? Its settings and team links are deleted, and its webhook and clone credentials are removed. This can't be undone.`,
+      )
+    )
+      remove.mutate();
+  };
+  return (
+    <section className="card pad stack" aria-label="Remove repository">
+      <h2>Remove repository</h2>
+      <div className="meta">
+        Its settings and team links are deleted, and its webhook and clone credentials are removed. This cannot be undone.
+      </div>
+      {remove.isError && <ErrorBox error={remove.error} />}
+      <div className="actions-row">
+        <button type="button" className="btn" disabled={remove.isPending} onClick={ask}>
+          Remove repository
+        </button>
+      </div>
+    </section>
   );
 }
 

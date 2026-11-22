@@ -1249,6 +1249,9 @@ describe("RepositoryDetail while paused, and Remove", () => {
     "GET /api/repositories/main/acme/tools": { body: tools },
     "GET /api/repositories/main/acme/tools/inputs": { body: noInputs },
     "GET /api/reviews?project=acme%2Ftools&days=90": { body: { items: [], nextCursor: "" } },
+    "GET /api/repositories/main/acme/tools/teams": { body: repoTeams },
+    "GET /api/repositories/main/acme/tools/chain": { body: chainRepoInherit },
+    "GET /api/repositories/main/acme/tools/panel-chain": { body: panelRepoInherit },
   };
   const waitingChange = {
     number: 5,
@@ -1278,6 +1281,38 @@ describe("RepositoryDetail while paused, and Remove", () => {
     expect(screen.queryByRole("button", { name: /Start review/ })).not.toBeInTheDocument();
   });
 
+  // removeCard waits for the Settings tab's Remove repository card and checks
+  // it is the tab's last card.
+  const removeCard = async () => {
+    const card = await screen.findByRole("region", { name: "Remove repository" });
+    const cards = screen.getByRole("tabpanel").querySelectorAll("section.card");
+    expect(cards[cards.length - 1]).toBe(card);
+    return card;
+  };
+
+  it("has no Remove on the Reviews tab", async () => {
+    renderAt("/repos/main/acme/tools", pausedRoutes);
+    expect(await screen.findByRole("tab", { name: "Reviews" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("button", { name: "Remove repository" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Remove repository" })).not.toBeInTheDocument();
+  });
+
+  it("puts Remove in the last card of the Settings tab of a paused repository", async () => {
+    renderAt("/repos/main/acme/tools?tab=settings", pausedRoutes);
+    const card = await removeCard();
+    expect(within(card).getByRole("heading", { name: "Remove repository" })).toBeInTheDocument();
+    expect(card).toHaveTextContent(
+      "Its settings and team links are deleted, and its webhook and clone credentials are removed. This cannot be undone.",
+    );
+    expect(within(card).getByRole("button", { name: "Remove repository" })).toBeEnabled();
+  });
+
+  it("puts Remove in the last card of the Settings tab of a running repository", async () => {
+    renderAt("/repos/main/acme/payments?tab=settings", base);
+    const card = await removeCard();
+    expect(within(card).getByRole("button", { name: "Remove repository" })).toBeInTheDocument();
+  });
+
   it("removes a repository after the confirm, and goes back to the list", async () => {
     const confirm = vi.fn(() => true);
     vi.stubGlobal("confirm", confirm);
@@ -1286,8 +1321,8 @@ describe("RepositoryDetail while paused, and Remove", () => {
       "DELETE /api/repositories/main/acme/tools": { body: { ...tools, repo: { ...repoToolsPaused, paused: false } } },
       "GET /api/repositories": { body: [] },
     });
-    renderApp("/repos/main/acme/tools");
-    await userEvent.click(await screen.findByRole("button", { name: "Remove repository" }));
+    renderApp("/repos/main/acme/tools?tab=settings");
+    await userEvent.click(within(await removeCard()).getByRole("button", { name: "Remove repository" }));
     expect(confirm).toHaveBeenCalledWith(
       "Remove acme/tools from pergent? Its settings and team links are deleted, and its webhook and clone credentials are removed. This can't be undone.",
     );
@@ -1298,64 +1333,38 @@ describe("RepositoryDetail while paused, and Remove", () => {
   it("sends nothing when the Remove confirm is cancelled", async () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
     const fake = fakeApi(pausedRoutes);
-    renderApp("/repos/main/acme/tools");
-    await userEvent.click(await screen.findByRole("button", { name: "Remove repository" }));
+    renderApp("/repos/main/acme/tools?tab=settings");
+    await userEvent.click(within(await removeCard()).getByRole("button", { name: "Remove repository" }));
     expect(fake.find("DELETE", "/api/repositories/main/acme/tools")).toHaveLength(0);
   });
 
   it("has no Remove for a config repository", async () => {
-    renderAt("/repos/main/acme/widgets", base);
-    expect(await screen.findByRole("heading", { name: "acme/widgets" })).toBeInTheDocument();
+    renderAt("/repos/main/acme/widgets?tab=settings", base);
+    expect(await screen.findByRole("region", { name: "Teams" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Remove repository" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove repository" })).not.toBeInTheDocument();
   });
 
-  it("has no Remove for a maintainer", async () => {
-    renderAt("/repos/main/acme/tools", { ...pausedRoutes, "GET /api/repositories/main/acme/tools": { body: repoDetail(repoToolsPaused, "maintainer") } });
-    expect(await screen.findByRole("heading", { name: "acme/tools" })).toBeInTheDocument();
+  it("has no Remove for a maintainer, on the Settings tab either", async () => {
+    renderAt("/repos/main/acme/tools?tab=settings", {
+      ...pausedRoutes,
+      "GET /api/repositories/main/acme/tools": { body: repoDetail(repoToolsPaused, "maintainer") },
+    });
+    expect(await screen.findByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("region", { name: "Model chain" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Remove repository" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove repository" })).not.toBeInTheDocument();
   });
 });
-
+// The code graph is experimental and has no dashboard switch: even an
+// install that keeps graphs shows no Code graph card on Settings.
 describe("RepositoryDetail code graph", () => {
-  it("turns the code graph on from the settings tab and shows its status", async () => {
-    const on = {
-      ...payments,
-      graph: {
-        ...payments.graph,
-        enabled: true,
-        branch: "main",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        nodes: 12,
-        edges: 30,
-        sizeBytes: 4096,
-        building: "queued" as const,
-        error: "graphify couldn't read the repository",
-      },
-    };
-    const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/graph": { body: on } });
+  it("shows no code graph card on the settings tab", async () => {
+    fakeApi({ ...base, "GET /api/repositories/main/acme/payments": { body: { ...payments, graph: { ...payments.graph, available: true } } } });
     renderApp("/repos/main/acme/payments?tab=settings");
-    const box = await screen.findByRole("checkbox", { name: "Build and use a code graph" });
-    expect(box).not.toBeChecked();
-    await userEvent.click(box);
-    await waitFor(() => expect(fake.find("PUT", "/api/repositories/main/acme/payments/graph")).toHaveLength(1));
-    expect(fake.find("PUT", "/api/repositories/main/acme/payments/graph")[0].body).toEqual({ enabled: true });
-    expect(await screen.findByText(/main at 0123456789ab, 12 nodes, 30 edges, 4 KiB/)).toBeInTheDocument();
-    expect(screen.getByText("queued")).toBeInTheDocument();
-    expect(screen.getByText("graphify couldn't read the repository")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Build and use a code graph" })).toBeChecked();
-  });
-
-  it("can't be turned on when the install keeps no graphs", async () => {
-    const off = { ...payments, graph: { ...payments.graph, available: false } };
-    renderAt("/repos/main/acme/payments?tab=settings", { ...base, "GET /api/repositories/main/acme/payments": { body: off } });
-    expect(await screen.findByRole("checkbox", { name: "Build and use a code graph" })).toBeDisabled();
-    expect(screen.getByText(/This install keeps no code graphs/)).toBeInTheDocument();
-  });
-
-  it("is not shown for a repository managed by the config file", async () => {
-    renderAt("/repos/main/acme/widgets?tab=settings", base);
     expect(await screen.findByRole("tab", { name: "Settings" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Code graph" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /code graph/i })).not.toBeInTheDocument();
   });
 });
 

@@ -1033,6 +1033,22 @@ ul.files li {
   font-weight: 400;
 }
 
+/* A CI job row (name, what to read, Blocks approval, Remove). The select takes
+   its own width, not the global 100%, the name keeps room to type, and a narrow
+   card wraps the row instead of pushing the switch and Remove out of it. */
+.ci-job .link-head {
+  flex-wrap: wrap;
+}
+
+.ci-job .link-head input.grow {
+  min-width: 12em;
+}
+
+.ci-job .link-head select {
+  width: auto;
+  flex: none;
+}
+
 .link-watched {
   display: grid;
   gap: 4px;
