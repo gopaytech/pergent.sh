@@ -12,38 +12,39 @@ import (
 func TestEffectiveRuleSetsConfig(t *testing.T) {
 	cfg := testConfig()
 	cfg.Repositories = append(cfg.Repositories, config.Repository{GitHub: "gh", Project: "Acme/Rules",
-		RuleSets: []string{"b", "a"}, BuiltInRules: ptr(false)})
+		RuleSets: []string{"b", "a"}, BuiltInRules: []string{"go"}})
 	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
 
 	unset := get(t, r, "main", "acme/widgets")
-	if unset.RuleSets != nil || unset.BuiltInRules || unset.Overridden[KeyRuleSets] || unset.Overridden[KeyBuiltInRules] {
+	if unset.RuleSets != nil || unset.BuiltInRules != nil || unset.Overridden[KeyRuleSets] || unset.Overridden[KeyBuiltInRules] {
 		t.Errorf("unset: %v %v %v", unset.RuleSets, unset.BuiltInRules, unset.Overridden)
 	}
 	set := get(t, r, "gh", "acme/rules")
-	if !slices.Equal(set.RuleSets, []string{"b", "a"}) || set.BuiltInRules || !set.Overridden[KeyRuleSets] || !set.Overridden[KeyBuiltInRules] {
+	if !slices.Equal(set.RuleSets, []string{"b", "a"}) || !slices.Equal(set.BuiltInRules, []string{"go"}) || !set.Overridden[KeyRuleSets] || !set.Overridden[KeyBuiltInRules] {
 		t.Errorf("set: %v %v %v", set.RuleSets, set.BuiltInRules, set.Overridden)
 	}
 }
 
-// Built-in rules are opt-in: a config-file repository that leaves
-// built_in_rules out gets none, and one that sets it gets what it set.
-func TestBuiltInRulesConfigOptIn(t *testing.T) {
+// Built-in rules are chosen per repository: a config-file repository that
+// leaves built_in_rules out, or lists none, gets none; one that lists some
+// gets those, in builtin.yaml order.
+func TestBuiltInRulesConfig(t *testing.T) {
 	for _, c := range []struct {
 		name       string
-		set        *bool
-		want       bool
+		set        []string
+		want       []string
 		overridden bool
 	}{
-		{"unset is off", nil, false, false},
-		{"on is on", ptr(true), true, true},
-		{"off is off", ptr(false), false, true},
+		{"unset is none", nil, nil, false},
+		{"empty is none", []string{}, nil, false},
+		{"a list is that list", []string{"yaml", "go"}, []string{"yaml", "go"}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := testConfig()
 			cfg.Repositories[0].BuiltInRules = c.set
 			r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
 			eff := get(t, r, "main", "acme/widgets")
-			if eff.BuiltInRules != c.want || eff.Overridden[KeyBuiltInRules] != c.overridden {
+			if !slices.Equal(eff.BuiltInRules, c.want) || eff.Overridden[KeyBuiltInRules] != c.overridden {
 				t.Errorf("BuiltInRules = %v (overridden %v), want %v (%v)", eff.BuiltInRules, eff.Overridden[KeyBuiltInRules], c.want, c.overridden)
 			}
 		})
@@ -58,21 +59,21 @@ func TestEffectiveRuleSetsDashboard(t *testing.T) {
 		row      store.DashboardRepo
 		defaults store.RepoDefaults
 		sets     []string
-		builtIn  bool
+		builtIn  []string
 		// setsOver and builtInOver are whether the repository overrides
-		// its rule sets and its Built-in rules switch.
+		// its rule sets and its built-in rules.
 		setsOver, builtInOver bool
 	}{
-		// Built-in rules are opt-in: NULL on the repository and in the
-		// defaults is off.
-		{"nothing set", store.DashboardRepo{}, store.RepoDefaults{}, nil, false, false, false},
-		{"default switch off", store.DashboardRepo{}, store.RepoDefaults{BuiltInRules: ptr(false)}, nil, false, false, false},
-		{"default switch on", store.DashboardRepo{}, store.RepoDefaults{BuiltInRules: ptr(true)}, nil, true, false, false},
-		{"repository on", store.DashboardRepo{BuiltInRules: ptr(true)}, store.RepoDefaults{}, nil, true, false, true},
-		{"repository off over a default on", store.DashboardRepo{BuiltInRules: ptr(false)},
-			store.RepoDefaults{BuiltInRules: ptr(true)}, nil, false, false, true},
-		{"repository wins", store.DashboardRepo{RuleSets: []string{"x"}, BuiltInRules: ptr(true)},
-			store.RepoDefaults{BuiltInRules: ptr(false), RuleSets: []string{"d"}}, []string{"x"}, true, true, true},
+		// Built-in rules have no default: a repository that chose none
+		// gets none.
+		{"nothing set", store.DashboardRepo{}, store.RepoDefaults{}, nil, nil, false, false},
+		{"chosen", store.DashboardRepo{BuiltInRules: []string{"go", "yaml"}}, store.RepoDefaults{}, nil, []string{"yaml", "go"}, false, true},
+		// A name the pinned pergent no longer has is dropped: the picker
+		// can't show it and pergent would skip it.
+		{"a name that is gone", store.DashboardRepo{BuiltInRules: []string{"gone", "go"}}, store.RepoDefaults{}, nil, []string{"go"}, false, true},
+		{"only gone names", store.DashboardRepo{BuiltInRules: []string{"gone"}}, store.RepoDefaults{}, nil, nil, false, false},
+		{"repository wins", store.DashboardRepo{RuleSets: []string{"x"}, BuiltInRules: []string{"go"}},
+			store.RepoDefaults{RuleSets: []string{"d"}}, []string{"x"}, []string{"go"}, true, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			row := c.row
@@ -81,7 +82,7 @@ func TestEffectiveRuleSetsDashboard(t *testing.T) {
 			if !ok {
 				t.Fatal("fromDashboard: not ok")
 			}
-			if !slices.Equal(eff.RuleSets, c.sets) || eff.BuiltInRules != c.builtIn ||
+			if !slices.Equal(eff.RuleSets, c.sets) || !slices.Equal(eff.BuiltInRules, c.builtIn) || (c.builtIn == nil && eff.BuiltInRules != nil) ||
 				eff.Overridden[KeyRuleSets] != c.setsOver || eff.Overridden[KeyBuiltInRules] != c.builtInOver {
 				t.Errorf("got %v %v %v", eff.RuleSets, eff.BuiltInRules, eff.Overridden)
 			}
@@ -99,7 +100,7 @@ func TestDefaultsHaveRuleKeys(t *testing.T) {
 	if _, ok := d.Overridden[KeyBuiltInRules]; !ok {
 		t.Error("Overridden lacks built_in_rules")
 	}
-	if d.BuiltInRules {
-		t.Error("built-in rules are on by default; they are opt-in")
+	if d.BuiltInRules != nil {
+		t.Errorf("the defaults choose built-in rules %v; there is no default", d.BuiltInRules)
 	}
 }

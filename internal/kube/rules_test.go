@@ -75,3 +75,29 @@ func TestJobNoBuiltInRules(t *testing.T) {
 		}
 	}
 }
+
+// The chosen built-in rules reach the Job as one comma-separated variable,
+// in the order given. They win over NoBuiltInRules: a Job never gets both.
+func TestJobBuiltInRulesList(t *testing.T) {
+	p := testParams()
+	p.BuiltInRules = []string{"yaml", "go"}
+	p.NoBuiltInRules = true
+	main := containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent")
+	var got []string
+	for _, e := range main.Env {
+		switch e.Name {
+		case "PERGENT_BUILT_IN_RULES":
+			got = append(got, e.Value)
+		case "PERGENT_NO_BUILT_IN_RULES":
+			t.Error("PERGENT_NO_BUILT_IN_RULES set with a list")
+		}
+	}
+	if len(got) != 1 || got[0] != "yaml,go" {
+		t.Errorf("PERGENT_BUILT_IN_RULES = %q, want one \"yaml,go\"", got)
+	}
+	for _, a := range main.Args {
+		if strings.Contains(a, "built-in") {
+			t.Errorf("unexpected arg %q", a)
+		}
+	}
+}

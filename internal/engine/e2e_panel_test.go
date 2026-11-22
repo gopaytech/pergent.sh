@@ -381,15 +381,13 @@ func TestE2EPanelMaxRunning(t *testing.T) {
 	}
 }
 
-// A member's Job gets the review's rules and built-in switch, as the review
+// A member's Job gets the review's rules and built-in rules, as the review
 // Job does: rules.json in its ConfigMap, PERGENT_RULES and
 // PERGENT_NO_BUILT_IN_RULES in its env.
 func TestE2EPanelMemberRules(t *testing.T) {
 	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
 	env := e.env
-	off := false
 	env.Engine.Config.Repositories[0].RuleSets = []string{"a"}
-	env.Engine.Config.Repositories[0].BuiltInRules = &off
 	addRuleSet(t, env, "a", setAYAML)
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
 	id := splitPanel(t, env, 1, sha('a'))
@@ -1758,9 +1756,7 @@ func TestE2EPanelPKeepsSplitBase(t *testing.T) {
 func TestE2EPanelPRules(t *testing.T) {
 	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
 	env := e.env
-	off := false
 	env.Engine.Config.Repositories[0].RuleSets = []string{"a"}
-	env.Engine.Config.Repositories[0].BuiltInRules = &off
 	addRuleSet(t, env, "a", setAYAML)
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
 	head := sha('a')

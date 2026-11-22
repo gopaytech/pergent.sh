@@ -157,55 +157,73 @@ func TestDashboardRepoRuleSetsRoundTrip(t *testing.T) {
 	s := newStore(t)
 	newRuleSet(t, s, "a", ruleYAML)
 	newRuleSet(t, s, "b", ruleYAML)
-	off, on := false, true
-	for _, tt := range []struct {
-		sets    []string
-		builtIn *bool
-	}{{nil, nil}, {[]string{"b", "a"}, &off}, {[]string{"a"}, &on}} {
+	for _, tt := range []struct{ sets, builtIn []string }{
+		{nil, nil}, {[]string{"b", "a"}, []string{"yaml", "go"}}, {[]string{"a"}, []string{}}, {[]string{"a"}, []string{"go"}},
+	} {
 		if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web", RuleSets: tt.sets, BuiltInRules: tt.builtIn}); err != nil {
 			t.Fatal(err)
 		}
 		got, _, err := s.AnyDashboardRepo(ctx, "lab", "acme/web")
-		if err != nil || !slices.Equal(got.RuleSets, tt.sets) || !samePtrBool(got.BuiltInRules, tt.builtIn) {
+		// An empty list is stored as NULL and read back as nil: none.
+		if err != nil || !slices.Equal(got.RuleSets, tt.sets) || !slices.Equal(got.BuiltInRules, tt.builtIn) || (len(tt.builtIn) == 0 && got.BuiltInRules != nil) {
 			t.Errorf("stored %v %v, read %v %v (%v)", tt.sets, tt.builtIn, got.RuleSets, got.BuiltInRules, err)
 		}
 	}
-	found, err := s.UpdateDashboardRepo(ctx, "lab", "acme/web", func(r *DashboardRepo) { r.RuleSets, r.BuiltInRules = []string{"b"}, &off })
+	found, err := s.UpdateDashboardRepo(ctx, "lab", "acme/web", func(r *DashboardRepo) { r.RuleSets, r.BuiltInRules = []string{"b"}, []string{"sql"} })
 	if err != nil || !found {
 		t.Fatalf("UpdateDashboardRepo = %v, %v", found, err)
 	}
 	got, _, _ := s.AnyDashboardRepo(ctx, "lab", "acme/web")
-	if !slices.Equal(got.RuleSets, []string{"b"}) || got.BuiltInRules == nil || *got.BuiltInRules {
+	if !slices.Equal(got.RuleSets, []string{"b"}) || !slices.Equal(got.BuiltInRules, []string{"sql"}) {
 		t.Errorf("after update: %v %v", got.RuleSets, got.BuiltInRules)
 	}
-	created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/api", RuleSets: []string{"a"}, BuiltInRules: &on})
+	created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/api", RuleSets: []string{"a"}, BuiltInRules: []string{"go"}})
 	if err != nil || !created {
 		t.Fatalf("InsertDashboardRepo = %v, %v", created, err)
 	}
 	got, _, _ = s.AnyDashboardRepo(ctx, "lab", "acme/api")
-	if !slices.Equal(got.RuleSets, []string{"a"}) || got.BuiltInRules == nil || !*got.BuiltInRules {
+	if !slices.Equal(got.RuleSets, []string{"a"}) || !slices.Equal(got.BuiltInRules, []string{"go"}) {
 		t.Errorf("inserted: %v %v", got.RuleSets, got.BuiltInRules)
 	}
+	// The old switch is left as it was: the previous release reads it after
+	// a rollback.
+	var old *bool
+	if err := s.pool.QueryRow(ctx, `SELECT built_in_rules FROM dashboard_repos WHERE project = 'acme/api'`).Scan(&old); err != nil || old != nil {
+		t.Errorf("built_in_rules = %v, %v; want NULL, untouched", old, err)
+	}
 }
-
-func samePtrBool(a, b *bool) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
 
 func TestRepoDefaultsRuleSets(t *testing.T) {
 	s := newStore(t)
 	newRuleSet(t, s, "a", ruleYAML)
-	off := false
-	if err := s.PutRepoDefaults(ctx, RepoDefaults{RuleSets: []string{"a"}, BuiltInRules: &off}); err != nil {
+	if err := s.PutRepoDefaults(ctx, RepoDefaults{RuleSets: []string{"a"}}); err != nil {
 		t.Fatal(err)
 	}
 	d, err := s.RepoDefaults(ctx)
-	if err != nil || !slices.Equal(d.RuleSets, []string{"a"}) || d.BuiltInRules == nil || *d.BuiltInRules {
-		t.Errorf("RepoDefaults = %v %v, %v", d.RuleSets, d.BuiltInRules, err)
+	if err != nil || !slices.Equal(d.RuleSets, []string{"a"}) {
+		t.Errorf("RepoDefaults = %v, %v", d.RuleSets, err)
 	}
 	if err := s.PutRepoDefaults(ctx, RepoDefaults{}); err != nil {
 		t.Fatal(err)
 	}
-	if d, _ := s.RepoDefaults(ctx); d.RuleSets != nil || d.BuiltInRules != nil {
-		t.Errorf("cleared defaults = %v %v", d.RuleSets, d.BuiltInRules)
+	if d, _ := s.RepoDefaults(ctx); d.RuleSets != nil {
+		t.Errorf("cleared defaults = %v", d.RuleSets)
+	}
+}
+
+// The old default switch is neither read nor written: a value the previous
+// release saved stays for it after a rollback.
+func TestRepoDefaultsLeaveOldBuiltInSwitch(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.pool.Exec(ctx, `INSERT INTO repo_defaults (id, built_in_rules, updated_at) VALUES (1, true, now())`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutRepoDefaults(ctx, RepoDefaults{}); err != nil {
+		t.Fatal(err)
+	}
+	var on *bool
+	if err := s.pool.QueryRow(ctx, `SELECT built_in_rules FROM repo_defaults WHERE id = 1`).Scan(&on); err != nil || on == nil || !*on {
+		t.Errorf("built_in_rules = %v, %v; want true, untouched", on, err)
 	}
 }
 
@@ -230,22 +248,26 @@ func TestSetRunRulesHash(t *testing.T) {
 	if r := getRun(t, s, id); r.RulesHash != nil {
 		t.Fatalf("a new run has rules hash %v", *r.RulesHash)
 	}
-	if err := s.SetRunRulesHash(ctx, id, "h1"); err != nil {
+	if err := s.SetRunRulesHash(ctx, id, "h1", "left out"); err != nil {
 		t.Fatalf("SetRunRulesHash: %v", err)
 	}
-	if r := getRun(t, s, id); r.RulesHash == nil || *r.RulesHash != "h1" {
-		t.Errorf("RulesHash = %v, want h1", r.RulesHash)
+	if r := getRun(t, s, id); r.RulesHash == nil || *r.RulesHash != "h1" || r.BuiltInRulesNote != "left out" {
+		t.Errorf("RulesHash = %v, note %q; want h1, left out", r.RulesHash, r.BuiltInRulesNote)
 	}
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetRunRulesHash(ctx, id, "h2"); err != nil {
+	if err := s.SetRunRulesHash(ctx, id, "h2", ""); err != nil {
 		t.Errorf("SetRunRulesHash of a running run: %v", err)
+	}
+	var note *string
+	if err := s.pool.QueryRow(ctx, `SELECT built_in_rules_note FROM runs WHERE id = $1::uuid`, id).Scan(&note); err != nil || note != nil {
+		t.Errorf("built_in_rules_note = %v, %v; want NULL for no note", note, err)
 	}
 	if _, err := s.SkipRun(ctx, id, "x", t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetRunRulesHash(ctx, id, "h3"); err == nil {
+	if err := s.SetRunRulesHash(ctx, id, "h3", ""); err == nil {
 		t.Error("SetRunRulesHash of a finished run passed")
 	}
 }

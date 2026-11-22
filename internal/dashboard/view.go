@@ -230,6 +230,10 @@ type RunDetailView struct {
 	// RulesUsed is whether the image that reviewed knows path rules (its
 	// result has a rules object); false for an older image or no result.
 	RulesUsed bool `json:"rulesUsed"`
+	// BuiltInRulesNote is why the built-in rules the repository chose were
+	// left out of this review (its image can't load only those); "" when
+	// they were not.
+	BuiltInRulesNote string `json:"builtInRulesNote"`
 	// LatestDecided is true for the one run of the change that dismiss and
 	// restore act on: its newest published review, or reported one with an
 	// outcome. Only that run shows dismissals; false when the change has no
@@ -531,6 +535,10 @@ type RepositoryDetailView struct {
 	// Graph is the repository's Code graph: the switch and the stored
 	// graph's status, never its contents.
 	Graph GraphView `json:"graph"`
+	// BuiltInRulesOff is why a review would leave out the built-in rules
+	// the repository chooses (jobs.image can't load only those); "" when it
+	// loads them.
+	BuiltInRulesOff string `json:"builtInRulesOff"`
 }
 
 // PanelView is a repository's review panel. On is whether a chain B is in
@@ -626,7 +634,9 @@ type InputsView struct {
 // then its rule sets, then the built-in rules when BuiltIn. Problem is why a
 // review would fail on its rules (Entries is then empty).
 type RulesView struct {
-	BuiltIn bool            `json:"builtIn"`
+	// BuiltIn names the built-in rules the repository chose, in
+	// builtin.yaml order; empty for none.
+	BuiltIn []string        `json:"builtIn"`
 	Entries []RuleEntryView `json:"entries"`
 	Problem string          `json:"problem"`
 }
@@ -985,9 +995,6 @@ type DefaultsView struct {
 	// RuleSets is the default rule-set list, in match order, for a
 	// repository whose own ruleSets is null. Empty means none.
 	RuleSets []string `json:"ruleSets"`
-	// BuiltInRules is whether a repository that sets none gets pergent's
-	// built-in path rules; false until an admin turns it on.
-	BuiltInRules bool `json:"builtInRules"`
 	// Config holds the values the config gives (jobs.* and the built-in
 	// defaults), before anything saved here. Skills has no config value.
 	Config DefaultValues `json:"config"`
@@ -1025,8 +1032,6 @@ type DefaultValues struct {
 	JobMemory         string `json:"jobMemory"`
 	RerunLimitPerMR   int    `json:"rerunLimitPerMR"`
 	RerunLimitPerRepo int    `json:"rerunLimitPerRepo"`
-	// BuiltInRules: see DefaultsView.
-	BuiltInRules bool `json:"builtInRules"`
 }
 
 // LLMView is the model reviews use.

@@ -3,6 +3,7 @@ package dashboard
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -41,33 +42,115 @@ func TestRepoRuleSetsSetting(t *testing.T) {
 	}
 }
 
-// Built-in rules are opt-in: a repository that sets nothing shows them off,
-// turning them on stores true, and a reset goes back to off.
+// Built-in rules are chosen per repository: a repository that chose none
+// shows an empty list, a PUT stores the names once each in builtin.yaml
+// order, [] and null and a reset go back to none.
 func TestRepoBuiltInRulesSetting(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
-	if s := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets").Settings["builtInRules"]; s.Value != false || s.Overridden {
-		t.Errorf("unset view = %+v, want off and not overridden", s)
+	builtIn := func() SettingView {
+		t.Helper()
+		return getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets").Settings["builtInRules"]
 	}
-	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"builtInRules":true}`), "on", http.StatusOK)
-	if r, _ := e.storedRepo("main", "acme/gadgets"); r.BuiltInRules == nil || !*r.BuiltInRules {
-		t.Errorf("stored = %v", r.BuiltInRules)
+	if s := builtIn(); !reflect.DeepEqual(s.Value, []any{}) || s.Overridden {
+		t.Errorf("unset view = %+v, want [] and not overridden", s)
 	}
-	v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets")
-	if s := v.Settings["builtInRules"]; s.Value != true || !s.Overridden {
+	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"builtInRules":["go","yaml","go"]}`), "choose", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); !slices.Equal(r.BuiltInRules, []string{"yaml", "go"}) {
+		t.Errorf("stored = %v, want [yaml go]", r.BuiltInRules)
+	}
+	if s := builtIn(); !reflect.DeepEqual(s.Value, []any{"yaml", "go"}) || !s.Overridden {
 		t.Errorf("view = %+v", s)
 	}
-	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"builtInRules":false}`), "off", http.StatusOK)
-	if r, _ := e.storedRepo("main", "acme/gadgets"); r.BuiltInRules == nil || *r.BuiltInRules {
-		t.Errorf("stored after off = %v", r.BuiltInRules)
+	for _, body := range []string{`{"builtInRules":[]}`, `{"builtInRules":null}`} {
+		wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"builtInRules":["go"]}`), "choose", http.StatusOK)
+		wantCode(t, e.send(c, "PUT", gadgetsSettings, body), body, http.StatusOK)
+		if r, _ := e.storedRepo("main", "acme/gadgets"); r.BuiltInRules != nil {
+			t.Errorf("stored after %s = %v, want none", body, r.BuiltInRules)
+		}
 	}
+	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"builtInRules":["go"]}`), "choose", http.StatusOK)
 	wantCode(t, e.send(c, "POST", gadgetsSettings+"/reset", ``), "reset", http.StatusOK)
 	if r, _ := e.storedRepo("main", "acme/gadgets"); r.BuiltInRules != nil {
 		t.Errorf("after reset: %v", r.BuiltInRules)
 	}
-	if s := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets").Settings["builtInRules"]; s.Value != false || s.Overridden {
-		t.Errorf("view after reset = %+v, want off", s)
+	if s := builtIn(); !reflect.DeepEqual(s.Value, []any{}) || s.Overridden {
+		t.Errorf("view after reset = %+v, want []", s)
+	}
+}
+
+// A name that is no built-in rule is refused by name, and so is the switch
+// the setting was before; nothing is stored.
+func TestRepoBuiltInRulesSettingRefused(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
+	for body, want := range map[string]string{
+		`{"builtInRules":["go","nope"]}`: `builtInRules: "nope" is not a built-in rule; the Rules page's Built-in tab lists them`,
+		`{"builtInRules":true}`:          msgBadBuiltInRules,
+		`{"builtInRules":"go"}`:          msgBadBuiltInRules,
+	} {
+		rec := e.send(c, "PUT", gadgetsSettings, body)
+		wantCode(t, rec, body, http.StatusBadRequest)
+		if got := errorOf(t, rec); got != want {
+			t.Errorf("%s: error = %q, want %q", body, got, want)
+		}
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.BuiltInRules != nil {
+		t.Errorf("stored = %v, want none", r.BuiltInRules)
+	}
+}
+
+// The repository page says when jobs.image can't load only the chosen
+// built-in rules, and the run page why a run got none.
+func TestBuiltInRulesOffNotes(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.Jobs.Image = "registry.example.com/pergent:v0.11.0" })
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
+	v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets")
+	if want := "Reviews get no built-in rules for now: no review image can load only the chosen built-in rules yet."; v.BuiltInRulesOff != want {
+		t.Errorf("builtInRulesOff = %q, want %q", v.BuiltInRulesOff, want)
+	}
+	old := config.BuiltInRulesListMinVersion
+	config.BuiltInRulesListMinVersion = "v0.11.0"
+	t.Cleanup(func() { config.BuiltInRulesListMinVersion = old })
+	if v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets"); v.BuiltInRulesOff != "" {
+		t.Errorf("builtInRulesOff with an image that loads them = %q", v.BuiltInRulesOff)
+	}
+	config.BuiltInRulesListMinVersion = "v0.12.0"
+	// It names the tag, never the registry: anyone who sees the repository
+	// reads it.
+	const older = `Reviews get no built-in rules for now: image tag "v0.11.0" is older than v0.12.0, the first pergent that loads only the chosen built-in rules.`
+	if v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets"); v.BuiltInRulesOff != older {
+		t.Errorf("builtInRulesOff with an older image = %q, want %q", v.BuiltInRulesOff, older)
+	}
+}
+
+// The admin defaults have no built-in rules: the view has no key for them,
+// and a PUT that still sends the old switch is refused with what to do.
+func TestDefaultsHaveNoBuiltInRules(t *testing.T) {
+	e := newEnv(t, nil)
+	admin := e.userOnMain(true, "acme/widgets")
+	rec := e.send(admin, "GET", "/api/admin/defaults", "")
+	wantCode(t, rec, "GET", http.StatusOK)
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["builtInRules"]; ok {
+		t.Errorf("defaults have builtInRules: %v", raw)
+	}
+	if _, ok := raw["config"].(map[string]any)["builtInRules"]; ok {
+		t.Error("the config defaults have builtInRules")
+	}
+	if _, ok := raw["pinned"].(map[string]any)["builtInRules"]; ok {
+		t.Error("pinned has builtInRules")
+	}
+	rec = e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"builtInRules": true})
+	wantCode(t, rec, "PUT builtInRules", http.StatusBadRequest)
+	if got := errorOf(t, rec); got != msgNoBuiltInDefault {
+		t.Errorf("error = %q, want %q", got, msgNoBuiltInDefault)
 	}
 }
 
@@ -77,15 +160,14 @@ func TestDefaultsRuleSets(t *testing.T) {
 	if err := e.st.CreateRuleSet(ctx, "a", goRuleSet, e.d.now()); err != nil {
 		t.Fatal(err)
 	}
-	v := decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"ruleSets": []string{"a"}, "builtInRules": true}), "PUT", http.StatusOK)
-	if !slices.Equal(v.RuleSets, []string{"a"}) || !v.BuiltInRules || !v.Pinned["builtInRules"] || v.Config.BuiltInRules {
+	v := decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"ruleSets": []string{"a"}}), "PUT", http.StatusOK)
+	if !slices.Equal(v.RuleSets, []string{"a"}) {
 		t.Errorf("defaults = %+v", v)
 	}
-	// A PUT without ruleSets keeps the list; one without builtInRules goes
-	// back to the default, off.
+	// A PUT without ruleSets keeps the list.
 	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"approve": true}), "PUT without", http.StatusOK)
-	if !slices.Equal(v.RuleSets, []string{"a"}) || v.BuiltInRules || v.Pinned["builtInRules"] {
-		t.Errorf("after a PUT without them: %v %v", v.RuleSets, v.BuiltInRules)
+	if !slices.Equal(v.RuleSets, []string{"a"}) {
+		t.Errorf("after a PUT without them: %v", v.RuleSets)
 	}
 	rec := e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"ruleSets": []string{"gone"}})
 	wantCode(t, rec, "PUT gone", http.StatusBadRequest)
@@ -98,6 +180,7 @@ func TestInputsViewRules(t *testing.T) {
 	e := newEnv(t, func(cfg *config.Config) {
 		cfg.Repositories[0].RuleSets = []string{"a"}
 		cfg.Repositories[0].Skills = []string{"style"}
+		cfg.Repositories[0].BuiltInRules = []string{"yaml", "go"}
 	})
 	e.skill("style", "Style text.")
 	if err := e.st.CreateRuleSet(ctx, "a", tsRuleSet, e.d.now()); err != nil {
@@ -113,8 +196,9 @@ func TestInputsViewRules(t *testing.T) {
 	for _, r := range v.Rules.Entries {
 		got = append(got, r.Source+"|"+r.Path)
 	}
-	// The repository sets no Built-in rules switch, so they are off: opt-in.
-	if !slices.Equal(got, []string{"repo|*.go", "dashboard:a|*.ts"}) || v.Rules.BuiltIn || v.Rules.Problem != "" {
+	// The entries are the repository's and the sets'; the built-in rules
+	// it chose follow them, by name.
+	if !slices.Equal(got, []string{"repo|*.go", "dashboard:a|*.ts"}) || !slices.Equal(v.Rules.BuiltIn, []string{"yaml", "go"}) || v.Rules.Problem != "" {
 		t.Errorf("rules = %+v", v.Rules)
 	}
 
@@ -152,5 +236,14 @@ func TestRunViewFileRules(t *testing.T) {
 	}
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+older); v.RulesUsed || v.Files.Rules == nil || len(v.Files.Rules) != 0 {
 		t.Errorf("an older result: rulesUsed %v, files.rules %#v", v.RulesUsed, v.Files.Rules)
+	}
+	// Why a run's chosen built-in rules were left out, as dispatch recorded it.
+	if v.BuiltInRulesNote != "" {
+		t.Errorf("builtInRulesNote = %q, want none", v.BuiltInRulesNote)
+	}
+	const note = "The chosen built-in rules were left out: no review image can load only the chosen built-in rules yet."
+	e.exec(`UPDATE runs SET built_in_rules_note = $2 WHERE id = $1::uuid`, older, note)
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+older); v.BuiltInRulesNote != note {
+		t.Errorf("builtInRulesNote = %q, want %q", v.BuiltInRulesNote, note)
 	}
 }

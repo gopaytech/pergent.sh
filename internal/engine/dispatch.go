@@ -229,10 +229,15 @@ type dispatcher struct {
 	// cis is where the CI wait's store calls go; nil is the engine's Store.
 	// Tests set it.
 	cis ciStore
-	// rulesHash is the hash of the run's rule list, built-in switch and Jobs
-	// image, set once the list is built; the next push compares it with its
-	// own.
+	// rulesHash is the hash of the run's rule list, chosen built-in rules
+	// and Jobs image, set once the list is built; the next push compares it
+	// with its own.
 	rulesHash string
+	// builtInRules are the built-in rules the Job loads (nil: none, and it
+	// gets PERGENT_NO_BUILT_IN_RULES); builtInNote is why the chosen ones
+	// were left out, "" when they were not (builtInRulesFor).
+	builtInRules []string
+	builtInNote  string
 	// clientModel is the model an API client chose ("" for none): its chain
 	// A is that model alone (chainA).
 	clientModel string
@@ -779,7 +784,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 	// And the rules hash: a lost write would make the next push carry files
 	// reviewed under other rules.
-	if err := e.Store.SetRunRulesHash(ctx, run.ID, d.rulesHash); err != nil {
+	if err := e.Store.SetRunRulesHash(ctx, run.ID, d.rulesHash, d.builtInNote); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's rules: %w", err))
 	}
 	// And the entry: a later attempt skips it, and the footer and the
@@ -900,7 +905,8 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 		Inputs:         in,
 		LinkedClones:   links.Clones,
 		CheckDeleted:   repo.CheckDeleted,
-		NoBuiltInRules: !repo.BuiltInRules,
+		NoBuiltInRules: len(d.builtInRules) == 0,
+		BuiltInRules:   d.builtInRules,
 		Instance:       run.MR.Instance,
 		ProjectID:      run.MR.ProjectID,
 		IID:            run.MR.IID,

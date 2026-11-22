@@ -112,6 +112,12 @@ type JobParams struct {
 	// NoBuiltInRules leaves pergent's built-in path rules out. It reaches the
 	// Job only when true; false leaves the Job as it was before rules existed.
 	NoBuiltInRules bool
+	// BuiltInRules names the only built-in rules pergent loads, sent as
+	// PERGENT_BUILT_IN_RULES. A list wins over NoBuiltInRules, so a Job never
+	// gets both. Only an image that reads the variable may get one
+	// (config.BuiltInRulesListImage): an older pergent ignores it and loads
+	// every built-in rule.
+	BuiltInRules []string
 	// The change this Job reviews, so a Job found in the cluster can be traced
 	// to it. Labels carry Instance, ProjectID, IID and HeadSHA; annotations carry
 	// ProjectPath and MRURL, which a label value cannot hold. A zero value is left out.
@@ -369,8 +375,11 @@ func BuildJob(p JobParams) *batchv1.Job {
 		// reviews without the rules, which never block.
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_RULES", Value: "/in/rules.json"})
 	}
-	if p.NoBuiltInRules {
-		// An environment variable for the same reason.
+	switch {
+	case len(p.BuiltInRules) > 0:
+		// Environment variables for the same reason.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_BUILT_IN_RULES", Value: strings.Join(p.BuiltInRules, ",")})
+	case p.NoBuiltInRules:
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_NO_BUILT_IN_RULES", Value: "true"})
 	}
 	if p.Panel != nil {

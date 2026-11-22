@@ -1576,7 +1576,7 @@ func TestInheritPanelSplit(t *testing.T) {
 	s := newStore(t)
 	root := panelRun(t, s, mr1, "a1")
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET quiet_reviews = true, comment_layout = '{checks:open}',
-		provider = 'openai', rules_hash = 'rh', model_source = 'team', model_entry_id = 'e1',
+		provider = 'openai', rules_hash = 'rh', built_in_rules_note = 'left out', model_source = 'team', model_entry_id = 'e1',
 		model_entry_name = 'Team A', model_team_id = 4, chain_position = 1, chain_length = 2, fallback_class = '',
 		linked_repos = '[{"target":"acme/api","can_block":true}]'::jsonb, incremental = true,
 		title = 'Add login', author = 'alice' WHERE id = $1::uuid`, root); err != nil {
@@ -1615,18 +1615,18 @@ func TestInheritPanelSplit(t *testing.T) {
 	r, a := getRun(t, s, root), getRun(t, s, next)
 	got := Run{BaseSHA: a.BaseSHA, StartSHA: a.StartSHA, Model: a.Model, Provider: a.Provider, SkillSources: a.SkillSources,
 		SkillVersions: a.SkillVersions, SkillHashes: a.SkillHashes, MaxTurns: a.MaxTurns, Incremental: a.Incremental,
-		Quiet: a.Quiet, CommentLayout: a.CommentLayout, LinkedRepos: a.LinkedRepos, RulesHash: a.RulesHash, ModelSource: a.ModelSource,
+		Quiet: a.Quiet, CommentLayout: a.CommentLayout, LinkedRepos: a.LinkedRepos, RulesHash: a.RulesHash, BuiltInRulesNote: a.BuiltInRulesNote, ModelSource: a.ModelSource,
 		ModelEntryID: a.ModelEntryID, ModelEntryName: a.ModelEntryName, ModelTeamID: a.ModelTeamID, ChainPosition: a.ChainPosition,
 		ChainLength: a.ChainLength, Title: a.Title, Author: a.Author}
 	want := Run{BaseSHA: r.BaseSHA, StartSHA: r.StartSHA, Model: r.Model, Provider: r.Provider, SkillSources: r.SkillSources,
 		SkillVersions: r.SkillVersions, SkillHashes: r.SkillHashes, MaxTurns: r.MaxTurns, Incremental: r.Incremental,
-		Quiet: r.Quiet, CommentLayout: r.CommentLayout, LinkedRepos: r.LinkedRepos, RulesHash: r.RulesHash, ModelSource: r.ModelSource,
+		Quiet: r.Quiet, CommentLayout: r.CommentLayout, LinkedRepos: r.LinkedRepos, RulesHash: r.RulesHash, BuiltInRulesNote: r.BuiltInRulesNote, ModelSource: r.ModelSource,
 		ModelEntryID: r.ModelEntryID, ModelEntryName: r.ModelEntryName, ModelTeamID: r.ModelTeamID, ChainPosition: r.ChainPosition,
 		ChainLength: r.ChainLength, Title: r.Title, Author: r.Author}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("attempt = %+v\nwant the first run's %+v", got, want)
 	}
-	if a.BaseSHA != "base-sha" || !a.Quiet || a.ModelEntryID != "e1" || len(a.LinkedRepos) != 1 || a.SkillSources["security"] != "library" {
+	if a.BaseSHA != "base-sha" || !a.Quiet || a.BuiltInRulesNote != "left out" || a.ModelEntryID != "e1" || len(a.LinkedRepos) != 1 || a.SkillSources["security"] != "library" {
 		t.Errorf("attempt = %+v; want the split's fields", a)
 	}
 }

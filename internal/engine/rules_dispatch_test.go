@@ -149,10 +149,9 @@ func TestDispatchConfigSetWins(t *testing.T) {
 	}
 }
 
-func TestDispatchBuiltInSwitch(t *testing.T) {
+func TestDispatchNoBuiltInRules(t *testing.T) {
 	env := newTestEnv(t)
-	off := false
-	env.Engine.Config.Repositories[0].BuiltInRules = &off
+	env.Engine.Config.Repositories[0].BuiltInRules = nil
 	id, _ := queue(env)
 
 	dispatch(t, env)
@@ -165,37 +164,83 @@ func TestDispatchBuiltInSwitch(t *testing.T) {
 	}
 }
 
-// Built-in rules are opt-in: a repository that sets nothing runs with
-// PERGENT_NO_BUILT_IN_RULES, one that turns them on runs without it, and the
-// rules hash records the switch, so flipping it gives one full review.
-func TestDispatchBuiltInRulesOptIn(t *testing.T) {
-	on, off := true, false
+// builtInListFloor sets the first pergent that loads only the chosen
+// built-in rules for the test.
+func builtInListFloor(t *testing.T, v string) {
+	t.Helper()
+	config.BuiltInRulesListMinVersion = v
+	t.Cleanup(func() { config.BuiltInRulesListMinVersion = "" })
+}
+
+// Built-in rules are chosen per repository. None chosen runs with
+// PERGENT_NO_BUILT_IN_RULES. Chosen ones reach the Job as
+// PERGENT_BUILT_IN_RULES, in builtin.yaml order, only when jobs.image loads
+// only those; any other image would load every built-in rule, so it gets
+// PERGENT_NO_BUILT_IN_RULES and the run records why. The rules hash takes in
+// the chosen list either way, so changing it gives one full review.
+func TestDispatchBuiltInRulesChosen(t *testing.T) {
 	for _, c := range []struct {
 		name   string
-		set    *bool
-		noVar  bool
-		inHash bool
+		chosen []string
+		floor  string // BuiltInRulesListMinVersion; testImage is v0.5.2
+		list   string // PERGENT_BUILT_IN_RULES, "" for none
+		note   string // a substring of the run's note, "" for none
+		hashed []string
 	}{
-		{"unset is off", nil, true, false},
-		{"on is on", &on, false, true},
-		{"off is off", &off, true, false},
+		{"none chosen", nil, "v0.5.0", "", "", nil},
+		{"no image loads a list yet", []string{"yaml", "go"}, "", "", "no review image can load only the chosen built-in rules yet", []string{"yaml", "go"}},
+		{"the image is too old", []string{"go"}, "v0.6.0", "", `image tag "v0.5.2" is older than v0.6.0`, []string{"go"}},
+		{"the image loads the list", []string{"go", "yaml"}, "v0.5.2", "yaml,go", "", []string{"yaml", "go"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			env := newTestEnv(t)
-			env.Engine.Config.Repositories[0].BuiltInRules = c.set
+			builtInListFloor(t, c.floor)
+			env.Engine.Config.Repositories[0].BuiltInRules = c.chosen
 			id, _ := queue(env)
 
 			dispatch(t, env)
 
-			v, ok := jobVar(t, env, id, "PERGENT_NO_BUILT_IN_RULES")
-			if got := ok && v == "true"; got != c.noVar || (ok && v != "true") {
-				t.Errorf("PERGENT_NO_BUILT_IN_RULES = %q, %v; want it set: %v", v, ok, c.noVar)
+			list, hasList := jobVar(t, env, id, "PERGENT_BUILT_IN_RULES")
+			no, hasNo := jobVar(t, env, id, "PERGENT_NO_BUILT_IN_RULES")
+			if c.list != "" {
+				if !hasList || list != c.list || hasNo {
+					t.Errorf("PERGENT_BUILT_IN_RULES = %q (%v), NO = %q (%v); want %q and no NO", list, hasList, no, hasNo, c.list)
+				}
+			} else if hasList || !hasNo || no != "true" {
+				t.Errorf("PERGENT_BUILT_IN_RULES = %q (%v), NO = %q (%v); want NO only", list, hasList, no, hasNo)
 			}
 			r := env.Run(id)
-			if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(nil, c.inHash, testImage) {
-				t.Errorf("rules_hash = %q, want the hash with built-in %v", deref(r.RulesHash), c.inHash)
+			if c.note == "" && r.BuiltInRulesNote != "" || !strings.Contains(r.BuiltInRulesNote, c.note) {
+				t.Errorf("note = %q, want %q", r.BuiltInRulesNote, c.note)
+			}
+			if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(nil, c.hashed, testImage) {
+				t.Errorf("rules_hash = %q, want the hash with built-in %v", deref(r.RulesHash), c.hashed)
 			}
 		})
+	}
+}
+
+// builtInRulesFor never gives an empty list to send: pergent reads that as
+// every built-in rule.
+func TestBuiltInRulesFor(t *testing.T) {
+	builtInListFloor(t, "v1.0.0")
+	if send, note := builtInRulesFor(nil, "x/pergent:v1.0.0"); send != nil || note != "" {
+		t.Errorf("none chosen = %v, %q", send, note)
+	}
+	if send, note := builtInRulesFor([]string{}, "x/pergent:v1.0.0"); send != nil || note != "" {
+		t.Errorf("an empty choice = %v, %q", send, note)
+	}
+	if send, note := builtInRulesFor([]string{"go"}, "x/pergent:v0.9.0"); send != nil || !strings.HasPrefix(note, "The chosen built-in rules were left out: ") {
+		t.Errorf("an old image = %v, %q", send, note)
+	}
+	chosen := []string{"go"}
+	send, note := builtInRulesFor(chosen, "x/pergent:v1.0.0")
+	if !slices.Equal(send, chosen) || note != "" {
+		t.Errorf("a new image = %v, %q", send, note)
+	}
+	send[0] = "changed"
+	if chosen[0] != "go" {
+		t.Error("builtInRulesFor gives out the repository's own slice")
 	}
 }
 
@@ -208,7 +253,7 @@ func TestDispatchRulesHashStored(t *testing.T) {
 
 	list, _ := rule.Load([]byte(repoRulesYAML), rule.SourceRepo)
 	r := env.Run(id)
-	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, false, testImage) {
+	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, nil, testImage) {
 		t.Errorf("rules_hash = %v, want the hash of the list with built-ins off (the default) and the Jobs image", r.RulesHash)
 	}
 }
@@ -225,7 +270,7 @@ func TestDispatchRulesHashHasTheImage(t *testing.T) {
 
 	list, _ := rule.Load([]byte(repoRulesYAML), rule.SourceRepo)
 	r := env.Run(id)
-	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, false, "ghcr.io/gopaytech/pergent:v9.9.9") {
+	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, nil, "ghcr.io/gopaytech/pergent:v9.9.9") {
 		t.Errorf("rules_hash = %v, want the hash with the configured Jobs image", r.RulesHash)
 	}
 }

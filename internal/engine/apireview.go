@@ -231,8 +231,9 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	in.Dismissals, dismissalCounts = d.apiDismissals(ctx, review, in)
 	in.AddDescription(review.Title, sent.Description)
 	// An API review has no repository to read a rules file from: it gets
-	// the admin default rule-set list and Built-in rules switch, added before
-	// Fit, which never drops them.
+	// the admin default rule-set list, added before Fit, which never drops
+	// them. Built-in rules are chosen per repository and have no default, so
+	// it gets none.
 	if err := d.addRules(ctx, nil, defaults, "", false, in); err != nil {
 		var bad *rulesProblem
 		if errors.As(err, &bad) {
@@ -271,7 +272,7 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	if err := e.Store.SetRunModel(ctx, run.ID, d.provider, d.model); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's model: %w", err))
 	}
-	if err := e.Store.SetRunRulesHash(ctx, run.ID, d.rulesHash); err != nil {
+	if err := e.Store.SetRunRulesHash(ctx, run.ID, d.rulesHash, d.builtInNote); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's rules: %w", err))
 	}
 	if d.entry.Position > 0 {
@@ -342,7 +343,8 @@ func (d *dispatcher) launchAPI(ctx context.Context, client store.APIClient, defa
 		Inputs:         in,
 		Import:         im,
 		APIClient:      client.Name,
-		NoBuiltInRules: !defaults.BuiltInRules,
+		NoBuiltInRules: len(d.builtInRules) == 0,
+		BuiltInRules:   d.builtInRules,
 	}
 	secrets := kube.Secrets{LLMKey: llmKey, ResultToken: token}
 	if merging {

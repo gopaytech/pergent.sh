@@ -336,10 +336,9 @@ type RepoDefaults struct {
 	// and have no default.
 	LinkedReposEnabled *bool
 	// RuleSets is the default rule-set list, for a repository whose own
-	// list is null; nil is none. BuiltInRules is the default Built-in rules
-	// switch (nil: off).
-	RuleSets     []string
-	BuiltInRules *bool
+	// list is null; nil is none. Built-in rules have no default: the old
+	// switch, built_in_rules, is left as it was and never read.
+	RuleSets []string
 }
 
 // RepoDefaults returns the defaults; the zero value when none were put.
@@ -348,12 +347,12 @@ func (s *Store) RepoDefaults(ctx context.Context) (RepoDefaults, error) {
 	err := s.pool.QueryRow(ctx, `SELECT approve, review_drafts, failure_status, job_timeout_seconds, max_turns, job_memory,
 			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at, inline_findings,
 			commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, rule_sets, built_in_rules
+			linked_repos_enabled, rule_sets
 		FROM repo_defaults WHERE id = 1`).
 		Scan(&d.Approve, &d.ReviewDrafts, &d.FailureStatus, &d.JobTimeoutSeconds, &d.MaxTurns, &d.JobMemory,
 			&d.RerunLimitPerMR, &d.RerunLimitPerRepo, &d.Skills, &d.UpdatedAt, &d.InlineFindings,
 			&d.CommandsAuthorAndMaintainersOnly, &d.IncrementalReviews, &d.LearnFromDismissals, &d.QuietReviews, &d.CommentLayout, &d.LinkedReposEnabled,
-			&d.RuleSets, &d.BuiltInRules)
+			&d.RuleSets)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RepoDefaults{}, nil
 	}
@@ -426,8 +425,8 @@ func (s *Store) PutRepoDefaults(ctx context.Context, d RepoDefaults) error {
 	if _, err := tx.Exec(ctx, `INSERT INTO repo_defaults (id, approve, review_drafts, failure_status, job_timeout_seconds, max_turns, job_memory,
 			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at, inline_findings,
 			commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout, linked_repos_enabled,
-			rule_sets, built_in_rules)
-		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			rule_sets)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11, $12, $13, $14, $15, $16, $17)
 		ON CONFLICT (id) DO UPDATE SET approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, job_timeout_seconds = EXCLUDED.job_timeout_seconds,
 			max_turns = EXCLUDED.max_turns, job_memory = EXCLUDED.job_memory, rerun_limit_per_mr = EXCLUDED.rerun_limit_per_mr,
@@ -439,10 +438,10 @@ func (s *Store) PutRepoDefaults(ctx context.Context, d RepoDefaults) error {
 			quiet_reviews = EXCLUDED.quiet_reviews,
 			comment_layout = EXCLUDED.comment_layout,
 			linked_repos_enabled = EXCLUDED.linked_repos_enabled,
-			rule_sets = EXCLUDED.rule_sets, built_in_rules = EXCLUDED.built_in_rules`,
+			rule_sets = EXCLUDED.rule_sets`,
 		d.Approve, d.ReviewDrafts, d.FailureStatus, d.JobTimeoutSeconds, d.MaxTurns, d.JobMemory, d.RerunLimitPerMR, d.RerunLimitPerRepo, skills, d.InlineFindings,
 		d.CommandsAuthorAndMaintainersOnly, d.IncrementalReviews, d.LearnFromDismissals, d.QuietReviews, nilIfEmpty(d.CommentLayout), d.LinkedReposEnabled,
-		nilIfEmpty(d.RuleSets), d.BuiltInRules); err != nil {
+		nilIfEmpty(d.RuleSets)); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

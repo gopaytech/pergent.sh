@@ -15,15 +15,14 @@ import (
 )
 
 // An API review has no repository: it gets the admin default rule sets and
-// Built-in rules switch, reads no rules file and records its hash.
+// no built-in rules, reads no rules file and records its hash.
 func TestAPIReviewRules(t *testing.T) {
 	a := newAPIE2E(t)
 	env := a.env
 	if err := env.Store.CreateRuleSet(env.ctx, "a", setAYAML, env.Now()); err != nil {
 		t.Fatal(err)
 	}
-	off := false
-	if err := env.Store.PutRepoDefaults(env.ctx, store.RepoDefaults{Skills: []string{"security"}, RuleSets: []string{"a"}, BuiltInRules: &off}); err != nil {
+	if err := env.Store.PutRepoDefaults(env.ctx, store.RepoDefaults{Skills: []string{"security"}, RuleSets: []string{"a"}}); err != nil {
 		t.Fatal(err)
 	}
 	id := a.ask(t, "route:1", twoFiles())
@@ -38,23 +37,30 @@ func TestAPIReviewRules(t *testing.T) {
 		t.Errorf("PERGENT_NO_BUILT_IN_RULES = %q, %v", v, ok)
 	}
 	r := env.Run(id)
-	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, false, testImage) {
+	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, nil, testImage) {
 		t.Errorf("rules_hash = %v", r.RulesHash)
 	}
 	noGitLab(t, env)
 }
 
-// With no admin default, an API review gets no built-in rules: they are
-// opt-in.
+// Built-in rules are chosen per repository and have no default, so an API
+// review gets none, even with an image that loads a chosen list.
 func TestAPIReviewBuiltInRulesOffByDefault(t *testing.T) {
 	a := newAPIE2E(t)
 	env := a.env
+	builtInListFloor(t, "v0.5.0")
 	id := a.ask(t, "route:1", twoFiles())
 
 	dispatch(t, env)
 
 	if v, ok := jobVar(t, env, id, "PERGENT_NO_BUILT_IN_RULES"); !ok || v != "true" {
 		t.Errorf("PERGENT_NO_BUILT_IN_RULES = %q, %v; want \"true\" with nothing set", v, ok)
+	}
+	if v, ok := jobVar(t, env, id, "PERGENT_BUILT_IN_RULES"); ok {
+		t.Errorf("PERGENT_BUILT_IN_RULES = %q; want none", v)
+	}
+	if r := env.Run(id); r.BuiltInRulesNote != "" {
+		t.Errorf("note = %q; want none with nothing chosen", r.BuiltInRulesNote)
 	}
 	noGitLab(t, env)
 }

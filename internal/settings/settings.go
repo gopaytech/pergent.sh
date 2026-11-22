@@ -117,9 +117,11 @@ type Effective struct {
 	// RuleSets are the library rule sets the repository uses, in match
 	// order; nil means the default list.
 	RuleSets []string
-	// BuiltInRules is whether pergent's built-in path rules come after the
-	// repository's and the sets'. The default is false: a repository opts in.
-	BuiltInRules bool
+	// BuiltInRules names the built-in path rules of pergent that come after
+	// the repository's and the sets', in builtin.yaml order; nil is none. A
+	// repository setting only, with no default: a repository chooses them.
+	// A stored name the pinned pergent no longer has is dropped.
+	BuiltInRules []string
 	JobTimeout   time.Duration
 	// MaxTurns is the step limit of each opencode run, from
 	// config.MinMaxTurns to config.MaxMaxTurns.
@@ -378,9 +380,6 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 	if stored.LinkedReposEnabled != nil {
 		eff.LinkedReposEnabled = *stored.LinkedReposEnabled
 	}
-	if stored.BuiltInRules != nil {
-		eff.BuiltInRules = *stored.BuiltInRules
-	}
 	if stored.FailureStatus != nil {
 		if fs, ok := failureStatus(*stored.FailureStatus); ok {
 			eff.FailureStatus = fs
@@ -563,8 +562,8 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if len(repo.RuleSets) > 0 {
 		eff.RuleSets, eff.Overridden[KeyRuleSets] = slices.Clone(repo.RuleSets), true
 	}
-	if repo.BuiltInRules != nil {
-		eff.BuiltInRules, eff.Overridden[KeyBuiltInRules] = *repo.BuiltInRules, true
+	if known, _ := config.OrderBuiltInRules(repo.BuiltInRules); len(known) > 0 {
+		eff.BuiltInRules, eff.Overridden[KeyBuiltInRules] = known, true
 	}
 	if repo.JobTimeout != nil {
 		eff.JobTimeout, eff.Overridden[KeyJobTimeout] = *repo.JobTimeout, true
@@ -654,8 +653,8 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	if len(row.RuleSets) > 0 {
 		eff.RuleSets, eff.Overridden[KeyRuleSets] = slices.Clone(row.RuleSets), true
 	}
-	if row.BuiltInRules != nil {
-		eff.BuiltInRules, eff.Overridden[KeyBuiltInRules] = *row.BuiltInRules, true
+	if known, _ := config.OrderBuiltInRules(row.BuiltInRules); len(known) > 0 {
+		eff.BuiltInRules, eff.Overridden[KeyBuiltInRules] = known, true
 	}
 	if row.JobTimeoutSeconds != nil && *row.JobTimeoutSeconds > 0 {
 		eff.JobTimeout, eff.Overridden[KeyJobTimeout] = time.Duration(*row.JobTimeoutSeconds)*time.Second, true
