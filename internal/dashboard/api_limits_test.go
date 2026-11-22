@@ -174,10 +174,15 @@ func TestTeamLimitsView(t *testing.T) {
 	te.addModel("openai", "gpt-6", "", llmKeyThree) // no limit for the team: not listed
 	gName := modelNamed(t, decode[ModelsAdminView](t, te.get(te.admin, modelsURL), "GET models", http.StatusOK), g.ID).Name
 	wantCode(t, te.send(te.admin, "PUT", teamLimitURL(g.ID, te.payments), `{"monthlyTokens":1000}`), "team limit", http.StatusNoContent)
-	wantCode(t, te.send(te.admin, "PUT", modelLimitURL(g.ID), `{"monthlyTokens":100}`), "model limit", http.StatusNoContent)
+	wantCode(t, te.send(te.admin, "PUT", modelLimitURL(g.ID), `{"monthlyTokens":200}`), "model limit", http.StatusNoContent)
 	wantCode(t, te.send(te.maintainer, "PUT", teamURL(te.payments, "/models/"+own.ID+"/limit"), `{"monthlyTokens":500}`), "own", http.StatusNoContent)
 	used := te.usageRun(runFix{project: "acme/payments", number: 50, head: head('5')}, usageSkill("code-review", "no_blocking_issues", 120, 30))
 	te.exec(`UPDATE runs SET model_source = 'global', model_entry_id = $2 WHERE id = $1::uuid`, used, g.ID)
+	// Another team's tokens on the same entry: the team's own use stays 150, the
+	// total is 250, past the model limit of 200. So "used_up" comes from the
+	// total, and Used must not.
+	foreign := te.usageRun(runFix{project: "acme/widgets", number: 51, head: head('6')}, usageSkill("code-review", "no_blocking_issues", 70, 30))
+	te.exec(`UPDATE runs SET model_source = 'global', model_entry_id = $2 WHERE id = $1::uuid`, foreign, g.ID)
 
 	for name, c := range map[string]*http.Cookie{"maintainer": te.maintainer, "admin": te.admin} {
 		rec := te.get(c, teamURL(te.payments, "/limits"))
@@ -191,7 +196,7 @@ func TestTeamLimitsView(t *testing.T) {
 		if gl := v.Global[0]; gl != (TeamGlobalLimitView{ID: g.ID, Name: gName, Limit: 1000, Used: 150, ModelLimit: "used_up"}) {
 			t.Errorf("%s: global entry = %+v", name, gl)
 		}
-		if strings.Contains(rec.Body.String(), `"100"`) || strings.Contains(rec.Body.String(), `:100,`) || strings.Contains(rec.Body.String(), `:100}`) {
+		if strings.Contains(rec.Body.String(), `:200,`) || strings.Contains(rec.Body.String(), `:200}`) || strings.Contains(rec.Body.String(), `:250`) {
 			t.Errorf("%s: the model limit's number reached the team: %s", name, rec.Body)
 		}
 	}
