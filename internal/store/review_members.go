@@ -1208,47 +1208,7 @@ func (s *Store) JudgeOf(ctx context.Context, runID string) (JudgeRow, bool, erro
 // OutcomeJudgeFailed and queues the review's next attempt, as EnqueueAttempt
 // does, with no mark. created is false when the run is not reported.
 func (s *Store) EnqueueJudgeRetry(ctx context.Context, from Run) (id string, created bool, err error) {
-	if !validUUID(from.ID) {
-		return "", false, fmt.Errorf("store: run %q not found", from.ID)
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return "", false, err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-
-	if err := lockMR(ctx, tx, from.MR); err != nil {
-		return "", false, err
-	}
-	var state string
-	err = tx.QueryRow(ctx, `SELECT state FROM runs WHERE id = $1::uuid FOR UPDATE`, from.ID).Scan(&state)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	if RunState(state) != Reported {
-		return "", false, nil
-	}
-	// Superseded first: one live run per head and target.
-	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded', outcome = $2, outcome_reason = $3 WHERE id = $1::uuid`,
-		from.ID, OutcomeFellBack, OutcomeJudgeFailed); err != nil {
-		return "", false, err
-	}
-	// The same columns as EnqueueAttempt copies.
-	if err := tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch,
-			kind, api_client_id, trigger, skill_subset, base_run_id, quota_checked, ci_checked, status_ref, attempt_of)
-		SELECT instance, project_id, mr_iid, project_path, head_sha, target_branch,
-			kind, api_client_id, trigger, skill_subset, base_run_id, quota_checked, ci_checked, status_ref, COALESCE(attempt_of, id)
-		FROM runs WHERE id = $1::uuid
-		RETURNING id::text`, from.ID).Scan(&id); err != nil {
-		return "", false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return "", false, err
-	}
-	return id, true, nil
+	return s.enqueueNextAttempt(ctx, from, OutcomeJudgeFailed, nil)
 }
 
 // InheritMultiReviewSplit gives the running later attempt id of a judge run,
