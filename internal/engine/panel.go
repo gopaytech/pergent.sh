@@ -117,13 +117,13 @@ func (d *dispatcher) panelOff(ctx context.Context, reason string) error {
 }
 
 // panelOffReason is why B can't run on any entry of chain B (dec does not
-// run). The quota is the reason when only it and A's model stopped the
-// entries, A's model when only it did; anything else is no usable entry.
+// run). The quota is the reason when only it, the limits and A's model stopped
+// the entries, A's model when only it did; anything else is no usable entry.
 func panelOffReason(dec chain.Decision) string {
 	quota, same := false, false
 	for _, s := range dec.Skips {
 		switch s.Reason {
-		case chain.ReasonInstanceQuota:
+		case chain.ReasonInstanceQuota, chain.ReasonModelLimit, chain.ReasonTeamLimit:
 			quota = true
 		case chain.ReasonSameModel:
 			same = true
@@ -533,8 +533,8 @@ func (p mergePlan) key(role string) string { return p.judges[role].model.Key }
 // merge goes on without that half. No judge runs (--panel-no-judge) when no
 // role can judge, when the repository's token quota (an API client's
 // monthly budget) is used up, or when the instance's is used up and a judge
-// entry is global. d.entry names model A and its key for the Job. err is a
-// store error.
+// entry is global. Limits are not checked: its tokens count on its entries all
+// the same. d.entry names model A and its key for the Job. err is a store error.
 func (d *dispatcher) resolveMerge(ctx context.Context, repo settings.Effective, repoUsedUp, instanceUsedUp bool) error {
 	done := map[string]*store.PanelMember{}
 	for i := range d.members {
@@ -555,6 +555,9 @@ func (d *dispatcher) resolveMerge(ctx context.Context, repo settings.Effective, 
 		return err
 	}
 	inA.Tried, inB.Tried = tried[kube.PanelRoleA], tried[kube.PanelRoleB]
+	// The judge ends a review that has started: no limit stops it.
+	inA.IgnoreLimits()
+	inB.IgnoreLimits()
 	if a := done[kube.PanelRoleA]; a != nil {
 		inB.Avoid = chain.SameModel{Provider: a.Provider, Model: a.Model}
 	}

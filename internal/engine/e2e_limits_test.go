@@ -295,3 +295,38 @@ func TestMemberAGoesPastAdminLimits(t *testing.T) {
 	dispatch(t, env)
 	wantMemberKey(t, env, memberOfRole(t, env, id, "a"), testLLMKey)
 }
+
+// Chain B with no entry left under its limits turns the panel off with the
+// quota's reason; the review runs on chain A alone.
+func TestDispatchPanelLimitStopsB(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	env := quotaPushEnv(t, 0, 0)
+	b := globalChainB(t, env)
+	seedEntryUsage(t, env, b, 10)
+	setLimit(t, env, b, 0, 10)
+	head := sha('a')
+	servePush(env, head)
+	id := env.Enqueue(3, head)
+	dispatch(t, env)
+	wantOnlyA(t, env, id, "the token quota stopped model B")
+}
+
+// Job P's judge does not check limits: it ends a review that has started.
+func TestPanelJudgeIgnoresLimits(t *testing.T) {
+	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
+	env := e.env
+	env.SetNow(novemberMid)
+	head := sha('a')
+	id, a, b := releasedPanel(t, e, head, withTokens(t, clean(t, head), 5, 5), withTokens(t, clean(t, head), 5, 5))
+	team := ownerTeam(t, env)
+	setLimit(t, env, store.EntryRef{Source: a.Entry.Source, ID: a.Entry.ID}, team, 1) // used up by member A's own tokens
+	setLimit(t, env, store.EntryRef{Source: b.Entry.Source, ID: b.Entry.ID}, team, 1)
+
+	dispatch(t, env)
+	if env.Job(id) == nil {
+		t.Fatalf("no Job P\n%s", env.Logs())
+	}
+	if js := panelJudges(t, env, id); len(js) != 2 || js["a"].Name != "team-a" || js["b"].Name != "team-b" {
+		t.Errorf("judges = %+v; want both, limits or not", js)
+	}
+}
