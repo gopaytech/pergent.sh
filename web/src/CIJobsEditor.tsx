@@ -91,7 +91,7 @@ export default function CIJobsEditor({
         {value.jobs.map((j, i) => {
           const unknown = names !== null && j.name.trim() !== "" && !names.includes(j.name.trim());
           return (
-            <div className="link-row" role="listitem" key={i}>
+            <div className="link-row ci-job" role="listitem" key={i}>
               <div className="link-head">
                 <input
                   type="text"
@@ -129,6 +129,7 @@ export default function CIJobsEditor({
                   {github && (
                     <input
                       type="text"
+                      className="grow"
                       aria-label="Report artifact"
                       placeholder="Workflow artifact name"
                       spellCheck={false}
