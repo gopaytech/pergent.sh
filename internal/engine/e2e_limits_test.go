@@ -161,3 +161,66 @@ func TestLimitReadErrorRetries(t *testing.T) {
 		t.Errorf("the retry isn't about the limits; logs:\n%s", logs)
 	}
 }
+
+// wantLimitHeld checks run id waits because a limit took part, with no Job.
+func wantLimitHeld(t *testing.T, env *testEnv, id string) {
+	t.Helper()
+	r := env.Run(id)
+	if r.State != store.Waiting || r.SkipReason != store.WaitLimit {
+		t.Fatalf("run = %s/%q, want waiting/%s; logs:\n%s", r.State, r.SkipReason, store.WaitLimit, env.Logs())
+	}
+	if jobs := env.Jobs(); len(jobs) != 0 {
+		t.Fatalf("%d jobs were created", len(jobs))
+	}
+}
+
+// A push whose only entry is at its model limit is held as for a used-up
+// quota: the same pending status and note, naming no limit. A 1-entry chain
+// ignores marks, not limits.
+func TestModelLimitHoldsPush(t *testing.T) {
+	env := quotaPushEnv(t, 0, 0)
+	seedEntryUsage(t, env, configRef(), 100)
+	setLimit(t, env, configRef(), 0, 100)
+	head := sha('a')
+	servePush(env, head)
+	id := env.Enqueue(3, head)
+	dispatch(t, env)
+
+	wantLimitHeld(t, env, id)
+	if got := statusesOf(t, env, head); len(got) != 1 || got[0] != "pending: "+quotaDescription {
+		t.Errorf("statuses = %v", got)
+	}
+	if ns := notes(env, 3); len(ns) != 1 || !strings.Contains(ns[0], quotaNote) {
+		t.Fatalf("notes = %v", ns)
+	}
+}
+
+// A fallback whose entries left are stopped by limits alone is held once the
+// mark of the entry it fell back from has ended.
+func TestFallbackHeldOnLimit(t *testing.T) {
+	e, refs := newFallbackE2E(t, "team-a", "team-b")
+	env := e.env
+	env.SetNow(novemberMid)
+	team := ownerTeam(t, env)
+	seedEntryUsage(t, env, refs[1], 10)
+	setLimit(t, env, refs[1], team, 10)
+	head := sha('a')
+	servePublish(env, 1, head)
+	root := env.Enqueue(1, head)
+
+	first := e.attempt(t, "key-team-a", failedOn(t, head, "quota"))
+	wantFellBack(t, env, first, store.ClassQuota)
+	env.SetNow(novemberMid.Add(2 * time.Hour)) // team-a's quota mark (1h) has ended: it reads "tried"
+	dispatch(t, env)
+
+	as, err := env.Store.Attempts(env.ctx, root)
+	if err != nil || len(as) != 2 {
+		t.Fatalf("attempts = %d, %v; want 2", len(as), err)
+	}
+	if last := as[1]; last.State != store.Waiting || last.SkipReason != store.WaitLimit {
+		t.Errorf("last attempt = %s/%q; want waiting/%s", last.State, last.SkipReason, store.WaitLimit)
+	}
+	if n := len(env.Jobs()); n != 1 {
+		t.Errorf("%d Jobs, want 1", n)
+	}
+}
