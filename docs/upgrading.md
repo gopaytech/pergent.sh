@@ -10,11 +10,14 @@
 - **Instance token quota.** With a panel, some tokens can count under the wrong source: [Monthly token quota](concepts/token-quota.md).
 - **Rolling back.** Turn chain B off at every level and wait until no review shows a running panel first.
 
-**Path rules.** A rule is a checklist for a kind of file, added to the review that already runs on it, never blocking: [Path rules](concepts/rules.md). The built-in list is empty in this release, so nothing changes until a repository adds `.pergent/rules.yaml` or uses a rule set.
+**Path rules.** A rule is a checklist for a kind of file, added to the review that already runs on it, never blocking: [Path rules](concepts/rules.md). pergent ships built-in rules for 67 file types. With a `jobs.image` that reads rules, every skill gets them. Turn them off per repository with **Built-in rules**, or per skill with `rules: false`.
+
+- **Reviews get no rules yet, built-in or team.** The default `jobs.image`, pergent v0.10.0, reads no rules. Rules reach a review only when `jobs.image` is a pergent release with rule support. The release notes name the first pergent release that has it. Until then a review is the same as before, and the review page says `This image does not use rules.`
+- The **Built-in** tab of the **Rules** page shows the built-in rules of the pergent version this pergent.sh is built with. That can differ from the one in `jobs.image`, and a review uses the rules of the pergent in `jobs.image`.
 
 - **Migration `0047`** runs at startup. It adds the table `rule_sets`, NULL columns `rule_sets` and `built_in_rules` on `repo_defaults` and `dashboard_repos`, and `runs.rules_hash`, dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them.
 - **New config keys** `rule_sets`, `repositories[].rule_sets` and `repositories[].built_in_rules`. An older release refuses unknown keys, so take them out of the config before you roll back.
-- The first push of each change after the upgrade is a full review for skills with rules on: no earlier review recorded a rules hash.
+- The first push of each change after the upgrade is a full review for skills with rules on, because every stored rules hash changes: an earlier review recorded no hash, or one without `jobs.image`, which is now in it. After that, each change of `jobs.image` gives one full review for skills with rules on, because a new image can bring new built-in texts.
 - A skill whose frontmatter has `rules` that is not a YAML bool (`yes`, `"false"`) is now refused when it is saved; one already in the library fails the reviews that use it with pergent's message.
 - The review Job gets the list as `PERGENT_RULES` and `PERGENT_NO_BUILT_IN_RULES`. A pergent image built before rules ignores both and reviews as before; the review page then says `This image does not use rules.`
 - The audit log has `rule_set_created`, `rule_set_updated` and `rule_set_deleted`; **Needs attention** has `rules_invalid`. The API has `/api/rule-sets`, `/api/built-in-rules` and `/api/admin/rule-sets`, the settings `ruleSets` and `builtInRules`, and new fields `InputsView.rules`, `FilesView.rules` and `RunDetailView.rulesUsed`.

@@ -174,8 +174,25 @@ func TestDispatchRulesHashStored(t *testing.T) {
 
 	list, _ := rule.Load([]byte(repoRulesYAML), rule.SourceRepo)
 	r := env.Run(id)
-	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, true) {
-		t.Errorf("rules_hash = %v, want the hash of the list with built-ins on", r.RulesHash)
+	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, true, testImage) {
+		t.Errorf("rules_hash = %v, want the hash of the list with built-ins on and the Jobs image", r.RulesHash)
+	}
+}
+
+// The built-in texts ship inside the Jobs image: a run on another image gets
+// another hash, so its next push reviews every skill with rules in full.
+func TestDispatchRulesHashHasTheImage(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.Jobs.Image = "ghcr.io/gopaytech/pergent:v9.9.9"
+	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
+	id, _ := queue(env)
+
+	dispatch(t, env)
+
+	list, _ := rule.Load([]byte(repoRulesYAML), rule.SourceRepo)
+	r := env.Run(id)
+	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, true, "ghcr.io/gopaytech/pergent:v9.9.9") {
+		t.Errorf("rules_hash = %v, want the hash with the configured Jobs image", r.RulesHash)
 	}
 }
 

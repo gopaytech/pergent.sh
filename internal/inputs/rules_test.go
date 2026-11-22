@@ -117,19 +117,28 @@ func TestRuleListBadStoredSet(t *testing.T) {
 }
 
 func TestRulesHash(t *testing.T) {
+	const image = "ghcr.io/gopaytech/pergent:v1.0.0"
 	list := []rule.Entry{{Path: "*.go", Rule: "r", Source: rule.SourceRepo}}
-	h := RulesHash(list, true)
-	if len(h) != 64 || RulesHash(list, true) != h {
+	h := RulesHash(list, true, image)
+	if len(h) != 64 || RulesHash(list, true, image) != h {
 		t.Fatalf("RulesHash = %q, not stable", h)
 	}
-	if RulesHash(list, false) == h {
+	if RulesHash(list, false, image) == h {
 		t.Error("the switch does not change the hash")
 	}
-	if RulesHash([]rule.Entry{{Path: "*.go", Rule: "other", Source: rule.SourceRepo}}, true) == h {
+	if RulesHash([]rule.Entry{{Path: "*.go", Rule: "other", Source: rule.SourceRepo}}, true, image) == h {
 		t.Error("the rule does not change the hash")
 	}
-	if RulesHash(nil, true) == RulesHash(nil, false) {
+	if RulesHash(nil, true, image) == RulesHash(nil, false, image) {
 		t.Error("an empty list hashes the same with built-ins on and off")
+	}
+	// The built-in texts ship inside the Jobs image, so a new image may
+	// change them: a file kept as reviewed must have seen the same texts.
+	if RulesHash(list, true, "ghcr.io/gopaytech/pergent:v1.0.1") == h {
+		t.Error("the Jobs image does not change the hash")
+	}
+	if RulesHash(nil, false, "a") == RulesHash(nil, false, "b") {
+		t.Error("the Jobs image does not change the hash with built-ins off")
 	}
 }
 

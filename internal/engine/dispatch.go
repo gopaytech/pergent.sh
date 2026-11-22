@@ -229,8 +229,9 @@ type dispatcher struct {
 	// cis is where the CI wait's store calls go; nil is the engine's Store.
 	// Tests set it.
 	cis ciStore
-	// rulesHash is the hash of the run's rule list and built-in switch, set
-	// once the list is built; the next push compares it with its own.
+	// rulesHash is the hash of the run's rule list, built-in switch and Jobs
+	// image, set once the list is built; the next push compares it with its
+	// own.
 	rulesHash string
 	// clientModel is the model an API client chose ("" for none): its chain
 	// A is that model alone (chainA).

@@ -1950,11 +1950,11 @@ type RuleSetWrittenView struct {
 	Notes   []string `json:"notes"`
 }
 
-// BuiltInRuleView is one of pergent's built-in path rules: its name (empty
-// for an off entry), glob and text.
+// BuiltInRuleView is one of pergent's built-in path rules: its name, the
+// globs it is for in match order (a file takes the first rule that matches,
+// across all rows) and its text. No shipped built-in is off.
 type BuiltInRuleView struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Off  bool   `json:"off"`
-	Rule string `json:"rule"`
+	Name  string   `json:"name"`
+	Paths []string `json:"paths"`
+	Rule  string   `json:"rule"`
 }

@@ -758,8 +758,9 @@ export type RuleSetDetail = RuleSet & { content: string; notes: string[] };
 // RuleSetWritten answers a save: the new version and the notes on the text.
 export type RuleSetWritten = { version: number; notes: string[] };
 
-// BuiltInRule is one of pergent's built-in path rules.
-export type BuiltInRule = { name: string; path: string; off: boolean; rule: string };
+// BuiltInRule is one of pergent's built-in path rules: its globs in match
+// order (a {a,b} glob is already split) and its text once (BuiltInRuleView).
+export type BuiltInRule = { name: string; paths: string[]; rule: string };
 
 // skillBudget is what a review takes of library skill text, in bytes
 // (inputs.ConfigMapLimit): saving a list over it is refused.
