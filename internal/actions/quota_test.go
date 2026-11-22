@@ -57,6 +57,13 @@ func newStore(t *testing.T) *store.Store {
 // Job's result came in at at, using tokens in tokens.
 func seedUsage(t *testing.T, st *store.Store, iid int64, at time.Time, tokens int64) {
 	t.Helper()
+	seedUsageOn(t, st, iid, at, tokens, nil)
+}
+
+// seedUsageOn is seedUsage of a run that ran on ref (nil: no entry, as
+// before chains).
+func seedUsageOn(t *testing.T, st *store.Store, iid int64, at time.Time, tokens int64, ref *store.EntryRef) {
+	t.Helper()
 	mr := store.MRKey{Instance: "main", ProjectID: 1, IID: iid}
 	id, _, err := st.EnqueueRun(ctx, mr, "acme/web", fmt.Sprintf("seed%d", iid), "main")
 	if err != nil {
@@ -64,6 +71,11 @@ func seedUsage(t *testing.T, st *store.Store, iid int64, at time.Time, tokens in
 	}
 	if got, err := st.ClaimQueued(ctx, 10, at); err != nil || len(got) == 0 {
 		t.Fatalf("ClaimQueued = %v, %v", got, err)
+	}
+	if ref != nil {
+		if err := st.SetRunEntry(ctx, id, store.RunEntry{Source: ref.Source, ID: ref.ID, Name: ref.ID, Position: 1, Length: 1}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	token := "tok-" + id
 	sum := sha256.Sum256([]byte(token))

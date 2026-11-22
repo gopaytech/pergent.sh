@@ -397,3 +397,36 @@ func TestJudgeCI(t *testing.T) {
 		t.Errorf("judge = %+v", got)
 	}
 }
+
+// An admin's start of a change whose chain is only a team entry at its
+// team's own limit is refused with the team's name; a maintainer's gets the
+// quota's refusal. The change stays waiting.
+func TestStartAtTeamOwnLimit(t *testing.T) {
+	te := newTeamsEnv(t) // Widgets owns main/acme/widgets, the button repository
+	m := te.addTeamModel(te.otherMaintainer, te.widgets, "wid-a", teamKeyOne)
+	ref := store.EntryRef{Source: store.SourceTeam, ID: m.ID}
+	if err := te.st.SaveChain(ctx, store.Chain{Scope: store.ScopeTeam, TeamID: te.widgets, Entries: []store.EntryRef{ref}}, te.clock.now()); err != nil {
+		t.Fatal(err)
+	}
+	used := te.usageRun(runFix{project: buttonProject, number: 99, head: head('9')}, usageSkill("code-review", "no_blocking_issues", 6, 4))
+	te.exec(`UPDATE runs SET model_source = 'team', model_entry_id = $2 WHERE id = $1::uuid`, used, m.ID)
+	if err := te.st.SetModelLimit(ctx, store.ModelLimit{Ref: ref, TeamID: te.widgets, MonthlyTokens: 10, UpdatedAt: te.clock.now(), UpdatedBy: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	id := te.waitingChange(head('1'), store.WaitLimit)
+
+	rec := te.send(te.admin, "POST", buttonURL("start"), `{"head":"`+head('1')+`"}`)
+	wantCode(t, rec, "admin start", http.StatusConflict)
+	if got := errorOf(t, rec); got != "every model of the chain is at the team's own limit: a maintainer of Widgets can raise it on the team page" {
+		t.Errorf("error = %q", got)
+	}
+	rec = te.send(te.otherMaintainer, "POST", buttonURL("start"), `{"head":"`+head('1')+`"}`)
+	wantCode(t, rec, "maintainer start", http.StatusConflict)
+	if got := errorOf(t, rec); got != msgQuotaUsedUp {
+		t.Errorf("maintainer's error = %q; want %q", got, msgQuotaUsedUp)
+	}
+	rows := te.runRows()
+	if i := slices.IndexFunc(rows, func(r runRow) bool { return r.ID == id }); i < 0 || rows[i].State != "waiting" {
+		t.Errorf("runs = %+v; want the change still waiting", rows)
+	}
+}

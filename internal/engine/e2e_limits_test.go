@@ -374,3 +374,19 @@ func TestAPIReviewPinnedModelRecordsEntry(t *testing.T) {
 		t.Errorf("run's ModelEntryID = %q; want %q", rv.Run.ModelEntryID, store.ConfigModelID)
 	}
 }
+
+// A writer's review command is refused when only limits stop every entry:
+// 👎 and the quota's note, as for a used-up quota.
+func TestReviewCommandRefusedAtModelLimit(t *testing.T) {
+	e := quotaCommands(t, 0)
+	env := e.env
+	publishedHead(t, env, sha('a'))
+	seedEntryUsage(t, env, configRef(), 5) // 5 of the repository's 10: room left
+	setLimit(t, env, configRef(), 0, 5)
+
+	c := e.say(t, "dev", userDeveloper, "@pergent-review review")
+	e.answer(t)
+	e.wantReactions(t, c, eyes, down)
+	e.wantReplies(t, quotaNote)
+	wantOutcome(t, env, "refused: "+whyQuota, 1)
+}

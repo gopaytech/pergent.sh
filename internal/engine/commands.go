@@ -629,7 +629,7 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 	switch res.Status {
 	case actions.RerunNothingFailed:
 		return noop("nothing failed", replyNothingFailed), nil
-	case actions.RerunQuotaUsedUp:
+	case actions.RerunQuotaUsedUp, actions.RerunTeamLimit:
 		return c.refuseQuota(ctx), nil
 	case actions.RerunCapped:
 		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil
@@ -700,7 +700,7 @@ func (c *commandRun) start(ctx context.Context) (verdict, error) {
 		return verdict{}, err
 	}
 	switch res.Status {
-	case actions.RerunQuotaUsedUp:
+	case actions.RerunQuotaUsedUp, actions.RerunTeamLimit:
 		return c.refuseQuota(ctx), nil
 	case actions.RerunCapped:
 		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil
