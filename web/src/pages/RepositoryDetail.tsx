@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { api, isStatus, paths, safeHref, type InputsView, type PanelView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
 import { useWrite } from "../layout/write";
 import { QuotaLine } from "../quota";
-import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, ago, platformName, skillOrigin } from "../ui";
+import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, platformName, skillOrigin } from "../ui";
 import AttentionRows from "./Attention";
 import PastDismissals from "./PastDismissals";
 import Readiness from "./Readiness";
@@ -85,7 +85,6 @@ export default function RepositoryDetail() {
       <div role="tabpanel">
         {tab === "reviews" && <ReviewList filter={{ project: repo.project, days: 90 }} label="Reviews of this repository" />}
         {tab === "skill-results" && <SkillResults instance={repo.instance} project={repo.project} />}
-        {tab === "settings" && repo.source === "dashboard" && <CodeGraph view={view} queryKey={queryKey} />}
         {tab === "settings" && <SettingsTab view={view} queryKey={queryKey} />}
         {tab === "past-dismissals" && (
           <PastDismissals
@@ -113,65 +112,6 @@ export default function RepositoryDetail() {
 
 // panelText is the panel line: on with the first entry of each chain, or off.
 const panelText = (p: PanelView) => (p.on ? `Panel: on (A: ${p.a ?? "none"}, B: ${p.b ?? "none"})` : "Panel: off");
-
-// CodeGraph is the repository's Code graph switch and the stored graph's
-// status. Off is the default and costs nothing; turning it off deletes the
-// graph. The switch can be turned on only when the install keeps graphs.
-function CodeGraph({ view, queryKey }: { view: RepositoryDetailView; queryKey: string[] }) {
-  const client = useQueryClient();
-  const write = useWrite();
-  const { repo, graph } = view;
-  const toggle = useMutation({
-    mutationFn: (enabled: boolean) => write<RepositoryDetailView>("PUT", paths.apiRepoGraph(repo.instance, repo.project), { enabled }),
-    onSuccess: (next) => client.setQueryData(queryKey, next),
-  });
-  const kib = Math.max(1, Math.round(graph.sizeBytes / 1024));
-  return (
-    <section className="card" aria-label="Code graph">
-      <h2>Code graph</h2>
-      <p className="prose">
-        pergent.sh builds a graph of the default branch and gives each review of a change into that branch the callers and
-        callees of the changed code. It is a hint for the model, never a source of truth.
-      </p>
-      <label>
-        <input
-          type="checkbox"
-          checked={graph.enabled}
-          disabled={toggle.isPending || (!graph.enabled && !graph.available)}
-          onChange={(e) => toggle.mutate(e.target.checked)}
-        />{" "}
-        Build and use a code graph
-      </label>
-      {!graph.available && !graph.enabled && (
-        <div className="meta">This install keeps no code graphs. An operator turns on graphs.enabled in the Helm chart.</div>
-      )}
-      {graph.enabled && (
-        <dl className="meta" aria-label="Graph status">
-          <dt>Stored graph</dt>
-          <dd>
-            {graph.commit === ""
-              ? "none yet"
-              : `${graph.branch} at ${graph.commit.slice(0, 12)}, ${graph.nodes} nodes, ${graph.edges} edges, ${kib} KiB` +
-                (graph.builtAt ? `, built ${ago(graph.builtAt)}` : "")}
-          </dd>
-          {graph.building !== "" && (
-            <>
-              <dt>Build</dt>
-              <dd>{graph.building}</dd>
-            </>
-          )}
-          {graph.error !== "" && (
-            <>
-              <dt>Last build failed</dt>
-              <dd>{graph.error}</dd>
-            </>
-          )}
-        </dl>
-      )}
-      {toggle.isError && <ErrorBox error={toggle.error} />}
-    </section>
-  );
-}
 
 // Remove deletes a repository from pergent for good, after a confirm, and
 // goes back to the list. Pausing is the list's switch.
