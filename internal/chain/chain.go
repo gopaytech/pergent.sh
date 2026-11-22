@@ -22,7 +22,7 @@ const (
 	ReasonNotOwner      = "not_owner"      // a team entry of a team that doesn't own the repository
 	ReasonKeyUnusable   = "key_unusable"   // no key, or it can't be opened
 	ReasonInstanceQuota = "instance_quota" // a global entry, and the instance's token quota is used up
-	ReasonSameModel     = "same_model"     // the model Avoid names: a panel's member A runs on it
+	ReasonSameModel     = "same_model"     // a model Avoid names: an earlier reviewer runs on it
 )
 
 // SameModel is a provider and a model. Two entries with the same ones are one
@@ -35,13 +35,23 @@ func (s SameModel) is(m instances.Model) bool {
 	return s != SameModel{} && strings.EqualFold(s.Provider, m.LLM.Provider) && strings.EqualFold(s.Model, m.LLM.Model)
 }
 
+// avoided reports whether m runs on any model of avoid.
+func avoided(avoid []SameModel, m instances.Model) bool {
+	for _, s := range avoid {
+		if s.is(m) {
+			return true
+		}
+	}
+	return false
+}
+
 // Input is everything Resolve reads. Entries holds every entry known now,
 // with its key ("" when it has none or it can't be opened); a ref missing
 // from it is a removed entry. OwnerTeam is the team that owns the repository,
 // 0 for none. Tried is the entries earlier attempts of this review ran.
 // SavedByAdmin is whether an admin saved the chain (store.Chain's). Avoid
-// is a model no entry may run on (a panel's member B avoids member A's); the
-// zero value avoids none.
+// is the models no entry may run on (reviewer k avoids the models reviewers
+// 1 to k-1 run on); nil, or a zero SameModel, avoids none.
 type Input struct {
 	Scope               string // store.ScopeGlobal, ScopeTeam or ScopeRepo
 	Refs                []store.EntryRef
@@ -51,7 +61,7 @@ type Input struct {
 	Marks               map[store.EntryRef]store.Mark
 	Tried               map[store.EntryRef]bool
 	InstanceQuotaUsedUp bool
-	Avoid               SameModel
+	Avoid               []SameModel
 	Now                 time.Time
 }
 
@@ -128,7 +138,7 @@ func skipReason(in Input, ref store.EntryRef, m instances.Model, known bool) str
 		return ReasonNotAllowed
 	case ref.Source == store.SourceTeam && (in.OwnerTeam == 0 || m.TeamID != in.OwnerTeam):
 		return ReasonNotOwner
-	case in.Avoid.is(m):
+	case avoided(in.Avoid, m):
 		return ReasonSameModel
 	}
 	if mk, ok := in.Marks[ref]; ok && len(in.Refs) > 1 && live(mk, in.Now) {
@@ -181,7 +191,7 @@ var reasonWords = map[string]string{
 	ReasonNotOwner:      "its team doesn't own this repository",
 	ReasonKeyUnusable:   "no usable key",
 	ReasonInstanceQuota: "instance token quota used up",
-	ReasonSameModel:     "the model the other review runs on",
+	ReasonSameModel:     "the model another reviewer runs on",
 }
 
 // ReasonWords is reason as words.

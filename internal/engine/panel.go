@@ -191,9 +191,11 @@ func (d *dispatcher) resolveMember(ctx context.Context, repo settings.Effective,
 		return chain.Decision{}, err
 	}
 	in.Tried = triedBy(ms, d.member)
-	if in.Avoid, err = d.modelOfA(ctx, repo, ms, instanceUsedUp); err != nil {
+	modelA, err := d.modelOfA(ctx, repo, ms, instanceUsedUp)
+	if err != nil {
 		return chain.Decision{}, err
 	}
+	in.Avoid = []chain.SameModel{modelA}
 	in.InstanceQuotaUsedUp = instanceUsedUp
 	dec := chain.Resolve(in)
 	d.attempt = len(in.Tried) + 1
@@ -557,7 +559,7 @@ func (d *dispatcher) resolveMerge(ctx context.Context, repo settings.Effective, 
 	}
 	inA.Tried, inB.Tried = tried[kube.PanelRoleA], tried[kube.PanelRoleB]
 	if a := done[kube.PanelRoleA]; a != nil {
-		inB.Avoid = chain.SameModel{Provider: a.Provider, Model: a.Model}
+		inB.Avoid = []chain.SameModel{{Provider: a.Provider, Model: a.Model}}
 	}
 	plan := mergePlan{judges: map[string]judge{}}
 	for role, in := range map[string]chain.Input{kube.PanelRoleA: inA, kube.PanelRoleB: inB} {

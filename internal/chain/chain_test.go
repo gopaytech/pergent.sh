@@ -325,7 +325,7 @@ func TestResolveAvoid(t *testing.T) {
 		LLM: config.LLM{Provider: "OpenAI", Model: "GPT-5"}}
 	in.Entries[g("b")] = instances.Model{ID: "b", Name: "n-b", Key: "key-b", TeamsMayUse: true,
 		LLM: config.LLM{Provider: "anthropic", Model: "claude"}}
-	in.Avoid = SameModel{Provider: "openai", Model: "gpt-5"}
+	in.Avoid = []SameModel{{Provider: "openai", Model: "gpt-5"}}
 	d := Resolve(in)
 	if d.Ref != g("b") || d.Position != 2 || d.FirstSkip != ReasonSameModel {
 		t.Fatalf("decision = %+v", d)
@@ -341,18 +341,59 @@ func TestResolveAvoid(t *testing.T) {
 	if !d.Exhausted || d.Hold || d.Wait || d.Runs() || len(d.Skips) != 1 || d.Skips[0].Reason != ReasonSameModel {
 		t.Fatalf("decision = %+v", d)
 	}
-	if got := FailureText(d); !strings.Contains(got, "n-a (the model the other review runs on)") {
+	if got := FailureText(d); !strings.Contains(got, "n-a (the model another reviewer runs on)") {
 		t.Errorf("failure text = %q", got)
 	}
 
 	// Another model of the same provider runs, and no Avoid avoids nothing.
 	other := only
-	other.Avoid = SameModel{Provider: "openai", Model: "gpt-4"}
+	other.Avoid = []SameModel{{Provider: "openai", Model: "gpt-4"}}
 	if d := Resolve(other); !d.Runs() || d.Ref != g("a") {
 		t.Errorf("another model: decision = %+v", d)
 	}
-	other.Avoid = SameModel{}
+	other.Avoid = []SameModel{{}}
+	if d := Resolve(other); !d.Runs() || d.Ref != g("a") {
+		t.Errorf("a zero Avoid: decision = %+v", d)
+	}
+	other.Avoid = nil
 	if d := Resolve(other); !d.Runs() || d.Ref != g("a") {
 		t.Errorf("no Avoid: decision = %+v", d)
+	}
+}
+
+// Avoid holds the models of every earlier reviewer: each is skipped, in any
+// case, and a chain of only those models is exhausted.
+func TestResolveAvoidSeveral(t *testing.T) {
+	model := func(id, provider, name string) instances.Model {
+		return instances.Model{ID: id, Name: "n-" + id, Key: "key-" + id, TeamsMayUse: true,
+			LLM: config.LLM{Provider: provider, Model: name}}
+	}
+	in := input(store.ScopeGlobal, g("a"), g("b"), g("c"))
+	in.Entries[g("a")] = model("a", "OpenAI", "GPT-5")
+	in.Entries[g("b")] = model("b", "anthropic", "Claude")
+	in.Entries[g("c")] = model("c", "alibaba", "qwen")
+	in.Avoid = []SameModel{{Provider: "openai", Model: "gpt-5"}, {Provider: "ANTHROPIC", Model: "claude"}}
+	d := Resolve(in)
+	if d.Ref != g("c") || d.Position != 3 || d.FirstSkip != ReasonSameModel {
+		t.Fatalf("decision = %+v", d)
+	}
+	if len(d.Skips) != 2 || d.Skips[0].Reason != ReasonSameModel || d.Skips[1].Reason != ReasonSameModel {
+		t.Fatalf("skips = %+v", d.Skips)
+	}
+	for _, ref := range []store.EntryRef{g("a"), g("b")} {
+		if got := EntryReason(in, ref); got != ReasonSameModel {
+			t.Errorf("EntryReason(%v) = %q", ref, got)
+		}
+	}
+
+	only := in
+	only.Refs = []store.EntryRef{g("a"), g("b")}
+	d = Resolve(only)
+	if !d.Exhausted || d.Hold || d.Wait || d.Runs() || len(d.Skips) != 2 {
+		t.Fatalf("only avoided models: decision = %+v", d)
+	}
+	want := "all models exhausted: n-a (the model another reviewer runs on), n-b (the model another reviewer runs on)"
+	if got := FailureText(d); got != want {
+		t.Errorf("failure text = %q", got)
 	}
 }
