@@ -5949,11 +5949,12 @@ components:
         since: {type: string, format: date-time}
         reason:
           type: string
-          enum: [untrusted_author, trust_check_failed, quota_used_up]
+          enum: [untrusted_author, trust_check_failed, quota_used_up, limit_used_up]
           description: |
             Why the review waits: the author is not trusted, the author's
             access could not be read, or the monthly token quota is used up (an
-            admin starts it).
+            admin starts it). `limit_used_up` is that hold when a model limit or
+            a team limit took part.
     PutCommentFooterRequest:
       type: object
       required: [note]
@@ -6696,8 +6697,8 @@ components:
           description: The team of a team entry; empty for a global one.
         state:
           type: string
-          enum: [ready, exhausted, key_rejected, removed, not_allowed, not_owner, key_unusable]
-          description: What a review does with the entry now. `exhausted` is a quota or billing mark, `key_rejected` an auth mark. A 1-entry chain ignores marks, so its entry reads `ready` with `class` set.
+          enum: [ready, exhausted, key_rejected, removed, not_allowed, not_owner, key_unusable, model_limit, team_limit]
+          description: What a review does with the entry now. `exhausted` is a quota or billing mark, `key_rejected` an auth mark. A 1-entry chain ignores marks, so its entry reads `ready` with `class` set. `model_limit` and `team_limit` mean its model limit, or the owner team's limit on it, is used up this month (a repository's chain only).
         class:
           type: string
           enum: ['', quota, billing, auth]

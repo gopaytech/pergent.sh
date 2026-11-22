@@ -581,7 +581,8 @@ type QuotaUseView struct {
 // WaitingView is a change of an author the repository doesn't trust, not
 // reviewed until someone starts it, or a change the monthly token quota holds.
 // Reason is "untrusted_author", "trust_check_failed" (the author's access
-// couldn't be read) or "quota_used_up" (only an admin starts it).
+// couldn't be read), "quota_used_up" (only an admin starts it) or
+// "limit_used_up" (held like "quota_used_up"; a limit took part).
 type WaitingView struct {
 	Number int64 `json:"number"`
 	// Head is the commit that waits; Start review sends it back, and a
@@ -1572,7 +1573,8 @@ type ChainView struct {
 // resolver does with it now: "ready", "exhausted" (a quota or billing mark),
 // "key_rejected" (an auth mark), "removed", "not_allowed" (a global entry
 // teams may not use), "not_owner" (a team entry of a team that doesn't own
-// the repository) or "key_unusable". Class and Until are its mark's, "" and
+// the repository), "key_unusable", "model_limit" (its model limit is used up
+// this month) or "team_limit" (the owner team's limit on it is). Class and Until are its mark's, "" and
 // null with none; CanClear is whether the session may clear it. Fixed is set
 // on the config file's entries, which stay at the front of the global chain.
 // Never a base URL or a key.

@@ -430,3 +430,11 @@ func TestStartAtTeamOwnLimit(t *testing.T) {
 		t.Errorf("runs = %+v; want the change still waiting", rows)
 	}
 }
+
+// A run a limit holds reads as one the quota holds in the runs lists.
+func TestJudgeLimitWaiting(t *testing.T) {
+	got := judge(store.RunDigest{Outcome: OutcomeWaiting, State: store.Waiting, SkipReason: store.WaitLimit})
+	if got.outcome != OutcomeWaiting || got.reason != reasonQuotaUsedUp || got.status != "" {
+		t.Errorf("judge = %+v; want waiting / %q", got, reasonQuotaUsedUp)
+	}
+}
