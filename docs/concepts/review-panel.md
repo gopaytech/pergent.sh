@@ -1,6 +1,6 @@
 # Review panel (experimental)
 
-**Status: experimental, off by default.** A repository with no chain B in effect reviews as before, byte for byte. This release accepts no review image for a panel yet, the default pergent v0.11.0 included (see [The image check](#the-image-check)), so nothing changes until a later release turns panels on.
+**Status: experimental, off by default.** A repository with no chain B in effect reviews as before, byte for byte. A panel needs pergent v0.11.0 or newer as `jobs.image` (see [The image check](#the-image-check)). That is the default image. Chain B is empty by default, so nothing changes until someone saves one.
 
 A review panel runs each review on two model chains and puts the two results together. Chain A is the [model chain](models.md) you know. Chain B is the second chain.
 
@@ -76,7 +76,7 @@ Chain B is a list of models, like chain A. Its first entry is the second model o
 
 ## The image check
 
-Saving a chain B with entries needs a review image that supports a review panel. pergent.sh knows the first pergent version that does (`PanelMinVersion`). It is unset in this build, so no image supports a panel yet: every save is refused with `no review image supports a review panel yet`, and a chain B that is already stored makes no panel (`panel off: the review image does not support it`). Nothing changes until a release sets it. Clearing a chain B, `off` and **Inherit** need no check.
+Saving a chain B with entries needs a review image that supports a review panel. The first pergent version that does is v0.11.0 (`PanelMinVersion`). The default `jobs.image` is v0.11.0, so a default install passes. An image with an older tag, no tag or a tag that is not a version is refused: the save fails with `chain B needs a review image with pergent v0.11.0 or later`, and a chain B that is already stored makes no panel (`panel off: the review image does not support it`). A build that sets `PanelMinVersion` empty refuses every image with `no review image supports a review panel yet`. Clearing a chain B, `off` and **Inherit** need no check.
 
 ## What you see
 

@@ -179,8 +179,9 @@ func TestDispatchJobUnchanged(t *testing.T) {
 // panelFloor sets the first pergent with a review panel for the test.
 func panelFloor(t *testing.T, v string) {
 	t.Helper()
+	old := config.PanelMinVersion
 	config.PanelMinVersion = v
-	t.Cleanup(func() { config.PanelMinVersion = "" })
+	t.Cleanup(func() { config.PanelMinVersion = old })
 }
 
 // saveChainB stores chain B c. A panel needs pergent.sh's own image for its
