@@ -1406,10 +1406,10 @@ func validInstanceTrust(m string) bool {
 	return m == "" || m == TrustFollowVisibility || m == TrustOn || m == TrustOff
 }
 
-// PanelMinVersion is the first pergent release with `agent --panel`, as
-// "vX.Y.Z". v0.11.0 is the first release that has it, and it is the default
-// jobs.image. A build that sets it to "" refuses every image.
-var PanelMinVersion = "v0.11.0"
+// PanelMinVersion is the first pergent release a review panel accepts, as
+// "vX.Y.Z". Empty refuses every image. It is empty because review panels stay
+// off until multi review replaces them.
+var PanelMinVersion = ""
 
 // ImageTag is the tag of an image reference, or "" when it has none. A digest
 // after the tag is ignored; a colon before the last slash is a registry port,
