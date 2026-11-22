@@ -72,7 +72,8 @@ describe("Repositories", () => {
     const [post] = fake.find("POST", "/api/repositories");
     expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
     expect(post.body).toEqual({ project: "acme/payments", instance: "main" });
-    expect(await screen.findByTestId("location")).toHaveTextContent("/repos/main/acme/payments");
+    // The page moves after the POST answers; wait for it, as findBy stops at the first match.
+    await vi.waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/repos/main/acme/payments"));
   });
 
   it("says what to do when the repository can't be reached any more", async () => {
