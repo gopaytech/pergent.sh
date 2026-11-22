@@ -1249,6 +1249,9 @@ describe("RepositoryDetail while paused, and Remove", () => {
     "GET /api/repositories/main/acme/tools": { body: tools },
     "GET /api/repositories/main/acme/tools/inputs": { body: noInputs },
     "GET /api/reviews?project=acme%2Ftools&days=90": { body: { items: [], nextCursor: "" } },
+    "GET /api/repositories/main/acme/tools/teams": { body: repoTeams },
+    "GET /api/repositories/main/acme/tools/chain": { body: chainRepoInherit },
+    "GET /api/repositories/main/acme/tools/panel-chain": { body: panelRepoInherit },
   };
   const waitingChange = {
     number: 5,
@@ -1278,6 +1281,38 @@ describe("RepositoryDetail while paused, and Remove", () => {
     expect(screen.queryByRole("button", { name: /Start review/ })).not.toBeInTheDocument();
   });
 
+  // removeCard waits for the Settings tab's Remove repository card and checks
+  // it is the tab's last card.
+  const removeCard = async () => {
+    const card = await screen.findByRole("region", { name: "Remove repository" });
+    const cards = screen.getByRole("tabpanel").querySelectorAll("section.card");
+    expect(cards[cards.length - 1]).toBe(card);
+    return card;
+  };
+
+  it("has no Remove on the Reviews tab", async () => {
+    renderAt("/repos/main/acme/tools", pausedRoutes);
+    expect(await screen.findByRole("tab", { name: "Reviews" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("button", { name: "Remove repository" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Remove repository" })).not.toBeInTheDocument();
+  });
+
+  it("puts Remove in the last card of the Settings tab of a paused repository", async () => {
+    renderAt("/repos/main/acme/tools?tab=settings", pausedRoutes);
+    const card = await removeCard();
+    expect(within(card).getByRole("heading", { name: "Remove repository" })).toBeInTheDocument();
+    expect(card).toHaveTextContent(
+      "Its settings and team links are deleted, and its webhook and clone credentials are removed. This cannot be undone.",
+    );
+    expect(within(card).getByRole("button", { name: "Remove repository" })).toBeEnabled();
+  });
+
+  it("puts Remove in the last card of the Settings tab of a running repository", async () => {
+    renderAt("/repos/main/acme/payments?tab=settings", base);
+    const card = await removeCard();
+    expect(within(card).getByRole("button", { name: "Remove repository" })).toBeInTheDocument();
+  });
+
   it("removes a repository after the confirm, and goes back to the list", async () => {
     const confirm = vi.fn(() => true);
     vi.stubGlobal("confirm", confirm);
@@ -1286,8 +1321,8 @@ describe("RepositoryDetail while paused, and Remove", () => {
       "DELETE /api/repositories/main/acme/tools": { body: { ...tools, repo: { ...repoToolsPaused, paused: false } } },
       "GET /api/repositories": { body: [] },
     });
-    renderApp("/repos/main/acme/tools");
-    await userEvent.click(await screen.findByRole("button", { name: "Remove repository" }));
+    renderApp("/repos/main/acme/tools?tab=settings");
+    await userEvent.click(within(await removeCard()).getByRole("button", { name: "Remove repository" }));
     expect(confirm).toHaveBeenCalledWith(
       "Remove acme/tools from pergent? Its settings and team links are deleted, and its webhook and clone credentials are removed. This can't be undone.",
     );
@@ -1298,20 +1333,26 @@ describe("RepositoryDetail while paused, and Remove", () => {
   it("sends nothing when the Remove confirm is cancelled", async () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
     const fake = fakeApi(pausedRoutes);
-    renderApp("/repos/main/acme/tools");
-    await userEvent.click(await screen.findByRole("button", { name: "Remove repository" }));
+    renderApp("/repos/main/acme/tools?tab=settings");
+    await userEvent.click(within(await removeCard()).getByRole("button", { name: "Remove repository" }));
     expect(fake.find("DELETE", "/api/repositories/main/acme/tools")).toHaveLength(0);
   });
 
   it("has no Remove for a config repository", async () => {
-    renderAt("/repos/main/acme/widgets", base);
-    expect(await screen.findByRole("heading", { name: "acme/widgets" })).toBeInTheDocument();
+    renderAt("/repos/main/acme/widgets?tab=settings", base);
+    expect(await screen.findByRole("region", { name: "Teams" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Remove repository" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove repository" })).not.toBeInTheDocument();
   });
 
-  it("has no Remove for a maintainer", async () => {
-    renderAt("/repos/main/acme/tools", { ...pausedRoutes, "GET /api/repositories/main/acme/tools": { body: repoDetail(repoToolsPaused, "maintainer") } });
-    expect(await screen.findByRole("heading", { name: "acme/tools" })).toBeInTheDocument();
+  it("has no Remove for a maintainer, on the Settings tab either", async () => {
+    renderAt("/repos/main/acme/tools?tab=settings", {
+      ...pausedRoutes,
+      "GET /api/repositories/main/acme/tools": { body: repoDetail(repoToolsPaused, "maintainer") },
+    });
+    expect(await screen.findByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("region", { name: "Model chain" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Remove repository" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove repository" })).not.toBeInTheDocument();
   });
 });

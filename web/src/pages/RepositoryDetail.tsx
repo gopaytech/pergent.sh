@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 
 import { api, isStatus, paths, safeHref, type InputsView, type PanelView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
 import { useWrite } from "../layout/write";
@@ -63,7 +63,6 @@ export default function RepositoryDetail() {
           </span>
         </div>
       )}
-      {view.role === "admin" && repo.source === "dashboard" && <Remove instance={repo.instance} project={repo.project} />}
       {view.role === "admin" && view.quota && (
         <div className="quota" role="group" aria-label="Token usage this month">
           <QuotaLine label="This repository" ariaLabel="Repository token quota" use={view.quota.repository} />
@@ -112,37 +111,6 @@ export default function RepositoryDetail() {
 
 // panelText is the panel line: on with the first entry of each chain, or off.
 const panelText = (p: PanelView) => (p.on ? `Panel: on (A: ${p.a ?? "none"}, B: ${p.b ?? "none"})` : "Panel: off");
-
-// Remove deletes a repository from pergent for good, after a confirm, and
-// goes back to the list. Pausing is the list's switch.
-function Remove({ instance, project }: { instance: string; project: string }) {
-  const client = useQueryClient();
-  const write = useWrite();
-  const navigate = useNavigate();
-  const remove = useMutation({
-    mutationFn: () => write<RepositoryDetailView>("DELETE", paths.apiRepo(instance, project)),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["repositories"] });
-      navigate("/repos");
-    },
-  });
-  const ask = () => {
-    if (
-      window.confirm(
-        `Remove ${project} from pergent? Its settings and team links are deleted, and its webhook and clone credentials are removed. This can't be undone.`,
-      )
-    )
-      remove.mutate();
-  };
-  return (
-    <div className="actions-row">
-      <button type="button" className="btn" disabled={remove.isPending} onClick={ask}>
-        Remove repository
-      </button>
-      {remove.isError && <ErrorBox error={remove.error} />}
-    </div>
-  );
-}
 
 // Waiting is the changes whose review waits for someone to start it: authors
 // the repository doesn't trust (a maintainer or an admin starts those) and
