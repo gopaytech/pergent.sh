@@ -1,5 +1,9 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+- **The dashboard no longer has a Code graph switch.** The code graph is experimental, so a repository turns it on with `PUT /api/repositories/{instance}/{project}/graph` only: [Code graph](concepts/code-graph.md). A repository that has it on keeps it on.
+
 ## Upgrading to 0.18.0
 
 **The default review image is pergent v0.11.0** (`jobs.image` `ghcr.io/gopaytech/pergent:v0.11.0`, was v0.10.0). It is the first pergent release that reads path rules, reports `provider_error` for a model fallback, gives the model CI results and uses the code graph. A config that sets its own `jobs.image` keeps the image it names, and gets none of these until it names v0.11.0 or newer.
