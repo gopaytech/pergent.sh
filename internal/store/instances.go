@@ -337,7 +337,7 @@ type RepoDefaults struct {
 	LinkedReposEnabled *bool
 	// RuleSets is the default rule-set list, for a repository whose own
 	// list is null; nil is none. BuiltInRules is the default Built-in rules
-	// switch (nil: on).
+	// switch (nil: off).
 	RuleSets     []string
 	BuiltInRules *bool
 }

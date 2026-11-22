@@ -44,6 +44,21 @@ func TestAPIReviewRules(t *testing.T) {
 	noGitLab(t, env)
 }
 
+// With no admin default, an API review gets no built-in rules: they are
+// opt-in.
+func TestAPIReviewBuiltInRulesOffByDefault(t *testing.T) {
+	a := newAPIE2E(t)
+	env := a.env
+	id := a.ask(t, "route:1", twoFiles())
+
+	dispatch(t, env)
+
+	if v, ok := jobVar(t, env, id, "PERGENT_NO_BUILT_IN_RULES"); !ok || v != "true" {
+		t.Errorf("PERGENT_NO_BUILT_IN_RULES = %q, %v; want \"true\" with nothing set", v, ok)
+	}
+	noGitLab(t, env)
+}
+
 func TestAPIReviewMissingDefaultSet(t *testing.T) {
 	a := newAPIE2E(t)
 	env := a.env

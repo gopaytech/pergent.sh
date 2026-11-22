@@ -4,6 +4,8 @@ Status: agreed with the owner on 2026-11-20, after a design session and two gril
 
 Amended on 2026-11-21, after the PR 1 plans, to say what PR 1 builds: the loader is the public package `rule/`, the migration is `0047`, API reviews use the admin defaults, the result has `files.rules`, the image joins the hash in PR 2, and a verification run whose rules can't be written keeps every finding. The owner decided the last four.
 
+Amended on 2026-11-22, for the pergent.sh release that ships them: **built-in rules are off by default in pergent.sh.** A repository opts in with **Built-in rules**, and an admin can turn them on for every repository. Team rules are unchanged. pergent PR 2 shipped 67 built-in rules, not the first 5. The owner decided both.
+
 ## Why
 
 A skill is a whole review: its own runs, its own verdict, its own `## Blocking` section. That is the right tool for "a security review of `api/**`", and the wrong tool for "when you review a Go file, also check for typed nil in interfaces". To get language depth today, a team must either grow one skill into a long list for every language, or add one skill per language, which adds a full review and a verdict per language.
@@ -14,7 +16,7 @@ A **rule** is the missing piece: a checklist for a kind of file, added to the re
 
 ## Goals
 
-- Deeper reviews by default: built-in checklists for common file types, used by every skill unless it opts out.
+- Deeper reviews when a repository asks for them: built-in checklists for common file types, which a repository turns on, used by every skill unless it opts out.
 - A team can add its own checks per path, in the repository or in the dashboard, without writing a skill.
 - A run gets only the rules for the files in its own batch.
 - It is always visible which rule reviewed which file.
@@ -52,8 +54,8 @@ These are the owner's.
 | Several rules match one file | The first match wins. Order: repository, then dashboard, then built-in. |
 | Which skills get rules | Every skill, unless its frontmatter says `rules: false`. Opt-out, because a fresh pergent.sh library is empty and no existing library skill would carry an opt-in field. |
 | Can a rule say what blocks | No. Rules are checks only. |
-| Built-ins after an upgrade | On. A per-repository setting `built_in_rules` and the CLI flag `--no-built-in-rules` turn them off. |
-| Where built-in texts come from | Adapted from OCR's Apache-2.0 rule docs. First 5: Go, TS/JS, Python, Terraform, GitHub workflows. |
+| Built-ins after an upgrade | Off in pergent.sh (amended 2026-11-22; first agreed as on). A repository turns them on with the setting `built_in_rules` (**Built-in rules**), or an admin for every repository with the default. A repository that sets nothing at any level gets none. The pergent CLI keeps them on unless `--no-built-in-rules`. |
+| Where built-in texts come from | Adapted from OCR's Apache-2.0 rule docs. 67 file types (the first plan named 5: Go, TS/JS, Python, Terraform, GitHub workflows). |
 | Where matching happens | In the pergent CLI, per batch. pergent.sh builds the rule list and passes it in. |
 | Can a repository override dashboard rules | Yes. The repository is first. Admins who need enforcement use a skill. |
 | A rule that hides a built-in | Allowed, with a note in the rule-set editor. |
@@ -102,7 +104,7 @@ Layer 3 is left out when built-ins are off. A file that matches nothing, or matc
 They live in pergent, `rule/builtin/`, embedded with `go:embed`:
 
 - `builtin.yaml`: the ordered glob to file map, in the same format as the rule file, with `rule_file:` in place of `rule:`.
-- One `.md` per rule: `go.md`, `ts_js.md`, `python.md`, `terraform.md`, `github_workflows.md`.
+- One `.md` per rule, 67 in all, such as `go.md`, `ts_js.md`, `python.md`, `terraform.md` and `github_workflows.md`.
 - `LICENSE` (Apache-2.0) and `NOTICE` with OCR's copyright line and "adapted for pergent". Each `.md` starts with a one-line comment that names its source file. The README's license section says this folder is Apache-2.0 and the rest is MIT.
 
 Adapting a text means: OCR's tool names (`file_read`, `code_search`, `file_find`) become opencode's (`read`, `grep`, `glob`), every sentence that says what is blocking is removed, and items that `go vet`, a compiler or a formatter already catch stay out, as OCR's own Go text asks. A test fails if a built-in text contains the word "blocking".
@@ -185,7 +187,7 @@ In `engine/dispatch.go`, next to `inputs.ResolveSkills`:
 
 1. Read `.pergent/rules.yaml` at the same ref as the repository skills (`mr.StartSHA`, the target side). A missing file is fine. A malformed one fails the run with `<path>: <problem>`, and the repository shows under "Needs attention".
 2. Append the entries of each rule set the repository uses, in order. A named set that is not in the library fails the run, as a missing library skill does.
-3. Put the list in the Job's inputs as a file and point `PERGENT_RULES` at it. It counts in the inputs size limit (`inputs.go`). Set `PERGENT_NO_BUILT_IN_RULES=true` when the setting is off. Both are environment variables, not flags, so an older image ignores them, as with `PERGENT_GRAPH` (`internal/kube/job.go`).
+3. Put the list in the Job's inputs as a file and point `PERGENT_RULES` at it. It counts in the inputs size limit (`inputs.go`). Set `PERGENT_NO_BUILT_IN_RULES=true` when the setting is off, which it is when nothing sets it. Both are environment variables, not flags, so an older image ignores them, as with `PERGENT_GRAPH` (`internal/kube/job.go`).
 4. Compute the hash over the list and the built-in switch, and store it on the run. In PR 2 the configured `jobs.image` joins the hash, because the built-in texts then ship inside the image and a new image can change them. PR 1 has no built-in text, so the image stays out of it.
 
 Review API runs read no repository file: they have no repository ref, their files come from the client and they call no forge. They get the admin default rule-set list and the default built-in switch, and store the hash as above.
@@ -205,16 +207,16 @@ If `rules_hash` differs from the last review's, every skill with rules on is rev
 
 ### Docs
 
-- `docs/concepts/rules.md`: what a rule is, the file format, the order, the built-ins and how to turn them off.
+- `docs/concepts/rules.md`: what a rule is, the file format, the order, the built-ins and how to turn them on.
 - `docs/concepts/skills.md`: the `rules` frontmatter field.
-- `docs/upgrading.md`, under `## Unreleased`, in the built-ins PR: `Every skill now gets built-in rules for Go, TS/JS, Python, Terraform and GitHub workflows. Turn them off per repository with Built-in rules, or per skill with rules: false.`
+- `docs/upgrading.md`, under `## Unreleased`, in the built-ins PR: pergent ships built-in rules for 67 file types. They are off by default: a repository turns them on with **Built-in rules**, and a skill with `rules: false` gets none.
 
 ## Rollout
 
 | PR | pergent | pergent.sh |
 |---|---|---|
 | 1 | `rule/` (public), `--rules`, `--no-built-in-rules`, the `rules` frontmatter field, batch and verification attachments, the result field, an empty built-in list | Rule sets, settings, dispatch, the hash, the dashboard, docs except the upgrade note |
-| 2 | The 5 built-in texts, `LICENSE`, `NOTICE` | The Built-in tab content and the upgrade note |
+| 2 | The 67 built-in texts, `LICENSE`, `NOTICE` | The Built-in tab content and the upgrade note |
 
 PR 2 merges only after the quality harness runs the same changes with built-ins on and off and shows more confirmed bugs, no higher false-positive rate, and the token cost per review.
 

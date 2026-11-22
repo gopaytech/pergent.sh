@@ -918,7 +918,7 @@ function Form({
         <Setting
           name="Built-in rules"
           overridden={settings.builtInRules?.overridden ?? false}
-          help="pergent's own path rules, after the repository's and the rule sets'."
+          help="pergent's own path rules, after the repository's and the rule sets'. Off by default: turn it on to use them."
         >
           <Switch label="Built-in rules" checked={d.builtInRules} disabled={disabled} onChange={(v) => set("builtInRules", v)} />
         </Setting>

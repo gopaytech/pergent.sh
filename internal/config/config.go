@@ -268,7 +268,7 @@ type Repository struct {
 	Skills, RepoSkills []string
 	// RuleSets names the rule sets the repository uses, in match order (nil:
 	// the default list). BuiltInRules is the Built-in rules switch (nil: the
-	// default).
+	// default, off).
 	RuleSets      []string
 	BuiltInRules  *bool
 	FailureStatus FailureStatus

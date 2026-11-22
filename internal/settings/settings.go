@@ -118,7 +118,7 @@ type Effective struct {
 	// order; nil means the default list.
 	RuleSets []string
 	// BuiltInRules is whether pergent's built-in path rules come after the
-	// repository's and the sets'. The default is true.
+	// repository's and the sets'. The default is false: a repository opts in.
 	BuiltInRules bool
 	JobTimeout   time.Duration
 	// MaxTurns is the step limit of each opencode run, from
@@ -331,7 +331,6 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		CommandsAuthorAndMaintainersOnly: true,
 		IncrementalReviews:               true,
 		LearnFromDismissals:              true,
-		BuiltInRules:                     true,
 		JobTimeout:                       r.Config.Jobs.Timeout,
 		MaxTurns:                         r.Config.Jobs.MaxTurns,
 		JobMemory:                        r.jobsMemory(r.Config.Jobs.Resources.Limits),

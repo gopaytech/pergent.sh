@@ -165,6 +165,40 @@ func TestDispatchBuiltInSwitch(t *testing.T) {
 	}
 }
 
+// Built-in rules are opt-in: a repository that sets nothing runs with
+// PERGENT_NO_BUILT_IN_RULES, one that turns them on runs without it, and the
+// rules hash records the switch, so flipping it gives one full review.
+func TestDispatchBuiltInRulesOptIn(t *testing.T) {
+	on, off := true, false
+	for _, c := range []struct {
+		name   string
+		set    *bool
+		noVar  bool
+		inHash bool
+	}{
+		{"unset is off", nil, true, false},
+		{"on is on", &on, false, true},
+		{"off is off", &off, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.Engine.Config.Repositories[0].BuiltInRules = c.set
+			id, _ := queue(env)
+
+			dispatch(t, env)
+
+			v, ok := jobVar(t, env, id, "PERGENT_NO_BUILT_IN_RULES")
+			if got := ok && v == "true"; got != c.noVar || (ok && v != "true") {
+				t.Errorf("PERGENT_NO_BUILT_IN_RULES = %q, %v; want it set: %v", v, ok, c.noVar)
+			}
+			r := env.Run(id)
+			if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(nil, c.inHash, testImage) {
+				t.Errorf("rules_hash = %q, want the hash with built-in %v", deref(r.RulesHash), c.inHash)
+			}
+		})
+	}
+}
+
 func TestDispatchRulesHashStored(t *testing.T) {
 	env := newTestEnv(t)
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
@@ -174,8 +208,8 @@ func TestDispatchRulesHashStored(t *testing.T) {
 
 	list, _ := rule.Load([]byte(repoRulesYAML), rule.SourceRepo)
 	r := env.Run(id)
-	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, true, testImage) {
-		t.Errorf("rules_hash = %v, want the hash of the list with built-ins on and the Jobs image", r.RulesHash)
+	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, false, testImage) {
+		t.Errorf("rules_hash = %v, want the hash of the list with built-ins off (the default) and the Jobs image", r.RulesHash)
 	}
 }
 
@@ -191,7 +225,7 @@ func TestDispatchRulesHashHasTheImage(t *testing.T) {
 
 	list, _ := rule.Load([]byte(repoRulesYAML), rule.SourceRepo)
 	r := env.Run(id)
-	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, true, "ghcr.io/gopaytech/pergent:v9.9.9") {
+	if r.RulesHash == nil || *r.RulesHash != inputs.RulesHash(list, false, "ghcr.io/gopaytech/pergent:v9.9.9") {
 		t.Errorf("rules_hash = %v, want the hash with the configured Jobs image", r.RulesHash)
 	}
 }

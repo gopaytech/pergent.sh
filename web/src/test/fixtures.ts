@@ -345,7 +345,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     // Only an admin is sent the quota.
     ...(role === "admin" ? { monthlyTokenQuota: { value: null, overridden: false } } : {}),
     ruleSets: { value: null, overridden: false },
-    builtInRules: { value: true, overridden: false },
+    builtInRules: { value: false, overridden: false },
   },
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
   waiting: [],
@@ -552,7 +552,7 @@ export const defaults: DefaultsView = {
   rerunLimitPerRepo: 50,
   skills: ["code-review"],
   ruleSets: [],
-  builtInRules: true,
+  builtInRules: false,
   // The config gives what is in effect, and nothing is saved here.
   config: {
     approve: true,
@@ -570,7 +570,7 @@ export const defaults: DefaultsView = {
     jobMemory: "",
     rerunLimitPerMR: 10,
     rerunLimitPerRepo: 50,
-    builtInRules: true,
+    builtInRules: false,
   },
   pinned: {},
 };

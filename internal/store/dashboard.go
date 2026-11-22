@@ -78,7 +78,7 @@ type DashboardRepo struct {
 	LinkedRepos []Link
 	// RuleSets names the library rule sets the repository uses, in match
 	// order (nil: the default list). BuiltInRules is the Built-in rules
-	// switch (nil: the default, on).
+	// switch (nil: the default, off).
 	RuleSets     []string
 	BuiltInRules *bool
 	// TrustedAuthorsOnly is "on" or "off" (nil: the instance's setting).

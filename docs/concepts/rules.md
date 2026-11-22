@@ -31,13 +31,15 @@ For each changed file in a skill's batch, pergent walks one ordered list and tak
 
 1. The repository's `.pergent/rules.yaml`, in file order. It is read from the **target branch**, the same commit as the repository's skills, so a change cannot edit its own rules.
 2. The entries of each rule set the repository uses, set by set in the repository's order.
-3. pergent's built-in rules, unless **Built-in rules** is off.
+3. pergent's built-in rules, only when **Built-in rules** is on. It is off by default.
 
 A file that matches nothing, or matches an `off` entry, gets no rule. The skill still reviews it with its own text.
 
 ## Built-in rules
 
 pergent ships built-in rules for 67 file types, adapted from [alibaba/open-code-review](https://github.com/alibaba/open-code-review) (Apache-2.0). They cover common languages, config files, schemas and templates. pergent's [Path rules](https://github.com/gopaytech/pergent/blob/master/docs/concepts/rules.md) page says which file types they cover, the order they match in and what was changed from open-code-review. The texts are in pergent's `rule/builtin/` folder. An entry of the repository or of a rule set for the same file wins over a built-in.
+
+**Built-in rules are opt-in.** A repository gets them only when **Built-in rules** is on: on the repository's **Settings**, in `repositories[].built_in_rules: true`, or as the default for every repository on the admin **Settings** page. A repository that sets nothing at any of these levels gets none, and its Job runs with `PERGENT_NO_BUILT_IN_RULES=true`. The repository's own `.pergent/rules.yaml` and its rule sets do not depend on this switch.
 
 - **A review uses the built-in rules of the pergent in `jobs.image`**, because the review Job runs that pergent. The default `jobs.image`, pergent v0.10.0, reads no rules at all. Until `jobs.image` is a pergent release with rule support, a review gets no rule, built-in or from a team. The release notes name the first pergent release with it.
 - The **Built-in** tab of the **Rules** page shows one row per rule: its name, its globs in match order and its text. It shows the rules of the pergent version this pergent.sh is built with. That can differ from the one in `jobs.image`. Copy a text from it into a rule set to change it.
@@ -57,7 +59,7 @@ Rule sets are on the **Rules** page. Everyone signed in reads them; admins creat
 | Setting | Where | Default |
 |---|---|---|
 | **Rule sets used for this repository** | A repository's **Settings**, or `repositories[].rule_sets` | The default list: **Default rule sets** on the admin **Settings** page |
-| **Built-in rules** | A repository's **Settings**, the default on the admin **Settings** page, or `repositories[].built_in_rules` | On |
+| **Built-in rules** | A repository's **Settings**, the default on the admin **Settings** page, or `repositories[].built_in_rules` | Off |
 
 A skill with `rules: false` in its frontmatter gets no rules in any run ([Skills and instructions](skills.md)).
 
