@@ -18,6 +18,16 @@ A Job **cannot** see: the review bot token, the approve bot token, the GitHub Ap
 
 Each Job's Secret and inputs ConfigMap are owned by the Job, so deleting the Job removes them. Finished Jobs are removed after an hour.
 
+**A review panel's Jobs** ([Review panel](review-panel.md)) are locked down as a review Job is, with fewer keys:
+
+| Job | Keys in its Secret |
+| --- | --- |
+| Member A, member B | One: the key of its own entry. |
+| Job P (merge) | At most 2: the key of each judge entry. None when it runs with no judge (the token quota stopped the cross-check). |
+
+- Members hold no key of the other member and no token that can write. They post only their result, with their own one-time token.
+- Job P has an extra init container, `panel-inputs` (pergent.sh's own image). It gets only the run's result token, and downloads both members' results to a volume outside the checkout.
+
 **A skill fetch Job** reads the skills of a public `https` URL an admin gives in the dashboard, so the pergent.sh pod never fetches an address an admin typed. It runs in the Jobs namespace under the same NetworkPolicy, for at most 2 minutes (its image pull and its limits, 512Mi of memory for the clone and 1Gi of scratch space, count against them), as user 65532 with a read-only root filesystem and no service account token. Its `clone` container (the `jobs.image`) gets no token of any kind: it fetches the one branch or tag at depth 1 with hooks off and https only. Its `send` container (pergent.sh's own image, which the chart passes as `PERGENT_SH_IMAGE`) reads the skills of the folder without following any symbolic link (one where a skill would be is listed as a problem) and posts them to `<callback_url>/skill-fetches/<id>/result` with a one-time token, its only secret. pergent.sh then drops the text of any skill holding a secret it holds or over 128 KiB. A URL outside `jobEgress.cidrs` can't be reached; the fetch then fails with `could not fetch <url> at <ref>; the URL, branch or tag may be wrong, or outside jobEgress.cidrs`.
 
 **A readiness scan Job** reads one repository's default branch for the [readiness scan](dashboard.md#readiness-scan). It is named `pergent-scan-<12hex>`, runs in the Jobs namespace as user 65532 with a read-only root filesystem and no service account token, and carries `app.kubernetes.io/managed-by: pergent-sh`, so the NetworkPolicy above applies to it. It has a 5 minute deadline, a 2Gi `emptyDir` for the clone, and asks for 100m CPU and 128Mi with a 512Mi memory limit. Its `clone` container (the `jobs.image`) gets only the read-only clone token, as a review's does (the GitLab deploy token, or a GitHub installation token for this one repository with `contents: read`), and fetches the one commit at depth 1 over https only, with hooks off. Its `scan` container (pergent.sh's own image, `PERGENT_SH_IMAGE`) gets only its one-time result token, as an environment variable, and its input as a read-only file: the library skills' names and `paths` and `exclude` globs, never their text. It follows no symbolic link and posts to `<callback_url>/readiness-scans/<id>/result`. The Job has **no LLM key and no token that can write**, and the clone never sees the result token.

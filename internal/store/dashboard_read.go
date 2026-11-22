@@ -112,14 +112,14 @@ func visibleCond(v Visibility, n int) (string, []any) {
 // "unknown": nothing is guessed. A skipped run (no skills) has its own
 // outcome, "skipped": it was not reviewed, and it is neither running,
 // failed nor superseded. A run dropped for the next entry of its chain is
-// "fell_back".
+// "fell_back". A panel waiting for its members is running.
 const outcomeSQL = `(CASE r.state
 	WHEN 'queued' THEN 'running'
 	WHEN 'running' THEN 'running'
 	WHEN 'reported' THEN CASE WHEN r.failure_reason <> '' THEN 'failed' ELSE 'running' END
 	WHEN 'superseded' THEN CASE WHEN r.outcome = 'fell_back' THEN 'fell_back' ELSE 'superseded' END
 	WHEN 'skipped' THEN 'skipped'
-	WHEN 'waiting' THEN 'waiting'
+	WHEN 'waiting' THEN CASE WHEN r.skip_reason = 'panel_members' THEN 'running' ELSE 'waiting' END
 	WHEN 'publish_failed' THEN 'failed'
 	ELSE COALESCE(NULLIF(r.outcome, ''), 'unknown') END)`
 
@@ -159,7 +159,8 @@ func reviewDigestsSQL(visible string) string {
 }
 
 // runStatsSQL counts the runs started since $1 that were reviewed or are
-// being (not superseded, skipped or waiting for a start), per project, by outcome, through
+// being (not superseded, skipped or waiting for a start; a panel waiting for
+// its members is being reviewed), per project, by outcome, through
 // runs_project_created_idx; visible is from visibleCond with n = 2.
 func runStatsSQL(visible string) string {
 	return `SELECT r.instance, lower(r.project_path), count(*),
@@ -167,7 +168,8 @@ func runStatsSQL(visible string) string {
 		count(*) FILTER (WHERE ` + outcomeSQL + ` = 'blocking'),
 		count(*) FILTER (WHERE ` + outcomeSQL + ` = 'failed')
 	FROM runs r
-	WHERE r.created_at >= $1 AND r.state NOT IN ('superseded', 'skipped', 'waiting')` + visible + `
+	WHERE r.created_at >= $1
+	  AND (r.state NOT IN ('superseded', 'skipped', 'waiting') OR (r.state = 'waiting' AND r.skip_reason = 'panel_members'))` + visible + `
 	GROUP BY r.instance, lower(r.project_path)`
 }
 
@@ -223,7 +225,8 @@ type RunCounts struct {
 }
 
 // RunStats counts the runs v lets be read started at or after since that
-// weren't superseded, skipped or waiting for a start, by project. Approved counts the runs the approve bot
+// weren't superseded, skipped or waiting for a start (a panel waiting for its
+// members counts), by project. Approved counts the runs the approve bot
 // approved, also when the approval was withdrawn later.
 func (s *Store) RunStats(ctx context.Context, v Visibility, since time.Time) (map[PathKey]RunCounts, error) {
 	out := map[PathKey]RunCounts{}

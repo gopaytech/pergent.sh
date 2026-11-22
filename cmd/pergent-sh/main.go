@@ -388,7 +388,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
-		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, CI: eng, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
+		Store: st, Panel: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, CI: eng, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
 		SkillFetches: fetchResults, ReadinessScans: scanResults, Graphs: graphs, ReviewAPI: api, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
@@ -423,6 +423,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	loops = append(loops, func(ctx context.Context) {
 		if n := tokenusage.Backfill(ctx, st, log); n > 0 {
 			log.Info("recorded the usage of earlier reviews", "runs", n)
+		}
+		if n := tokenusage.BackfillMembers(ctx, st, log); n > 0 {
+			log.Info("recorded the usage of earlier review panel members", "members", n)
 		}
 	})
 	if eng.Scans {

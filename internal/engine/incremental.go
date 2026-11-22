@@ -53,6 +53,13 @@ const (
 // changed files only for a push that can be incremental.
 func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settings.Effective, last store.Run, haveLast bool, in *inputs.Inputs) (map[string][]string, string, error) {
 	run := d.run
+	provider, model := d.provider, d.model
+	if d.keepsRun() {
+		// A panel's members and Job P carry what the review decided at its
+		// split, by the model its run recorded then (member A's): member B
+		// runs on another model by design.
+		provider, model = deref(run.Provider), deref(run.Model)
+	}
 	switch {
 	case !repo.IncrementalReviews:
 		return nil, fullSettingOff, nil
@@ -62,7 +69,7 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 		return nil, fullTarget, nil
 	case last.HeadSHA == run.HeadSHA:
 		return nil, fullSameHead, nil
-	case modelChanged(last, d.provider, d.model):
+	case modelChanged(last, provider, model):
 		// What the files carried over were reviewed by is not what reviews
 		// the rest, and the findings of one model are not the other's.
 		return nil, fullModelChanged, nil

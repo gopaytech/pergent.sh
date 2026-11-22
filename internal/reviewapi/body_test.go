@@ -279,6 +279,21 @@ func TestStatusOf(t *testing.T) {
 	}
 }
 
+// A panel review waiting for its members is running; a review held for
+// another reason is still queued.
+func TestAPIStatusPanelRunning(t *testing.T) {
+	for reason, want := range map[string]string{store.WaitPanel: StatusRunning, store.WaitQuota: StatusQueued, "": StatusQueued} {
+		r := apiReview(store.Waiting, "", "")
+		r.Run.SkipReason = reason
+		if got := StatusOf(r); got != want {
+			t.Errorf("status of a run waiting for %q = %q, want %q", reason, got, want)
+		}
+		if FailureOf(r) != nil {
+			t.Errorf("a run waiting for %q has a failure", reason)
+		}
+	}
+}
+
 func TestFailureOf(t *testing.T) {
 	failed := apiReview(store.Published, "job-1", "")
 	failed.Run.FailureStep, failed.Run.FailureReason = "review", "the review job ran out of memory (OOMKilled)"

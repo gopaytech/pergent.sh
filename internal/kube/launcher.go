@@ -237,6 +237,7 @@ func (l *Launcher) JobSecrets(ctx context.Context, jobName string) (Secrets, err
 	return Secrets{
 		GitToken:    string(sec.Data[keyGitToken]),
 		LLMKey:      string(sec.Data[keyLLMKey]),
+		LLMKeyB:     string(sec.Data[keyLLMKeyB]),
 		ResultToken: string(sec.Data[keyResultToken]),
 	}, nil
 }

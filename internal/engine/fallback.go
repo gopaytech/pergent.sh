@@ -39,40 +39,27 @@ func providerError(stored []byte) *result.ProviderError {
 // on an entry of a chain of at least 2 (a 1-entry chain never falls back),
 // and handled is true only then: the caller publishes the run otherwise. An
 // API review is marked but not retried, since its inputs are gone once its
-// Job has them; it is published as before.
+// Job has them; it is published as before (markOnly). A review panel's
+// merge (Job P) falls back by its judges instead (fallBackJudge); an API
+// review's Job P marks the judge entry and is published.
 func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) (handled bool, err error) {
-	if run.ModelEntryID == "" || run.ChainLength < 2 {
+	if pe := providerError(run.Result); pe != nil {
+		merge, err := e.isPanelMerge(ctx, run)
+		if err != nil {
+			return false, err
+		}
+		if merge {
+			return e.fallBackJudge(ctx, run, pe.Role, log)
+		}
+	}
+	m, ok := e.refusedMark(store.EntryRef{Source: run.ModelSource, ID: run.ModelEntryID}, run.ChainLength, run.Result)
+	if !ok {
 		return false, nil
 	}
-	pe := providerError(run.Result)
-	if pe == nil {
-		return false, nil
-	}
-	switch pe.Class {
-	case store.ClassQuota, store.ClassBilling, store.ClassAuth:
-	default:
-		// A plain rate limit, or a class this release doesn't know: as
-		// before, no fallback.
-		return false, nil
-	}
-	now := e.now()
-	m := store.Mark{Ref: store.EntryRef{Source: run.ModelSource, ID: run.ModelEntryID}, Class: pe.Class, SetAt: now}
-	if pe.Class != store.ClassAuth {
-		until := now.Add(e.Config.Fallback.Cooldown())
-		m.Until = &until
-	}
-	log = log.With("model_entry", run.ModelEntryID, "class", pe.Class)
+	log = log.With("model_entry", run.ModelEntryID, "class", m.Class)
 	if run.Kind != store.KindMR {
-		if err := e.Store.SetMark(ctx, m); err != nil {
-			return false, fmt.Errorf("mark the model entry: %w", err)
-		}
-		// The mark is set again on a publish retry (the same upsert); the
-		// audit entry is written on the first try only.
-		if run.PublishError == "" {
-			log.Warn("the provider refused the review's model entry; it is skipped until the mark ends")
-			e.auditMark(ctx, run, log)
-		}
-		return false, nil
+		// The audit entry is written on the first try only.
+		return false, e.markOnly(ctx, run, run.ModelEntryName, m, run.PublishError == "", log)
 	}
 	next, created, err := e.Store.EnqueueAttempt(ctx, run, m)
 	if err != nil {
@@ -85,7 +72,7 @@ func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) 
 		return true, nil
 	}
 	log.Warn("the provider refused the review's model entry; trying the next entry of its chain", "next_run", next)
-	e.auditMark(ctx, run, log)
+	e.auditMark(ctx, run, run.ModelEntryName, m.Class, log)
 	e.Wake()
 	root := run.ID
 	if run.AttemptOf != nil {
@@ -106,19 +93,120 @@ func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) 
 	return true, nil
 }
 
-// auditMark records the mark of run's entry: its name and class, never a
-// key. A failure is logged and changes nothing.
-func (e *Engine) auditMark(ctx context.Context, run store.Run, log *slog.Logger) {
+// isPanelMerge reports whether run is a review panel's merge (Job P): its
+// review has a member that is not off.
+func (e *Engine) isPanelMerge(ctx context.Context, run store.Run) (bool, error) {
+	ms, err := e.Store.PanelMembers(ctx, run.ID)
+	if err != nil {
+		return false, fmt.Errorf("read the review's panel members: %w", err)
+	}
+	for _, m := range ms {
+		if m.State != store.MemberOff {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// fallBackJudge moves the judge of role ("a" or "b") of Job P run to the
+// next entry of that role's chain when the provider refused its judge
+// entry, as fallBack does for a run: the entry is marked and audited, the
+// run closes as fell_back and the next attempt of P is queued, in one
+// transaction. That attempt picks the role's judge again (resolveMerge);
+// the members are not touched. It acts only on a role that judged with an
+// entry of a chain of at least 2. A provider error with no role is not a
+// judge's: the run is published as it is. When the role has no entry left,
+// the next attempt runs without that judge and pergent's merge keeps its
+// findings. Nothing is posted for the dropped attempt: the review's status
+// already says it runs. An API review's P only marks the entry (markOnly)
+// and is published.
+func (e *Engine) fallBackJudge(ctx context.Context, run store.Run, role string, log *slog.Logger) (handled bool, err error) {
+	if role == "" {
+		return false, nil
+	}
+	js, err := e.Store.PanelJudges(ctx, run.ID)
+	if err != nil {
+		return false, fmt.Errorf("read the review panel's judges: %w", err)
+	}
+	j, ok := js[role]
+	if !ok {
+		return false, nil
+	}
+	m, ok := e.refusedMark(store.EntryRef{Source: j.Source, ID: j.ID}, j.Length, run.Result)
+	if !ok {
+		return false, nil
+	}
+	log = log.With("role", role, "model_entry", j.ID, "class", m.Class)
+	if run.Kind != store.KindMR {
+		// An API review's P has no next attempt either.
+		return false, e.markOnly(ctx, run, j.Name, m, run.PublishError == "", log)
+	}
+	next, created, err := e.Store.EnqueueAttempt(ctx, run, m)
+	if err != nil {
+		return false, fmt.Errorf("queue the next attempt: %w", err)
+	}
+	if !created {
+		log.Info("not falling back: the run is no longer waiting to be published")
+		return true, nil
+	}
+	log.Warn("the provider refused the review panel's judge entry; the merge runs again on the next entry of its chain", "next_run", next)
+	e.auditMark(ctx, run, j.Name, m.Class, log)
+	e.Wake()
+	return true, nil
+}
+
+// markOnly marks the entry the provider refused, with no next attempt: the
+// rule of an API review, whose inputs are gone once its Job has them, and of
+// its panel's members and Job P. The mark is set again on a retry (the same
+// upsert); with audit the audit entry is written too.
+func (e *Engine) markOnly(ctx context.Context, run store.Run, entryName string, m store.Mark, audit bool, log *slog.Logger) error {
+	if err := e.Store.SetMark(ctx, m); err != nil {
+		return fmt.Errorf("mark the model entry: %w", err)
+	}
+	if audit {
+		log.Warn("the provider refused the review's model entry; it is skipped until the mark ends")
+		e.auditMark(ctx, run, entryName, m.Class, log)
+	}
+	return nil
+}
+
+// refusedMark is the mark of the entry ref when the stored result says the
+// provider refused it: out of quota or credit, or its key rejected. The mark
+// ends after the cooldown, or for auth when its key is edited. ok is false
+// when nothing falls back: no entry, a chain of 1 (it never falls back), no
+// provider_error, or a plain rate limit or a class this release doesn't
+// know. A review and a panel member decide it the same way.
+func (e *Engine) refusedMark(ref store.EntryRef, chainLength int, stored []byte) (m store.Mark, ok bool) {
+	if ref.ID == "" || chainLength < 2 {
+		return store.Mark{}, false
+	}
+	pe := providerError(stored)
+	if pe == nil {
+		return store.Mark{}, false
+	}
+	switch pe.Class {
+	case store.ClassQuota, store.ClassBilling, store.ClassAuth:
+	default:
+		return store.Mark{}, false
+	}
+	now := e.now()
+	m = store.Mark{Ref: ref, Class: pe.Class, SetAt: now}
+	if pe.Class != store.ClassAuth {
+		until := now.Add(e.Config.Fallback.Cooldown())
+		m.Until = &until
+	}
+	return m, true
+}
+
+// auditMark records the mark of an entry of run's review: the entry's name
+// and the class, never a key. A failure is logged and changes nothing.
+func (e *Engine) auditMark(ctx context.Context, run store.Run, entryName, class string, log *slog.Logger) {
 	actx, cancel := settle(ctx)
 	defer cancel()
-	var class string
-	if pe := providerError(run.Result); pe != nil {
-		class = pe.Class
-	}
 	if err := e.Store.Audit(actx, store.AuditEntry{
 		At: e.now(), Actor: fallbackActor, Action: "model_marked",
 		Instance: run.MR.Instance, Project: run.ProjectPath,
-		Detail: fmt.Sprintf("model=%s class=%s", run.ModelEntryName, class),
+		Detail: fmt.Sprintf("model=%s class=%s", entryName, class),
 	}); err != nil {
 		log.Error("recording an audit entry failed", "action", "model_marked", "error", e.redact(err.Error()))
 	}

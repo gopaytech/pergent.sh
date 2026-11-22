@@ -268,7 +268,7 @@ func TestClientListMonthCounts(t *testing.T) {
 
 	usage := func(id string, in, out int64) {
 		t.Helper()
-		if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{{Skill: "security", Verdict: "no_blocking_issues", In: in, Out: out}}); err != nil {
+		if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{{Skill: "security", Verdict: "no_blocking_issues", In: in, Out: out}}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -22,13 +22,26 @@ const (
 	ReasonNotOwner      = "not_owner"      // a team entry of a team that doesn't own the repository
 	ReasonKeyUnusable   = "key_unusable"   // no key, or it can't be opened
 	ReasonInstanceQuota = "instance_quota" // a global entry, and the instance's token quota is used up
+	ReasonSameModel     = "same_model"     // the model Avoid names: a panel's member A runs on it
 )
+
+// SameModel is a provider and a model. Two entries with the same ones are one
+// model, whatever their keys, and the case does not count.
+type SameModel struct{ Provider, Model string }
+
+// is reports whether m runs on this provider and model. The zero SameModel
+// is no model.
+func (s SameModel) is(m instances.Model) bool {
+	return s != SameModel{} && strings.EqualFold(s.Provider, m.LLM.Provider) && strings.EqualFold(s.Model, m.LLM.Model)
+}
 
 // Input is everything Resolve reads. Entries holds every entry known now,
 // with its key ("" when it has none or it can't be opened); a ref missing
 // from it is a removed entry. OwnerTeam is the team that owns the repository,
 // 0 for none. Tried is the entries earlier attempts of this review ran.
-// SavedByAdmin is whether an admin saved the chain (store.Chain's).
+// SavedByAdmin is whether an admin saved the chain (store.Chain's). Avoid
+// is a model no entry may run on (a panel's member B avoids member A's); the
+// zero value avoids none.
 type Input struct {
 	Scope               string // store.ScopeGlobal, ScopeTeam or ScopeRepo
 	Refs                []store.EntryRef
@@ -38,6 +51,7 @@ type Input struct {
 	Marks               map[store.EntryRef]store.Mark
 	Tried               map[store.EntryRef]bool
 	InstanceQuotaUsedUp bool
+	Avoid               SameModel
 	Now                 time.Time
 }
 
@@ -114,6 +128,8 @@ func skipReason(in Input, ref store.EntryRef, m instances.Model, known bool) str
 		return ReasonNotAllowed
 	case ref.Source == store.SourceTeam && (in.OwnerTeam == 0 || m.TeamID != in.OwnerTeam):
 		return ReasonNotOwner
+	case in.Avoid.is(m):
+		return ReasonSameModel
 	}
 	if mk, ok := in.Marks[ref]; ok && len(in.Refs) > 1 && live(mk, in.Now) {
 		return mk.Class
@@ -165,6 +181,7 @@ var reasonWords = map[string]string{
 	ReasonNotOwner:      "its team doesn't own this repository",
 	ReasonKeyUnusable:   "no usable key",
 	ReasonInstanceQuota: "instance token quota used up",
+	ReasonSameModel:     "the model the other review runs on",
 }
 
 // ReasonWords is reason as words.

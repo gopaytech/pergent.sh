@@ -319,7 +319,7 @@ paths:
         '200':
           description: The result was recorded (or dropped, for a superseded run). No body.
         '400':
-          description: The body could not be read, is not JSON, or is not a usable result. The run is recorded as failed.
+          description: The body could not be read (nothing is recorded), or it is not JSON or not a usable result (the run is recorded as failed).
           content:
             text/plain:
               schema: {type: string}
@@ -330,6 +330,73 @@ paths:
               schema: {type: string}
         '409':
           description: A result for this run was received already.
+          content:
+            text/plain:
+              schema: {type: string}
+        '413':
+          description: The body is over 11 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  /runs/{id}/members/{member}/result:
+    post:
+      operationId: postRunMemberResult
+      tags: [Job callbacks]
+      summary: Deliver a review panel member's result
+      description: |
+        A review panel member's Job posts its result here, with the
+        member's own one-time bearer token. The body and its checks are
+        those of `POST /runs/{id}/result`: pergent's result schema version 1,
+        for the run's `base` and `head`, with the skills the Job was started
+        with.
+
+        An unusable result makes **the member fail**, never the run, and is
+        answered 400. Nothing is posted to the merge request from here.
+
+        A member that is not the run's, an unknown member and a missing or
+        wrong token all get the same 401, so the answer never tells whether
+        a member exists. A 200 also answers a result for a member that was
+        superseded; the result is dropped.
+      x-pergent-access: none
+      security:
+        - runResultToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The review's first run's id.
+          schema:
+            type: string
+            format: uuid
+        - name: member
+          in: path
+          required: true
+          description: The panel member's id.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        description: The result. At most 11 MiB (pergent caps its own at 10 MB).
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/result.Result'}
+      responses:
+        '200':
+          description: The result was recorded (or dropped, for a superseded member). No body.
+        '400':
+          description: The body could not be read (nothing is recorded), or it is not JSON or not a usable result (the member is recorded as failed, never the run).
+          content:
+            text/plain:
+              schema: {type: string}
+        '401':
+          description: The bearer token is missing or not this member's, it expired, or the member is not this run's.
+          content:
+            text/plain:
+              schema: {type: string}
+        '409':
+          description: A result for this member was received already.
           content:
             text/plain:
               schema: {type: string}
@@ -1193,6 +1260,61 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404':
           description: No such run, or nothing was kept.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/runs/{id}/members/{member}/log:
+    get:
+      operationId: getRunMemberLog
+      tags: [Overview and reviews]
+      summary: The redacted tail of a review panel member's Job log
+      description: As `GET /api/runs/{id}/log`, with the same rights, for a member the run's `panel` lists.
+        A member of another review is not found.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/MemberId'
+      responses:
+        '200':
+          description: The log text.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LogView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: No such run or member of its panel, or no log was kept.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/runs/{id}/members/{member}/diagnostics:
+    get:
+      operationId: getRunMemberDiagnostics
+      tags: [Overview and reviews]
+      summary: What was kept of a failed review panel member's Job
+      description: As `GET /api/runs/{id}/diagnostics`, with the same rights, for a member the run's `panel`
+        lists. An admin of the run's repository gets the clone log as it was and the pod's state; anyone else
+        gets the masked clone log and no podState. A member of another review is not found.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/MemberId'
+      responses:
+        '200':
+          description: The diagnostics.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiagnosticsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: No such run or member of its panel, or nothing was kept.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ErrorBody'}
@@ -4870,6 +4992,14 @@ components:
       schema:
         type: string
         format: uuid
+    MemberId:
+      name: member
+      in: path
+      required: true
+      description: The id of a member attempt of the run's review panel, as its `panel` lists it.
+      schema:
+        type: string
+        format: uuid
     FetchId:
       name: id
       in: path
@@ -7409,6 +7539,103 @@ components:
           oneOf:
           - $ref: '#/components/schemas/KubernetesView'
           - type: 'null'
+        panel:
+          description: The review panel of a panel review. The key is left out for any other run, never null.
+          oneOf:
+          - $ref: '#/components/schemas/RunPanelView'
+          - type: 'null'
+    RunPanelView:
+      description: A review panel on its run's page. When it did not start, `off` says why and the lists are
+        empty. Otherwise its members, the entries Job P judged with on this run, and the tokens of each model
+        in the whole review (every member attempt and every Job P attempt), the same on each attempt's page.
+        The run's own tokens stay in `tokens`. Names are entry and model names, never a key.
+      type: object
+      required: [members, judges, cost]
+      properties:
+        'off':
+          type: string
+          description: Why the panel did not start, so the review ran on chain A alone. Left out when it started.
+        members:
+          type: array
+          items: {$ref: '#/components/schemas/PanelMemberView'}
+          description: Member a, then b, each that has an attempt.
+        judges:
+          type: array
+          items: {$ref: '#/components/schemas/PanelJudgeView'}
+          description: The roles that judged on this run, a then b.
+        cost:
+          type: array
+          items: {$ref: '#/components/schemas/ModelCostView'}
+          description: Members first (by role, then attempt), then each Job P attempt's merge by run and role.
+            The page adds them up for the review's total.
+    PanelMemberView:
+      description: Member A or B of a panel review.
+      type: object
+      required: [role, attempts]
+      properties:
+        role:
+          type: string
+          enum: [a, b]
+        attempts:
+          type: array
+          items: {$ref: '#/components/schemas/MemberAttemptView'}
+          description: Oldest first. A later attempt follows a provider's refusal of the one before (`fell_back`).
+    MemberAttemptView:
+      description: One attempt of a panel member. Entry, provider and model are empty before it was dispatched.
+      type: object
+      required: [id, entry, position, provider, model, state, failure, step]
+      properties:
+        id: {type: string, format: uuid}
+        entry: {type: string}
+        position:
+          type: integer
+          description: The entry's place in chain B (or chain A for member a), from 1.
+        provider: {type: string}
+        model: {type: string}
+        state:
+          type: string
+          enum: [queued, running, reported, done, failed, fell_back, superseded]
+        failure:
+          type: string
+          description: Why it failed; empty when it did not.
+        step:
+          type: string
+          description: The step it failed at; empty when none was recorded.
+    PanelJudgeView:
+      description: The entry and model one role of Job P judged with on this run.
+      type: object
+      required: [role, entry, provider, model]
+      properties:
+        role:
+          type: string
+          enum: [a, b]
+        entry: {type: string}
+        provider: {type: string}
+        model: {type: string}
+    ModelCostView:
+      description: The tokens one model used in the review.
+      type: object
+      required: [part, role, run, member, entry, provider, model, in, out]
+      properties:
+        part:
+          type: string
+          enum: [member, merge]
+          description: A member's review, or Job P's merge.
+        role:
+          type: string
+          enum: [a, b]
+        run:
+          type: string
+          format: uuid
+          description: The run the tokens count on, a run of `attempts` (the members' count on the run that was split).
+        member:
+          type: string
+          description: The member attempt of a member's tokens, as `members` lists it; empty for a merge.
+        entry: {type: string}
+        provider: {type: string}
+        model: {type: string}
+        in: {type: integer, format: int64}
+        out: {type: integer, format: int64}
     RunSummary:
       description: One run in a review's history.
       type: object

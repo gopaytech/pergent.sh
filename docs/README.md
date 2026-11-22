@@ -29,7 +29,7 @@
 | [Commands](concepts/commands.md) | `@<bot> review`, `review failed`, `dismiss` |
 | [How approval works](concepts/approval.md) | When pergent.sh approves, and when it takes it back |
 | [Models](concepts/models.md) | Global and team models, model chains, and the backup model when a key is out of quota or credit |
-| [Review panel (experimental)](concepts/review-panel.md) | Chain B, the second model chain (off by default; reviews do not use it yet) |
+| [Review panel (experimental)](concepts/review-panel.md) | A review run by 2 models and merged by a third Job (off by default; needs a chain B) |
 | [Usage](concepts/usage.md) | Where the model tokens go |
 | [Metrics](concepts/metrics.md) | Prometheus metrics |
 | [Skill results](concepts/skill-results.md) | What became of each skill's findings |

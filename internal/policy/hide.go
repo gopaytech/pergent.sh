@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -28,6 +29,41 @@ func HideModel(text, provider, model string, baseURLs ...string) string {
 		text = replaceWord(text, strings.TrimRight(u, "/"), "the provider")
 	}
 	return replaceWord(text, provider, "the provider")
+}
+
+// ModelRef is a provider and a model, for HideModels.
+type ModelRef struct{ Provider, Model string }
+
+// HideModels is HideModel for the several models of a review panel: every
+// "provider/model" first, then every model name, every base URL and every
+// provider, each kind longest first, so a name that starts a longer one
+// ("gpt-5" in "gpt-5-mini") never leaves it half replaced. A model with no
+// provider and no name hides nothing.
+func HideModels(text string, models []ModelRef, baseURLs []string) string {
+	var pairs, names, provs []string
+	for _, m := range models {
+		if m.Provider != "" && m.Model != "" {
+			pairs = append(pairs, m.Provider+"/"+m.Model)
+		}
+		names = append(names, m.Model)
+		provs = append(provs, m.Provider)
+	}
+	urls := make([]string, 0, len(baseURLs))
+	for _, u := range baseURLs {
+		urls = append(urls, strings.TrimRight(u, "/"))
+	}
+	for _, kind := range []struct {
+		names []string
+		with  string
+	}{{pairs, "the model"}, {names, "the model"}, {urls, "the provider"}, {provs, "the provider"}} {
+		// Longest first; equal lengths in a fixed order.
+		sorted := slices.Clone(kind.names)
+		slices.SortStableFunc(sorted, func(a, b string) int { return len(b) - len(a) })
+		for _, n := range slices.Compact(sorted) {
+			text = replaceWord(text, n, kind.with)
+		}
+	}
+	return text
 }
 
 // replaceWord is text with each occurrence of name, in any case, that no
