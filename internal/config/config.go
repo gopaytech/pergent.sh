@@ -1407,9 +1407,9 @@ func validInstanceTrust(m string) bool {
 }
 
 // PanelMinVersion is the first pergent release with `agent --panel`, as
-// "vX.Y.Z". "" (no release has it yet) refuses every image. The owner sets
-// it at release time, with defaultImage.
-var PanelMinVersion = ""
+// "vX.Y.Z". v0.11.0 is the first release that has it, and it is the default
+// jobs.image. A build that sets it to "" refuses every image.
+var PanelMinVersion = "v0.11.0"
 
 // ImageTag is the tag of an image reference, or "" when it has none. A digest
 // after the tag is ignored; a colon before the last slash is a registry port,

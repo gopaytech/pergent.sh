@@ -50,7 +50,8 @@ func newCommandsE2E(t *testing.T) *cmdE2E {
 	}
 	mux := server.Routes(server.Deps{
 		Config: env.Engine.Config, Instances: env.Engine.Instances, WebhookSecrets: env.Engine.WebhookSecrets,
-		Store: env.Store, Bots: bots, Wake: env.Engine.Wake, Now: env.Now, Dashboard: e.dash.Handler(), Log: env.Engine.Log,
+		Store: env.Store, Bots: bots, Wake: env.Engine.Wake, Now: env.Now, Dashboard: e.dash.Handler(),
+		Background: &env.background, Log: env.Engine.Log,
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

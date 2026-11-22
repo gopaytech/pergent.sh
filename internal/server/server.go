@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/callback"
@@ -65,7 +66,11 @@ type Deps struct {
 	// ReviewAPI serves /v1/, the review API. Nil, when the dashboard is off:
 	// the paths are absent.
 	ReviewAPI *reviewapi.Handler
-	Log       *slog.Logger
+	// Background, when set, counts the work the result callbacks start that
+	// outlives its request (the usage writes), so the owner of the store can
+	// wait for it before closing or dropping the store. May be nil.
+	Background *sync.WaitGroup
+	Log        *slog.Logger
 }
 
 // Routes serves:
@@ -108,10 +113,10 @@ func Routes(d Deps) *http.ServeMux {
 		Config: d.Config, Instances: d.Instances, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Repos: repos, Projects: projects, Deliveries: deliveries, Commands: commands, Bots: d.Bots, Wake: d.Wake, CI: d.CI, Log: d.Log,
 	})
 	mux.Handle("POST /runs/{id}/result", &callback.Handler{
-		Results: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,
+		Results: d.Store, Now: d.Now, Wake: d.Wake, Background: d.Background, Log: d.Log,
 	})
 	mux.Handle("POST /runs/{id}/members/{member}/result", &callback.MemberHandler{
-		Members: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,
+		Members: d.Store, Now: d.Now, Wake: d.Wake, Background: d.Background, Log: d.Log,
 	})
 	if d.SkillFetches != nil {
 		mux.Handle("POST /skill-fetches/{id}/result", &callback.FetchHandler{Fetches: d.SkillFetches, Log: d.Log})

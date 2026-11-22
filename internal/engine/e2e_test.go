@@ -32,6 +32,7 @@ func newE2E(t *testing.T) *e2e {
 		Panel:          env.Store,
 		Wake:           env.Engine.Wake,
 		Now:            env.Now,
+		Background:     &env.background,
 		Log:            env.Engine.Log,
 	})
 	srv := httptest.NewServer(mux)

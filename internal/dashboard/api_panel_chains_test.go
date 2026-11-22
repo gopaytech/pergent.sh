@@ -23,11 +23,12 @@ const (
 func repoPanelURL(project string) string { return "/api/repositories/main/" + project + "/panel-chain" }
 
 // setPanelFloor sets the first pergent with a panel and the review image,
-// the floor going back to "" after the test.
+// the floor going back to its default after the test.
 func setPanelFloor(t *testing.T, e *env, floor, image string) {
 	t.Helper()
+	old := config.PanelMinVersion
 	config.PanelMinVersion = floor
-	t.Cleanup(func() { config.PanelMinVersion = "" })
+	t.Cleanup(func() { config.PanelMinVersion = old })
 	e.cfg.Jobs.Image = image
 }
 
@@ -66,7 +67,7 @@ func (te *teamsEnv) gadgetsOwnedByPayments() {
 func TestPanelChainRefusedWithoutFloor(t *testing.T) {
 	te := newTeamsEnv(t)
 	shared, _ := te.sharedAndPrivate()
-	te.cfg.Jobs.Image = panelImageOK
+	setPanelFloor(t, te.env, "", panelImageOK)
 	for name, tc := range map[string]struct {
 		c   *http.Cookie
 		url string

@@ -1916,8 +1916,20 @@ func TestImageTag(t *testing.T) {
 
 func setPanelMin(t *testing.T, v string) {
 	t.Helper()
+	old := PanelMinVersion
 	PanelMinVersion = v
-	t.Cleanup(func() { PanelMinVersion = "" })
+	t.Cleanup(func() { PanelMinVersion = old })
+}
+
+// The shipped floor accepts the default review image and refuses the release
+// before it.
+func TestPanelImageShippedDefault(t *testing.T) {
+	if ok, reason := PanelImage("ghcr.io/gopaytech/pergent:v0.11.0"); !ok {
+		t.Errorf("v0.11.0 refused: %s", reason)
+	}
+	if ok, _ := PanelImage("ghcr.io/gopaytech/pergent:v0.10.0"); ok {
+		t.Error("v0.10.0 accepted")
+	}
 }
 
 // With no floor, no image passes; with one, only a tag that is a version at

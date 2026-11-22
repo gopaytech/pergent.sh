@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,6 +37,8 @@ type fakeMembers struct {
 	replErr  error
 	usage    map[string][]store.SkillUsage // RecordMemberUsage calls, by member
 	usageErr error
+	// usageGate, when set, holds RecordMemberUsage until it is closed.
+	usageGate chan struct{}
 }
 
 func (f *fakeMembers) PanelRun(_ context.Context, root string) (store.Run, bool, error) {
@@ -69,6 +72,9 @@ func (f *fakeMembers) ReplaceMemberWithFailure(_ context.Context, id string, fai
 }
 
 func (f *fakeMembers) RecordMemberUsage(_ context.Context, id string, skills []store.SkillUsage) error {
+	if f.usageGate != nil {
+		<-f.usageGate
+	}
 	if f.usage == nil {
 		f.usage = map[string][]store.SkillUsage{}
 	}
@@ -405,5 +411,30 @@ func TestMemberHandlerRecordsUsage(t *testing.T) {
 	e = newMemberEnv(f)
 	if rec := e.post(runID, memberID, "Bearer good", body); rec.Code != http.StatusOK {
 		t.Errorf("status = %d with a failed usage write; want 200", rec.Code)
+	}
+}
+
+// With Background set, the usage write that outlives the request is counted
+// there, so the owner of the store can wait for it before dropping the store.
+func TestMemberHandlerCountsUsageInBackground(t *testing.T) {
+	f := newFakeMembers()
+	f.usageGate = make(chan struct{})
+	e := newMemberEnv(f)
+	var bg sync.WaitGroup
+	e.h.Background = &bg
+	if rec := e.post(runID, memberID, "Bearer good", completedJSON("security")); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	done := make(chan struct{})
+	go func() { bg.Wait(); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("Background was done while the usage write still ran")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(f.usageGate)
+	<-done
+	if len(f.usage[memberID]) != 1 {
+		t.Errorf("usage = %+v; want the member's write done once Background is", f.usage)
 	}
 }
