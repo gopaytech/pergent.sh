@@ -313,7 +313,7 @@ func (s *Store) OwnerTeam(ctx context.Context, instance, project string) (teamID
 // of the repository chains (chain A and chain B) that name them; ok is false when there is no such team. When check is not nil
 // it is handed the team under the lock UpdateTeam takes, so what it decides
 // on can't change before the team goes; an error from it keeps the team and
-// is returned.
+// is returned. Its model limits go with it (ON DELETE CASCADE).
 func (s *Store) DeleteTeam(ctx context.Context, id int64, check func(Team) error) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

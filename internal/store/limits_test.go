@@ -236,3 +236,68 @@ func TestPanelUsageRecordsOwnerTeam(t *testing.T) {
 		t.Errorf("%d model rows, want 5", n)
 	}
 }
+
+// A limit is set, replaced and cleared per entry and team; clearing names the
+// number it had; ModelLimits lists every one, by entry and team.
+func TestSetAndClearModelLimit(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	g := EntryRef{Source: SourceGlobal, ID: "m1"}
+	tm := EntryRef{Source: SourceTeam, ID: "t1"}
+	for _, l := range []ModelLimit{
+		{Ref: g, MonthlyTokens: 100, UpdatedAt: t0, UpdatedBy: "root (password)"},
+		{Ref: g, TeamID: team, MonthlyTokens: 50, UpdatedAt: t0, UpdatedBy: "root (password)"},
+		{Ref: g, MonthlyTokens: 200, UpdatedAt: t0.Add(time.Minute), UpdatedBy: "alice@example.com"}, // replaces the first
+		{Ref: tm, TeamID: team, MonthlyTokens: 7, UpdatedAt: t0, UpdatedBy: "alice@example.com"},
+	} {
+		if err := s.SetModelLimit(ctx, l); err != nil {
+			t.Fatalf("SetModelLimit(%+v): %v", l, err)
+		}
+	}
+	got, err := s.ModelLimits(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ModelLimit{
+		{Ref: g, MonthlyTokens: 200, UpdatedAt: t0.Add(time.Minute), UpdatedBy: "alice@example.com"},
+		{Ref: g, TeamID: team, MonthlyTokens: 50, UpdatedAt: t0, UpdatedBy: "root (password)"},
+		{Ref: tm, TeamID: team, MonthlyTokens: 7, UpdatedAt: t0, UpdatedBy: "alice@example.com"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ModelLimits = %+v; want %+v", got, want)
+	}
+	for i := range want {
+		if got[i].Ref != want[i].Ref || got[i].TeamID != want[i].TeamID || got[i].MonthlyTokens != want[i].MonthlyTokens ||
+			!got[i].UpdatedAt.Equal(want[i].UpdatedAt) || got[i].UpdatedBy != want[i].UpdatedBy {
+			t.Errorf("limit %d = %+v; want %+v", i, got[i], want[i])
+		}
+	}
+	if old, found, err := s.ClearModelLimit(ctx, g, 0); err != nil || !found || old != 200 {
+		t.Errorf("ClearModelLimit(model) = %d, %v, %v; want 200, true", old, found, err)
+	}
+	if _, found, err := s.ClearModelLimit(ctx, g, 0); err != nil || found {
+		t.Errorf("ClearModelLimit again = %v, %v; want not found", found, err)
+	}
+	if got, _ := s.ModelLimits(ctx); len(got) != 2 {
+		t.Errorf("after the clear: %+v; want the 2 team limits", got)
+	}
+}
+
+// Removing a team removes its limits, on global and team entries.
+func TestDeleteTeamDropsItsLimits(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	g := EntryRef{Source: SourceGlobal, ID: "m1"}
+	for _, l := range []ModelLimit{{Ref: g, MonthlyTokens: 100}, {Ref: g, TeamID: team, MonthlyTokens: 50}} {
+		l.UpdatedAt, l.UpdatedBy = t0, "test"
+		if err := s.SetModelLimit(ctx, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := s.DeleteTeam(ctx, team, nil); err != nil || !ok {
+		t.Fatalf("DeleteTeam = %v, %v", ok, err)
+	}
+	if got, err := s.ModelLimits(ctx); err != nil || len(got) != 1 || got[0].TeamID != 0 {
+		t.Errorf("ModelLimits = %+v, %v; want the model limit alone", got, err)
+	}
+}
