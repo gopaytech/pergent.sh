@@ -224,3 +224,74 @@ func TestFallbackHeldOnLimit(t *testing.T) {
 		t.Errorf("%d Jobs, want 1", n)
 	}
 }
+
+// An admin's start of a limit-held change goes past the model limit and runs
+// on the first global entry with no mark; the team entry at its team's own
+// limit stays skipped.
+func TestStartGoesPastAdminLimits(t *testing.T) {
+	env := quotaPushEnv(t, 0, 0)
+	team := teamOwning(t, env, "Payments")
+	a := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
+	g := globalRef(t, env, "gpt-g", "key-g")
+	saveChain(t, env, store.Chain{Scope: store.ScopeRepo, Instance: testInstance, Project: testProjectPath,
+		Entries: []store.EntryRef{a, g}, SavedByAdmin: true})
+	seedEntryUsage(t, env, a, 10)
+	seedEntryUsage(t, env, g, 10)
+	setLimit(t, env, a, team, 10) // the team's own
+	setLimit(t, env, g, 0, 10)    // an admin's
+	head := sha('a')
+	servePush(env, head)
+	id := env.Enqueue(3, head)
+	dispatch(t, env)
+	wantLimitHeld(t, env, id)
+
+	if started, ok, err := env.Store.StartRun(env.ctx, env.MRKey(3), testProjectPath, head, "main"); err != nil || !ok || started != id {
+		t.Fatalf("StartRun = %s, %v, %v", started, ok, err)
+	}
+	dispatch(t, env)
+	wantJobKey(t, env, id, "key-g")
+}
+
+// A start whose chain is only the team's entry at the team's own limit can't
+// be held (a start never is) and can't run: it fails, naming the limit.
+func TestStartStoppedByTeamOwnLimitFails(t *testing.T) {
+	env := quotaPushEnv(t, 0, 0)
+	team := teamOwning(t, env, "Payments")
+	a := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
+	saveChain(t, env, store.Chain{Scope: store.ScopeTeam, TeamID: team, Entries: []store.EntryRef{a}})
+	seedEntryUsage(t, env, a, 10)
+	setLimit(t, env, a, team, 10)
+	head := sha('a')
+	servePush(env, head)
+	id := env.Enqueue(3, head)
+	dispatch(t, env)
+	wantLimitHeld(t, env, id)
+
+	if _, ok, err := env.Store.StartRun(env.ctx, env.MRKey(3), testProjectPath, head, "main"); err != nil || !ok {
+		t.Fatalf("StartRun = %v, %v", ok, err)
+	}
+	dispatch(t, env)
+	if r := env.Run(id); r.FailureReason != "all models exhausted: team-a (team limit used up)" {
+		t.Fatalf("run = %s %q; want the exhausted failure\n%s", r.State, r.FailureReason, env.Logs())
+	}
+	if n := len(env.Jobs()); n != 0 {
+		t.Errorf("%d Jobs, want 0", n)
+	}
+}
+
+// Member A passed the hold with its run: a model limit used up since the
+// split does not stop it.
+func TestMemberAGoesPastAdminLimits(t *testing.T) {
+	panelFloor(t, "v0.5.0")
+	e := newE2E(t)
+	env := e.env
+	env.SetNow(novemberMid)
+	env.Engine.ScanImage = testScanImage
+	teamOwning(t, env, "Payments")
+	savePanelChain(t, env, "team-b")
+	seedEntryUsage(t, env, configRef(), 10)
+	id := splitPanel(t, env, 1, sha('a'))
+	setLimit(t, env, configRef(), 0, 10)
+	dispatch(t, env)
+	wantMemberKey(t, env, memberOfRole(t, env, id, "a"), testLLMKey)
+}

@@ -203,7 +203,7 @@ func (d *dispatcher) resolveMember(ctx context.Context, repo settings.Effective,
 
 // resolveA resolves chain A for member A of the review whose members are ms:
 // the run's chain and tried entries, the entries member A's earlier attempts
-// ran, and no hold for the instance quota.
+// ran, and no hold: it goes past the instance quota and the admin limits (pastAdmin).
 func (d *dispatcher) resolveA(ctx context.Context, repo settings.Effective, ms []store.PanelMember, instanceUsedUp bool) (chain.Decision, chain.Input, error) {
 	in, err := d.chainA(ctx, repo)
 	if err != nil {
@@ -222,8 +222,7 @@ func (d *dispatcher) resolveA(ctx context.Context, repo settings.Effective, ms [
 	in.InstanceQuotaUsedUp = instanceUsedUp
 	dec := chain.Resolve(in)
 	if dec.Hold {
-		in.InstanceQuotaUsedUp = false
-		dec = chain.Resolve(in)
+		dec = pastAdmin(in)
 	}
 	return dec, in, nil
 }
