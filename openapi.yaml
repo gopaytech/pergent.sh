@@ -3072,6 +3072,86 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/models/{model}/limit:
+    put:
+      operationId: setTeamModelLimit
+      tags: [Organization]
+      summary: Set the limit of a team's own entry
+      description: |
+        For the team's maintainers and admins (a viewer of the team or a
+        maintainer of another team 403, anyone else 404). The most tokens
+        reviews may spend on the entry in a UTC calendar month; at it, they
+        skip the entry. An entry of another team is 400 (`the model is not one
+        of this team's models`); a global entry's limits are the admins'
+        (403 `only admins set a team's limit on a global model`). Audited as
+        `model_limit_set`.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - $ref: '#/components/parameters/TeamModelId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ModelLimitRequest'}
+      responses:
+        '204':
+          description: The limit is set.
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: clearTeamModelLimit
+      tags: [Organization]
+      summary: Remove the limit of a team's own entry
+      description: As setting one. 204 whether it had one or not; a limit removed is audited (`model_limit_cleared`).
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - $ref: '#/components/parameters/TeamModelId'
+      responses:
+        '204':
+          description: No limit now.
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/limits:
+    get:
+      operationId: getTeamLimits
+      tags: [Organization]
+      summary: A team's model limits
+      description: |
+        For the team's maintainers and admins: a viewer of the team gets 403
+        (`only maintainers of this team see its model limits`), anyone else
+        404. Each of the team's own entries with its limit, and each global
+        entry with an admin's limit for the team. A global entry's model
+        limit shows only as `none`, `room_left` or `used_up`, because its
+        numbers count other teams.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      responses:
+        '200':
+          description: The team's limits.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamLimitsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/panel-chain:
     get:
       operationId: getRepositoryPanelChain
@@ -8149,6 +8229,49 @@ components:
           oneOf:
             - $ref: '#/components/schemas/MarkView'
             - type: 'null'
+    TeamLimitsView:
+      description: A team's model limits. Never another team's numbers.
+      type: object
+      required: [team, models, global]
+      properties:
+        team: {$ref: '#/components/schemas/TeamRef'}
+        models:
+          type: array
+          items: {$ref: '#/components/schemas/TeamModelLimitView'}
+        global:
+          type: array
+          items: {$ref: '#/components/schemas/TeamGlobalLimitView'}
+    TeamModelLimitView:
+      description: One of the team's own entries and its limit.
+      type: object
+      required: [id, name, limit, used]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        limit:
+          type: [integer, 'null']
+          format: int64
+          description: Tokens per UTC month; null for none.
+        used:
+          type: integer
+          format: int64
+          description: The team's tokens on the entry this month.
+    TeamGlobalLimitView:
+      description: A global entry with an admin's limit for the team. Read-only for maintainers.
+      type: object
+      required: [id, name, limit, used, modelLimit]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        limit: {type: integer, format: int64}
+        used:
+          type: integer
+          format: int64
+          description: The team's tokens on the entry this month.
+        modelLimit:
+          type: string
+          enum: [none, room_left, used_up]
+          description: The entry's model limit, without its numbers.
     CreateTeamModelRequest:
       type: object
       required: [name, provider, model, apiKey]

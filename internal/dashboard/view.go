@@ -1309,6 +1309,37 @@ type TeamModelView struct {
 	Mark     *MarkView  `json:"mark"`
 }
 
+// TeamLimitsView is GET /api/teams/{id}/limits, for the team's maintainers
+// and admins: each of the team's own entries with its limit and the team's
+// use of it this month, and each global entry with an admin's limit for the
+// team. Never another team's numbers.
+type TeamLimitsView struct {
+	Team   TeamRef               `json:"team"`
+	Models []TeamModelLimitView  `json:"models"`
+	Global []TeamGlobalLimitView `json:"global"`
+}
+
+// TeamModelLimitView is one of the team's entries: its limit (null: none,
+// which a maintainer of the team sets) and its tokens this month.
+type TeamModelLimitView struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Limit *int64 `json:"limit"`
+	Used  int64  `json:"used"`
+}
+
+// TeamGlobalLimitView is a global entry with an admin's limit for the team:
+// that limit and the team's tokens on the entry this month, read-only for a
+// maintainer. ModelLimit is the state of the entry's model limit alone,
+// "none", "room_left" or "used_up": its numbers count other teams.
+type TeamGlobalLimitView struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Limit      int64  `json:"limit"`
+	Used       int64  `json:"used"`
+	ModelLimit string `json:"modelLimit"`
+}
+
 // RepoTeamsView is GET .../teams of a repository: every team, by name
 // ignoring case.
 type RepoTeamsView struct {
