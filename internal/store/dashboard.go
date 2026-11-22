@@ -614,11 +614,13 @@ func (s *Store) RunLog(ctx context.Context, runID string) (string, bool, error) 
 	return text, true, nil
 }
 
-// PruneRunLogs deletes the logs and the diagnostics of runs and of panel
-// members stored before the given time and returns how many there were in all.
+// PruneRunLogs deletes the logs and the diagnostics of runs, of review
+// members and of panel members stored before the given time and returns how
+// many there were in all.
 func (s *Store) PruneRunLogs(ctx context.Context, before time.Time) (int, error) {
 	n := 0
-	for _, table := range []string{"run_logs", "run_diagnostics", "panel_member_logs", "panel_member_diagnostics"} {
+	for _, table := range []string{"run_logs", "run_diagnostics", "review_member_logs", "review_member_diagnostics",
+		"panel_member_logs", "panel_member_diagnostics"} {
 		tag, err := s.pool.Exec(ctx, `DELETE FROM `+table+` WHERE created_at < $1`, before)
 		if err != nil {
 			return n, err
