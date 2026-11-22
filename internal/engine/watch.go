@@ -38,10 +38,13 @@ const (
 // log of each finished Job once, and the diagnostics of a failed one (see
 // captureLog), whether its run is still running or already reported.
 //
+// The Jobs of running panel members are watched the same way (watchMember):
+// such a Job fails its member, never the run.
+//
 // It also records the checkout time a Job measured, the Job's pod and how far
 // its checkout got, deletes an API review's files once its checkout is done
 // (or its Job is reported), and requeues runs claimed
-// over 5 minutes ago that never got a Job. A result that wins the race with a
+// over 5 minutes ago that never got a Job, and members the same. A result that wins the race with a
 // report is kept. One Job the cluster can't be asked about is logged and
 // skipped; the returned error joins store failures.
 func (e *Engine) WatchOnce(ctx context.Context) error {
@@ -53,6 +56,13 @@ func (e *Engine) WatchOnce(ctx context.Context) error {
 		errs = append(errs, fmt.Errorf("watch: requeue stranded runs: %w", err))
 	} else if n > 0 {
 		e.log().Warn("requeued runs stranded before their job started", "runs", n)
+		wake = true
+	}
+
+	if n, err := e.Store.RecoverUnlaunchedMembers(ctx, now.Add(-unlaunchedAfter)); err != nil {
+		errs = append(errs, fmt.Errorf("watch: requeue stranded panel members: %w", err))
+	} else if n > 0 {
+		e.log().Warn("requeued panel members stranded before their job started", "members", n)
 		wake = true
 	}
 
@@ -73,6 +83,11 @@ func (e *Engine) WatchOnce(ctx context.Context) error {
 		}
 		wake = wake || reported
 	}
+	reported, err := e.watchMembers(ctx, now)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	wake = wake || reported
 	if err := e.captureReportedLogs(ctx, now); err != nil && ctx.Err() == nil {
 		// The log is a convenience: a failure here is logged, never returned.
 		e.log().Info("couldn't list the runs whose log is to be kept", "error", e.redact(err.Error()))
@@ -110,7 +125,7 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 	// is done.
 	isAPI := run.Kind == store.KindAPI
 	if isAPI && run.CheckoutSeen < 2 && seen >= 2 {
-		e.deleteFiles(ctx, run, log)
+		e.deleteFiles(ctx, run.JobName, log)
 	}
 	if obs.Failure.Deadline {
 		if obs.Failure.Step == kube.StepClone {
@@ -143,7 +158,7 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 		// redact the detail, first.
 		e.captureLog(ctx, run, obs, log)
 		f = obs.Stuck
-		f.Detail = e.redactDetail(ctx, run, f.Detail, log)
+		f.Detail = e.redactDetail(ctx, run.JobName, f.Detail, log)
 		if err := e.Launcher.Delete(ctx, run.JobName); err != nil {
 			log.Warn("couldn't delete the stuck review job; will try again", "reason", f.Reason, "error", e.redact(err.Error()))
 			return false, nil
@@ -161,7 +176,7 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 		if f.Reason == "" {
 			f = kube.Failure{Step: kube.StepDelivery, Reason: reasonFinishedNoSend}
 		}
-		f.Detail = e.redactDetail(ctx, run, f.Detail, log)
+		f.Detail = e.redactDetail(ctx, run.JobName, f.Detail, log)
 	default:
 		return false, nil
 	}
@@ -169,7 +184,7 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 	if isAPI {
 		// The Job can't read them any more; its deletion would remove them
 		// only later.
-		e.deleteFiles(ctx, run, log)
+		e.deleteFiles(ctx, run.JobName, log)
 	}
 	changed, err := e.Store.ReportFailure(ctx, run.ID, store.Failure{Reason: f.Reason, Step: f.Step, Detail: f.Detail}, now)
 	if err != nil {
@@ -190,5 +205,132 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 	if f.Step == kube.StepClone {
 		e.refreshCloneFailing(ctx, run.MR.Instance, run.ProjectPath)
 	}
+	return true, nil
+}
+
+// watchMembers watches the Job of every running panel member whose run still
+// waits for it. A member whose run is gone is left to the sweep
+// (CleanupOnce). It reports whether it reported a member.
+func (e *Engine) watchMembers(ctx context.Context, now time.Time) (bool, error) {
+	ms, err := e.Store.RunningMembers(ctx)
+	if err != nil {
+		return false, fmt.Errorf("watch: list running panel members: %w", err)
+	}
+	var errs []error
+	reported := false
+	runs := map[string]*store.Run{}
+	for _, m := range ms {
+		if ctx.Err() != nil {
+			break
+		}
+		if m.JobName == "" {
+			continue
+		}
+		run, seen := runs[m.RunID]
+		if !seen {
+			r, found, err := e.Store.PanelRun(ctx, m.RunID)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("watch member %s: load the panel's run: %w", m.ID, err))
+				continue
+			}
+			if found {
+				run = &r
+			}
+			runs[m.RunID] = run
+		}
+		if run == nil {
+			continue
+		}
+		r, err := e.watchMember(ctx, m, *run, now)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("watch member %s: %w", m.ID, err))
+		}
+		reported = reported || r
+	}
+	return reported, errors.Join(errs...)
+}
+
+// watchMember is watch for the Job of the running panel member m, whose run
+// waits for it: it records the pod and how far the checkout got, keeps the
+// log of a finished Job, deletes a stuck Job, and fails the member when its
+// Job is stuck, gone or finished without a result past watchGrace. An API
+// member's files go once its checkout is done. It sets no checkout time and
+// raises no "Needs attention" item, and it never touches the run. It
+// reports whether it reported the member.
+func (e *Engine) watchMember(ctx context.Context, m store.PanelMember, run store.Run, now time.Time) (bool, error) {
+	log := e.log().With("run", run.ID, "member", m.ID, "role", m.Role, "instance", run.MR.Instance,
+		"project", run.ProjectPath, "mr", run.MR.IID, "head", run.HeadSHA, "job", m.JobName)
+	obs, err := e.Launcher.Inspect(ctx, m.JobName, now)
+	if err != nil {
+		log.Warn("couldn't inspect the member's job; will look again", "error", e.redact(err.Error()))
+		return false, nil
+	}
+	if obs.PodName != "" && obs.PodName != m.PodName {
+		if err := e.Store.SetMemberPod(ctx, m.ID, obs.PodName); err != nil {
+			log.Info("couldn't record the member job's pod", "error", e.redact(err.Error()))
+		}
+	}
+	seen := max(m.CheckoutSeen, obs.Checkout)
+	if seen > m.CheckoutSeen {
+		if err := e.Store.AdvanceMemberCheckoutSeen(ctx, m.ID, seen); err != nil {
+			log.Info("couldn't record how far the member's checkout got", "error", e.redact(err.Error()))
+		}
+	}
+	// The files Secret is the member Job's own; the stored copy stays.
+	isAPI := run.Kind == store.KindAPI
+	if isAPI && m.CheckoutSeen < 2 && seen >= 2 {
+		e.deleteFiles(ctx, m.JobName, log)
+	}
+	if obs.Failure.Deadline {
+		if obs.Failure.Step == kube.StepClone {
+			seen = max(seen, 1)
+		}
+		obs.Failure = kube.DeadlineFailure(seen)
+	}
+	job := e.memberJob(m, len(run.LinkedRepos) > 0)
+	if obs.Exists && obs.Finished {
+		e.captureJobLog(ctx, job, obs, log, logTimeout)
+	}
+
+	var f kube.Failure
+	switch {
+	case obs.Stuck.Reason != "":
+		e.captureJobLog(ctx, job, obs, log, logTimeout)
+		f = obs.Stuck
+		f.Detail = e.redactDetail(ctx, m.JobName, f.Detail, log)
+		if err := e.Launcher.Delete(ctx, m.JobName); err != nil {
+			log.Warn("couldn't delete the member's stuck job; will try again", "reason", f.Reason, "error", e.redact(err.Error()))
+			return false, nil
+		}
+	case !obs.Exists:
+		if now.Sub(m.DispatchedAt) < watchGrace {
+			return false, nil
+		}
+		f = kube.Failure{Step: kube.StepUnknown, Reason: reasonDisappeared}
+	case obs.Finished:
+		if now.Sub(obs.FinishedAt) < watchGrace {
+			return false, nil
+		}
+		f = obs.Failure
+		if f.Reason == "" {
+			f = kube.Failure{Step: kube.StepDelivery, Reason: reasonFinishedNoSend}
+		}
+		f.Detail = e.redactDetail(ctx, m.JobName, f.Detail, log)
+	default:
+		return false, nil
+	}
+
+	if isAPI {
+		e.deleteFiles(ctx, m.JobName, log)
+	}
+	changed, err := e.Store.ReportMemberFailure(ctx, m.ID, store.Failure{Reason: f.Reason, Step: f.Step, Detail: f.Detail}, now)
+	if err != nil {
+		return false, fmt.Errorf("report member failure: %w", err)
+	}
+	if !changed {
+		log.Info("the member got its result meanwhile; not reporting the job", "reason", f.Reason)
+		return false, nil
+	}
+	log.Warn("member job ended without a result; member reported as failed", "reason", f.Reason, "step", f.Step)
 	return true, nil
 }

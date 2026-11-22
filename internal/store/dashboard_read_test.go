@@ -434,3 +434,19 @@ func explain(t *testing.T, s *Store, sql string, args ...any) string {
 	}
 	return b.String()
 }
+
+// A panel waiting for its members is a review being done: the overview counts
+// it, as running. A run held for a start still isn't counted.
+func TestRunStatsCountPanel(t *testing.T) {
+	s := newStore(t)
+	panelRun(t, s, mr1, "a1")
+	heldRun(t, s, mr2, "b1", WaitUntrusted)
+	got, err := s.RunStats(ctx, Visibility{All: true}, t0.Add(-24*time.Hour*365*10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := PathKey{Instance: mr1.Instance, Path: "acme/widgets"}
+	if c := got[k]; c != (RunCounts{Reviews: 1}) || len(got) != 1 {
+		t.Errorf("RunStats = %+v; want only %v with 1 review, none approved, blocking or failed", got, k)
+	}
+}

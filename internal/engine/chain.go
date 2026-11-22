@@ -21,6 +21,23 @@ func (e *Engine) chainFor(ctx context.Context, run store.Run, repo settings.Effe
 	return chain.Load(ctx, e.Store, e.registry(), e.now(), run, repo)
 }
 
+// chainA is the run's chain A as a panel reads it: the chain in effect
+// (chainFor), or for an API client that chose a model, that model alone, a
+// chain of 1 that never falls back. A model that is gone leaves the chain
+// empty.
+func (d *dispatcher) chainA(ctx context.Context, repo settings.Effective) (chain.Input, error) {
+	in, err := d.e.chainFor(ctx, d.run, repo)
+	if err != nil || d.clientModel == "" {
+		return in, err
+	}
+	in.Scope, in.Refs, in.Tried = store.ScopeGlobal, nil, nil
+	if m, ok := d.e.registry().ModelByID(d.clientModel); ok {
+		ref := entryRef(m)
+		in.Refs, in.Entries[ref] = []store.EntryRef{ref}, m
+	}
+	return in, nil
+}
+
 // entryRef is how a chain names m.
 func entryRef(m instances.Model) store.EntryRef { return chain.RefOf(m) }
 
@@ -60,6 +77,10 @@ func (d *dispatcher) failExhausted(ctx context.Context, dec chain.Decision) erro
 	}
 	ref := dec.Skips[0].Ref
 	d.log.Warn("the model chosen for this repository can't be used", "model_id", ref.ID, "reason", dec.Skips[0].Reason)
+	if d.isMember() {
+		// A member writes nothing to its run.
+		return d.fail(ctx, reasonModelUnusable)
+	}
 	for _, m := range d.e.registry().AllModels() {
 		if entryRef(m) == ref {
 			if err := d.e.Store.SetRunModel(ctx, d.run.ID, m.LLM.Provider, m.LLM.Model); err != nil {
@@ -84,4 +105,13 @@ func (d *dispatcher) runningText() string {
 		return fmt.Sprintf(backupDescription, d.attempt, d.entry.Length)
 	}
 	return runningDescription
+}
+
+// resolveB picks member B's entry from chain B (in, from chain.LoadSet): never
+// the model A runs on. The instance quota stops B's global entries even for
+// a run somebody asked for: they let the review start, not a second model.
+func (d *dispatcher) resolveB(in chain.Input, instanceUsedUp bool) chain.Decision {
+	in.InstanceQuotaUsedUp = instanceUsedUp
+	in.Avoid = chain.SameModel{Provider: d.provider, Model: d.model}
+	return chain.Resolve(in)
 }

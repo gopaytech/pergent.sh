@@ -292,11 +292,17 @@ func skipRule(rule string) string {
 
 // StatusOf is the v1 status of a review, from its run. It agrees with the SQL
 // of store's apiStatusSQL for every state that has a status there. A run that
-// waits is still queued; a skipped run, or a state this code doesn't know, is
-// failed: that never reads as a review that finished well.
+// waits is still queued, but a panel waiting for its members is running; a
+// skipped run, or a state this code doesn't know, is failed: that never reads
+// as a review that finished well.
 func StatusOf(r store.APIReview) string {
 	switch r.Run.State {
-	case store.Queued, store.Waiting:
+	case store.Waiting:
+		if r.Run.SkipReason == store.WaitPanel {
+			return StatusRunning
+		}
+		return StatusQueued
+	case store.Queued:
 		return StatusQueued
 	case store.Running:
 		if r.Run.JobName == "" {

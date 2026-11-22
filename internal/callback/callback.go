@@ -33,7 +33,8 @@ type Results interface {
 	StoreResult(ctx context.Context, id, token string, body []byte, now time.Time) (store.ResultOutcome, error)
 	ReportFailure(ctx context.Context, id string, f store.Failure, now time.Time) (bool, error)
 	ReplaceWithFailure(ctx context.Context, id string, f store.Failure) error
-	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error
+	IsPanelMerge(ctx context.Context, id string) (bool, error)
+	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage, models []store.ModelUsage) error
 }
 
 // Handler serves POST /runs/{id}/result.
@@ -147,21 +148,28 @@ func (h *Handler) recordUsageLater(ctx context.Context, id string, body []byte) 
 	}()
 }
 
-// recordUsage stores what the accepted result's skills used. Usage is for
-// the admin views only: a failure is logged and never changes the review.
+// recordUsage stores what the accepted result's skills used, and for a
+// review panel's merge (Job P) what each model used (usage.Rows). Usage is
+// for the admin views and the quota only: a failure is logged and never
+// changes the review.
 func (h *Handler) recordUsage(ctx context.Context, id string, body []byte) {
 	run, found, err := h.Results.Run(ctx, id)
 	if err != nil || !found {
 		h.log().Warn("couldn't record the result's usage", "run", id, "found", found, "error", errText(err))
 		return
 	}
-	skills, err := usage.FromResult(body, run)
+	merge, err := h.Results.IsPanelMerge(ctx, id)
+	if err != nil {
+		// Not marked: the background fill at the next start records it.
+		h.log().Warn("couldn't record the result's usage", "run", id, "error", err.Error())
+		return
+	}
+	skills, models, err := usage.Rows(body, run, merge)
 	if err != nil {
 		// The run is still marked, so it isn't read again later.
 		h.log().Warn("couldn't read the result's usage", "run", id, "error", err.Error())
-		skills = nil
 	}
-	if err := h.Results.RecordUsage(ctx, id, skills); err != nil {
+	if err := h.Results.RecordUsage(ctx, id, skills, models); err != nil {
 		h.log().Warn("couldn't record the result's usage", "run", id, "error", err.Error())
 	}
 }
@@ -179,9 +187,10 @@ func (h *Handler) check(ctx context.Context, id string, body []byte) (string, er
 	if err != nil {
 		return err.Error(), nil
 	}
-	if res.Merged || res.MergeNote != "" {
-		// Only pergent.sh marks a result as merged, after it merged it.
-		return "the result carries merge fields, which only pergent.sh sets", nil
+	// Before the run is read, as it always was: a result with merge fields
+	// fails even when its run is gone.
+	if reason := checkMerge(res); reason != "" {
+		return reason, nil
 	}
 	run, found, err := h.Results.Run(ctx, id)
 	if err != nil {
@@ -190,10 +199,52 @@ func (h *Handler) check(ctx context.Context, id string, body []byte) (string, er
 	if !found {
 		return "", fmt.Errorf("run %s vanished after its result was stored", id)
 	}
-	if res.Base != run.BaseSHA || res.Head != run.HeadSHA {
-		return "the result is for a different commit than the one this run reviews", nil
+	return checkResult(res, run), nil
+}
+
+// checkResult returns why the parsed result res of a Job of run cannot be
+// used, or "": it carries merge fields, it is for another commit, or its
+// skills are not those the Job was started with. A review Job and a panel
+// member's Job are checked the same way.
+func checkResult(res *result.Result, run store.Run) string {
+	if reason := checkMerge(res); reason != "" {
+		return reason
 	}
-	return checkSkills(res, run), nil
+	if res.Base != run.BaseSHA || res.Head != run.HeadSHA {
+		return "the result is for a different commit than the one this run reviews"
+	}
+	return checkSkills(res, run)
+}
+
+// CheckStored checks the stored result body of a Job of run as the handlers
+// check a result when it arrives, and returns it parsed. ok is false, with
+// the failure to record in its place, when it does not parse or checkResult
+// refuses it. The engine checks a panel member's stored result with it again
+// before the member counts as done, so a result stored but not yet checked
+// (the handler stores, then checks) never reaches Job P.
+func CheckStored(body []byte, run store.Run) (res *result.Result, f store.Failure, ok bool) {
+	res, err := result.Parse(body)
+	if err != nil {
+		return nil, unusableFailure(err.Error()), false
+	}
+	if reason := checkResult(res, run); reason != "" {
+		return nil, unusableFailure(reason), false
+	}
+	return res, store.Failure{}, true
+}
+
+// unusableFailure is the failure of a result that can't be used.
+func unusableFailure(reason string) store.Failure {
+	return store.Failure{Reason: unusable + reason, Step: "delivery"}
+}
+
+// checkMerge returns why res carries merge fields, or "".
+func checkMerge(res *result.Result) string {
+	if res.Merged || res.MergeNote != "" {
+		// Only pergent.sh marks a result as merged, after it merged it.
+		return "the result carries merge fields, which only pergent.sh sets"
+	}
+	return ""
 }
 
 // checkSkills returns why the skills of a completed result are not those the

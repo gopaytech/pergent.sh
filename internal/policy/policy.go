@@ -156,7 +156,18 @@ type Outcome struct {
 	// FallbackNote is FallbackLine of a review that ran on a backup entry,
 	// "" otherwise. It follows the footer's text.
 	FallbackNote string
-	FileURL      func(path string, line, endLine int) string
+	// PanelOffNote is PanelOffLine of a review that ran as one review
+	// because its panel could not start, "" otherwise. It follows the
+	// fallback line.
+	PanelOffNote string
+	// Panel names the two models of a review panel's merge (their entry
+	// names): the meta line and the findings' panel lines use them. Nil is a
+	// review with no panel, whose comment is today's. With a panel, Hide also
+	// reaches the model text of the findings, the summaries, the checks and
+	// the confidence reason (never a path or a rule); a suggestion it would
+	// change is not shown.
+	Panel   *render.PanelNames
+	FileURL func(path string, line, endLine int) string
 
 	// InlineOn says findings are posted as inline threads: Inline holds the
 	// fingerprints shown on the diff, FindingNotes why each other finding is in
@@ -303,6 +314,9 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 	// finished comment.
 	rs = redactSkills(rs, redact)
 	rs = hideInFailures(rs, hide)
+	if o.Panel != nil {
+		rs = hideInPanelText(rs, hide)
+	}
 	comment := withMarker(redact(render.Comment(rs, renderOptions(o, r, redactAll(result.ChangedFiles(r), redact)))))
 	block := render.FindingsBlock(rs)
 	if r.MergeNote != "" {
@@ -410,9 +424,13 @@ func renderOptions(o Outcome, r *result.Result, changed []string) render.Options
 			opts.Footer = "Run again: `@" + o.Mention + " review` · or reply `@" + o.Mention + " dismiss <reason>` in a finding's thread"
 		}
 	}
-	opts.Footer = withFooterNote(o.FooterNote, o.FallbackNote, opts.Footer)
+	opts.Footer = withFooterNote(o.FooterNote, opts.Footer, o.FallbackNote, o.PanelOffNote)
+	opts.Panel = o.Panel
 	return opts
 }
+
+// PanelOffLine is the footer line of a review whose panel could not start.
+func PanelOffLine(reason string) string { return "panel off: " + reason }
 
 // FallbackLine is the footer line of a review that ran on the entry name, a
 // backup: firstSkip is why the chain's first entry was passed over (a mark's
@@ -433,15 +451,18 @@ func FallbackLine(name, firstSkip string) string {
 // DefaultFooterNote is the footer's text when an admin set none.
 const DefaultFooterNote = "Reviewed by [pergent](https://github.com/gopaytech/pergent.sh)"
 
-// withFooterNote puts the note, or the built-in text, and then the fallback
-// line when there is one, in front of the footer. Neither can mention anyone.
-func withFooterNote(note, fallback, footer string) string {
+// withFooterNote puts the note, or the built-in text, and then each line
+// that is not "" (the fallback line, the panel off line), in front of the
+// footer. None can mention anyone.
+func withFooterNote(note, footer string, lines ...string) string {
 	if note == "" {
 		note = DefaultFooterNote
 	}
 	note = noMentions(note)
-	if fallback != "" {
-		note += " · " + noMentions(fallback)
+	for _, l := range lines {
+		if l != "" {
+			note += " · " + noMentions(l)
+		}
 	}
 	if footer == "" {
 		return note
@@ -509,6 +530,56 @@ func hideInFailures(skills []render.Skill, hide func(string) string) []render.Sk
 		for _, n := range skills[i].Notes {
 			s.Notes = append(s.Notes, hide(n))
 		}
+		out[i] = s
+	}
+	return out
+}
+
+// hideInPanelText is skills with hide applied to the model text of a
+// panel's comment that hideInFailures leaves: each finding's title,
+// explanation, suggested fix and panel reason (dismissed ones too), the
+// summaries, the checks and the confidence reason. A suggestion (code) that
+// hiding would change is dropped, never changed. Paths and rules are left as
+// they are. skills is not modified.
+func hideInPanelText(skills []render.Skill, hide func(string) string) []render.Skill {
+	finding := func(f render.Finding) render.Finding {
+		f.Title, f.Explanation, f.SuggestedFix = hide(f.Title), hide(f.Explanation), hide(f.SuggestedFix)
+		if hide(f.Suggestion) != f.Suggestion {
+			// Changed code is wrong code: no suggestion is shown, as in
+			// an inline thread.
+			f.Suggestion = ""
+		}
+		if f.Panel != nil {
+			fp := *f.Panel
+			fp.Reason = hide(fp.Reason)
+			f.Panel = &fp
+		}
+		return f
+	}
+	out := make([]render.Skill, len(skills))
+	for i, s := range skills {
+		s.Findings = nil
+		for _, f := range skills[i].Findings {
+			s.Findings = append(s.Findings, finding(f))
+		}
+		s.Dismissed = nil
+		for _, d := range skills[i].Dismissed {
+			s.Dismissed = append(s.Dismissed, render.DismissedFinding{Finding: finding(d.Finding), By: d.By, Reason: d.Reason})
+		}
+		s.Summaries = nil
+		for _, sum := range skills[i].Summaries {
+			s.Summaries = append(s.Summaries, render.Summary{Batch: sum.Batch, Text: hide(sum.Text)})
+		}
+		s.Checks = nil
+		for _, bc := range skills[i].Checks {
+			rb := bc
+			rb.Checks = nil
+			for _, c := range bc.Checks {
+				rb.Checks = append(rb.Checks, render.Check{Section: c.Section, Name: hide(c.Name), Status: c.Status, Detail: hide(c.Detail)})
+			}
+			s.Checks = append(s.Checks, rb)
+		}
+		s.ConfidenceReason = hide(skills[i].ConfidenceReason)
 		out[i] = s
 	}
 	return out

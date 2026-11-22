@@ -1,0 +1,500 @@
+{
+  "configMap": {
+    "metadata": {
+      "name": "JOB-NAME-inputs",
+      "namespace": "pergent-jobs",
+      "creationTimestamp": null,
+      "labels": {
+        "app.kubernetes.io/managed-by": "pergent-sh",
+        "pergent.sh/head": "2222222222222222222222222222222222222222",
+        "pergent.sh/instance": "main",
+        "pergent.sh/mr": "3",
+        "pergent.sh/project-id": "7",
+        "pergent.sh/run": "RUN-ID"
+      },
+      "ownerReferences": [
+        {
+          "apiVersion": "batch/v1",
+          "kind": "Job",
+          "name": "JOB-NAME",
+          "uid": "uid-JOB-NAME",
+          "controller": false
+        }
+      ]
+    },
+    "data": {
+      "carried.json": "{\"security\":[\"a.go\",\"c.go\"]}",
+      "change-description.md": "Add login\n\nIt drops the old cookie on purpose.",
+      "ci-results.md": "# CI job results\n\nHead commit: 2222222222222222222222222222222222222222\n\n## test: passed\n",
+      "dismissals.json": "{\"security\":[{\"file\":\"api/auth.go\",\"title\":\"Token compared with ==\",\"severity\":\"blocking\",\"reason\":\"Not a secret: a public request ID.\"}]}",
+      "instructions.md": "\n# Quiet review\n\nWhen you raise a suggestion of your own, raise it only if it would change how the code behaves or clearly helps the next person who reads it, and leave out style, naming, formatting and other nitpicks. This applies to nothing else: it does not change what is blocking, how you report or judge a checklist item, or how you check findings another reviewer raised.\n",
+      "previous.json": "{\"schema_version\":1,\"status\":\"completed\",\"skills\":[{\"name\":\"security\",\"findings\":[]}]}",
+      "rules.json": "[{\"path\":\"*.go\",\"rule\":\"Repo rule.\",\"source\":\"repo\"},{\"path\":\"*.py\",\"rule\":\"Set a.\",\"source\":\"dashboard:a\"}]",
+      "skill-0.md": "---\nname: security\n---\nLook for security problems.\n"
+    }
+  },
+  "job": {
+    "metadata": {
+      "name": "JOB-NAME",
+      "namespace": "pergent-jobs",
+      "uid": "uid-JOB-NAME",
+      "creationTimestamp": null,
+      "labels": {
+        "app.kubernetes.io/managed-by": "pergent-sh",
+        "pergent.sh/head": "2222222222222222222222222222222222222222",
+        "pergent.sh/instance": "main",
+        "pergent.sh/mr": "3",
+        "pergent.sh/project-id": "7",
+        "pergent.sh/run": "RUN-ID"
+      },
+      "annotations": {
+        "pergent.sh/mr-url": "https://gitlab.example.com/acme/widgets/-/merge_requests/3",
+        "pergent.sh/project": "acme/widgets"
+      }
+    },
+    "spec": {
+      "activeDeadlineSeconds": 1140,
+      "backoffLimit": 0,
+      "template": {
+        "metadata": {
+          "creationTimestamp": null,
+          "labels": {
+            "app.kubernetes.io/managed-by": "pergent-sh",
+            "pergent.sh/head": "2222222222222222222222222222222222222222",
+            "pergent.sh/instance": "main",
+            "pergent.sh/mr": "3",
+            "pergent.sh/project-id": "7",
+            "pergent.sh/run": "RUN-ID"
+          },
+          "annotations": {
+            "pergent.sh/mr-url": "https://gitlab.example.com/acme/widgets/-/merge_requests/3",
+            "pergent.sh/project": "acme/widgets"
+          }
+        },
+        "spec": {
+          "volumes": [
+            {
+              "name": "work",
+              "emptyDir": {
+                "sizeLimit": "20Gi"
+              }
+            },
+            {
+              "name": "inputs",
+              "configMap": {
+                "name": "JOB-NAME-inputs",
+                "items": [
+                  {
+                    "key": "skill-0.md",
+                    "path": "skills/security.md"
+                  },
+                  {
+                    "key": "instructions.md",
+                    "path": "instructions.md"
+                  },
+                  {
+                    "key": "previous.json",
+                    "path": "previous.json"
+                  },
+                  {
+                    "key": "carried.json",
+                    "path": "carried.json"
+                  },
+                  {
+                    "key": "dismissals.json",
+                    "path": "dismissals.json"
+                  },
+                  {
+                    "key": "change-description.md",
+                    "path": "change-description.md"
+                  },
+                  {
+                    "key": "ci-results.md",
+                    "path": "ci-results.md"
+                  },
+                  {
+                    "key": "rules.json",
+                    "path": "rules.json"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "graph",
+              "emptyDir": {
+                "sizeLimit": "128Mi"
+              }
+            }
+          ],
+          "initContainers": [
+            {
+              "name": "checkout",
+              "image": "ghcr.io/gopaytech/pergent:v0.5.2",
+              "command": [
+                "sh",
+                "-ec",
+                "set -eu\nexport GIT_CONFIG_COUNT=1\nexport GIT_CONFIG_KEY_0=http.extraHeader\nexport GIT_CONFIG_VALUE_0=\"Authorization: Basic $(printf '%s:%s' \"$GIT_USERNAME\" \"$GIT_TOKEN\" | base64 -w0)\"\ngit init -q /work/repo\ncd /work/repo\ngit config core.hooksPath /dev/null\ngit remote add origin \"$REPO_URL\"\ngit remote set-url --push origin pergent-push-disabled:\nif ! git fetch -q --no-tags --depth=1 origin \"$BASE_SHA\" \"$HEAD_SHA\"; then\n  echo \"fetch by SHA failed; falling back to $MR_REF and $TARGET_BRANCH\" \u003e\u00262\n  git fetch -q --no-tags --depth=1 origin \"$MR_REF\"\n  depth=50\n  until git cat-file -e \"$BASE_SHA^{commit}\" 2\u003e/dev/null; do\n    if [ \"$depth\" -gt 3200 ]; then echo \"merge base $BASE_SHA not found within depth 3200\" \u003e\u00262; exit 1; fi\n    git fetch -q --no-tags --depth=\"$depth\" origin \"$TARGET_BRANCH\"\n    depth=$((depth * 2))\n  done\nfi\ngit checkout -q --detach \"$HEAD_SHA\"\nif [ -n \"${LINKED_CLONES:-}\" ]; then\n  # Linked repositories: one \"linked-N \u003chttps url\u003e\" per line, cloned after the\n  # checkout, each into a temporary name and renamed when whole. The token\n  # reaches git only through the environment header set above, never in a URL\n  # or a file. A clone that fails, runs over its time or is over its size is\n  # removed and the Job goes on: pergent reads the missing directory as a\n  # failed clone. Nothing here may stop the script.\n  printf '%s\\n' \"$LINKED_CLONES\" | while read -r dir url; do\n    case \"$dir\" in linked-[1-3]) ;; *) continue ;; esac\n    tmp=\"/work/.$dir.tmp\"\n    rm -rf \"$tmp\" \"/work/$dir\"\n    if (\n      export GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=https GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null\n      timeout 120 git clone -q --depth=1 --no-tags --single-branch -c core.symlinks=false -c core.hooksPath=/dev/null -- \"$url\" \"$tmp\" || exit 1\n      size=\"$(du -sk \"$tmp\")\" || exit 1\n      size=\"${size%%[!0-9]*}\"\n      [ -n \"$size\" ] \u0026\u0026 [ \"$size\" -le 2097152 ] || exit 1\n    ) \u003c/dev/null \u0026\u0026 mv \"$tmp\" \"/work/$dir\"; then\n      echo \"cloned $dir\" \u003e\u00262\n    else\n      rm -rf \"$tmp\" \"/work/$dir\"\n      echo \"could not clone $dir\" \u003e\u00262\n    fi\n  done || true\nfi\n"
+              ],
+              "env": [
+                {
+                  "name": "REPO_URL",
+                  "value": "https://gitlab.example.com/acme/widgets.git"
+                },
+                {
+                  "name": "MR_REF",
+                  "value": "refs/merge-requests/3/head"
+                },
+                {
+                  "name": "TARGET_BRANCH",
+                  "value": "main"
+                },
+                {
+                  "name": "BASE_SHA",
+                  "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                },
+                {
+                  "name": "HEAD_SHA",
+                  "value": "2222222222222222222222222222222222222222"
+                },
+                {
+                  "name": "GIT_USERNAME",
+                  "value": "gitlab+deploy-token-1"
+                },
+                {
+                  "name": "GIT_TOKEN",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "JOB-NAME-secrets",
+                      "key": "git-token"
+                    }
+                  }
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "memory": "6Gi"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "work",
+                  "mountPath": "/work"
+                }
+              ],
+              "securityContext": {
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "allowPrivilegeEscalation": false
+              }
+            },
+            {
+              "name": "graph",
+              "image": "ghcr.io/gopaytech/pergent.sh:v0.0.0-test",
+              "command": [
+                "/pergent-sh"
+              ],
+              "args": [
+                "get-graph",
+                "--url=https://pergent.example.com/runs/RUN-ID/graph",
+                "--out=/graph/graph.json"
+              ],
+              "env": [
+                {
+                  "name": "PERGENT_RESULT_TOKEN",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "JOB-NAME-secrets",
+                      "key": "result-token"
+                    }
+                  }
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "memory": "256Mi"
+                },
+                "requests": {
+                  "cpu": "50m",
+                  "memory": "64Mi"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "graph",
+                  "mountPath": "/graph"
+                }
+              ],
+              "securityContext": {
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "runAsUser": 65532,
+                "runAsGroup": 65532,
+                "runAsNonRoot": true,
+                "readOnlyRootFilesystem": true,
+                "allowPrivilegeEscalation": false
+              }
+            }
+          ],
+          "containers": [
+            {
+              "name": "pergent",
+              "image": "ghcr.io/gopaytech/pergent:v0.5.2",
+              "command": [
+                "pergent"
+              ],
+              "args": [
+                "agent",
+                "--repo-path=/work/repo",
+                "--base=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "--head=2222222222222222222222222222222222222222",
+                "--skills-dir=/in/skills",
+                "--instructions=/in/instructions.md",
+                "--previous=/in/previous.json",
+                "--carried=/in/carried.json",
+                "--scrub-instructions",
+                "--timeout=15m0s",
+                "--concurrency=4",
+                "--max-turns=50",
+                "--max-comment-size=990000",
+                "--result-url=https://pergent.example.com/runs/RUN-ID/result"
+              ],
+              "env": [
+                {
+                  "name": "OPENCODE_PROVIDER",
+                  "value": "anthropic"
+                },
+                {
+                  "name": "OPENCODE_MODEL",
+                  "value": "claude-sonnet-4"
+                },
+                {
+                  "name": "OPENCODE_BASE_URL",
+                  "value": "https://llm.example.com/v1"
+                },
+                {
+                  "name": "PERGENT_DISMISSALS",
+                  "value": "/in/dismissals.json"
+                },
+                {
+                  "name": "PERGENT_CHANGE_DESCRIPTION",
+                  "value": "/in/change-description.md"
+                },
+                {
+                  "name": "PERGENT_CI_RESULTS",
+                  "value": "/in/ci-results.md"
+                },
+                {
+                  "name": "PERGENT_GRAPH",
+                  "value": "/graph/graph.json"
+                },
+                {
+                  "name": "PERGENT_CHECK_DELETED",
+                  "value": "true"
+                },
+                {
+                  "name": "PERGENT_RULES",
+                  "value": "/in/rules.json"
+                },
+                {
+                  "name": "PERGENT_NO_BUILT_IN_RULES",
+                  "value": "true"
+                },
+                {
+                  "name": "OPENCODE_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "JOB-NAME-secrets",
+                      "key": "llm-api-key"
+                    }
+                  }
+                },
+                {
+                  "name": "PERGENT_RESULT_TOKEN",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "JOB-NAME-secrets",
+                      "key": "result-token"
+                    }
+                  }
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "memory": "6Gi"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "work",
+                  "mountPath": "/work"
+                },
+                {
+                  "name": "inputs",
+                  "readOnly": true,
+                  "mountPath": "/in"
+                },
+                {
+                  "name": "graph",
+                  "readOnly": true,
+                  "mountPath": "/graph"
+                }
+              ],
+              "securityContext": {
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "allowPrivilegeEscalation": false
+              }
+            }
+          ],
+          "restartPolicy": "Never",
+          "terminationGracePeriodSeconds": 30,
+          "automountServiceAccountToken": false,
+          "enableServiceLinks": false
+        }
+      },
+      "ttlSecondsAfterFinished": 3600,
+      "suspend": false
+    },
+    "status": {}
+  },
+  "run": {
+    "ID": "RUN-ID",
+    "MR": {
+      "Instance": "main",
+      "ProjectID": 7,
+      "IID": 3
+    },
+    "ProjectPath": "acme/widgets",
+    "HeadSHA": "2222222222222222222222222222222222222222",
+    "BaseSHA": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "StartSHA": "5555555555555555555555555555555555555555",
+    "TargetBranch": "main",
+    "State": "running",
+    "JobName": "JOB-NAME",
+    "TokenExpiresAt": "0001-01-01T00:00:00Z",
+    "Result": null,
+    "FailureReason": "",
+    "FailureStep": "",
+    "FailureDetail": "",
+    "PodName": "",
+    "CheckoutSeen": 0,
+    "PublishError": "",
+    "Attempts": 0,
+    "CreatedAt": "0001-01-01T00:00:00Z",
+    "DispatchedAt": "0001-01-01T00:00:00Z",
+    "ReportedAt": "0001-01-01T00:00:00Z",
+    "NotBefore": "0001-01-01T00:00:00Z",
+    "CleanedUp": false,
+    "Title": "Add login",
+    "WebURL": "https://gitlab.example.com/acme/widgets/-/merge_requests/3",
+    "SourceBranch": "",
+    "Author": "dev",
+    "Model": "claude-sonnet-4",
+    "SkillSources": {
+      "security": "library"
+    },
+    "Provider": "anthropic",
+    "MaxTurns": 50,
+    "SkillVersions": {
+      "security": 1
+    },
+    "SkipReason": "",
+    "Outcome": "",
+    "OutcomeReason": "",
+    "DecisionStatus": "",
+    "Approved": false,
+    "Trigger": "push",
+    "SkillSubset": null,
+    "BaseRunID": "BASE-RUN-ID",
+    "Incremental": true,
+    "SkillHashes": {
+      "security": "77c0c64771de3bb5b31669deafa8f50ec3ec1e1046ff39cb6bb0d1a846df96ea"
+    },
+    "RulesHash": "d4a6186a4e8531e4edcf5ff858d482ad80071d9a5840c55075673688c94319b6",
+    "Quiet": true,
+    "QuotaChecked": false,
+    "CIChecked": true,
+    "CIDeadline": null,
+    "CIJobs": [
+      {
+        "name": "test",
+        "result": "passed",
+        "read": "log",
+        "size": 0,
+        "cut": false,
+        "blocks": true
+      }
+    ],
+    "CommentLayout": [
+      "checks:open",
+      "findings:collapsed"
+    ],
+    "LinkedRepos": null,
+    "Kind": "mr",
+    "APIClientID": null,
+    "AttemptOf": null,
+    "ChainPosition": 1,
+    "ChainLength": 1,
+    "ModelSource": "global",
+    "ModelEntryID": "config",
+    "ModelEntryName": "anthropic/claude-sonnet-4",
+    "FallbackClass": "",
+    "ModelTeamID": null,
+    "StatusRef": 0
+  },
+  "runTimes": {
+    "dispatched_at": "0s",
+    "reported_at": "",
+    "token_expires_at": "20m0s"
+  },
+  "secret": {
+    "metadata": {
+      "name": "JOB-NAME-secrets",
+      "namespace": "pergent-jobs",
+      "creationTimestamp": null,
+      "labels": {
+        "app.kubernetes.io/managed-by": "pergent-sh",
+        "pergent.sh/head": "2222222222222222222222222222222222222222",
+        "pergent.sh/instance": "main",
+        "pergent.sh/mr": "3",
+        "pergent.sh/project-id": "7",
+        "pergent.sh/run": "RUN-ID"
+      },
+      "ownerReferences": [
+        {
+          "apiVersion": "batch/v1",
+          "kind": "Job",
+          "name": "JOB-NAME",
+          "uid": "uid-JOB-NAME",
+          "controller": false
+        }
+      ]
+    },
+    "data": {
+      "git-token": "ZGVwbG95LXRva2VuLWV4YW1wbGU=",
+      "llm-api-key": "bGxtLWtleS1leGFtcGxl",
+      "result-token": "UkVTVUxULVRPS0VO"
+    },
+    "type": "Opaque"
+  },
+  "writes": [
+    {
+      "body": {
+        "description": "pergent review running",
+        "name": "pergent",
+        "state": "running"
+      },
+      "method": "POST",
+      "path": "/projects/7/statuses/2222222222222222222222222222222222222222"
+    }
+  ]
+}

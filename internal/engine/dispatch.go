@@ -106,11 +106,25 @@ func (e *Engine) DispatchOnce(ctx context.Context) error {
 	if len(skip) > 0 {
 		e.warnUnconnected(ctx, skip)
 	}
-	runs, err := e.Store.ClaimQueued(ctx, limit, e.now(), skip...)
+	// A panel's members first: their runs passed every check already, and
+	// each holds a slot as a run does (CountRunning counts both).
+	members, err := e.Store.ClaimQueuedMembers(ctx, limit, e.now(), skip...)
 	if err != nil {
-		return fmt.Errorf("dispatch: claim queued runs: %w", err)
+		return fmt.Errorf("dispatch: claim queued panel members: %w", err)
 	}
 	var errs []error
+	for _, m := range members {
+		if err := e.dispatchMember(ctx, m); err != nil {
+			errs = append(errs, fmt.Errorf("dispatch panel member %s: %w", m.ID, err))
+		}
+	}
+	if limit -= len(members); limit <= 0 {
+		return errors.Join(errs...)
+	}
+	runs, err := e.Store.ClaimQueued(ctx, limit, e.now(), skip...)
+	if err != nil {
+		return errors.Join(append(errs, fmt.Errorf("dispatch: claim queued runs: %w", err))...)
+	}
 	for _, run := range runs {
 		d := &dispatcher{e: e, run: run, log: e.log().With(
 			"run", run.ID, "instance", run.MR.Instance, "project", run.ProjectPath,
@@ -119,7 +133,7 @@ func (e *Engine) DispatchOnce(ctx context.Context) error {
 		if run.Kind == store.KindAPI {
 			err = d.dispatchAPI(ctx)
 		} else {
-			err = d.dispatch(ctx)
+			err = d.dispatchRun(ctx)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("dispatch run %s: %w", run.ID, err))
@@ -160,12 +174,31 @@ func (e *Engine) warnUnconnected(ctx context.Context, names []string) {
 	}
 }
 
-// dispatcher handles one claimed run. Its methods return only store errors;
-// everything else is turned into the run's next state.
+// stage is what a dispatch starts: a review (today's), a panel member's Job
+// or a panel's merge (Job P).
+type stage int
+
+const (
+	stageReview stage = iota
+	stageMember
+	stageMerge
+)
+
+// dispatcher handles one claimed run, or one claimed panel member of a run
+// that waits for it. Its methods return only store errors; everything else is
+// turned into the run's (or the member's) next state.
 type dispatcher struct {
 	e   *Engine
 	run store.Run
 	log *slog.Logger
+	// stage is what the dispatch starts. In stageMember, member is the
+	// claimed member and run the run waiting for it, which is never written.
+	// In stageMerge, members are the review's members and merge what Job P
+	// runs with (resolveMerge).
+	stage   stage
+	member  store.PanelMember
+	members []store.PanelMember
+	merge   mergePlan
 	// secrets are values that must never reach a failure reason or a log.
 	secrets []string
 	// keptSources are the sources of the skills a re-run of some skills keeps
@@ -200,7 +233,83 @@ type dispatcher struct {
 	// image, set once the list is built; the next push compares it with its
 	// own.
 	rulesHash string
+	// clientModel is the model an API client chose ("" for none): its chain
+	// A is that model alone (chainA).
+	clientModel string
 }
+
+// dispatchRun starts the claimed merge request run: today's review, or the
+// merge (Job P) of a review panel, which is a run whose review has a member
+// that is not off and whose members are final (the run was released). A
+// run with a live member goes back to wait for them (waitForMembers). The
+// run that was split is dispatched at its split and has what it recorded
+// then. A later attempt of Job P (not dispatched yet) first takes those
+// values from the run it fell back from (InheritPanelSplit), since Job P
+// writes nothing of them.
+func (d *dispatcher) dispatchRun(ctx context.Context) error {
+	ms, err := d.e.Store.PanelMembers(ctx, d.run.ID)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("read the review's panel members: %w", err))
+	}
+	if merge, live := panelStage(ms); live {
+		return d.waitForMembers(ctx)
+	} else if merge {
+		d.stage, d.members = stageMerge, ms
+	}
+	if d.stage == stageMerge && d.run.AttemptOf != nil && d.run.DispatchedAt.IsZero() {
+		if err := d.e.Store.InheritPanelSplit(ctx, d.run.ID); err != nil {
+			return d.retry(ctx, fmt.Errorf("take the review panel's split: %w", err))
+		}
+		run, found, err := d.e.Store.Run(ctx, d.run.ID)
+		if err != nil {
+			return d.retry(ctx, fmt.Errorf("load the run: %w", err))
+		}
+		if !found {
+			return nil
+		}
+		d.run = run
+	}
+	return d.dispatch(ctx)
+}
+
+// panelStage reads the members ms of a claimed run's review: merge is true
+// when one is not off (the run is a panel's), live when one is queued,
+// running or reported (it is not final yet).
+func panelStage(ms []store.PanelMember) (merge, live bool) {
+	for _, m := range ms {
+		switch m.State {
+		case store.MemberOff:
+			continue
+		case store.MemberQueued, store.MemberRunning, store.MemberReported:
+			live = true
+		}
+		merge = true
+	}
+	return merge, live
+}
+
+// waitForMembers puts the claimed run back to wait for its panel members,
+// which are not all final: ReleasePanel queues it once they are. Only an
+// older release queues such a run (its StartRun, during a rolling deploy);
+// merging now would merge what is done so far, and the sweep would
+// supersede the live members.
+func (d *dispatcher) waitForMembers(ctx context.Context) error {
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	back, err := d.e.Store.WaitForPanel(sctx, d.run.ID)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("put the run back to wait for its panel members: %w", err))
+	}
+	if back {
+		d.log.Warn("not merging: a review panel member is not final yet; the run waits for its members again")
+	}
+	return nil
+}
+
+// keepsRun reports whether the dispatch writes nothing to its run: a
+// member's (its run waits) or a merge's (the run keeps what its split
+// recorded, which both members reviewed).
+func (d *dispatcher) keepsRun() bool { return d.stage != stageReview }
 
 func (d *dispatcher) dispatch(ctx context.Context) error {
 	e, run := d.e, d.run
@@ -244,7 +353,10 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("get merge request: %w", err))
 	}
-	d.recordChange(ctx, mr)
+	if d.stage == stageReview {
+		// A member's and Job P's run keep what the review recorded.
+		d.recordChange(ctx, mr)
+	}
 	if mr.State != forge.StateOpen {
 		d.log.Info("merge request is no longer open; run superseded", "state", mr.State)
 		return d.supersede(ctx)
@@ -271,9 +383,16 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return fmt.Errorf("enqueue new head %s: %w", mr.HeadSHA, err)
 		}
 		e.Wake()
+		if d.isMember() {
+			// The panel's run is superseded with the old head: the member
+			// goes back to the queue, so it holds no slot, and the sweep
+			// supersedes it.
+			return d.postpone(ctx, e.now())
+		}
 		return nil
 	}
-	if run.Trigger == store.TriggerPush && run.AttemptOf == nil {
+	// A member's run passed trust, the quota hold and CI before it was split.
+	if d.stage == stageReview && run.Trigger == store.TriggerPush && run.AttemptOf == nil {
 		// Before any token, Job or model call. A later attempt is the same
 		// review of the same head, its author checked by the first. The retries of a check that
 		// fails run for trustPatience from its first failure: a push of an author the
@@ -322,7 +441,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("read the token quota: %w", err))
 	}
-	if repoUsedUp && !askedFor {
+	if repoUsedUp && !askedFor && d.stage == stageReview {
 		return d.holdForQuota(ctx, plat)
 	}
 	// The model is picked from the chain in effect, read now, so an edit made
@@ -330,11 +449,26 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	// (quota, billing, auth: a mark, or an earlier attempt of this review),
 	// never because an entry is missing: a 1-entry chain runs on its entry or
 	// fails, never on another model the repository did not ask for.
-	dec, err := d.resolve(ctx, repo, instanceUsedUp, askedFor)
+	var dec chain.Decision
+	switch d.stage {
+	case stageMember:
+		dec, err = d.resolveMember(ctx, repo, instanceUsedUp)
+	case stageMerge:
+		if e.ScanImage == "" {
+			return d.fail(ctx, reasonNoPanelImage)
+		}
+		err = d.resolveMerge(ctx, repo, repoUsedUp, instanceUsedUp)
+	default:
+		dec, err = d.resolve(ctx, repo, instanceUsedUp, askedFor)
+	}
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("read the model chain: %w", err))
 	}
 	switch {
+	case d.stage == stageMerge:
+		// Job P always starts: a role with no entry left does not judge.
+	case d.isMember() && !dec.Runs():
+		return d.memberCannotRun(ctx, dec)
 	case dec.Wait:
 		// No entry at all, or no usable one in the chain of before chains:
 		// the run waits, as when the list is empty.
@@ -345,7 +479,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	case dec.Exhausted:
 		return d.failExhausted(ctx, dec)
 	}
-	if ciApplies(run, repo) && !run.CIChecked {
+	if d.stage == stageReview && ciApplies(run, repo) && !run.CIChecked {
 		// After trust and quota: a run held for either doesn't also wait for
 		// CI until it is released. Each run checks CI once: a run released
 		// from the wait, or started during it, is marked.
@@ -365,6 +499,12 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		}
 		d.log.Info("merge request diff is not ready; waiting", "delay", diffRefsDelay)
 		return d.postpone(ctx, e.now().Add(diffRefsDelay))
+	}
+	if d.keepsRun() && run.BaseSHA != "" {
+		// Both members, and Job P, review the base their run recorded at the
+		// split, not the merge request's base now (GitHub's follows the base
+		// branch), and their results are checked against it.
+		mr.BaseSHA, mr.StartSHA = run.BaseSHA, run.StartSHA
 	}
 
 	project, found, err := e.Store.Project(ctx, run.MR.Instance, run.MR.ProjectID)
@@ -392,6 +532,12 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	llm, llmKey := d.entry.Entry.LLM, d.entry.Entry.Key
 	d.provider, d.model = llm.Provider, llm.Model
 	d.secrets = append(d.secrets, string(gitToken), llmKey)
+	if d.stage == stageMerge {
+		// Job P judges with up to 2 keys. What it carries is decided as at
+		// the split, by the model the run recorded then.
+		d.secrets = append(d.secrets, d.merge.key(kube.PanelRoleB))
+		d.provider, d.model = deref(run.Provider), deref(run.Model)
+	}
 
 	var previous []byte
 	last, havePrev, err := e.Store.LastReview(ctx, run.MR, run.ID)
@@ -434,9 +580,16 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		return d.fail(ctx, err.Error())
 	}
 	if in, err = d.subset(ctx, in, mr); err != nil {
+		if errors.Is(err, errInputsChanged) {
+			return d.fail(ctx, reasonInputsChanged)
+		}
 		return d.retry(ctx, err)
 	}
 	if len(in.Skills) == 0 {
+		if d.keepsRun() {
+			// The run had skills when it was split.
+			return d.fail(ctx, reasonInputsChanged)
+		}
 		return d.skipNoSkills(ctx, plat, repo)
 	}
 	// The rules are read at the same ref as the repository skills, never at
@@ -485,7 +638,8 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	in.AddDescription(mr.Title, mr.Description)
 	// The CI results are read now, with their text, and added before Fit,
 	// which drops them first.
-	if ciApplies(run, repo) {
+	if ciApplies(run, repo) && d.stage != stageMerge {
+		// Job P takes no CI results (forPanel), so none are read for it.
 		if err := d.addCIResults(ctx, plat, repo, in); err != nil {
 			if errors.Is(err, store.ErrRunGone) {
 				d.log.Debug("run superseded while its CI jobs were read")
@@ -498,8 +652,13 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	hadCarried := len(in.Carried) > 0
 	hadDismissals := len(in.Dismissals) > 0
 	hadDescription := len(in.Description) > 0
-	// The quiet line counts toward the budget, so it is added before Fit.
-	if repo.QuietReviews {
+	// The quiet line counts toward the budget, so it is added before Fit. A
+	// member follows its run, which kept the value it was dispatched with.
+	quiet := repo.QuietReviews
+	if d.keepsRun() {
+		quiet = run.Quiet
+	}
+	if quiet {
 		in.AddQuietLine()
 	}
 	if err := in.Fit(inputs.ConfigMapLimit); err != nil {
@@ -520,7 +679,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	case hadDismissals:
 		d.log.Info("past dismissals", "entries", dismissalCounts)
 	}
-	if push {
+	if push && !d.keepsRun() {
 		if err := d.setIncremental(ctx, last, in, hadCarried); err != nil {
 			return d.retry(ctx, err)
 		}
@@ -548,12 +707,15 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.fail(ctx, reasonTooLarge)
 		}
 		// Written before the Job starts, like the layout: a lost write would
-		// hide what the review was started with.
-		if err := e.Store.SetRunLinks(ctx, run.ID, links.Matched); err != nil {
-			return d.retry(ctx, fmt.Errorf("record the linked repositories: %w", err))
+		// hide what the review was started with. A member's or a merge's
+		// run has them (memberInputsMatch).
+		if !d.keepsRun() {
+			if err := e.Store.SetRunLinks(ctx, run.ID, links.Matched); err != nil {
+				return d.retry(ctx, fmt.Errorf("record the linked repositories: %w", err))
+			}
 		}
 	} else {
-		if len(run.LinkedRepos) > 0 {
+		if len(run.LinkedRepos) > 0 && !d.keepsRun() {
 			// An earlier attempt of this run recorded links the Job will not
 			// have: the result is checked against what the Job was given.
 			if err := e.Store.SetRunLinks(ctx, run.ID, nil); err != nil {
@@ -564,6 +726,9 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			// Turned off, or the links gone, since the re-run was asked for:
 			// the check can't be repeated, and the review that has it can only
 			// be replaced by one that doesn't.
+			if d.keepsRun() {
+				return d.fail(ctx, reasonInputsChanged)
+			}
 			d.log.Warn("reviewing with all skills: the linked repositories' check can't run any more")
 			if err := e.Store.MakeFullRerun(ctx, run.ID); err != nil {
 				return d.retry(ctx, fmt.Errorf("record the full re-run: %w", err))
@@ -576,10 +741,22 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			// result for good (result.MergeIncremental), so review everything.
 			d.log.Info("full review", "reason", fullImpactOpen)
 			in.Carried = nil
-			if err := e.Store.SetIncremental(ctx, run.ID, nil); err != nil {
-				return d.retry(ctx, fmt.Errorf("record the review as a full one: %w", err))
+			if !d.keepsRun() {
+				if err := e.Store.SetIncremental(ctx, run.ID, nil); err != nil {
+					return d.retry(ctx, fmt.Errorf("record the review as a full one: %w", err))
+				}
 			}
 		}
+	}
+	if d.keepsRun() {
+		// A member, or Job P, writes nothing to its run, which was dispatched
+		// with these inputs: a member that would review other ones can't be
+		// merged with the other member's, and Job P merges what the members
+		// reviewed.
+		if !d.memberInputsMatch(in, last, links) {
+			return d.fail(ctx, reasonInputsChanged)
+		}
+		return d.launch(ctx, plat, repo, project, mr, in, links, gitToken, gitUser)
 	}
 	// The run keeps the value it was dispatched with: the prompt, the threads
 	// and the comment follow the run, never the repository's later setting.
@@ -610,12 +787,47 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err := e.Store.SetRunEntry(ctx, run.ID, runEntry(d.entry)); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's model entry: %w", err))
 	}
+	// A repository with chain B in effect gets a review panel: the run waits
+	// for its members, whose Jobs start apart. With no chain B this writes
+	// nothing and the review goes on as before.
+	split, err := d.panel(ctx, mr, in, repo, repoUsedUp, instanceUsedUp)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("start the review panel: %w", err))
+	}
+	if split {
+		return nil
+	}
 
+	return d.launch(ctx, plat, repo, project, mr, in, links, gitToken, gitUser)
+}
+
+// launch starts the Job of the run, or of the member in stageMember, with
+// the fitted inputs in, and records it. gitToken is the clone token (a
+// GitHub one is minted here). A member's Job has its own name, result route
+// and token, its own entry's key alone and --no-skill-verify; it records
+// itself on the member and sets the running status only when it is the
+// review's first member Job. It writes nothing to the run, with one
+// exception: on GitHub that first status stores its Check Run's ref on the
+// run (status_ref, best effort, in setStatus), so Job P updates the same one.
+// Job P (stageMerge) is the run's own Job with its result route, and
+// MarkDispatched keeps the split's base: it holds the judges' keys
+// (resolveMerge), fetches the member results from the panel route, has its
+// own timeout and no linked repository, records the judges before it
+// starts, and sets no status (the first member set it) and no inputs.
+func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Effective, project store.Project,
+	mr forge.Change, in *inputs.Inputs, links linkPlan, gitToken []byte, gitUser string) error {
+	e, run := d.e, d.run
+	llm, llmKey := d.entry.Entry.LLM, d.entry.Entry.Key
 	token, tokenHash, err := mintToken()
 	if err != nil {
 		return d.retry(ctx, err)
 	}
 	d.secrets = append(d.secrets, token)
+	merging := d.stage == stageMerge
+	if merging {
+		// Job P clones the repository alone: its checkout has no linked one.
+		links = linkPlan{}
+	}
 	if plat.isGitHub() {
 		if gitToken, err = d.gitHubCloneToken(ctx, plat, project, links.RepoIDs...); err != nil {
 			if github.InstallationGone(err) {
@@ -628,26 +840,49 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 
 	now := e.now()
 	allowance := kube.CloneAllowance(project.CloneSeconds, len(links.Clones))
-	expires := now.Add(kube.Deadline(repo.JobTimeout, allowance) + tokenGrace)
-	name := kube.JobName(run.ID)
+	timeout, budget := repo.JobTimeout, repo.JobTimeout
+	if merging {
+		// Job P's deadline counts the member results' fetch too.
+		timeout, budget = kube.PanelTimeout, kube.PanelTimeout+kube.PanelFetchTimeout
+	}
+	expires := now.Add(kube.Deadline(budget, allowance) + tokenGrace)
+	name, runID := kube.JobName(run.ID), run.ID
+	resultURL := strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/result"
+	if d.isMember() {
+		// The member's Job is named and reports by the member; it belongs to
+		// the review's first run.
+		m := d.member
+		name, runID = kube.JobName(m.ID), m.RunID
+		resultURL = strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + m.RunID + "/members/" + m.ID + "/result"
+	}
 	commentLimit := kube.CommentLimitGitLab
 	if plat.isGitHub() {
 		commentLimit = kube.CommentLimitGitHub
 	}
 	// The code graph: only with the repository's switch on does anything
-	// read or ask for one, so with it off the Job is the Job of before.
+	// read or ask for one, so with it off the Job is the Job of before. The
+	// graph route takes the run's own result token, so a member reviews
+	// without it.
 	var graphURL, graphImage string
 	if repo.GraphContext {
 		e.WantGraph(repo.Instance, repo.Project)
-		if graphURL = e.reviewGraphURL(ctx, run.ID, repo.Instance, repo.Project, mr.TargetBranch); graphURL != "" {
+		switch {
+		case merging:
+			// Job P takes no graph (forPanel).
+		case d.isMember():
+			d.log.Info("the code graph is left out for a panel member")
+		default:
+			graphURL = e.reviewGraphURL(ctx, run.ID, repo.Instance, repo.Project, mr.TargetBranch)
+		}
+		if graphURL != "" {
 			graphImage = e.ScanImage
 		}
 	}
 	params := kube.JobParams{
 		Name:           name,
-		RunID:          run.ID,
+		RunID:          runID,
 		Image:          e.Config.Jobs.Image,
-		Timeout:        repo.JobTimeout,
+		Timeout:        timeout,
 		CloneAllowance: allowance,
 		Concurrency:    e.Config.Jobs.Concurrency,
 		MaxTurns:       repo.MaxTurns,
@@ -657,7 +892,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		BaseSHA:        mr.BaseSHA,
 		HeadSHA:        run.HeadSHA,
 		GitUsername:    gitUser,
-		ResultURL:      strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/result",
+		ResultURL:      resultURL,
 		MaxCommentSize: commentLimit,
 		LLM:            llm,
 		Resources:      jobResources(e.Config.Jobs.Resources, repo.JobMemory),
@@ -674,7 +909,30 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		GraphURL:       graphURL,
 		GraphImage:     graphImage,
 	}
+	// The entry's key alone: a member's Job never holds the other model's.
 	secrets := kube.Secrets{GitToken: string(gitToken), LLMKey: llmKey, ResultToken: token}
+	if merging {
+		callback := strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/panel/"
+		params.PanelRole = kube.PanelRoleMerge
+		params.Panel = &kube.PanelParams{AURL: callback + kube.PanelRoleA, BURL: callback + kube.PanelRoleB,
+			B: d.merge.b, NoJudge: d.merge.noJudge, Image: e.ScanImage}
+		// Each judge's key, and with --panel-no-judge none (BuildSecret).
+		secrets.LLMKeyB = d.merge.key(kube.PanelRoleB)
+		// Before the Job starts, as a run's entry: a judge's provider error
+		// falls back along that role's chain from it.
+		if err := d.recordJudges(ctx); err != nil {
+			return d.retry(ctx, err)
+		}
+	}
+	if d.isMember() {
+		params.SkipSkillVerify = true
+		params.PanelMemberID, params.PanelRole = d.member.ID, d.member.Role
+		// Before the Job starts, as for a run: the other member avoids it,
+		// and the role's next attempt skips it.
+		if err := e.Store.SetMemberEntry(ctx, d.member.ID, runEntry(d.entry), d.provider, d.model); err != nil {
+			return d.retry(ctx, fmt.Errorf("record the member's model entry: %w", err))
+		}
+	}
 	if err := e.Launcher.Launch(ctx, params, secrets); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// A Job left over from an earlier attempt of this run that never
@@ -684,10 +942,20 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		return d.retry(ctx, fmt.Errorf("launch job: %w", err))
 	}
 
-	err = e.Store.MarkDispatched(ctx, run.ID, name, mr.BaseSHA, mr.StartSHA, tokenHash, expires, now)
+	first := true
+	if d.isMember() {
+		first, err = e.Store.MarkMemberDispatched(ctx, d.member.ID, name, tokenHash, expires, now)
+	} else {
+		err = e.Store.MarkDispatched(ctx, run.ID, name, mr.BaseSHA, mr.StartSHA, tokenHash, expires, now)
+	}
 	if errors.Is(err, store.ErrNotRunning) {
 		d.log.Info("run was superseded while its job started; deleting the job", "job", name)
 		d.deleteJob(ctx, name)
+		if d.isMember() {
+			// As for a moved head: back to the queue, so the member holds no
+			// slot until the sweep supersedes it.
+			return d.postpone(ctx, e.now())
+		}
 		return nil
 	}
 	if err != nil {
@@ -701,10 +969,40 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	e.clearAttention(ctx, repo.Instance, repo.Project, attSkillMissing)
 	e.clearAttention(ctx, repo.Instance, repo.Project, attNoSkills)
 	e.clearAttention(ctx, repo.Instance, repo.Project, attRulesInvalid)
+	if merging {
+		// The running status is set (the review's first member did), and
+		// the run keeps the inputs its split recorded.
+		return nil
+	}
+	if d.isMember() {
+		// The review's running status, once: the other member's Job, and
+		// Job P later, find it set.
+		if first {
+			if err := e.setStatus(ctx, plat, run, forge.StatusRunning, d.memberRunningText(ctx)); err != nil {
+				d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
+			}
+		}
+		return nil
+	}
 	// For the dashboard, best effort: the model, where each skill came from
 	// and the library version of each library skill. The hash of each skill
 	// goes along: the next push carries nothing for a skill that changed.
-	sources, versions := in.Sources, in.Versions
+	sources, versions, hashes := d.runInputs(in)
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, repo.MaxTurns, sources, versions, hashes); err != nil {
+		d.log.Info("couldn't record the review's model, step limit and skills for the dashboard", "error", d.redact(err.Error()))
+	}
+
+	if err := e.setStatus(ctx, plat, run, forge.StatusRunning, d.runningText()); err != nil {
+		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
+	}
+	return nil
+}
+
+// runInputs is what a run records of the skills of its inputs in: where each
+// came from, the library version of each library skill and the hash of each.
+// A re-run of some skills records the whole review's.
+func (d *dispatcher) runInputs(in *inputs.Inputs) (sources map[string]string, versions map[string]int, hashes map[string]string) {
+	sources, versions = in.Sources, in.Versions
 	if len(d.keptSources) > 0 {
 		// A re-run of some skills shows the whole review's sources and
 		// versions.
@@ -723,7 +1021,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			versions[name] = v
 		}
 	}
-	hashes := skillHashes(in.Skills)
+	hashes = skillHashes(in.Skills)
 	if len(d.keptHashes) > 0 {
 		hashes = map[string]string{}
 		for name, h := range d.keptHashes {
@@ -733,14 +1031,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			hashes[name] = h
 		}
 	}
-	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, repo.MaxTurns, sources, versions, hashes); err != nil {
-		d.log.Info("couldn't record the review's model, step limit and skills for the dashboard", "error", d.redact(err.Error()))
-	}
-
-	if err := e.setStatus(ctx, plat, run, forge.StatusRunning, d.runningText()); err != nil {
-		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
-	}
-	return nil
+	return sources, versions, hashes
 }
 
 // subset reduces the inputs of a run that reviews some of the skills (a
@@ -787,6 +1078,9 @@ func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Cha
 		}
 	}
 	if reason != "" {
+		if d.keepsRun() {
+			return nil, errInputsChanged
+		}
 		d.log.Warn("reviewing with all skills: the skills to re-run can't be kept apart from the rest of the review", "reason", reason)
 		if err := d.e.Store.MakeFullRerun(ctx, run.ID); err != nil {
 			return nil, fmt.Errorf("record the full re-run: %w", err)
@@ -800,6 +1094,9 @@ func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Cha
 			if (own || n != impactSkill) && !slices.Contains(kept, n) {
 				gone = append(gone, n)
 			}
+		}
+		if d.keepsRun() {
+			return nil, errInputsChanged
 		}
 		if len(gone) > 0 {
 			d.log.Warn("re-running without skills that don't exist any more", "skills", strings.Join(gone, ","))
@@ -1000,9 +1297,17 @@ func settleCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
 }
 
+// supersede supersedes the run; in stageMember, the panel's run and its live
+// members.
 func (d *dispatcher) supersede(ctx context.Context) error {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
+	if d.isMember() {
+		if err := d.e.Store.SupersedePanel(sctx, d.run.ID, ""); err != nil {
+			return fmt.Errorf("supersede the panel: %w", err)
+		}
+		return nil
+	}
 	if err := d.e.Store.Supersede(sctx, d.run.ID); err != nil {
 		return fmt.Errorf("supersede: %w", err)
 	}
@@ -1014,18 +1319,32 @@ func (d *dispatcher) supersede(ctx context.Context) error {
 func (d *dispatcher) supersedeDraft(ctx context.Context) error {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
+	if d.isMember() {
+		if err := d.e.Store.SupersedePanel(sctx, d.run.ID, store.SupersededDraft); err != nil {
+			return fmt.Errorf("supersede the panel: %w", err)
+		}
+		return nil
+	}
 	if err := d.e.Store.SupersedeDraft(sctx, d.run.ID); err != nil {
 		return fmt.Errorf("supersede: %w", err)
 	}
 	return nil
 }
 
-// fail reports the run with reason; the publisher posts it.
+// fail reports the run with reason; the publisher posts it. In stageMember it
+// reports the member only: the run goes on waiting for its members.
 func (d *dispatcher) fail(ctx context.Context, reason string) error {
 	reason = d.redact(reason)
-	d.log.Warn("review can't start; reporting the run as failed", "reason", reason)
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
+	if d.isMember() {
+		d.log.Warn("the panel member can't start; reporting it as failed", "reason", reason)
+		if _, err := d.e.Store.ReportMemberFailure(sctx, d.member.ID, store.Failure{Reason: reason}, d.e.now()); err != nil {
+			return fmt.Errorf("report the member's failure: %w", err)
+		}
+		return nil
+	}
+	d.log.Warn("review can't start; reporting the run as failed", "reason", reason)
 	if _, err := d.e.Store.ReportFailure(sctx, d.run.ID, store.Failure{Reason: reason}, d.e.now()); err != nil {
 		return fmt.Errorf("report failure: %w", err)
 	}
@@ -1042,7 +1361,11 @@ func (d *dispatcher) retry(ctx context.Context, cause error) error {
 		d.log.Info("dispatch interrupted; the run goes back to the queue", "error", text)
 		return d.postpone(ctx, d.e.now())
 	}
-	attempt := d.run.Attempts + 1
+	attempts := d.run.Attempts
+	if d.isMember() {
+		attempts = d.member.Attempts
+	}
+	attempt := attempts + 1
 	if attempt >= maxDispatchAttempts {
 		d.log.Error("couldn't start the review; giving up", "attempt", attempt, "error", text)
 		if d.api {
@@ -1050,7 +1373,7 @@ func (d *dispatcher) retry(ctx context.Context, cause error) error {
 		}
 		return d.fail(ctx, reasonCouldntStart+text)
 	}
-	notBefore := d.e.now().Add(dispatchBackoff << d.run.Attempts)
+	notBefore := d.e.now().Add(dispatchBackoff << attempts)
 	d.log.Warn("couldn't start the review; will retry", "attempt", attempt, "retry_at", notBefore, "error", text)
 	return d.requeue(ctx, notBefore)
 }
@@ -1060,6 +1383,9 @@ func (d *dispatcher) retry(ctx context.Context, cause error) error {
 func (d *dispatcher) requeue(ctx context.Context, notBefore time.Time) error {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
+	if d.isMember() {
+		return d.requeueMember(sctx, notBefore)
+	}
 	err := d.e.Store.Requeue(sctx, d.run.ID, notBefore)
 	if err == nil {
 		return nil
@@ -1139,10 +1465,17 @@ func (d *dispatcher) announceHold(ctx context.Context, plat Platform, descriptio
 	}
 }
 
-// postpone puts the run back in the queue without counting an attempt.
+// postpone puts the run (in stageMember, the member) back in the queue
+// without counting an attempt.
 func (d *dispatcher) postpone(ctx context.Context, notBefore time.Time) error {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
+	if d.isMember() {
+		if err := d.e.Store.PostponeMember(sctx, d.member.ID, notBefore); err != nil {
+			return fmt.Errorf("postpone the member: %w", err)
+		}
+		return nil
+	}
 	if err := d.e.Store.Postpone(sctx, d.run.ID, notBefore); err != nil {
 		return fmt.Errorf("postpone: %w", err)
 	}

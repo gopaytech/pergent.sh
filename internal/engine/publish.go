@@ -70,6 +70,11 @@ func publishBackoff(attempts int) time.Duration {
 // store gives up after the 10th attempt). One run's trouble never stops the
 // others; the returned error is a failure to list the runs.
 func (e *Engine) PublishOnce(ctx context.Context) error {
+	// A panel's members first: a review whose members both failed is
+	// published below in this pass.
+	if err := e.settleMembers(ctx); err != nil {
+		e.log().Warn("couldn't settle the review panels' members; trying again on the next pass", "error", e.redact(err.Error()))
+	}
 	runs, err := e.Store.RunsToPublish(ctx, e.now(), publishBatch)
 	if err != nil {
 		return fmt.Errorf("publish: list reported runs: %w", err)
@@ -148,11 +153,17 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if o.Dismissals, err = e.dismissals(ctx, run.MR); err != nil {
 		return err
 	}
+	pc, err := e.panelComment(ctx, run)
+	if err != nil {
+		return err
+	}
+	// Before the threads: a panel's threads hide its models too.
+	o.Panel, o.PanelOffNote, o.Hide = pc.names, pc.off, e.hideModel(run, pc.models...)
 	// Findings on the diff are posted as threads before the comment is
 	// decided: the comment lists the others.
 	view := e.syncInline(ctx, plat, run, repo, ok, o, log)
 	o.InlineOn, o.Inline, o.FindingNotes = view.On, view.Inline, view.Notes
-	o.MaxComment, o.Redact, o.Hide = kube.CommentLimitGitLab, e.redact, e.hideModel(run)
+	o.MaxComment, o.Redact = kube.CommentLimitGitLab, e.redact
 	if plat.isGitHub() {
 		o.MaxComment = kube.CommentLimitGitHub
 	}
@@ -371,13 +382,21 @@ func (e *Engine) replaceStepAdvice(ctx context.Context, run store.Run, advice st
 // of the entries that have the run's provider and model; a run that recorded
 // neither is left alone, and so is one whose entry is gone and which has no
 // URL to hide.
-func (e *Engine) hideModel(run store.Run) func(string) string {
+//
+// panel is the other models of a review panel's merge (its members' and its
+// judges'): their providers, models and base URLs are hidden too
+// (policy.HideModels), so none of the 3 Jobs' entries reaches the comment.
+// Without them it is the run's own model alone, as before.
+func (e *Engine) hideModel(run store.Run, panel ...store.ModelUsed) func(string) string {
 	var provider, model string
 	if run.Provider != nil {
 		provider = *run.Provider
 	}
 	if run.Model != nil {
 		model = *run.Model
+	}
+	if len(panel) > 0 {
+		return e.hidePanelModels(append([]store.ModelUsed{{Provider: provider, Model: model}}, panel...))
 	}
 	if provider == "" && model == "" {
 		return nil
@@ -389,6 +408,104 @@ func (e *Engine) hideModel(run store.Run) func(string) string {
 		}
 	}
 	return func(text string) string { return policy.HideModel(text, provider, model, urls...) }
+}
+
+// hidePanelModels is hideModel for every model of a review panel. A model
+// with no provider and no name hides nothing; with none left, nil.
+func (e *Engine) hidePanelModels(models []store.ModelUsed) func(string) string {
+	var refs []policy.ModelRef
+	for _, m := range models {
+		if m.Provider != "" || m.Model != "" {
+			refs = append(refs, policy.ModelRef{Provider: m.Provider, Model: m.Model})
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	var urls []string
+	for _, m := range e.registry().AllModels() {
+		for _, r := range refs {
+			if m.LLM.Provider == r.Provider && m.LLM.Model == r.Model && m.LLM.BaseURL != "" {
+				urls = append(urls, m.LLM.BaseURL)
+				break
+			}
+		}
+	}
+	return func(text string) string { return policy.HideModels(text, refs, urls) }
+}
+
+// panelComment is what a run's comment needs from its review panel.
+type panelComment struct {
+	// names are the entry names of a merge's 2 models; nil for a run that
+	// is not a panel's merge.
+	names *render.PanelNames
+	// models are the providers and models of a merge's members (every
+	// attempt) and judges, to hide.
+	models []store.ModelUsed
+	// off is the panel off line of a review that ran as one review because
+	// its panel could not start; "" otherwise.
+	off string
+}
+
+// panelComment reads run's review panel. A run whose review has a member
+// other than off is a panel's merge (Job P): each role is named by its judge
+// entry (panel_judges), else by its last member's entry. A review with only
+// an off row ran "A only" when that row is the run's own (PanelOffReason): a
+// row an earlier, failed launch left is not. A review with neither has
+// nothing, and its comment is today's.
+func (e *Engine) panelComment(ctx context.Context, run store.Run) (panelComment, error) {
+	var pc panelComment
+	ms, err := e.Store.PanelMembers(ctx, run.ID)
+	if err != nil {
+		return pc, fmt.Errorf("read the review's panel members: %w", err)
+	}
+	last := map[string]store.PanelMember{}
+	off := false
+	for _, m := range ms { // oldest first
+		if m.State == store.MemberOff {
+			off = true
+			continue
+		}
+		last[m.Role] = m
+		pc.models = append(pc.models, store.ModelUsed{Provider: m.Provider, Model: m.Model})
+	}
+	if len(last) == 0 {
+		if !off {
+			return pc, nil
+		}
+		reason, found, err := e.Store.PanelOffReason(ctx, run.ID)
+		if err != nil {
+			return pc, fmt.Errorf("read why the review has no panel: %w", err)
+		}
+		if found {
+			pc.off = policy.PanelOffLine(reason)
+		}
+		return pc, nil
+	}
+	judges, err := e.Store.PanelJudges(ctx, run.ID)
+	if err != nil {
+		return pc, fmt.Errorf("read the panel's judges: %w", err)
+	}
+	jm, err := e.Store.PanelJudgeModels(ctx, run.ID)
+	if err != nil {
+		return pc, fmt.Errorf("read the panel's judge models: %w", err)
+	}
+	for _, role := range []string{"a", "b"} {
+		if m, ok := jm[role]; ok {
+			pc.models = append(pc.models, m)
+		}
+	}
+	name := func(role, none string) string {
+		if n := judges[role].Name; n != "" {
+			return n
+		}
+		if n := last[role].Entry.Name; n != "" {
+			return n
+		}
+		return none
+	}
+	pc.names = &render.PanelNames{A: name("a", "model A"), B: name("b", "model B")}
+	return pc, nil
 }
 
 // dismissals are the dismissals of the merge request in the renderer's form.
@@ -865,7 +982,10 @@ func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logg
 
 // CleanupOnce deletes the Jobs of superseded runs (keeping each one's log
 // first, best effort, within 10 s), sets their commit status
-// to canceled when they had been dispatched, and removes the approve bot's
+// to canceled when they had been dispatched, supersedes the panel members
+// whose run no longer waits for them and deletes the Jobs of superseded
+// members the same way (with no status: a member never sets one), and
+// removes the approve bot's
 // approvals of a head or target branch that is no longer the MR's newest
 // run's, and every approval it holds in a repository whose "approve clean
 // reviews" is turned off. Anything that fails is left for a later pass: a
@@ -888,6 +1008,12 @@ func (e *Engine) CleanupOnce(ctx context.Context) error {
 		if err := e.cleanUp(ctx, run, log); err != nil {
 			log.Warn("couldn't clean up the superseded run; will try again", "error", e.redact(err.Error()))
 		}
+	}
+	if err := e.cleanUpMembers(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	if ctx.Err() != nil {
+		return errors.Join(errs...)
 	}
 
 	stale, err := e.Store.StaleApprovals(ctx, e.now())
@@ -971,6 +1097,50 @@ func (e *Engine) withdraw(ctx context.Context, a store.Approval, done, failed st
 		return
 	}
 	log.Info(done)
+}
+
+// cleanUpMembers supersedes the live panel members whose run no longer waits
+// for them (a push, a close or a supersede took it), then deletes the Job of
+// every superseded member not yet cleaned up, keeping its log first, best
+// effort and once. Its Secret and ConfigMap go with the Job, as a run's do.
+// A member that fails is left for the next pass.
+func (e *Engine) cleanUpMembers(ctx context.Context) error {
+	var errs []error
+	if n, err := e.Store.SupersedeOrphanMembers(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("cleanup: supersede orphan panel members: %w", err))
+	} else if n > 0 {
+		e.log().Info("superseded panel members whose run is gone", "members", n)
+	}
+	ms, err := e.Store.MembersToCleanUp(ctx)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("cleanup: list superseded panel members: %w", err))
+	}
+	for _, m := range ms {
+		if ctx.Err() != nil {
+			break
+		}
+		log := e.log().With("run", m.RunID, "member", m.ID, "role", m.Role)
+		if err := e.cleanUpMember(ctx, m, log); err != nil {
+			log.Warn("couldn't clean up the superseded panel member; will try again", "error", e.redact(err.Error()))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// cleanUpMember deletes superseded member m's Job, if it has one, and
+// records it is cleaned up. It sets no status.
+func (e *Engine) cleanUpMember(ctx context.Context, m store.PanelMember, log *slog.Logger) error {
+	if m.JobName != "" {
+		e.captureJobLog(ctx, e.memberJob(m, false), kube.Observation{}, log.With("job", m.JobName), supersededLogTimeout)
+		if err := e.Launcher.Delete(ctx, m.JobName); err != nil {
+			return err
+		}
+	}
+	if err := e.Store.MarkMemberCleanedUp(ctx, m.ID); err != nil {
+		return fmt.Errorf("mark cleaned up: %w", err)
+	}
+	log.Info("superseded panel member cleaned up", "job", m.JobName)
+	return nil
 }
 
 func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) error {

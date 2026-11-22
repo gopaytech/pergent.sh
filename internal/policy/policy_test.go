@@ -2069,3 +2069,129 @@ func TestRedactSkillsRedactsPanel(t *testing.T) {
 		t.Errorf("the caller's panel changed: %+v", panel)
 	}
 }
+
+// The footer line of a review whose panel could not start.
+func TestPanelOffLine(t *testing.T) {
+	if got := PanelOffLine("the review image does not support it"); got != "panel off: the review image does not support it" {
+		t.Errorf("PanelOffLine = %q", got)
+	}
+}
+
+// An "A only" review says why in its footer, after the footer's text and a
+// backup line, before the commands. Without it the footer is today's.
+func TestPublishPanelOffNote(t *testing.T) {
+	r := completed(skill("security", "no_blocking_issues", "a.go"))
+	o := Outcome{Result: r, Mention: "bot", PanelOffNote: PanelOffLine("the review image does not support it")}
+	d := Decide(o, config.FailureStatusFailed)
+	want := DefaultFooterNote + " · panel off: the review image does not support it · Run again: `@bot review`"
+	if !strings.Contains(d.Comment, want) {
+		t.Errorf("comment lacks the footer %q:\n%s", want, d.Comment)
+	}
+	if d.Status != StatusSuccess || !d.Approve {
+		t.Errorf("decision = %+v; the note changes the comment only", d)
+	}
+	o.FallbackNote = FallbackLine("backup", "quota")
+	got := renderOptions(o, r, nil).Footer
+	want = DefaultFooterNote + " · " + FallbackLine("backup", "quota") + " · panel off: the review image does not support it · Run again: `@bot review`"
+	if got != want {
+		t.Errorf("Footer = %q\nwant %q", got, want)
+	}
+	o.FallbackNote, o.PanelOffNote = "", ""
+	if got := renderOptions(o, r, nil).Footer; got != DefaultFooterNote+" · Run again: `@bot review`" {
+		t.Errorf("Footer with no note = %q", got)
+	}
+	// The note can't mention anyone either.
+	if got := renderOptions(Outcome{PanelOffNote: PanelOffLine("@team")}, r, nil).Footer; strings.Contains(got, " @team") {
+		t.Errorf("Footer = %q, want the mention broken", got)
+	}
+}
+
+// panelResult is a clean result of one skill with one suggestion whose
+// texts all name text, merged by a panel in which model B disagreed with
+// a reason that names it too.
+func panelResult(text string) *result.Result {
+	s := skill("security", "no_blocking_issues", "a.go")
+	b, _ := json.Marshal(result.Finding{
+		ID: "abc123", Fingerprint: "abc123def456", File: "a.go", Line: 3, Severity: "suggestion",
+		Title: "Uses " + text, Explanation: "The call to " + text + " is slow.", SuggestedFix: "Drop " + text + ".",
+		Suggestion: "x := " + text,
+		Panel:      &result.FindingPanel{FoundBy: "a", DisagreedBy: "b", Reason: text + " thinks it is fine"},
+	})
+	s.Findings = append(s.Findings, b)
+	s.Summaries = []result.Summary{{Batch: 1, Text: "Reviewed by " + text}}
+	s.Panel = &result.SkillPanel{Mode: "both"}
+	return completed(s)
+}
+
+// A panel's comment names its models by the names it is given, in the meta
+// line, and a finding's panel line uses them. Hide reaches the model text of
+// the findings and summaries of a panel's comment, so no provider or model
+// of the 3 Jobs reaches it. Without a panel the findings are not hidden, as
+// today.
+func TestDecidePanelNamesAndHide(t *testing.T) {
+	const name = "zeta-provider-b/omega-model-b"
+	hide := func(s string) string { return HideModels(s, []ModelRef{{"zeta-provider-b", "omega-model-b"}}, nil) }
+	o := Outcome{Result: panelResult(name), Hide: hide, Panel: &render.PanelNames{A: "team-a", B: "team-b"}}
+	d := Decide(o, config.FailureStatusFailed)
+	if !strings.Contains(d.Comment, "Panel: team-a (A) + team-b (B)") || !strings.Contains(d.Comment, "team-b disagreed") {
+		t.Errorf("comment lacks the panel names:\n%s", d.Comment)
+	}
+	for _, bad := range []string{"zeta-provider-b", "omega-model-b"} {
+		if strings.Contains(d.Comment, bad) {
+			t.Errorf("comment names %q:\n%s", bad, d.Comment)
+		}
+	}
+	if !strings.Contains(d.Comment, "The call to the model is slow.") {
+		t.Errorf("comment lacks the hidden explanation:\n%s", d.Comment)
+	}
+	if d.Status != StatusSuccess || !d.Approve {
+		t.Errorf("decision = %+v; want a clean approval", d)
+	}
+
+	o.Panel = nil
+	d = Decide(o, config.FailureStatusFailed)
+	if strings.Contains(d.Comment, "Panel:") {
+		t.Errorf("comment without a panel names one:\n%s", d.Comment)
+	}
+	if !strings.Contains(d.Comment, "The call to "+name+" is slow.") {
+		t.Errorf("comment without a panel hid a finding's text:\n%s", d.Comment)
+	}
+}
+
+// HideModels hides several models: every "provider/model" first, then the
+// model names longest first, so a name that starts another is not left half
+// replaced, then the base URLs and the providers.
+func TestHideModels(t *testing.T) {
+	models := []ModelRef{{"openai", "gpt-5"}, {"azure", "gpt-5-mini"}, {"", ""}}
+	got := HideModels("openai/gpt-5 and azure/gpt-5-mini; gpt-5-mini then gpt-5 on azure via https://llm.example.com/v1 or openai",
+		models, []string{"https://llm.example.com/v1/"})
+	want := "the model and the model; the model then the model on the provider via the provider or the provider"
+	if got != want {
+		t.Errorf("HideModels = %q\nwant %q", got, want)
+	}
+	if got := HideModels("gpt-5", nil, nil); got != "gpt-5" {
+		t.Errorf("HideModels with no model = %q", got)
+	}
+	// One model is HideModel.
+	for _, text := range []string{"Model not found: openai/gpt-5", "openai said gpt-5 at https://x.example/v1"} {
+		if a, b := HideModels(text, []ModelRef{{"openai", "gpt-5"}}, []string{"https://x.example/v1"}), HideModel(text, "openai", "gpt-5", "https://x.example/v1"); a != b {
+			t.Errorf("HideModels(%q) = %q; HideModel = %q", text, a, b)
+		}
+	}
+}
+
+// In a panel's comment a suggestion that hiding would change is not shown:
+// changed code would be wrong code. One that names no model is kept as is.
+func TestDecidePanelDropsChangedSuggestion(t *testing.T) {
+	const name = "omega-model-b"
+	hide := func(s string) string { return HideModels(s, []ModelRef{{"zeta-provider-b", name}}, nil) }
+	o := Outcome{Result: panelResult(name), Hide: hide, Panel: &render.PanelNames{A: "team-a", B: "team-b"}}
+	d := Decide(o, config.FailureStatusFailed)
+	if strings.Contains(d.Comment, "x := the model") || strings.Contains(d.Comment, "x := "+name) {
+		t.Errorf("comment shows the changed suggestion:\n%s", d.Comment)
+	}
+	o.Result = panelResult("plain")
+	if d := Decide(o, config.FailureStatusFailed); !strings.Contains(d.Comment, "x := plain") {
+		t.Errorf("comment lost a suggestion that names no model:\n%s", d.Comment)
+	}
+}

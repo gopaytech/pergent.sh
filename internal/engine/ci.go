@@ -239,8 +239,11 @@ func (d *dispatcher) addCIResults(ctx context.Context, plat Platform, repo setti
 			snap.Jobs[i].TextFailed = snap.Jobs[i].Read != "status"
 		}
 	}
-	if err := d.ciStore().SetRunCI(ctx, d.run.ID, snap.Results()); err != nil {
-		return err
+	// A member's run recorded its snapshot when it was dispatched.
+	if !d.isMember() {
+		if err := d.ciStore().SetRunCI(ctx, d.run.ID, snap.Results()); err != nil {
+			return err
+		}
 	}
 	// ci.Build removes the known secret shapes. Every LLM key the registry
 	// knows goes next, the longest first, then the run's own secrets.

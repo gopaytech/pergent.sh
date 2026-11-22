@@ -4,20 +4,21 @@ import { api, isStatus, type DiagnosticsView, type LogView } from "./api";
 import { ErrorBox, Loading } from "./ui";
 
 // RunLog is a run's log and, below it, what was kept of its Job. The paths
-// say which API answers: a merge request's run and an API review's run have
-// their own, and the same views.
-export default function RunLog({ logPath, diagnosticsPath }: { logPath: string; diagnosticsPath: string }) {
+// say which API answers: a merge request's run, a review panel member and an
+// API review's run have their own, and the same views. what names whose log
+// it is when none was kept ("run" when not given).
+export default function RunLog({ logPath, diagnosticsPath, what = "run" }: { logPath: string; diagnosticsPath: string; what?: string }) {
   return (
     <>
-      <ReviewLog path={logPath} />
+      <ReviewLog path={logPath} what={what} />
       <Diagnostics path={diagnosticsPath} />
     </>
   );
 }
 
-function ReviewLog({ path }: { path: string }) {
+function ReviewLog({ path, what }: { path: string; what: string }) {
   const log = useQuery({ queryKey: ["log", path], queryFn: () => api.get<LogView>(path) });
-  if (isStatus(log.error, 404)) return <div className="pad meta">No log was kept for this run.</div>;
+  if (isStatus(log.error, 404)) return <div className="pad meta">No log was kept for this {what}.</div>;
   if (log.isPending) return <Loading />;
   if (log.isError) return <ErrorBox error={log.error} />;
   return <pre className="log">{log.data.text}</pre>;

@@ -246,6 +246,71 @@ type RunDetailView struct {
 	// Attempts are every attempt of the review this run is one of, oldest
 	// first, this run included; empty for a review of one attempt.
 	Attempts []AttemptView `json:"attempts"`
+	// Panel is the review panel of a panel review: its members, judges and
+	// the tokens of each model, or why it did not start. The key is left
+	// out for any other run.
+	Panel *RunPanelView `json:"panel,omitempty"`
+}
+
+// RunPanelView is a panel review on its run's page: why it did not start
+// (Off), or its members, the entries Job P judged with on this run, and the
+// tokens per model of the whole review, the same on each attempt's page.
+// (A repository's panel is PanelView.)
+type RunPanelView struct {
+	Off     string            `json:"off,omitempty"`
+	Members []PanelMemberView `json:"members"`
+	Judges  []PanelJudgeView  `json:"judges"`
+	Cost    []ModelCostView   `json:"cost"`
+}
+
+// PanelMemberView is member A or B of a panel review: Role is "a" or "b",
+// Attempts its attempts, oldest first (a later one follows a provider's
+// refusal of the one before).
+type PanelMemberView struct {
+	Role     string              `json:"role"`
+	Attempts []MemberAttemptView `json:"attempts"`
+}
+
+// MemberAttemptView is one attempt of a panel member: the entry it ran on
+// (its name and place in the chain), the model, its state, and why it
+// failed with the step it failed at ("" when it did not fail). Entry,
+// Provider and Model are "" before the attempt was dispatched.
+type MemberAttemptView struct {
+	ID       string `json:"id"`
+	Entry    string `json:"entry"`
+	Position int    `json:"position"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	// State is "queued", "running", "reported", "done", "failed",
+	// "fell_back" or "superseded".
+	State   string `json:"state"`
+	Failure string `json:"failure"`
+	Step    string `json:"step"`
+}
+
+// PanelJudgeView is the entry and model a role ("a" or "b") of Job P judged
+// with on this run.
+type PanelJudgeView struct {
+	Role     string `json:"role"`
+	Entry    string `json:"entry"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// ModelCostView is the tokens one model used in the review: Part is
+// "member" (a member's review) or "merge" (Job P), Role "a" or "b", Run the
+// run they count on, Member the member attempt ("" for a merge), Entry the
+// entry's name.
+type ModelCostView struct {
+	Part     string `json:"part"`
+	Role     string `json:"role"`
+	Run      string `json:"run"`
+	Member   string `json:"member"`
+	Entry    string `json:"entry"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	In       int64  `json:"in"`
+	Out      int64  `json:"out"`
 }
 
 // RunEntryView is the entry a run ran on: its name, its place in the chain

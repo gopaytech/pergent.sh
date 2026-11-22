@@ -91,7 +91,8 @@ func lockAPI(ctx context.Context, tx pgx.Tx, key string) error {
 // EnqueueAPIReview queues an API review: a run of kind KindAPI with no merge
 // request and its api_reviews row, in one transaction. A subject is its
 // client, tenant and subject together. The subject's queued and running API
-// reviews are superseded, as a push supersedes a merge request's, and each
+// reviews, and one whose panel members run, are superseded, as a push
+// supersedes a merge request's (the cleanup takes the members), and each
 // gets its callback (when the client has a callback URL); a reported one is
 // not: it finishes, and its callback goes out then.
 //
@@ -140,7 +141,7 @@ func (s *Store) EnqueueAPIReview(ctx context.Context, n NewAPIReview) (id string
 	if _, err := tx.Exec(ctx, `WITH s AS (
 			UPDATE runs SET state = 'superseded'
 			WHERE id IN (SELECT run_id FROM api_reviews WHERE client_id = $1 AND tenant = $2 AND subject = $3)
-			  AND state IN ('queued', 'running')
+			  AND (state IN ('queued', 'running') OR (state = 'waiting' AND skip_reason = 'panel_members'))
 			RETURNING id)
 		INSERT INTO api_callbacks (run_id, client_id)
 		SELECT s.id, c.id FROM s JOIN api_clients c ON c.id = $1 WHERE c.callback_url <> ''
@@ -234,12 +235,13 @@ type APIReviewFilter struct {
 
 // apiStatusSQL is each v1 status of an API review, from its run's state: the
 // rules of reviewapi.StatusOf. A claimed run without a Job is still queued; a
-// reported one is running until its result is out. Once published it is
-// completed when the stored result's status is, and failed otherwise (also
-// when there is no result, only a failure); publish_failed is failed.
+// panel waiting for its members is running, and so is a reported one until
+// its result is out. Once published it is completed when the stored result's
+// status is, and failed otherwise (also when there is no result, only a
+// failure); publish_failed is failed.
 var apiStatusSQL = map[string]string{
 	"queued":     `(runs.state = 'queued' OR (runs.state = 'running' AND runs.job_name = ''))`,
-	"running":    `((runs.state = 'running' AND runs.job_name <> '') OR runs.state = 'reported')`,
+	"running":    `((runs.state = 'running' AND runs.job_name <> '') OR runs.state = 'reported' OR (runs.state = 'waiting' AND runs.skip_reason = 'panel_members'))`,
 	"completed":  `(runs.state = 'published' AND runs.result->>'status' = 'completed')`,
 	"failed":     `(runs.state = 'publish_failed' OR (runs.state = 'published' AND runs.result->>'status' IS DISTINCT FROM 'completed'))`,
 	"superseded": `runs.state = 'superseded'`,

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**Review panels run.** A repository with a chain B in effect runs each review as a panel: member Jobs A and B in parallel, then a merge Job P, which alone publishes ([Review panel](concepts/review-panel.md)). It is experimental and off by default. No release supports a panel yet, so nothing changes in a review until one does.
+
+- **Migration `0049_panel_members.sql`** runs at startup. It adds tables and drops nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database. It never claims a waiting panel run.
+- **Rolling deploy.** It can happen when a later release that turns panels on (it sets the minimum image for a panel) rolls out over pods older than this release. A pod of this release can then split a review while an old pod still runs. The old pod's **Start review** or `review` command can queue the waiting panel run while its members still run. A pod of this release that claims that run starts no Job P: it puts the run back to wait for its members. If the sweep has already superseded those members, it starts Job P on the members that are done: the review is then a review by one model, or it fails. It is never a pass that no model gave. An old pod that claims it runs it as one review, and the sweep supersedes its members. So upgrade to this release on every pod before you upgrade to a release that turns panels on.
+- **Metrics.** A member's fallback to its next entry is not counted in `pergent_model_fallback_total`. Members are not runs, so `pergent_reviews_total` counts a panel review once.
+- **Instance token quota.** With a panel, some tokens can count under the wrong source: [Monthly token quota](concepts/token-quota.md).
+- **Rolling back.** Turn chain B off at every level and wait until no review shows a running panel first.
+
 **Path rules.** A rule is a checklist for a kind of file, added to the review that already runs on it, never blocking: [Path rules](concepts/rules.md). pergent ships built-in rules for 67 file types. With a `jobs.image` that reads rules, every skill gets them. Turn them off per repository with **Built-in rules**, or per skill with `rules: false`.
 
 - **Reviews get no rules yet, built-in or team.** The default `jobs.image`, pergent v0.10.0, reads no rules. Rules reach a review only when `jobs.image` is a pergent release with rule support. The release notes name the first pergent release that has it. Until then a review is the same as before, and the review page says `This image does not use rules.`

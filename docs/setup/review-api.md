@@ -457,7 +457,7 @@ An admin sets the limits of each client (the defaults are [above](#what-a-client
 | Max request bytes, Max files | The request is `413 too_large`. Packed for the Job, the files may not pass 1000000 bytes either. |
 | Requests per hour | Each key holds this many requests, on any route, and gets them back evenly, not all at the top of the hour (600 an hour is one more every 6 seconds). A new key can use all of them at once. Past it the request is `429 rate_limited`, `too many requests for this key`, with `Retry-After`: the seconds until one more is allowed. Every request with a good key takes one, whatever its route or answer; a request refused with `429` takes none. The count is kept in memory: a restart gives every key a full allowance. |
 | Max in flight | At most this many of the client's reviews run at once. More wait in the queue, oldest first, and hold up no other client and no merge request. |
-| Monthly token budget | Once the tokens of the reviews asked for this UTC month reach it, `POST /v1/reviews` is `429 budget_used_up`, `this client's monthly token budget is used up`, with `Retry-After` until the next month. A review already queued fails at `starting` with the same reason. A retry with an `Idempotency-Key` used before is still answered. |
+| Monthly token budget | Once the tokens of the reviews asked for this UTC month reach it, `POST /v1/reviews` is `429 budget_used_up`, `this client's monthly token budget is used up`, with `Retry-After` until the next month. A review already queued fails at `starting` with the same reason (a panel that has split runs its members and Job P without a judge, see [How a review runs](#how-a-review-runs)). A retry with an `Idempotency-Key` used before is still answered. |
 
 There is no cap on how many reviews a client may queue. Each queued review keeps its sealed files in the database until it is dispatched, so send an `Idempotency-Key` on a retry, or a repeated request queues a second review.
 
@@ -469,6 +469,13 @@ Wait the `Retry-After` seconds after a `429`, then try again; do not retry at on
 - It uses the client's skills and model, read when the Job starts. The Job's timeout, memory and Max steps are the defaults on **Admin → Settings**.
 - The files reach the Job in a Secret of their own, which only its checkout container reads. The watcher tries to delete it the first time it sees the checkout done, and again before it reports a stuck, vanished or finished Job. A delete that fails is logged and not tried again at that step: the Secret then goes with the failure report, or with the Job, an hour after it ends. If the result arrives before a watcher pass sees the checkout done, the Secret stays until the Job is deleted, an hour after it ends. The stored copy is deleted once the Job has started.
 - Nothing is posted to GitLab or GitHub.
+- **Review panel.** If chain B is set, an API review can run as a [review panel](../concepts/review-panel.md): members A and B, then Job P. Then:
+  - The review keeps its stored files until **Job P starts**, not until the first Job starts, because each member needs them.
+  - An API panel's chain B is the **global** one. A client has no chain B of its own.
+  - API members **do not fall back**: a member whose provider refuses its model fails.
+  - Job P may **judge** with the next entry of a chain, when a done member's entry was marked or removed since it ran. Job P itself **does not fall back**: when a judge's provider refuses its model, that entry is marked and the review is published as it is.
+  - A queued API review past the **Monthly token budget** fails at `starting`, as above, **unless it is a panel that has split already**: its members and Job P still run, and Job P runs with no judge.
+  - The `usage` of a panel review is the total of A, B and Job P.
 
 A failed review has a `failure` with the step it failed at: see [A failed review](#a-failed-review).
 

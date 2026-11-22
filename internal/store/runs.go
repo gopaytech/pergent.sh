@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // MRKey identifies a merge request.
@@ -52,6 +53,9 @@ const (
 	// WaitCIPending: the CI jobs the repository chose are still running;
 	// Run.CIDeadline is when the run stops waiting for them.
 	WaitCIPending = "ci_pending"
+	// WaitPanel: a panel review's run waits while its members A and B
+	// review (panel_members). The previous release never claims it.
+	WaitPanel = "panel_members"
 )
 
 var (
@@ -455,8 +459,9 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 // limits the run to those skills (nil or empty: all of them) and baseRunID is
 // the run whose results the new one keeps.
 //
-// A run of this head and target that is queued, running or reported (its
-// review not yet published) is not replaced or duplicated: created is false
+// A run of this head and target that is queued, running, reported (its
+// review not yet published) or a panel waiting for its members is not
+// replaced or duplicated: created is false
 // and id is that run's, nothing is changed. Superseding a reported run would
 // leave its commit status for the cleanup to cancel while the new run
 // is running. The exception is replace (a full review asked for): it
@@ -658,10 +663,12 @@ func (s *Store) supersede(ctx context.Context, id, reason string) error {
 	return err
 }
 
-// CountRunning returns the number of runs in state running.
+// CountRunning returns the number of runs and panel members in state
+// running: each holds a jobs.max_running slot.
 func (s *Store) CountRunning(ctx context.Context) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM runs WHERE state = 'running'`).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM runs WHERE state = 'running')
+		+ (SELECT count(*) FROM panel_members WHERE state = 'running')`).Scan(&n)
 	return n, err
 }
 
@@ -671,7 +678,8 @@ func (s *Store) CountRunning(ctx context.Context) (int, error) {
 // runs that have to wait for an instance take no slot from the others.
 //
 // An API review is claimed only while its client has fewer than its
-// max_in_flight reviews running, counting those this claim takes: its due
+// max_in_flight reviews running (a panel waiting for its members is one
+// review running), counting those this claim takes: its due
 // reviews are numbered oldest first, and those past the cap stay queued and
 // take no slot either. A merge request's run is never held by it.
 func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip ...string) ([]Run, error) {
@@ -683,7 +691,10 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip 
 	}
 	// A query with a window function can't lock rows, so the runs it picks
 	// are locked by the select around it, which checks the claim's conditions
-	// again: a run claimed meanwhile is skipped as before.
+	// again: a run claimed meanwhile is skipped as before. The lock is NO KEY
+	// UPDATE, which is all the claim's update needs: a write that only holds
+	// the run's key (KEY SHARE, as a row that references the run takes, such
+	// as a panel member's usage) does not make the claim skip a due run.
 	rows, err := s.pool.Query(ctx, `UPDATE runs SET state = 'running', claimed_at = $2 WHERE id IN (
 			SELECT id FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
 			  AND instance <> ALL($3::text[])
@@ -694,9 +705,10 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip 
 					FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
 					  AND instance <> ALL($3::text[])) q
 				WHERE q.kind = 'mr'
-				   OR q.n + (SELECT count(*) FROM runs x WHERE x.api_client_id = q.api_client_id AND x.state = 'running')
+				   OR q.n + (SELECT count(*) FROM runs x WHERE x.api_client_id = q.api_client_id
+						AND (x.state = 'running' OR (x.state = 'waiting' AND x.skip_reason = 'panel_members')))
 					<= (SELECT c.max_in_flight FROM api_clients c WHERE c.id = q.api_client_id))
-			ORDER BY created_at, id LIMIT $1 FOR UPDATE OF runs SKIP LOCKED)
+			ORDER BY created_at, id LIMIT $1 FOR NO KEY UPDATE OF runs SKIP LOCKED)
 		RETURNING `+runColumns, limit, now, skip)
 	if err != nil {
 		return nil, err
@@ -803,6 +815,26 @@ func (s *Store) SetRunInputs(ctx context.Context, id, model string, maxTurns int
 	if !validUUID(id) {
 		return fmt.Errorf("store: run %q not found", id)
 	}
+	return setRunInputs(ctx, s.pool, id, RunInputs{Model: model, MaxTurns: maxTurns, Sources: sources, Versions: versions, Hashes: hashes})
+}
+
+// RunInputs is what SetRunInputs records of a run's Job.
+type RunInputs struct {
+	Model    string
+	MaxTurns int
+	Sources  map[string]string
+	Versions map[string]int
+	Hashes   map[string]string
+}
+
+// execer runs one statement: the pool, or a transaction.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// setRunInputs is SetRunInputs on db.
+func setRunInputs(ctx context.Context, db execer, id string, in RunInputs) error {
+	sources, versions, hashes := in.Sources, in.Versions, in.Hashes
 	if sources == nil {
 		sources = map[string]string{}
 	}
@@ -825,12 +857,12 @@ func (s *Store) SetRunInputs(ctx context.Context, id, model string, maxTurns int
 		return err
 	}
 	var turns *int
-	if maxTurns > 0 {
-		turns = &maxTurns
+	if in.MaxTurns > 0 {
+		turns = &in.MaxTurns
 	}
-	_, err = s.pool.Exec(ctx, `UPDATE runs SET model = $2, max_turns = $3, skill_sources = $4::jsonb, skill_versions = $5::jsonb,
+	_, err = db.Exec(ctx, `UPDATE runs SET model = $2, max_turns = $3, skill_sources = $4::jsonb, skill_versions = $5::jsonb,
 			skill_hashes = $6::jsonb
-		WHERE id = $1::uuid`, id, cutText(model), turns, string(b), string(v), string(h))
+		WHERE id = $1::uuid`, id, cutText(in.Model), turns, string(b), string(v), string(h))
 	return err
 }
 
@@ -866,20 +898,25 @@ func (s *Store) HoldRun(ctx context.Context, id, reason string) (ok bool, err er
 	return tag.RowsAffected() == 1, nil
 }
 
+// panelWaitingSQL is a panel review's run while its members run: live, and on
+// its way.
+const panelWaitingSQL = `(state = 'waiting' AND skip_reason = 'panel_members')`
+
 // liveRerunRunSQL finds the run of a head and target that EnqueueRerun leaves
-// as it is ($6 is replace): queued, running or reported, but not, with
-// replace, a push's run that hasn't been dispatched or reviews only some files.
+// as it is ($6 is replace): queued, running, reported or a panel waiting for
+// its members, but not, with replace, a push's run that hasn't been
+// dispatched or reviews only some files.
 const liveRerunRunSQL = `SELECT id::text FROM runs
 	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-	  AND state IN ('queued', 'running', 'reported')
+	  AND (state IN ('queued', 'running', 'reported') OR ` + panelWaitingSQL + `)
 	  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`
 
-// liveStartRunSQL finds a live (queued, running or reported) run of a head and
-// target, which StartRun reaches only when no waiting run or undispatched
-// push run of it was there to start.
+// liveStartRunSQL finds a live (queued, running, reported or a panel waiting
+// for its members) run of a head and target, which StartRun reaches only when
+// no waiting run or undispatched push run of it was there to start.
 const liveStartRunSQL = `SELECT id::text FROM runs
 	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-	  AND state IN ('queued', 'running', 'reported')`
+	  AND (state IN ('queued', 'running', 'reported') OR ` + panelWaitingSQL + `)`
 
 // undispatchedPushRunSQL is the condition of a push's run that is queued or
 // claimed and not dispatched yet, which StartRun turns into a start.
@@ -893,7 +930,8 @@ const undispatchedPushRunSQL = `state IN ('queued', 'running') AND dispatched_at
 const onItsWaySQL = ` AND (quota_checked OR dispatched_at IS NOT NULL OR trigger = 'start')`
 
 // ReviewActiveForRerun reports whether EnqueueRerun (with replace) would find
-// the head's review already queued, running or reported and queue nothing,
+// the head's review already queued, running, reported or a panel waiting for
+// its members, and queue nothing,
 // and the dispatcher won't hold that review for the quota.
 func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, targetBranch string, replace bool) (bool, error) {
 	var id string
@@ -905,8 +943,9 @@ func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, tar
 }
 
 // ReviewActiveForStart reports whether StartRun would find the head's review
-// already queued, running or reported and start nothing: a waiting run, or a
-// push's queued run that hasn't been dispatched, is one it starts. A review
+// already queued, running, reported or a panel waiting for its members, and
+// start nothing: any other waiting run, or a push's queued run that hasn't
+// been dispatched, is one it starts. A review
 // the dispatcher will hold for the quota doesn't count.
 func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, targetBranch string) (bool, error) {
 	var id string
@@ -919,12 +958,14 @@ func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, tar
 }
 
 // StartRun starts the review of headSHA onto targetBranch of an untrusted
-// author's merge request. A waiting run of that head and target becomes a
+// author's merge request. A waiting run of that head and target (not a
+// panel waiting for its members, which is on its way) becomes a
 // queued run with TriggerStart (started is true, id is that run's), and so
 // does a push's run of it not dispatched yet, queued or claimed (being
 // checked): the dispatcher's hold then leaves it alone, and so does its CI
-// hold (a start skips the CI wait, and the quota check). With none, a live (queued, running or reported) run of that head and target is
-// left as it is and returned, started false. Otherwise a new queued TriggerStart run is
+// hold (a start skips the CI wait, and the quota check). With none, a live
+// (queued, running, reported, or a panel waiting for its members) run of that
+// head and target is left as it is and returned, started false. Otherwise a new queued TriggerStart run is
 // created, superseding the live runs of other heads and targets and an older
 // finished run of this one, as EnqueueRerun does. The caller checks the
 // merge request's re-run cap first.
@@ -941,7 +982,7 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL, quota_checked = true,
 			ci_checked = ci_checked OR skip_reason = 'ci_pending'
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state = 'waiting'
+		  AND state = 'waiting' AND skip_reason <> 'panel_members'
 		RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
@@ -1712,10 +1753,11 @@ type WaitingChange struct {
 // WaitingChanges returns the merge requests of project (its path, matched
 // ignoring case) on instance whose newest live run waits, newest first, at
 // most 100. A waiting run with a newer one (left by a release that didn't
-// know waiting runs) isn't listed.
+// know waiting runs) isn't listed, nor is a panel waiting for its members.
 func (s *Store) WaitingChanges(ctx context.Context, instance, project string) ([]WaitingChange, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.mr_iid, r.head_sha, r.title, r.author, r.web_url, r.created_at, r.skip_reason FROM runs r
 		WHERE r.instance = $1 AND lower(r.project_path) = lower($2) AND r.state = 'waiting'
+		  AND r.skip_reason <> 'panel_members'
 		  AND NOT EXISTS (SELECT 1 FROM runs n
 			WHERE n.instance = r.instance AND n.project_id = r.project_id AND n.mr_iid = r.mr_iid
 			  AND n.state <> 'superseded' AND (n.created_at, n.id) > (r.created_at, r.id))

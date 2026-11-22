@@ -1046,3 +1046,40 @@ func TestRunDetailLatestDecided(t *testing.T) {
 		t.Errorf("with a newer decided run: newer %v, older %v; want true, false", latest(newer), latest(decided))
 	}
 }
+
+// The start button refuses a panel review waiting for its members: it is on
+// its way, not waiting for a start. A change held for a start still starts.
+func TestStartButtonRefusesPanel(t *testing.T) {
+	for _, panel := range []bool{true, false} {
+		e := newEnv(t, nil)
+		e.aliceOn("main", store.RoleMaintainer)
+		c := e.aliceSession()
+		id := e.waitingChange(head('1'), store.WaitUntrusted)
+		if panel {
+			// The run is claimed and split into its members instead.
+			if _, err := e.db.Exec(ctx, `UPDATE runs SET state = 'running', skip_reason = '' WHERE id = $1::uuid`, id); err != nil {
+				t.Fatal(err)
+			}
+			if started, err := e.st.StartPanel(ctx, id, store.PanelSplit{BaseSHA: "base-sha", StartSHA: "start-sha"}, time.Now()); err != nil || !started {
+				t.Fatalf("StartPanel = %v, %v", started, err)
+			}
+		}
+		rec := e.send(c, "POST", buttonURL("start"), `{"head":"`+head('1')+`"}`)
+		rows := e.runRows()
+		if !panel {
+			if rec.Code != http.StatusAccepted || len(rows) != 1 || rows[0].State != "queued" {
+				t.Errorf("start of a held change = %d %s, runs %+v; want 202 and the run queued", rec.Code, rec.Body, rows)
+			}
+			continue
+		}
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), msgNotWaiting) {
+			t.Errorf("start of a panel = %d %s; want 409 %q", rec.Code, rec.Body, msgNotWaiting)
+		}
+		if len(rows) != 1 || rows[0].ID != id || rows[0].State != "waiting" || rows[0].Trigger != store.TriggerPush {
+			t.Errorf("runs = %+v; want the panel's run still waiting for its members", rows)
+		}
+		if a := e.auditOf("review_start"); len(a) != 0 {
+			t.Errorf("audit = %+v; want no start", a)
+		}
+	}
+}

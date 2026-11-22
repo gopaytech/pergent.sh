@@ -147,3 +147,27 @@ func ModelRows(body []byte, run store.Run) ([]store.ModelUsage, error) {
 	}
 	return out, nil
 }
+
+// Rows returns what to record of run's result body: what each skill used
+// (FromResult) and, for a review panel's merge (merge true, Job P), its model
+// rows (ModelRows), never nil then, so the store adds P's tokens to the rows
+// its members made even when the result has no per-model tokens. Any other
+// run has nil model rows: today's record. An unreadable result is an error
+// with no skills, and, for a merge, no model rows.
+func Rows(body []byte, run store.Run, merge bool) ([]store.SkillUsage, []store.ModelUsage, error) {
+	skills, err := FromResult(body, run)
+	if err != nil {
+		skills = nil
+	}
+	if !merge {
+		return skills, nil, err
+	}
+	models, merr := ModelRows(body, run)
+	if merr != nil || models == nil {
+		models = []store.ModelUsage{}
+	}
+	if err == nil {
+		err = merr
+	}
+	return skills, models, err
+}
