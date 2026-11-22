@@ -3761,6 +3761,107 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/models/{id}/limit:
+    put:
+      operationId: setModelLimit
+      tags: [Instances and settings]
+      summary: Set a global entry's model limit
+      description: |
+        Admins only. The most tokens (input plus output) reviews may spend on
+        the entry in a UTC calendar month, on every instance and repository,
+        API reviews included. When it is used up, reviews skip the entry.
+        `{id}` takes `config` and `config-1` to `config-4` too. A number out
+        of range is 400 with the range. Audited as `model_limit_set`.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ModelId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ModelLimitRequest'}
+      responses:
+        '204':
+          description: The limit is set.
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: clearModelLimit
+      tags: [Instances and settings]
+      summary: Remove a global entry's model limit
+      description: |
+        Admins only. 204 whether it had one or not; a limit removed is audited
+        (`model_limit_cleared`, with the number it had).
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ModelId'
+      responses:
+        '204':
+          description: No model limit now.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/models/{id}/team-limits/{teamId}:
+    put:
+      operationId: setTeamLimit
+      tags: [Instances and settings]
+      summary: Set a team's limit on a global entry
+      description: |
+        Admins only. The most tokens the repositories the team owns may spend
+        on the entry in a UTC calendar month, whether teams may use the entry
+        or not (the global chain reaches it too). When it is used up, those
+        repositories skip the entry. A team limit may be larger than the
+        model limit. 404 for an unknown entry or team. Audited as
+        `model_limit_set`, with the team's name.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ModelId'
+        - $ref: '#/components/parameters/TeamId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ModelLimitRequest'}
+      responses:
+        '204':
+          description: The limit is set.
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: clearTeamLimit
+      tags: [Instances and settings]
+      summary: Remove a team's limit on a global entry
+      description: Admins only. 204 whether it had one or not; a limit removed is audited (`model_limit_cleared`).
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ModelId'
+        - $ref: '#/components/parameters/TeamId'
+      responses:
+        '204':
+          description: No team limit now.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/chain:
     get:
       operationId: getGlobalChain
@@ -4911,8 +5012,16 @@ components:
       name: id
       in: path
       required: true
-      description: The model's ID in the list; `config` is the entry the config file supplies.
+      description: The model's ID in the list; `config` is the entry the config file supplies, `config-1` to `config-4` its `llm.fallbacks`.
       schema: {type: string}
+    TeamId:
+      name: teamId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
     ApiClientName:
       name: name
       in: path
@@ -5899,6 +6008,17 @@ components:
         head:
           type: string
           pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$'
+    ModelLimitRequest:
+      type: object
+      required: [monthlyTokens]
+      additionalProperties: false
+      properties:
+        monthlyTokens:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 1000000000000000
+          description: Tokens (input plus output) per UTC calendar month. Removing a limit is a `DELETE`.
     InstanceTokenQuotaRequest:
       type: object
       required: [monthlyTokenQuota]
