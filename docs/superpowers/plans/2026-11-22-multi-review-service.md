@@ -16,15 +16,15 @@ Details the design does not state. The default is what this plan builds; reconci
 
 | # | Need | Default this plan builds on | Used in |
 |---|---|---|---|
-| D1 | Flag forms | `--multi-review`, `--reviewer=<file>` repeated (Go `flag` `=` form), `--no-judge`, `--no-skill-verify` on reviewer Jobs. `--panel`, `--panel-a`, `--panel-b`, `--panel-no-judge` and `PERGENT_PANEL_B_*` are gone. | M3.2 |
-| D2 | Reviewer numbering | The number is the position of `--reviewer`. pergent.sh passes only reviewers with a result, in reviewer order (1, 3 when 2 has none), and the names to `render` in the same order. | M3.2, M3.9 |
-| D3 | A `--reviewer` file that is missing (the fetch got 404 or gave up) | That reviewer is unusable for every skill, not an error. All missing: every skill `failed`, as "No reviewer usable". | M3.2, M3.8 |
-| D4 | `--no-judge` env | Needs `OPENCODE_PROVIDER` and `OPENCODE_MODEL` set and no `OPENCODE_API_KEY`. pergent.sh sets them to the judge copy's first entry, else reviewer 1's final model. | M3.8 |
-| D5 | Render names | `render.Options.MultiReview *render.MultiReviewNames{Reviewers []string; Judge string}`; `Judge` is `""` with no judge. Nil writes no multi review text, so the comment is today's. | M3.9 |
-| D6 | Result JSON | Top level `multi_review` with `reviewers[]` and `judge` (provider, model each); skill level `multi_review` (exact merge flag); finding level `multi_review` (`found_by` reviewer numbers, `reason`, `rated_suggestion_by`, `unjudged`). pergent.sh mirrors them in `internal/result` and only passes them to `render`. | M3.9 |
-| D7 | Provider error of the judge | `provider_error.role` is `judge` on a judge run's error; a reviewer Job's has no role. | M3.8 |
-| D8 | Judge tokens | `skills[].tokens` of a judge result are the judge's own model calls only, never the reviewers'. No `tokens_by_model`. | M3.9 |
-| D9 | Lines pergent.sh writes | pergent.sh writes `multi review off: <reason>` and `Multi review: <name> was skipped: <reason>.` as footer lines. The CLI writes the header, the rows, the demoted line and the exact merge line, and no skip line. | M3.9 |
+| D1 | Flag forms | `--multi-review`, `--reviewer <file>` 1 to 5 times (pergent.sh writes the Go `flag` `=` form), `--no-judge`, `--no-skill-verify` on reviewer Jobs only (refused with `--multi-review`, as are previous, carried, CI results, description, linked repositories and graph). `--panel*` flags and `PERGENT_PANEL_B_*` are gone. | M3.1 |
+| D2 | Reviewer numbering | The n-th `--reviewer` is reviewer n, and an unusable file keeps its number. pergent.sh passes every reviewer of the frozen set, in card order, one `--reviewer` each, a reviewer with no result included, so the CLI's reviewer 3 is the card's reviewer 3. `MultiReviewNames.Reviewers` holds every reviewer's name in that order. | M3.1, M3.7, M3.9 |
+| D3 | A `--reviewer` file that is missing (no result: get-reviewers wrote none) | That reviewer is unusable (log line only), not an error. No usable file at all: `--multi-review needs at least one usable reviewer result`, an error result (exit 3), which M3.7 treats as a judge failure. | M3.1, M3.7 |
+| D4 | `--no-judge` env | `OPENCODE_PROVIDER`, `OPENCODE_MODEL` and `OPENCODE_API_KEY` are not required. pergent.sh sets no LLM and no key (the env values are empty). | M3.7 |
+| D5 | Render names | `render.Options.MultiReview *render.MultiReviewNames{Reviewers []string; Judge string; Skipped []render.SkippedReviewer{Name, Reason}}`; `Judge` is `""` with no judge; a missing name reads `reviewer <n>`. Nil writes no multi review text, so the comment is today's. | M3.9 |
+| D6 | Result JSON | Top `multi_review: {reviewers: [{number, usable}], judge: {provider, model, judged}}`; skill `multi_review: {reviewers, failed, judge, judge_cause, exact_merge}`; finding `multi_review: {found_by, also, judge_disagreed, reason, rated_suggestion_by, unjudged}`. pergent.sh mirrors them in `internal/result` (`MultiReview`, `SkillMultiReview`, `FindingMultiReview`) and passes them to `render`. | M3.9 |
+| D7 | Provider error of the judge | `provider_error.role` is `judge` on a judge (or one-reviewer verification) error, with the judge's provider and model; a reviewer Job's has no role. | M3.7 |
+| D8 | Judge tokens | One model per Job: `skills[].tokens` of a judge result are the judge's own calls. `tokens_by_model` is removed. | M3.9 |
+| D9 | Lines pergent.sh writes | Only the footer line `multi review off: <reason>` of a review that ran as one review. `render` writes every multi review text, the skip line `Multi review: <name> was skipped: <reason>.` from `Skipped` included; pergent.sh fills `Skipped`. | M3.9 |
 | D10 | The release | The first pergent release with `--multi-review` is the new `PanelMinVersion`. The owner sets it with `defaultImage` and the `go.mod` pin (Rollout step 2), not this plan. | M4.2 |
 
 ## Findings (checked 2026-11-22 on `origin/main` c0bda17)
@@ -89,12 +89,12 @@ Details the design does not state. The default is what this plan builds; reconci
 | Member states | The panel's, plus `skipped` (final; an extra reviewer that could not start at the split, reason in `failure_reason`). `off` stays: reviewer 1's one row of a review whose multi review did not start. | Design "Reviewer skipped", "Only reviewer 1 can start". |
 | Off reasons (after `multi review off: `) | `the review image does not support it` (design text), `pergent.sh's own image is not set`, `the token quota is used up`, `no other reviewer can start`, `the reviewers could not be read`. | Builder's texts. |
 | Skip reasons at the split | `no different model left` (only `same_model`), `the token quota` (only the instance quota), `no usable entry` (anything else). | Comment-safe fixed words. |
-| Skipped line reason in the comment | Fixed words only: a skip reason, `chain.ReasonWords(class)` for a provider refusal, else `its review failed`. The full text is on the run page. | No model text in the comment. |
+| Skipped reason (`render`'s `Skipped`, D5) | Fixed words only: a skip reason, `chain.ReasonWords(class)` for a provider refusal, else `its review failed`. The full text is on the run page. | No model text in the comment. |
 | Every reviewer failed | Run reported with `every reviewer failed: reviewer 1 (<name>): <reason>; reviewer 2 (<name>): <reason>` (each cut with `cutText`). | Design "Every reviewer failed". |
 | Judge stage name | `stageJudge` (was `stageMerge`). | Words of the design. |
-| Judge row | `review_judges` (PK `run_id`): reviewers passed (`int[]`, `--reviewer` order), `no_judge`, `no_judge_reason`, the entry. Written before the Job starts. | Names, fallback and usage read it. |
+| Judge row | `review_judges` (PK `run_id`): every reviewer of the frozen set (`int[]`, `--reviewer` order, D2), `no_judge`, `no_judge_reason`, the entry. Written before the Job starts. | Names, fallback and usage read it. |
 | Judge crash | Publish of a judge run with no usable result and `no_judge = false` calls `Store.EnqueueJudgeRetry`: the run is superseded with outcome `fell_back`, reason `judge_failed`, and the next attempt is queued. A judge stage whose review has a `judge_failed` attempt runs `--no-judge`. A failed `--no-judge` run is published as failed. | Design: "One more judge Job with `--no-judge`. If it fails too, the review fails." |
-| Results for the judge | `GET /runs/{id}/reviewers/{n}`, the judge run's live result token: the newest `done` member of reviewer `n`; 404 otherwise. Fetched by `get-reviewers --base-url=<...>/runs/<id>/reviewers --reviewers=1,3 --dir=/panel` into `/panel/reviewer-<n>.json`. | The panel's route and fetch, for N. |
+| Results for the judge | `GET /runs/{id}/reviewers/{n}`, the judge run's live result token: the newest `done` member of reviewer `n`; 404 otherwise. Fetched by `get-reviewers --base-url=<...>/runs/<id>/reviewers --reviewers=1,2,3 --dir=/panel` into `/panel/reviewer-<n>.json`; a reviewer with no result gets no file (D3). | The panel's route and fetch, for N. |
 | Labels | `pergent.sh/review-member` (member ID) and `pergent.sh/reviewer` (`1`..`5`, or `judge`). | The panel labels never shipped in use. |
 | Usage | `run_usage_by_model`: part `reviewer` (one row per member attempt and skill, on the split run) and part `judge` (one row per judge run and skill, the `review_judges` entry; none with `--no-judge`). `run_usage` keeps the total. | Design "Data". |
 | Legacy panel rows | At start: log one warning with the count of `panel_chains` rows with entries and of `panel_members` rows; queue each run waiting on `panel_members` again as a single review; supersede its live `panel_members` and delete their Jobs. | Design "Old tables and rows". |
@@ -226,8 +226,8 @@ CREATE TABLE review_judge_chains (
     chain  jsonb NOT NULL
 );
 
--- review_judges: what each judge Job run judged with: the reviewers whose
--- results it got, in --reviewer order, and its entry, or no_judge and why.
+-- review_judges: what each judge Job run judged with: every reviewer of the
+-- review, in --reviewer order, and its entry, or no_judge and why.
 CREATE TABLE review_judges (
     run_id           uuid      PRIMARY KEY REFERENCES runs (id) ON DELETE CASCADE,
     reviewers        integer[] NOT NULL,
@@ -677,13 +677,13 @@ const (
 // JudgeParams is what a judge Job needs beyond a review Job's checkout.
 type JudgeParams struct {
 	BaseURL   string // <callback>/runs/<run>/reviewers
-	Reviewers []int  // reviewers with a result, in --reviewer order
+	Reviewers []int  // every reviewer of the frozen set, in order (D2)
 	NoJudge   bool   // --no-judge: no model runs and no key is held
 	Image     string // pergent.sh's own image, for get-reviewers
 }
 ```
 
-`forJudge` drops what `forPanel` drops. Args: `--multi-review`, then `--reviewer=/panel/reviewer-<n>.json` per entry of `Reviewers`, then `--no-judge` when set (D1). `reviewersContainer` runs `/pergent-sh get-reviewers --base-url=<BaseURL> --reviewers=1,3 --dir=/panel` with `PERGENT_RESULT_TOKEN` only. The panel volume grows to `64Mi` (5 results of 10 MiB and a temp file). Key handling:
+`forJudge` drops what `forPanel` drops. Args: `--multi-review`, then `--reviewer=/panel/reviewer-<n>.json` per entry of `Reviewers`, then `--no-judge` when set (D1). `reviewersContainer` runs `/pergent-sh get-reviewers --base-url=<BaseURL> --reviewers=1,2,3 --dir=/panel` with `PERGENT_RESULT_TOKEN` only. The panel volume grows to `64Mi` (5 results of 10 MiB and a temp file). Key handling:
 
 ```go
 // BuildSecret: a judge Job holds the judge's key as llm-api-key, and none
@@ -696,7 +696,7 @@ if p.Judge != nil && p.Judge.NoJudge {
 
 `get-reviewers` writes `<dir>/reviewer-<n>.json` with mode 0644, at most 10 MiB each, 3 tries, a 404 or a failure writes no file, always exits 0, and accepts only numbers 1..5.
 
-- [ ] **Step 1: Failing tests:** `TestBuildJobUnchanged` passes with no golden edit; `TestBuildReviewerJob` (`SkipSkillVerify`, `ReviewMemberID`, `Reviewer: "3"`: `--no-skill-verify` and the 2 labels, nothing else against the golden); `TestBuildJudgeJob` (args in order for `Reviewers: [1, 3]`, `--timeout=10m0s`, no previous, carried, CI, description, linked or graph input; init containers `checkout` then `reviewers`; no `PERGENT_PANEL_B_*` anywhere); `TestBuildJudgeJobKeys` (Secret keys exactly `git-token`, `llm-api-key`, `result-token`; `OPENCODE_API_KEY` once, only in `pergent`; the fetch container gets only `PERGENT_RESULT_TOKEN`); `TestBuildJudgeJobNoJudge` (`--no-judge`, no `llm-api-key`, no `OPENCODE_API_KEY`); `TestGetReviewersWritesByNumber` (2 servers' answers land as `reviewer-1.json` and `reviewer-3.json`; a 404 writes no file; exit 0; `--reviewers=6` refused); the existing panel Job tests still pass.
+- [ ] **Step 1: Failing tests:** `TestBuildJobUnchanged` passes with no golden edit; `TestBuildReviewerJob` (`SkipSkillVerify`, `ReviewMemberID`, `Reviewer: "3"`: `--no-skill-verify` and the 2 labels, nothing else against the golden); `TestBuildJudgeJob` (args in order for `Reviewers: [1, 2, 3]`, `--timeout=10m0s`, no previous, carried, CI, description, linked or graph input; init containers `checkout` then `reviewers`; no `PERGENT_PANEL_B_*` anywhere); `TestBuildJudgeJobKeys` (Secret keys exactly `git-token`, `llm-api-key`, `result-token`; `OPENCODE_API_KEY` once, only in `pergent`; the fetch container gets only `PERGENT_RESULT_TOKEN`); `TestBuildJudgeJobNoJudge` (`--no-judge`, no `llm-api-key`, no `OPENCODE_API_KEY`); `TestGetReviewersWritesByNumber` (2 servers' answers land as `reviewer-1.json` and `reviewer-3.json`; a 404 writes no file; exit 0; `--reviewers=6` refused); the existing panel Job tests still pass.
 - [ ] **Step 2: Run to fail.** `go test -count=1 ./internal/kube/ ./cmd/pergent-sh/ -run 'BuildJob|BuildReviewer|BuildJudge|GetReviewers'`. Expected: FAIL, undefined `JudgeParams`.
 - [ ] **Step 3: Code.**
 - [ ] **Step 4: Run.** PASS. Then `go vet ./...`.
@@ -855,8 +855,9 @@ A reported member falls back only on a merge request's review: a provider refusa
 **Interfaces:**
 
 ```go
-// judgePlan is what the judge Job runs with: the reviewers with a done
-// member, in number order; the judge entry, or no judge and why.
+// judgePlan is what the judge Job runs with: every reviewer of the frozen
+// set, in number order (one with no done member gets no file); the judge
+// entry, or no judge and why.
 type judgePlan struct {
 	reviewers []int
 	entry     chain.Decision // the judge's entry; zero with noJudge
@@ -874,8 +875,8 @@ func (p judgePlan) key() string { if p.noJudge { return "" }; return p.entry.Ent
 // judge chain"); an earlier attempt of the review closed with reason
 // judge_failed ("the judge Job failed"); the repository quota is used up;
 // or the chain resolves to no entry (marks, keys, the instance quota on
-// global entries). d.entry is the judge (OPENCODE_*); with no judge its LLM
-// is the copy's first entry, else reviewer 1's final model, with no key (D4).
+// global entries). d.entry is the judge (OPENCODE_*); with no judge it is
+// empty: no LLM and no key (D4).
 func (d *dispatcher) resolveJudge(ctx context.Context, repo settings.Effective, repoUsedUp, instanceUsedUp bool) error
 
 // retryJudge acts on a reported judge run with no usable result (no result,
@@ -890,8 +891,8 @@ The judge Job: `params.Judge = &kube.JudgeParams{BaseURL: <callback>/runs/<run>/
 - [ ] **Step 1: Failing tests:**
   - `TestE2EJudgeJob`: 3 reviewers done: one judge Job, `--multi-review --reviewer=/panel/reviewer-1.json --reviewer=/panel/reviewer-2.json --reviewer=/panel/reviewer-3.json`, `--timeout=10m0s`; one `review_judges` row.
   - `TestE2EJudgeJobHoldsOnlyJudgeKey` (Review Focus 5): the Secret's `llm-api-key` is the judge entry's key; no reviewer's key is in the Secret or the Job; with the judge on reviewer 2's entry, the one key is that entry's.
-  - `TestE2EJudgeSkippedReviewerLeftOut`: reviewer 2 failed: `--reviewer` for 1 and 3 only; `reviewers` `{1,3}`.
-  - `TestE2EJudgeOneReviewer`: only reviewer 1 done: one `--reviewer`, the judge still runs.
+  - `TestE2EJudgeFailedReviewerKeepsNumber`: reviewer 2 failed and reviewer 3 was skipped at the split: `--reviewer` for 1, 2 and 3; `reviewers` `{1,2,3}`; get-reviewers writes only `reviewer-1.json` (the route gives 404 for 2 and 3).
+  - `TestE2EJudgeOneReviewer`: only reviewer 1 of 2 done: both `--reviewer` flags, one file, the judge still runs.
   - `TestE2EJudgeQuotaNoJudge`: repository quota used up: `--no-judge`, no key; `no_judge_reason` set.
   - `TestE2EJudgeEmptyChainNoJudge`: an empty judge copy: `--no-judge`.
   - `TestE2EJudgeFallsBack`: a judge result with `provider_error.role` `judge`, quota: the entry marked, a new judge attempt on the next frozen entry; the members untouched.
@@ -923,12 +924,12 @@ The judge Job: `params.Judge = &kube.JudgeParams{BaseURL: <callback>/runs/<run>/
 
 ### Task M3.9: Pin pergent, read the result, publish, count tokens
 
-Needs the CLI plan's code merged on pergent `master` and rows D2, D5 to D9 settled.
+Needs the CLI plan's code merged on pergent `master` (rows D2, D5 to D9).
 
 **Files:**
 - Modify: `go.mod`, `go.sum` (`GOFLAGS=-mod=mod go get github.com/gopaytech/pergent@<master sha>`, `go mod tidy`)
 - Modify: `internal/result/result.go:30-300,360-440` (the D6 types in place of `Panel`, `SkillPanel`, `PanelJudge`, `FindingPanel`, `ModelTokens`; `ToRender`)
-- Modify: `internal/policy/policy.go:150-170,317,427-433` (`Outcome.MultiReview *render.MultiReviewNames`, `Outcome.MultiReviewNotes []string`, `MultiReviewOffLine`, `SkippedLine`; `hideInPanelText` → `hideInMultiReviewText`)
+- Modify: `internal/policy/policy.go:150-170,317,427-433` (`Outcome.MultiReview *render.MultiReviewNames`, `MultiReviewOffLine`; `hideInPanelText` → `hideInMultiReviewText`)
 - Modify: `internal/engine/publish.go:156-161,390-510` (`reviewComment` in place of `panelComment`), `internal/usage/usage.go:105-170` (`Rows(body, run, judge bool)`, drop `ModelRows`), `internal/usage/backfill.go:61-90`, `internal/callback/callback.go` and `member.go` (usage writes), `cmd/pergent-sh/main.go:427`
 - Test: `internal/result/result_test.go`, `internal/policy/policy_test.go`, `internal/engine/e2e_multi_review_publish_test.go` (new, from `e2e_panel_publish_test.go`), `internal/usage/usage_test.go`
 
@@ -939,20 +940,18 @@ Needs the CLI plan's code merged on pergent `master` and rows D2, D5 to D9 settl
 // not start.
 func MultiReviewOffLine(reason string) string { return "multi review off: " + reason }
 
-// SkippedLine is the footer line of a reviewer with no result.
-func SkippedLine(name, reason string) string { return "Multi review: " + name + " was skipped: " + reason + "." }
-
-// reviewComment reads what run's comment needs: the names in --reviewer
-// order (review_judges.reviewers, each from its done member's frozen
-// entry), the judge's name ("" with no judge), a SkippedLine per reviewer
-// with no result (fixed words, Choices), every member's and the judge's
-// model to hide, or the off line of a review that runs as one.
+// reviewComment reads what run's comment needs: render.MultiReviewNames
+// with every reviewer's name in --reviewer order (review_judges.reviewers;
+// the frozen entry of its done member, else its chain's first entry), the
+// judge's name ("" with no judge) and Skipped, one per reviewer with no
+// result (fixed words, Choices); every member's and the judge's model to
+// hide; or the off line of a review that runs as one.
 func (e *Engine) reviewComment(ctx context.Context, run store.Run) (reviewComment, error)
 ```
 
 Only the judge run is published, through today's `publish`. A review with no member row and no off row gets nothing: today's comment.
 
-- [ ] **Step 1: Failing tests:** `TestCommentUnchanged` passes with no golden edit; `TestToRenderMultiReviewFields` and `TestToRenderNoMultiReviewUnchanged`; `TestPublishMultiReviewOnce` (one comment with the header `Multi review: <e1>, <e2>, <e3> · judge <ej>`, no provider or model text, `success` for a clean result, the approval on the judge run only); `TestPublishSkippedLine` (`Multi review: <e2> was skipped: the token quota.`); `TestPublishOffLine` (`multi review off: the review image does not support it`); `TestCommentHidesEveryModel` (each reviewer's and the judge's provider and model in a finding's text are hidden); `TestE2EMultiReviewUsage` (`run_usage` of the review holds reviewers + judge per skill; `quota.Check` sees all of it; part reviewer and part judge rows); `TestBackfillReviewMembers` (a lost usage write is filled at start).
+- [ ] **Step 1: Failing tests:** `TestCommentUnchanged` passes with no golden edit; `TestToRenderMultiReviewFields` and `TestToRenderNoMultiReviewUnchanged`; `TestPublishMultiReviewOnce` (one comment with the header `Multi review: <e1>, <e2>, <e3> · judge <ej>`, no provider or model text, `success` for a clean result, the approval on the judge run only); `TestPublishSkippedLine` (`Skipped` holds `{<e2>, the token quota}` and the comment shows render's `Multi review: <e2> was skipped: the token quota.` once); `TestPublishOffLine` (`multi review off: the review image does not support it`); `TestCommentHidesEveryModel` (each reviewer's and the judge's provider and model in a finding's text are hidden); `TestE2EMultiReviewUsage` (`run_usage` of the review holds reviewers + judge per skill; `quota.Check` sees all of it; part reviewer and part judge rows); `TestBackfillReviewMembers` (a lost usage write is filled at start).
 - [ ] **Step 2: Run to fail.** `PERGENT_SH_TEST_DATABASE_URL=... go test -count=1 ./internal/result/ ./internal/policy/ ./internal/usage/ ./internal/engine/ -run 'MultiReview|Skipped|OffLine|HidesEvery|CommentUnchanged|BackfillReview'`. Expected: FAIL.
 - [ ] **Step 3: Code.**
 - [ ] **Step 4: Run** the 4 packages, then the full suite. PASS.
