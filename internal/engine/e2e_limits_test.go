@@ -330,3 +330,47 @@ func TestPanelJudgeIgnoresLimits(t *testing.T) {
 		t.Errorf("judges = %+v; want both, limits or not", js)
 	}
 }
+
+// A client that pinned a model at its model limit fails, naming the entry: a
+// pinned model is a chain of 1, and an API review is never held.
+func TestAPIReviewPinnedModelAtLimitFails(t *testing.T) {
+	a := newAPIE2E(t)
+	env := a.env
+	env.SetNow(novemberMid)
+	seedEntryUsage(t, env, configRef(), 10)
+	setLimit(t, env, configRef(), 0, 10)
+	id := a.ask(t, "route:1", twoFiles())
+	if _, _, err := env.Store.UpdateAPIClient(env.ctx, "gateway", func(c *store.APIClient) { c.ModelID = store.ConfigModelID }); err != nil {
+		t.Fatal(err)
+	}
+	dispatch(t, env)
+	if env.Job(id) != nil {
+		t.Fatal("a pinned model at its model limit got a Job")
+	}
+	publish(t, env)
+	a.wantFailed(t, id, reviewapi.StepStarting, "all models exhausted: "+configName(t, env)+" (model limit used up)")
+}
+
+// A pinned review's tokens count toward the model limit of its entry, so the
+// run records that entry.
+func TestAPIReviewPinnedModelRecordsEntry(t *testing.T) {
+	a := newAPIE2E(t)
+	env := a.env
+	env.SetNow(novemberMid)
+	setLimit(t, env, configRef(), 0, 1000000)
+	id := a.ask(t, "route:1", twoFiles())
+	if _, _, err := env.Store.UpdateAPIClient(env.ctx, "gateway", func(c *store.APIClient) { c.ModelID = store.ConfigModelID }); err != nil {
+		t.Fatal(err)
+	}
+	dispatch(t, env)
+	if env.Job(id) == nil {
+		t.Fatalf("no Job for a pinned model under its limit\n%s", env.Logs())
+	}
+	rv, found, err := env.Store.APIReviewByID(env.ctx, id)
+	if err != nil || !found {
+		t.Fatalf("APIReviewByID = %v, %v", found, err)
+	}
+	if rv.Run.ModelEntryID != store.ConfigModelID {
+		t.Errorf("run's ModelEntryID = %q; want %q", rv.Run.ModelEntryID, store.ConfigModelID)
+	}
+}
