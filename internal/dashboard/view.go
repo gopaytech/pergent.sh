@@ -641,9 +641,14 @@ type InputsView struct {
 type RulesView struct {
 	// BuiltIn names the built-in rules the repository chose, in
 	// builtin.yaml order; empty for none.
-	BuiltIn []string        `json:"builtIn"`
-	Entries []RuleEntryView `json:"entries"`
-	Problem string          `json:"problem"`
+	BuiltIn []string `json:"builtIn"`
+	// BuiltInEntries is each chosen built-in rule this pergent.sh knows,
+	// with its globs and text, in builtin.yaml order. It and BuiltIn are
+	// read from the repository's settings at each request, not kept 5
+	// minutes with the rest.
+	BuiltInEntries []BuiltInRuleView `json:"builtInEntries"`
+	Entries        []RuleEntryView   `json:"entries"`
+	Problem        string            `json:"problem"`
 }
 
 // RuleEntryView is one entry of a rule list. Source is "repo" or
@@ -714,6 +719,9 @@ type ReadinessView struct {
 	// ApplyBase is today's list of library skills: the repository's, or the
 	// default list. "Use these skills" saves it plus the ticked ones.
 	ApplyBase []string `json:"applyBase"`
+	// ApplyBuiltInBase is the built-in rules the repository chose now.
+	// "Use these built-in rules" saves it plus the ticked ones.
+	ApplyBuiltInBase []string `json:"applyBuiltInBase"`
 }
 
 // ScanView is one readiness scan. State is "queued", "running", "done" or

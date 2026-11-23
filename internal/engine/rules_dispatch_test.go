@@ -197,7 +197,7 @@ func TestDispatchBuiltInRulesChosen(t *testing.T) {
 		hashed []string
 	}{
 		{"none chosen", nil, "v0.5.0", "", "", nil},
-		{"no image loads a list yet", []string{"yaml", "go"}, "", "", "no review image can load only the chosen built-in rules yet", []string{"yaml", "go"}},
+		{"no image loads a list yet", []string{"yaml", "go"}, "", "", "no review image can load only the enabled built-in rules yet", []string{"yaml", "go"}},
 		{"the image is too old", []string{"go"}, "v0.6.0", "", `image tag "v0.5.2" is older than v0.6.0`, []string{"go"}},
 		{"the image loads the list", []string{"go", "yaml"}, "v0.5.2", "yaml,go", "", []string{"yaml", "go"}},
 	} {
@@ -239,7 +239,7 @@ func TestBuiltInRulesFor(t *testing.T) {
 	if send, note := builtInRulesFor([]string{}, "x/pergent:v1.0.0"); send != nil || note != "" {
 		t.Errorf("an empty choice = %v, %q", send, note)
 	}
-	if send, note := builtInRulesFor([]string{"go"}, "x/pergent:v0.9.0"); send != nil || !strings.HasPrefix(note, "The chosen built-in rules were left out: ") {
+	if send, note := builtInRulesFor([]string{"go"}, "x/pergent:v0.9.0"); send != nil || !strings.HasPrefix(note, "The enabled built-in rules were left out: ") {
 		t.Errorf("an old image = %v, %q", send, note)
 	}
 	chosen := []string{"go"}

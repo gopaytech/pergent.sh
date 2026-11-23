@@ -155,6 +155,23 @@ func builtInRuleViews(entries []rule.Entry) []BuiltInRuleView {
 	return out
 }
 
+// chosenBuiltInRules is the built-in rules names chooses, as
+// builtInRuleViews shows them: in the order of entries (pergent's), whatever
+// the order of names. A name entries doesn't have has no row.
+func chosenBuiltInRules(entries []rule.Entry, names []string) []BuiltInRuleView {
+	chosen := slices.DeleteFunc(slices.Clone(entries), func(e rule.Entry) bool { return !slices.Contains(names, e.Name) })
+	return builtInRuleViews(chosen)
+}
+
+// withBuiltInRules is v with the built-in rules repo chooses now. It is set
+// at each request and never kept with the rest of the view: a settings save
+// clears only the cache of the pod that took it.
+func (d *Dashboard) withBuiltInRules(v RulesView, repo settings.Effective) RulesView {
+	v.BuiltIn = nonNil(slices.Clone(repo.BuiltInRules))
+	v.BuiltInEntries = chosenBuiltInRules(d.builtInRules(), repo.BuiltInRules)
+	return v
+}
+
 // ruleSetNotes is the editor's notes on a set's text: one for each entry and
 // built-in rule its files may also match, so that built-in no longer applies
 // to them. Allowed, but worth knowing. A built-in with a {a,b} glob is one
@@ -343,6 +360,7 @@ func ruleSetInUseView(e *store.RuleSetInUseError) SkillInUseView {
 
 // rulesView is the rule list a review of ref would get, as the engine builds
 // it (inputs.BuildRules). Rules that would fail a review show as Problem.
+// The built-in rules are not in it: withBuiltInRules adds them.
 func (d *Dashboard) rulesView(ctx context.Context, src inputs.Source, projectID int64, ref string, repo settings.Effective) (RulesView, error) {
 	configSet := func(name string) (string, bool) {
 		cs, ok := d.cfg.RuleSet(name)
@@ -363,7 +381,7 @@ func (d *Dashboard) rulesView(ctx context.Context, src inputs.Source, projectID 
 	if err != nil {
 		return RulesView{}, err
 	}
-	v := RulesView{BuiltIn: nonNil(repo.BuiltInRules), Entries: []RuleEntryView{}, Problem: problem}
+	v := RulesView{BuiltIn: []string{}, BuiltInEntries: []BuiltInRuleView{}, Entries: []RuleEntryView{}, Problem: problem}
 	for _, e := range list {
 		v.Entries = append(v.Entries, RuleEntryView{Source: e.Source, Path: e.Path, Off: e.Off, Rule: e.Rule})
 	}

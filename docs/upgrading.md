@@ -1,5 +1,12 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+- **The dashboard says "enabled" for built-in rules.** The **Built-in rules** card on a repository's **Settings** pins the enabled rules on top and counts them as `3 of 67 enabled`. The note on a run whose built-in rules were left out now starts `The enabled built-in rules were left out:`. Runs from before keep their old note.
+- **The Rules card on Skills & instructions shows each enabled built-in rule** with its globs and text ([Path rules](concepts/rules.md#settings)).
+- **Readiness suggests built-in rules** whose globs match files ([Readiness scan](concepts/dashboard.md#readiness-scan)). A scan from before the upgrade has no counts, so the list is empty until the next scan.
+- **New dashboard API fields, all additive:** `RulesView.builtInEntries`, `ReadinessView.applyBuiltInBase` and `Checklist.suggestedBuiltInRules`. The readiness scan Job's result has a new `builtInRules` list. No migration and no config change.
+
 ## Upgrading to 0.19.0
 
 - **On a GitLab instance that does not send `bot`, no one's comment runs a command.** If `GET /api/v4/users/<id>` has no `"bot"` key, upgrade GitLab first. **When pergent.sh can't say whether the author is a bot, the author is no longer counted as a person.** pergent.sh asks GitLab (`GET /users/:id`) whether a commenter or a change's author is a bot. A user with no user ID, and a user whose answer has no `bot` flag, used to count as a person. Now, with no `bot` flag, a username that matches a GitLab bot pattern (`project_<id>_bot…`, `group_<id>_bot…`, `service_account_…`) is a bot. For any other username, and for a user with no user ID, pergent.sh can't say whether the author is a bot. Such an author's commands are dropped with 👎 and no reply, and their changes are left out of [Skill results](concepts/skill-results.md). On an instance that sends `bot`, the only change is for an author with no user ID: their commands are now dropped too.

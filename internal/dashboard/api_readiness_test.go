@@ -592,7 +592,7 @@ func TestApplyBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	e.dashboardRepo("main", "acme/tools", func(r *store.DashboardRepo) { r.Skills = []string{"ts"} })
+	e.dashboardRepo("main", "acme/tools", func(r *store.DashboardRepo) { r.Skills = []string{"ts"}; r.BuiltInRules = []string{"yaml"} })
 	c := e.signInOn(store.RoleMaintainer, "acme/gadgets", "acme/tools")
 
 	v := decode[ReadinessView](t, e.get(c, readinessURL("acme/gadgets")), "GET gadgets", http.StatusOK)
@@ -602,5 +602,21 @@ func TestApplyBase(t *testing.T) {
 	v = decode[ReadinessView](t, e.get(c, readinessURL("acme/tools")), "GET tools", http.StatusOK)
 	if v.FollowsDefaults || !slices.Equal(v.ApplyBase, []string{"ts"}) {
 		t.Errorf("tools: followsDefaults, applyBase = %v, %v; want false, [ts]", v.FollowsDefaults, v.ApplyBase)
+	}
+
+	// Use these built-in rules starts from the rules chosen now. The
+	// suggestions leave out a chosen rule and one this pergent.sh doesn't know.
+	if !slices.Equal(v.ApplyBuiltInBase, []string{"yaml"}) {
+		t.Errorf("tools: applyBuiltInBase = %v; want [yaml]", v.ApplyBuiltInBase)
+	}
+	job := `{"version":1,"commit":"` + scanCommit + `","files":5,"builtInRules":[{"name":"yaml","files":2},{"name":"go","files":3},{"name":"gone","files":9}]}`
+	e.scanRow("acme/tools", store.ScanDone, e.clock.now().Add(-time.Hour), podAllPassed, job, "")
+	rec := e.get(c, readinessURL("acme/tools"))
+	v = decode[ReadinessView](t, rec, "GET tools", http.StatusOK)
+	if v.Checklist == nil || !slices.Equal(v.Checklist.SuggestedBuiltInRules, []readiness.BuiltInFit{{Name: "go", Files: 3}}) {
+		t.Errorf("tools: body %s; want go suggested with 3 files", rec.Body)
+	}
+	if got := decode[ReadinessView](t, e.get(c, readinessURL("acme/gadgets")), "GET gadgets", http.StatusOK); got.ApplyBuiltInBase == nil {
+		t.Errorf("gadgets: applyBuiltInBase = nil; want []")
 	}
 }

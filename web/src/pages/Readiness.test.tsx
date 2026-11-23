@@ -62,11 +62,13 @@ const view = (over: Partial<ReadinessView> = {}): ReadinessView => ({
     ],
     suggested: [],
     budget: 1000,
+    suggestedBuiltInRules: [],
   },
   canScan: true,
   configRepo: false,
   followsDefaults: false,
   applyBase: ["code-review"],
+  applyBuiltInBase: [],
   ...over,
 });
 
@@ -120,6 +122,7 @@ describe("Readiness", () => {
             sections: [{ key: "context", items: [item("readme", { state: "unknown", reason: "couldn't scan files: the clone took longer than 5 minutes" })] }],
             suggested: [],
             budget: 0,
+            suggestedBuiltInRules: [],
           },
         }),
       ),
@@ -150,6 +153,7 @@ describe("Readiness", () => {
             ],
             suggested: [],
             budget: 0,
+            suggestedBuiltInRules: [],
           },
         }),
       ),
@@ -174,6 +178,7 @@ describe("Readiness", () => {
             ],
             suggested: [],
             budget: 0,
+            suggestedBuiltInRules: [],
           },
         }),
       ),
@@ -203,6 +208,7 @@ describe("Readiness", () => {
             ],
             suggested: [],
             budget: 0,
+            suggestedBuiltInRules: [],
           },
         }),
       ),
@@ -331,7 +337,7 @@ describe("Readiness", () => {
         view({
           followsDefaults: true,
           applyBase: ["code-review"],
-          checklist: { sections: [], suggested: ["security-review", "go-style"], budget: 0 },
+          checklist: { sections: [], suggested: ["security-review", "go-style"], budget: 0, suggestedBuiltInRules: [] },
         }),
       ),
       "PUT /api/repositories/main/acme/payments/settings": { body: repoDetail(repoPayments) },
@@ -352,7 +358,7 @@ describe("Readiness", () => {
   it("does not save when the confirm is refused", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const fake = fakeApi({
-      ...base(view({ followsDefaults: true, checklist: { sections: [], suggested: ["go-style"], budget: 0 } })),
+      ...base(view({ followsDefaults: true, checklist: { sections: [], suggested: ["go-style"], budget: 0, suggestedBuiltInRules: [] } })),
       "PUT /api/repositories/main/acme/payments/settings": { body: repoDetail(repoPayments) },
     });
     renderApp("/repos/main/acme/payments?tab=readiness");
@@ -366,7 +372,7 @@ describe("Readiness", () => {
   it("does not ask to confirm for a repository that already has its own list", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const fake = fakeApi({
-      ...base(view({ followsDefaults: false, applyBase: ["code-review"], checklist: { sections: [], suggested: ["go-style"], budget: 0 } })),
+      ...base(view({ followsDefaults: false, applyBase: ["code-review"], checklist: { sections: [], suggested: ["go-style"], budget: 0, suggestedBuiltInRules: [] } })),
       "PUT /api/repositories/main/acme/payments/settings": { body: repoDetail(repoPayments) },
     });
     renderApp("/repos/main/acme/payments?tab=readiness");
@@ -382,7 +388,7 @@ describe("Readiness", () => {
   it("clears the ticked skills after a save, so the button waits for a new tick", async () => {
     const fake = fakeApi({
       // The answer after the save still suggests the skill (a stale read).
-      ...base(view({ checklist: { sections: [], suggested: ["go-style"], budget: 0 } })),
+      ...base(view({ checklist: { sections: [], suggested: ["go-style"], budget: 0, suggestedBuiltInRules: [] } })),
       "PUT /api/repositories/main/acme/payments/settings": { body: repoDetail(repoPayments) },
     });
     renderApp("/repos/main/acme/payments?tab=readiness");
@@ -401,7 +407,7 @@ describe("Readiness", () => {
     const fake = fakeApi({
       ...base(view()),
       "GET /api/repositories/main/acme/payments/readiness": () => ({
-        body: view({ checklist: { sections: [], suggested, budget: 0 } }),
+        body: view({ checklist: { sections: [], suggested, budget: 0, suggestedBuiltInRules: [] } }),
       }),
       "POST /api/repositories/main/acme/payments/readiness/scan": () => {
         // A new scan no longer suggests alpha.
@@ -427,7 +433,7 @@ describe("Readiness", () => {
         view({
           configRepo: true,
           applyBase: ["code-review"],
-          checklist: { sections: [], suggested: ["security-review", "go-style"], budget: 0 },
+          checklist: { sections: [], suggested: ["security-review", "go-style"], budget: 0, suggestedBuiltInRules: [] },
         }),
         repoWidgets,
       ),
@@ -441,11 +447,75 @@ describe("Readiness", () => {
   });
 
   it("shows suggestions without checkboxes to a viewer of a dashboard repository", async () => {
-    fakeApi(base(view({ canScan: false, checklist: { sections: [], suggested: ["go-style"], budget: 0 } })));
+    fakeApi(base(view({ canScan: false, checklist: { sections: [], suggested: ["go-style"], budget: 0, suggestedBuiltInRules: [] } })));
     renderApp("/repos/main/acme/payments?tab=readiness");
     expect(await screen.findByText("go-style")).toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Use these skills" })).not.toBeInTheDocument();
+  });
+
+  it("suggests built-in rules with their file counts and enables the ticked ones with the enabled ones", async () => {
+    const builtIns = (over: Partial<ReadinessView> = {}) =>
+      view({
+        applyBuiltInBase: ["go"],
+        checklist: {
+          sections: [],
+          suggested: [],
+          budget: 0,
+          suggestedBuiltInRules: [
+            { name: "yaml", files: 12 },
+            { name: "json", files: 1 },
+          ],
+        },
+        ...over,
+      });
+    const fake = fakeApi({
+      ...base(builtIns()),
+      "PUT /api/repositories/main/acme/payments/settings": { body: repoDetail(repoPayments) },
+    });
+    renderApp("/repos/main/acme/payments?tab=readiness");
+    const card = await screen.findByRole("region", { name: "Suggested built-in rules" });
+    expect(within(card).getByRole("heading", { name: "Suggested built-in rules" })).toBeInTheDocument();
+    expect(within(card).getByRole("checkbox", { name: "yaml" }).closest("label")).toHaveTextContent("yaml 12 files");
+    expect(within(card).getByRole("checkbox", { name: "json" }).closest("label")).toHaveTextContent("json 1 file");
+    expect(card).not.toHaveTextContent(/chosen/i);
+    const button = within(card).getByRole("button", { name: "Enable 0 rules" });
+    expect(button).toBeDisabled();
+    await userEvent.click(within(card).getByRole("checkbox", { name: "yaml" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Enable 1 rule" }));
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    const puts = fake.find("PUT", "/api/repositories/main/acme/payments/settings");
+    expect(puts).toHaveLength(1);
+    expect(puts[0].body).toEqual({ builtInRules: ["go", "yaml"] });
+    expect(within(card).getByRole("checkbox", { name: "yaml" })).not.toBeChecked();
+  });
+
+  it("shows the built_in_rules line to paste for a config repository, and plain names to a viewer", async () => {
+    const checklist = { sections: [], suggested: [], budget: 0, suggestedBuiltInRules: [{ name: "yaml", files: 3 }] };
+    fakeApi({
+      ...base(view({ configRepo: true, applyBuiltInBase: ["go"], checklist }), repoWidgets),
+      "GET /api/reviews?project=acme%2Fwidgets&days=90": { body: { items: [], nextCursor: "" } },
+    });
+    const { unmount } = renderApp("/repos/main/acme/widgets?tab=readiness");
+    const card = await screen.findByRole("region", { name: "Suggested built-in rules" });
+    await userEvent.click(within(card).getByRole("checkbox", { name: "yaml" }));
+    expect(within(card).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(card).getByText("built_in_rules: [go, yaml]").tagName).toBe("PRE");
+    unmount();
+
+    fakeApi(base(view({ canScan: false, checklist })));
+    renderApp("/repos/main/acme/payments?tab=readiness");
+    const viewer = await screen.findByRole("region", { name: "Suggested built-in rules" });
+    expect(viewer).toHaveTextContent("yaml 3 files");
+    expect(within(viewer).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(within(viewer).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("shows no built-in rule card when none is suggested", async () => {
+    fakeApi(base(view()));
+    renderApp("/repos/main/acme/payments?tab=readiness");
+    await screen.findByText(/Scanned 3 days ago/);
+    expect(screen.queryByRole("region", { name: "Suggested built-in rules" })).not.toBeInTheDocument();
   });
 
   it("lists at most 50 noise paths and the count of the rest", async () => {
@@ -457,6 +527,7 @@ describe("Readiness", () => {
             sections: [{ key: "size", items: [item("noise", { state: "warning", reason: "70 files", noise, more: 10 })] }],
             suggested: [],
             budget: 0,
+            suggestedBuiltInRules: [],
           },
         }),
       ),

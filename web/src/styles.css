@@ -1152,6 +1152,40 @@ ul.built-in-pick {
   border-bottom: 1px solid var(--line);
 }
 
+ul.built-in-pick:empty {
+  display: none;
+}
+
+ul.built-in-pick li.skill {
+  align-items: flex-start;
+}
+
+/* A built-in rule in the picker: its name and globs, which open to its text. */
+details.built-in-doc summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+details.built-in-doc summary::-webkit-details-marker {
+  display: none;
+}
+
+details.built-in-doc summary::before {
+  content: "▸";
+  color: var(--muted);
+}
+
+details.built-in-doc[open] summary::before {
+  content: "▾";
+}
+
+details.built-in-doc pre.doc {
+  margin: 8px 0 0;
+}
+
 /* --- tables --- */
 
 .table {
