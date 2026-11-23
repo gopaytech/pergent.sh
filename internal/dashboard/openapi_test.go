@@ -1434,7 +1434,7 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		{"MyTeamView", "role", roles},
 		{"TeamModelsView", "role", roles},
 		{"MarkView", "class", []string{store.ClassQuota, store.ClassBilling, store.ClassAuth}},
-		{"AttemptView", "reason", []string{"", store.ClassQuota, store.ClassBilling, store.ClassAuth}},
+		{"AttemptView", "reason", []string{"", store.ClassQuota, store.ClassBilling, store.ClassAuth, store.OutcomeJudgeFailed}},
 		{"MemberAttemptView", "state", []string{string(store.MemberQueued), string(store.MemberRunning), string(store.MemberReported),
 			string(store.MemberDone), string(store.MemberFailed), string(store.MemberFellBack), string(store.MemberSuperseded)}},
 		{"PanelMemberView", "role", []string{"a", "b"}},
@@ -1475,7 +1475,9 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		known               [][]string
 	}{
 		// nothing_reviewed is an API review's outcome: no run view shows it.
-		{"internal/store/*.go", "Outcome", "", [][]string{outcomes, {store.OutcomeNothingReviewed}}},
+		// judge_failed is not an outcome but the reason of a fell_back judge
+		// run: AttemptView.reason lists it.
+		{"internal/store/*.go", "Outcome", "", [][]string{outcomes, {store.OutcomeNothingReviewed, store.OutcomeJudgeFailed}}},
 		// An account's role is admin or user (a team member's, viewer or
 		// maintainer, is in the roles above). The platform kind is hidden: no
 		// view of the API shows it.
