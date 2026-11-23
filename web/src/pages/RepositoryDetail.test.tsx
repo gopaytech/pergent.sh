@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi } from "../test/fakeApi";
 import {
   chainRepoInherit,
-  panelRepoInherit,
+  reviewersNone,
   librarySkills,
   linkable,
   pastDismissals,
@@ -41,11 +41,34 @@ const base = {
   "GET /api/repositories/main/acme/widgets/teams": { body: repoTeams },
   "GET /api/repositories/main/acme/payments/chain": { body: chainRepoInherit },
   "GET /api/repositories/main/acme/widgets/chain": { body: chainRepoInherit },
-  "GET /api/repositories/main/acme/payments/panel-chain": { body: panelRepoInherit },
-  "GET /api/repositories/main/acme/widgets/panel-chain": { body: panelRepoInherit },
+  "GET /api/repositories/main/acme/payments/reviewers": { body: reviewersNone },
+  "GET /api/repositories/main/acme/widgets/reviewers": { body: reviewersNone },
   "GET /api/repositories/main/acme/payments/skill-results/tokens": { body: [] },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
 };
+
+describe("RepositoryDetail: the multi review line", () => {
+  const withMulti = (multiReview: { on: boolean; reviewers: number; judge: string }) => ({
+    ...base,
+    "GET /api/repositories/main/acme/payments": { body: { ...payments, multiReview } },
+  });
+
+  it("names the count of reviewers and the judge while multi review is on", async () => {
+    renderAt("/repos/main/acme/payments", withMulti({ on: true, reviewers: 3, judge: "Claude Opus" }));
+    expect(await screen.findByText("Multi review: on (3 reviewers, judge Claude Opus)")).toBeInTheDocument();
+  });
+
+  it("says when multi review is on with no judge", async () => {
+    renderAt("/repos/main/acme/payments", withMulti({ on: true, reviewers: 3, judge: "" }));
+    expect(await screen.findByText("Multi review: on (3 reviewers, no judge)")).toBeInTheDocument();
+  });
+
+  it("says multi review is off, and has no panel line", async () => {
+    renderAt("/repos/main/acme/payments", withMulti({ on: false, reviewers: 1, judge: "" }));
+    expect(await screen.findByText("Multi review: off")).toBeInTheDocument();
+    expect(screen.queryByText(/^Panel:/)).not.toBeInTheDocument();
+  });
+});
 
 describe("RepositoryDetail", () => {
   it("shows the repository's reviews first", async () => {
@@ -1092,7 +1115,7 @@ describe("RepositorySettings: Linked repositories", () => {
     "GET /api/repositories/hub/acme/gadgets/inputs": { body: noInputs },
     "GET /api/repositories/hub/acme/gadgets/teams": { body: repoTeams },
     "GET /api/repositories/hub/acme/gadgets/chain": { body: chainRepoInherit },
-    "GET /api/repositories/hub/acme/gadgets/panel-chain": { body: panelRepoInherit },
+    "GET /api/repositories/hub/acme/gadgets/reviewers": { body: reviewersNone },
     [`GET ${linkablePath}`]: { body: linkable },
   };
   const withLinks = (enabled: boolean) => ({
@@ -1251,7 +1274,7 @@ describe("RepositoryDetail while paused, and Remove", () => {
     "GET /api/reviews?project=acme%2Ftools&days=90": { body: { items: [], nextCursor: "" } },
     "GET /api/repositories/main/acme/tools/teams": { body: repoTeams },
     "GET /api/repositories/main/acme/tools/chain": { body: chainRepoInherit },
-    "GET /api/repositories/main/acme/tools/panel-chain": { body: panelRepoInherit },
+    "GET /api/repositories/main/acme/tools/reviewers": { body: reviewersNone },
   };
   const waitingChange = {
     number: 5,
@@ -1351,7 +1374,7 @@ describe("RepositoryDetail while paused, and Remove", () => {
       "GET /api/repositories/main/acme/tools": { body: repoDetail(repoToolsPaused, "maintainer") },
     });
     expect(await screen.findByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByRole("region", { name: "Model chain" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Reviewers" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Remove repository" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove repository" })).not.toBeInTheDocument();
   });
