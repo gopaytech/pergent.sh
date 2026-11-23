@@ -21,7 +21,7 @@ func (e *Engine) chainFor(ctx context.Context, run store.Run, repo settings.Effe
 	return chain.Load(ctx, e.Store, e.registry(), e.now(), run, repo)
 }
 
-// chainA is the run's chain A as a panel reads it: the chain in effect
+// chainA is the run's chain A as a multi review reads it: the chain in effect
 // (chainFor), or for an API client that chose a model, that model alone, a
 // chain of 1 that never falls back. A model that is gone leaves the chain
 // empty.

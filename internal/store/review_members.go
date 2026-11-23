@@ -26,6 +26,25 @@ import (
 // waiting run's row, then member rows. Nothing that holds a member row waits
 // for a run row.
 
+// MemberState is where a review member is in its life: queued → running
+// (claimed) → reported (a result or a failure) → done (it has a result) or
+// failed; reported → fell_back when a quota, billing or auth error moves it to
+// its next entry; any live state → superseded when its run is gone. Off is
+// the one row of a review whose multi review could not start; it never
+// moves. Skipped (MemberSkipped) is an extra reviewer that could not start.
+type MemberState string
+
+const (
+	MemberQueued     MemberState = "queued"
+	MemberRunning    MemberState = "running"
+	MemberReported   MemberState = "reported"
+	MemberDone       MemberState = "done"
+	MemberFailed     MemberState = "failed"
+	MemberFellBack   MemberState = "fell_back"
+	MemberSuperseded MemberState = "superseded"
+	MemberOff        MemberState = "off"
+)
+
 // WaitReviewers: a multi review's run waits while its members review.
 // v0.18.0 never claims it.
 const WaitReviewers = "review_members"
@@ -558,6 +577,26 @@ func (s *Store) StoreReviewMemberResult(ctx context.Context, runID, id, token st
 		return 0, err
 	}
 	return ResultStored, nil
+}
+
+// rowQuerier reads one row: the pool, or a transaction.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// noToken is compared against when there is no stored token, so a refusal
+// takes the same steps whether or not the member exists.
+var noToken [sha256.Size]byte
+
+// reviewOf returns the merge request and the review's first run of run id;
+// found is false for an unknown run.
+func reviewOf(ctx context.Context, tx pgx.Tx, id string) (mr MRKey, root string, found bool, err error) {
+	err = tx.QueryRow(ctx, `SELECT instance, project_id, mr_iid, COALESCE(attempt_of, id)::text FROM runs WHERE id = $1::uuid`,
+		id).Scan(&mr.Instance, &mr.ProjectID, &mr.IID, &root)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MRKey{}, "", false, nil
+	}
+	return mr, root, err == nil, err
 }
 
 // reviewMemberTokenOK reports whether presented is the SHA-256 of member

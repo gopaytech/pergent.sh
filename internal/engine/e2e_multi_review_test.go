@@ -328,9 +328,9 @@ func TestE2EMultiReviewMembersStart(t *testing.T) {
 				t.Errorf("reviewer %d's label %s = %q, want %q", n, k, job.Labels[k], v)
 			}
 		}
-		for _, k := range []string{kube.LabelPanelMember, kube.LabelPanelRole} {
+		for _, k := range []string{"pergent.sh/panel-member", "pergent.sh/panel-role"} {
 			if v, ok := job.Labels[k]; ok {
-				t.Errorf("reviewer %d has the panel label %s=%q", n, k, v)
+				t.Errorf("reviewer %d has the legacy panel label %s=%q", n, k, v)
 			}
 		}
 		meta := maps.Clone(job.Labels)
@@ -1139,82 +1139,6 @@ func TestE2EMultiReviewSplitAfterFallBack(t *testing.T) {
 		}
 	}
 	wantWaiting(t, env, split)
-}
-
-// An API run waits on a queued legacy panel_members row (a main build left
-// it): its dispatch reports the member failed with "an API review never runs
-// multi review", starts no Job and leaves the run untouched.
-func TestDispatchLegacyAPIPanelMemberFails(t *testing.T) {
-	a := newAPIE2E(t)
-	env := a.env
-	id := a.ask(t, "route:1", twoFiles())
-	now := env.Now()
-	if ms, err := env.Store.ClaimQueued(env.ctx, 10, now.Add(time.Hour)); err != nil || len(ms) != 1 {
-		t.Fatalf("ClaimQueued = %d, %v", len(ms), err)
-	}
-	if started, err := env.Store.StartPanel(env.ctx, id, store.PanelSplit{BaseSHA: "base", StartSHA: "start"}, now); err != nil || !started {
-		t.Fatalf("StartPanel = %v, %v", started, err)
-	}
-	before := env.Run(id)
-
-	dispatch(t, env)
-	ms, err := env.Store.PanelMembers(env.ctx, id)
-	if err != nil || len(ms) != 2 {
-		t.Fatalf("PanelMembers = %d, %v", len(ms), err)
-	}
-	for _, m := range ms {
-		if m.State != store.MemberReported || m.FailureReason != reasonAPINoMultiReview || m.JobName != "" {
-			t.Errorf("member %s = %s %q job %q; want reported %q with no Job", m.Role, m.State, m.FailureReason, m.JobName, reasonAPINoMultiReview)
-		}
-	}
-	if n := len(env.Jobs()); n != 0 {
-		t.Errorf("%d Jobs; want none", n)
-	}
-	if after := env.Run(id); !reflect.DeepEqual(before, after) {
-		t.Errorf("the legacy member's dispatch wrote the run:\n before %+v\n after  %+v", before, after)
-	}
-
-	// The settle pass still fails such a review: it never waits for ever,
-	// and it is never a pass.
-	publish(t, env)
-	if r := env.Run(id); r.State != store.Published || !strings.Contains(r.FailureReason, reasonAPINoMultiReview) {
-		t.Errorf("run = %s %q; want published as failed", r.State, r.FailureReason)
-	}
-}
-
-// A merge request's legacy panel member found at dispatch starts no Job:
-// its review is queued again as one review, as at start.
-func TestDispatchLegacyPanelMemberRequeuesReview(t *testing.T) {
-	env := newTestEnv(t)
-	now := time.Now()
-	id := env.Enqueue(3, sha('a'))
-	if _, err := env.Store.ClaimQueued(env.ctx, 10, now.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if started, err := env.Store.StartPanel(env.ctx, id, store.PanelSplit{BaseSHA: "base", StartSHA: "start"}, now); err != nil || !started {
-		t.Fatalf("StartPanel = %v, %v", started, err)
-	}
-
-	// The legacy step of DispatchOnce alone: the pass would then claim the
-	// queued run as one review.
-	if err := env.Engine.dispatchLegacyMembers(env.ctx, 10, nil); err != nil {
-		t.Fatal(err)
-	}
-	if r := env.Run(id); r.State != store.Queued || r.SkipReason != "" {
-		t.Errorf("legacy run = %s %q; want queued again as one review", r.State, r.SkipReason)
-	}
-	ms, err := env.Store.PanelMembers(env.ctx, id)
-	if err != nil || len(ms) != 2 {
-		t.Fatalf("PanelMembers = %d, %v", len(ms), err)
-	}
-	for _, m := range ms {
-		if m.State != store.MemberSuperseded || m.JobName != "" {
-			t.Errorf("member %s = %s job %q; want superseded with no Job", m.Role, m.State, m.JobName)
-		}
-	}
-	if n := len(env.Jobs()); n != 0 {
-		t.Errorf("%d Jobs; want none", n)
-	}
 }
 
 // errorResult is a result of head whose review failed with message.

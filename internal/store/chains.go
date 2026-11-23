@@ -42,24 +42,13 @@ type Chain struct {
 }
 
 // ChainSet is which chain a chain row belongs to: ChainA, the review's model
-// chain (reviewer 1), ChainB, a review panel's second chain, or
-// ChainReviewers, a repository's reviewers 2 to 5 and its judge. Its table
+// chain (reviewer 1), or ChainReviewers, a repository's reviewers 2 to 5 and its judge. Its table
 // and column names are fixed here and never come from input; the chain SQL
 // is built from them. slot is the SQL that reads a row's slot, an empty
 // text literal for a set with none.
 type ChainSet struct{ chains, entries, mode, slot string }
 
-var (
-	ChainA = ChainSet{chains: "model_chains", entries: "model_chain_entries", mode: "chain_mode", slot: "''"}
-	ChainB = ChainSet{chains: "panel_chains", entries: "panel_chain_entries", mode: "panel_chain_mode", slot: "''"}
-)
-
-// A repository's chain B mode (DashboardRepo.PanelChainMode).
-const (
-	PanelInherit = "inherit"
-	PanelCustom  = "custom"
-	PanelOff     = "off"
-)
+var ChainA = ChainSet{chains: "model_chains", entries: "model_chain_entries", mode: "chain_mode", slot: "''"}
 
 type rowsQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -210,12 +199,8 @@ const (
 // ErrChainTooLong is returned when a chain has more than MaxChain entries.
 var ErrChainTooLong = errors.New("store: the chain has more than 5 entries")
 
-// ErrEmptyRepoPanelChain is returned for a repository chain B with no
-// entries: an empty one means off, which only SetRepoPanelOff writes.
-var ErrEmptyRepoPanelChain = errors.New("store: a repository's chain B needs an entry")
-
-// errUnknownChainSet is returned for a ChainSet that is neither ChainA nor
-// ChainB.
+// errUnknownChainSet is returned for a ChainSet that ResetRepoChainOf does
+// not reset: only ChainA.
 var errUnknownChainSet = errors.New("store: unknown chain set")
 
 // chainWhere matches the chain of one scope target, the project ignoring
@@ -267,8 +252,7 @@ func (s *Store) SaveChain(ctx context.Context, c Chain, at time.Time) error {
 // SaveChainOf stores c's entries in place of the ones its scope target had
 // in set, creating the chain when there is none; at is its updated_at, and
 // c.SavedByAdmin replaces what the chain had. More than MaxChain entries is
-// ErrChainTooLong; a repository chain B with none is ErrEmptyRepoPanelChain;
-// a team entry that is not there is ErrModelNotFound (it is
+// ErrChainTooLong; a team entry that is not there is ErrModelNotFound (it is
 // locked, so it can't be removed meanwhile). Nothing else is checked here:
 // who may name which entry is the caller's. A repository save makes the
 // set's mode of the repository custom.
@@ -277,13 +261,9 @@ func (s *Store) SaveChain(ctx context.Context, c Chain, at time.Time) error {
 // follow the chain. Global: a stored entry at position 1 becomes the default
 // and is written to llm_settings (ConfigModelID or a removed entry changes
 // nothing). Repo: model_id is position 1 when it is global, NULL otherwise.
-// ChainB writes neither: the previous release has no panel.
 func (s *Store) SaveChainOf(ctx context.Context, set ChainSet, c Chain, at time.Time) error {
 	if len(c.Entries) > MaxChain {
 		return ErrChainTooLong
-	}
-	if set == ChainB && c.Scope == ScopeRepo && len(c.Entries) == 0 {
-		return ErrEmptyRepoPanelChain
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -298,14 +278,6 @@ func (s *Store) SaveChainOf(ctx context.Context, set ChainSet, c Chain, at time.
 	}
 	if err := lockTeamEntries(ctx, tx, c.Entries); err != nil {
 		return err
-	}
-	// A chain B repository save locks the repository's row before the chain,
-	// as an off does (setRepoPanelMode). A repository with no row (one the
-	// config file switches on) is saved all the same: the resolver reads it.
-	if set == ChainB && c.Scope == ScopeRepo {
-		if _, err := lockRepoRow(ctx, tx, c.Instance, c.Project); err != nil {
-			return err
-		}
 	}
 	var id int64
 	if err := tx.QueryRow(ctx, `INSERT INTO `+set.chains+` (scope, team_id, instance, project, saved_by_admin, updated_at)
@@ -346,7 +318,7 @@ func (s *Store) ResetRepoChain(ctx context.Context, instance, project string) er
 
 // ResetRepoChainOf drops a repository's own chain of set: it inherits
 // again. For ChainA its model_id is NULL (the default, for the previous
-// release); for ChainB the mode is inherit from custom or off.
+// release).
 func (s *Store) ResetRepoChainOf(ctx context.Context, set ChainSet, instance, project string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -356,65 +328,11 @@ func (s *Store) ResetRepoChainOf(ctx context.Context, set ChainSet, instance, pr
 	switch set {
 	case ChainA:
 		err = setRepoModelChain(ctx, tx, instance, project, nil)
-	case ChainB:
-		_, err = setRepoPanelMode(ctx, tx, instance, project, PanelInherit)
 	default:
 		return errUnknownChainSet
 	}
 	if err != nil {
 		return err
-	}
-	return tx.Commit(ctx)
-}
-
-// RepoPanelMode is the repository's chain B mode: its dashboard row's,
-// PanelInherit with no row. PanelOff too when the repository has a chain B
-// row with no entries, which is how a repository with no dashboard row (the
-// config file switches it on) is off: a save with no entries is refused, so
-// an empty row means off and nothing else.
-func (s *Store) RepoPanelMode(ctx context.Context, instance, project string) (string, error) {
-	var mode string
-	var empty bool
-	err := s.pool.QueryRow(ctx, `SELECT
-		COALESCE((SELECT panel_chain_mode FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2)), 'inherit'),
-		EXISTS (SELECT 1 FROM `+ChainB.chains+` c WHERE c.scope = 'repo' AND c.instance = $1 AND lower(c.project) = lower($2)
-			AND NOT EXISTS (SELECT 1 FROM `+ChainB.entries+` e WHERE e.chain_id = c.id))`,
-		instance, project).Scan(&mode, &empty)
-	if err != nil {
-		return "", err
-	}
-	if empty {
-		return PanelOff, nil
-	}
-	return mode, nil
-}
-
-// SetRepoPanelOff turns the panel off for the repository, in one
-// transaction. With a dashboard row its chain B row goes and its mode is
-// PanelOff. With none (the config file switches it on) its chain B row is
-// kept with no entries, which RepoPanelMode reads as PanelOff; at dates it.
-func (s *Store) SetRepoPanelOff(ctx context.Context, instance, project string, at time.Time) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	found, err := setRepoPanelMode(ctx, tx, instance, project, PanelOff)
-	if err != nil {
-		return err
-	}
-	if !found {
-		// The upsert waits for a save of the same row, so the two can't mix.
-		var id int64
-		if err := tx.QueryRow(ctx, `INSERT INTO `+ChainB.chains+` (scope, instance, project, saved_by_admin, updated_at)
-			VALUES ('repo', $1, $2, false, $3)
-			ON CONFLICT (scope, COALESCE(team_id, 0), instance, lower(project)) DO UPDATE SET updated_at = EXCLUDED.updated_at
-			RETURNING id`, instance, project, at).Scan(&id); err != nil {
-			return err
-		}
-		if err := writeChainEntries(ctx, tx, ChainB, id, nil); err != nil {
-			return err
-		}
 	}
 	return tx.Commit(ctx)
 }
@@ -440,10 +358,9 @@ func lockTeamEntries(ctx context.Context, tx pgx.Tx, entries []EntryRef) error {
 	return nil
 }
 
-// lockRepoRow locks the repository's dashboard row, which a chain B or
-// reviewer chains write takes before the chains, so a save and an off one
-// after the other never leave mode off with a chain B row. found is false
-// with no row.
+// lockRepoRow locks the repository's dashboard row, which a reviewer chains
+// write takes before the chains, so two writes of one repository never mix.
+// found is false with no row.
 func lockRepoRow(ctx context.Context, tx pgx.Tx, instance, project string) (found bool, err error) {
 	rows, err := tx.Query(ctx, `SELECT 1 FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2) FOR UPDATE`,
 		instance, project)
@@ -454,26 +371,6 @@ func lockRepoRow(ctx context.Context, tx pgx.Tx, instance, project string) (foun
 	found = rows.Next()
 	rows.Close()
 	return found, rows.Err()
-}
-
-// setRepoPanelMode locks the repository's row, drops its chain B row (an
-// empty one too) and sets its chain B mode to mode (PanelInherit or
-// PanelOff, neither of which keeps a row). found is false when it has no
-// dashboard row: the chain B row is dropped all the same.
-func setRepoPanelMode(ctx context.Context, tx pgx.Tx, instance, project, mode string) (found bool, err error) {
-	if found, err = lockRepoRow(ctx, tx, instance, project); err != nil {
-		return false, err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM `+ChainB.chains+` WHERE scope = 'repo' AND instance = $1 AND lower(project) = lower($2)`,
-		instance, project); err != nil {
-		return false, err
-	}
-	if !found {
-		return false, nil
-	}
-	_, err = tx.Exec(ctx, `UPDATE dashboard_repos SET `+ChainB.mode+` = $3
-		WHERE instance = $1 AND lower(project) = lower($2)`, instance, project, mode)
-	return true, err
 }
 
 // setRepoModelChain writes the repository chain the old model setting means:

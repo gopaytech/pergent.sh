@@ -343,9 +343,9 @@ paths:
     post:
       operationId: postRunMemberResult
       tags: [Job callbacks]
-      summary: Deliver a review panel member's result
+      summary: Deliver a multi review reviewer's result
       description: |
-        A review panel member's Job posts its result here, with the
+        A multi review reviewer's Job posts its result here, with the
         member's own one-time bearer token. The body and its checks are
         those of `POST /runs/{id}/result`: pergent's result schema version 1,
         for the run's `base` and `head`, with the skills the Job was started
@@ -372,7 +372,7 @@ paths:
         - name: member
           in: path
           required: true
-          description: The panel member's id.
+          description: The review member's id.
           schema:
             type: string
             format: uuid
@@ -571,44 +571,6 @@ paths:
                 description: A pergent-graph/v1 file.
         '404':
           description: No graph for this run.
-          content:
-            text/plain:
-              schema: {type: string}
-        '500': {$ref: '#/components/responses/PlainTextError'}
-  /runs/{id}/panel/{role}:
-    get:
-      operationId: getRunPanelMember
-      tags: [Job callbacks]
-      summary: Download a panel member's result
-      description: |
-        Called by a review panel's merge Job with the merge Job's result
-        token. Answers the agent result of member `a` or `b` of the panel, as
-        the member posted it. Every refusal, a missing or wrong token
-        included, is the same 404. Only registered when the install keeps
-        review panels; else 404.
-      x-pergent-access: none
-      security:
-        - runResultToken: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: The merge run's id.
-          schema: {type: string}
-        - name: role
-          in: path
-          required: true
-          description: The panel member whose result to read.
-          schema: {type: string, enum: [a, b]}
-      responses:
-        '200':
-          description: The member's agent result.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/result.Result'
-        '404':
-          description: No result for this run and member.
           content:
             text/plain:
               schema: {type: string}

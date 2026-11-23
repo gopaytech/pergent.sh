@@ -34,7 +34,7 @@ func HideModel(text, provider, model string, baseURLs ...string) string {
 // ModelRef is a provider and a model, for HideModels.
 type ModelRef struct{ Provider, Model string }
 
-// HideModels is HideModel for the several models of a review panel: every
+// HideModels is HideModel for the several models of a multi review: every
 // "provider/model" first, then every model name, every base URL and every
 // provider, each kind longest first, so a name that starts a longer one
 // ("gpt-5" in "gpt-5-mini") never leaves it half replaced. A model with no

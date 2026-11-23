@@ -13,14 +13,14 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
-func (e *panelEnv) saveReviewers(t *testing.T, extra [][]store.EntryRef, judge []store.EntryRef, admin bool) {
+func (e *loadEnv) saveReviewers(t *testing.T, extra [][]store.EntryRef, judge []store.EntryRef, admin bool) {
 	t.Helper()
 	if _, err := e.st.SaveReviewers(ctx, store.ReviewersSave{Instance: inst, Project: project, Extra: extra, Judge: judge, SavedByAdmin: admin}, now); err != nil {
 		t.Fatalf("SaveReviewers: %v", err)
 	}
 }
 
-func (e *panelEnv) loadReviewers(t *testing.T, run store.Run) Reviewers {
+func (e *loadEnv) loadReviewers(t *testing.T, run store.Run) Reviewers {
 	t.Helper()
 	r, err := LoadReviewers(ctx, e.st, e.reg, now, run, repo)
 	if err != nil {
@@ -32,8 +32,8 @@ func (e *panelEnv) loadReviewers(t *testing.T, run store.Run) Reviewers {
 // With no stored reviewer, reviewer 1 is Load's input and there is no other
 // reviewer and no judge.
 func TestLoadReviewersNoneIsOne(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{})
-	e.save(t, store.ChainA, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.a, e.b}})
+	e := newLoadEnv(t, &config.Config{})
+	e.save(t, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.a, e.b}})
 	r := e.loadReviewers(t, store.Run{})
 	want, err := Load(ctx, e.st, e.reg, now, store.Run{}, repo)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestLoadReviewersNoneIsOne(t *testing.T) {
 // The stored reviewers come in slot order, then the judge, each with its own
 // saved_by_admin and the entries, marks and owner team of reviewer 1.
 func TestLoadReviewersOrder(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{})
+	e := newLoadEnv(t, &config.Config{})
 	e.repoRow(t)
 	if err := e.st.SetMark(ctx, store.Mark{Ref: e.b, Class: store.ClassQuota, Until: at(time.Hour), SetAt: now}); err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestLoadReviewersOrder(t *testing.T) {
 
 // An API review is never a multi review: it reads no stored reviewer.
 func TestLoadReviewersAPIHasNone(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{})
+	e := newLoadEnv(t, &config.Config{})
 	e.repoRow(t)
 	e.saveReviewers(t, [][]store.EntryRef{{e.b}}, []store.EntryRef{e.a}, true)
 	r := e.loadReviewers(t, store.Run{Kind: store.KindAPI})
@@ -207,7 +207,7 @@ func TestFromFrozenDropsTried(t *testing.T) {
 	}
 }
 
-// Every chain of a review reads the limits LoadSet read for chain A: a
+// Every chain of a review reads the limits Load read for chain A: a
 // reviewer chain skips an entry at its model or team limit, on copies of the
 // maps.
 func TestFromFrozenKeepsLimits(t *testing.T) {

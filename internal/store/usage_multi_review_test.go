@@ -162,9 +162,10 @@ func TestRecordReviewMemberUsage(t *testing.T) {
 			t.Errorf("reviewer %d usage_recorded = false; want true", m.Reviewer)
 		}
 	}
-	// No panel table is written.
-	if rows := modelRowsOf(t, s, id); len(rows) != 0 {
-		t.Errorf("run_usage_models = %+v; want none", rows)
+	// No legacy panel table is written.
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM run_usage_models WHERE run_id = $1::uuid`, id).Scan(&n); err != nil || n != 0 {
+		t.Errorf("run_usage_models = %d rows, %v; want none", n, err)
 	}
 	if err := s.RecordReviewMemberUsage(ctx, "00000000-0000-0000-0000-000000000000", []SkillUsage{{Skill: "security", In: 1}}); err != nil {
 		t.Errorf("RecordReviewMemberUsage of an unknown member: %v", err)
@@ -195,7 +196,7 @@ func TestRecordReviewMemberUsage(t *testing.T) {
 func TestRecordReviewMemberUsageOnSplitRun(t *testing.T) {
 	s := newStore(t)
 	first := reported(t, s, mr1, "a1", `{}`)
-	if err := s.RecordUsage(ctx, first, []SkillUsage{{Skill: "security", Verdict: "failed", In: 9}}, nil); err != nil {
+	if err := s.RecordUsage(ctx, first, []SkillUsage{{Skill: "security", Verdict: "failed", In: 9}}); err != nil {
 		t.Fatal(err)
 	}
 	split, _, err := s.EnqueueAttempt(ctx, getRun(t, s, first), quotaMark("m1"))
@@ -259,10 +260,6 @@ func TestReviewMembersWithoutUsage(t *testing.T) {
 	}
 	if ms, err := s.ReviewMembersWithoutUsage(ctx, 0); err != nil || len(ms) != 0 {
 		t.Errorf("ReviewMembersWithoutUsage(0) = %+v, %v; want none", ms, err)
-	}
-	// The panel's list does not see review members.
-	if ms, err := s.MembersWithoutUsage(ctx, 10); err != nil || len(ms) != 0 {
-		t.Errorf("MembersWithoutUsage = %+v, %v; want none", ms, err)
 	}
 }
 
@@ -439,7 +436,7 @@ func TestReviewCostsOrder(t *testing.T) {
 	}
 	// Another review, a single review and a bad id have none.
 	other := reported(t, s, mr2, "b1", `{}`)
-	if err := s.RecordUsage(ctx, other, []SkillUsage{{Skill: "security", In: 1}}, nil); err != nil {
+	if err := s.RecordUsage(ctx, other, []SkillUsage{{Skill: "security", In: 1}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, none := range []string{other, "bad", "00000000-0000-0000-0000-000000000000"} {
@@ -513,7 +510,7 @@ func TestReviewNoResultOffIsSingle(t *testing.T) {
 		reported_at = $2, created_at = $2 WHERE id = $1::uuid`, id, usageAt(5, 10, 0)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "security", Verdict: "no_blocking_issues", In: 40}}, nil); err != nil {
+	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "security", Verdict: "no_blocking_issues", In: 40}}); err != nil {
 		t.Fatal(err)
 	}
 	w, err := s.UsageWasted(ctx, mr.Instance, 7, usageSince)
@@ -523,4 +520,23 @@ func TestReviewNoResultOffIsSingle(t *testing.T) {
 	if w.Failed.In != 0 {
 		t.Errorf("wasted = %+v; want nothing wasted for a single review's passed skill", w)
 	}
+}
+
+// usageRow is one run_usage row of run id and skill.
+type usageRow struct {
+	in, out          int64
+	cache            *int64
+	verdict          string
+	findings, blocks int
+}
+
+func usageOf(t *testing.T, s *Store, id, skill string) (usageRow, bool) {
+	t.Helper()
+	var u usageRow
+	err := s.pool.QueryRow(ctx, `SELECT tokens_in, tokens_out, cache_read, verdict, findings, blocking FROM run_usage
+		WHERE run_id = $1::uuid AND skill = $2`, id, skill).Scan(&u.in, &u.out, &u.cache, &u.verdict, &u.findings, &u.blocks)
+	if err != nil {
+		return usageRow{}, false
+	}
+	return u, true
 }

@@ -54,19 +54,19 @@ const (
 
 var repo = settings.Effective{Instance: inst, Project: project}
 
-// panelEnv is a store with a team that owns the repository, 3 stored global
+// loadEnv is a store with a team that owns the repository, 2 stored global
 // entries (the first is the default) and a registry over them.
-type panelEnv struct {
+type loadEnv struct {
 	st   *store.Store
 	reg  *instances.Registry
 	team int64
 	a, b store.EntryRef
 }
 
-func newPanelEnv(t *testing.T, cfg *config.Config) *panelEnv {
+func newLoadEnv(t *testing.T, cfg *config.Config) *loadEnv {
 	t.Helper()
 	st := newStore(t)
-	e := &panelEnv{st: st}
+	e := &loadEnv{st: st}
 	mk := func(model string) store.EntryRef {
 		m, err := st.CreateLLMModel(ctx, store.LLMModel{Provider: "openai", Model: model}, now)
 		if err != nil {
@@ -94,108 +94,24 @@ func newPanelEnv(t *testing.T, cfg *config.Config) *panelEnv {
 	return e
 }
 
-func (e *panelEnv) save(t *testing.T, set store.ChainSet, c store.Chain) {
-	t.Helper()
-	if err := e.st.SaveChainOf(ctx, set, c, now); err != nil {
-		t.Fatalf("SaveChainOf: %v", err)
-	}
-}
-
-func (e *panelEnv) repoRow(t *testing.T) {
+func (e *loadEnv) repoRow(t *testing.T) {
 	t.Helper()
 	if err := e.st.UpsertDashboardRepo(ctx, store.DashboardRepo{Instance: inst, Project: project, CreatedBy: "alice"}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func (e *panelEnv) loadB(t *testing.T, run store.Run) Input {
+func (e *loadEnv) save(t *testing.T, c store.Chain) {
 	t.Helper()
-	in, err := LoadSet(ctx, e.st, e.reg, now, run, repo, store.ChainB)
-	if err != nil {
-		t.Fatalf("LoadSet: %v", err)
-	}
-	return in
-}
-
-func TestLoadChainBNoneIsOff(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{LLM: config.LLM{Provider: "openai", Model: "cfg"}})
-	in := e.loadB(t, store.Run{})
-	if in.Refs != nil || in.Scope != "" {
-		t.Fatalf("in = %+v, %q; want no chain", in.Refs, in.Scope)
-	}
-	// Chain A still falls to the global level, where the config entry is.
-	a, err := LoadSet(ctx, e.st, e.reg, now, store.Run{}, repo, store.ChainA)
-	if err != nil || a.Scope != store.ScopeGlobal {
-		t.Fatalf("chain A scope = %q, %v", a.Scope, err)
+	if err := e.st.SaveChain(ctx, c, now); err != nil {
+		t.Fatalf("SaveChain: %v", err)
 	}
 }
 
-func TestLoadChainBRepoBeforeTeamBeforeGlobal(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{})
-	e.save(t, store.ChainB, store.Chain{Scope: store.ScopeGlobal, Entries: []store.EntryRef{e.a}})
-	in := e.loadB(t, store.Run{})
-	if in.Scope != store.ScopeGlobal || !slices.Equal(in.Refs, []store.EntryRef{e.a}) || in.OwnerTeam != e.team {
-		t.Fatalf("global: %+v %q team %d", in.Refs, in.Scope, in.OwnerTeam)
-	}
-	e.save(t, store.ChainB, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.b}})
-	in = e.loadB(t, store.Run{})
-	if in.Scope != store.ScopeTeam || !slices.Equal(in.Refs, []store.EntryRef{e.b}) {
-		t.Fatalf("team: %+v %q", in.Refs, in.Scope)
-	}
-	e.repoRow(t)
-	e.save(t, store.ChainB, store.Chain{Scope: store.ScopeRepo, Instance: inst, Project: project, Entries: []store.EntryRef{e.a, e.b}})
-	in = e.loadB(t, store.Run{})
-	if in.Scope != store.ScopeRepo || !slices.Equal(in.Refs, []store.EntryRef{e.a, e.b}) {
-		t.Fatalf("repo: %+v %q", in.Refs, in.Scope)
-	}
-	// Chain A is untouched by all of this.
-	a, err := LoadSet(ctx, e.st, e.reg, now, store.Run{}, repo, store.ChainA)
-	if err != nil || a.Scope != store.ScopeGlobal {
-		t.Fatalf("chain A scope = %q, %v", a.Scope, err)
-	}
-}
-
-func TestLoadChainBRepoOffBeatsTeam(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{})
-	e.repoRow(t)
-	e.save(t, store.ChainB, store.Chain{Scope: store.ScopeGlobal, Entries: []store.EntryRef{e.a}})
-	e.save(t, store.ChainB, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.b}})
-	if err := e.st.SetRepoPanelOff(ctx, inst, project, now); err != nil {
-		t.Fatal(err)
-	}
-	in := e.loadB(t, store.Run{})
-	if in.Refs != nil || in.Scope != "" {
-		t.Fatalf("off: %+v %q", in.Refs, in.Scope)
-	}
-}
-
-func TestLoadChainBAPIReadsGlobal(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{})
-	e.repoRow(t)
-	e.save(t, store.ChainB, store.Chain{Scope: store.ScopeGlobal, Entries: []store.EntryRef{e.a}})
-	e.save(t, store.ChainB, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.b}})
-	if err := e.st.SetRepoPanelOff(ctx, inst, project, now); err != nil {
-		t.Fatal(err)
-	}
-	in := e.loadB(t, store.Run{Kind: store.KindAPI})
-	if in.Scope != store.ScopeGlobal || !slices.Equal(in.Refs, []store.EntryRef{e.a}) {
-		t.Fatalf("api: %+v %q", in.Refs, in.Scope)
-	}
-}
-
-func TestLoadChainBTriedIsTheCallers(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{})
-	other := "7"
-	in := e.loadB(t, store.Run{AttemptOf: &other})
-	if in.Tried != nil {
-		t.Fatalf("Tried = %v, want nil", in.Tried)
-	}
-}
-
-func TestLoadChainAUnchanged(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{})
-	e.save(t, store.ChainB, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.b}})
-	e.save(t, store.ChainA, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.a}})
+// The owner team's chain is in effect when the repository has none.
+func TestLoadTeamChain(t *testing.T) {
+	e := newLoadEnv(t, &config.Config{})
+	e.save(t, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.a}})
 	in, err := Load(ctx, e.st, e.reg, now, store.Run{}, repo)
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +142,7 @@ func spent(t *testing.T, st *store.Store, iid int64, ref store.EntryRef, tokens 
 	if out, err := st.StoreResult(ctx, id, "tok-"+id, []byte(`{"schema_version":1,"status":"completed","skills":[]}`), now); err != nil || out != store.ResultStored {
 		t.Fatalf("StoreResult = %v, %v", out, err)
 	}
-	if err := st.RecordUsage(ctx, id, []store.SkillUsage{{Skill: "a", Verdict: "no_blocking_issues", In: tokens}}, nil); err != nil {
+	if err := st.RecordUsage(ctx, id, []store.SkillUsage{{Skill: "a", Verdict: "no_blocking_issues", In: tokens}}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -241,7 +157,7 @@ func limit(t *testing.T, st *store.Store, ref store.EntryRef, team, tokens int64
 // Load reads the limits of this month: the model limits, and the owner
 // team's limits only. A repository with no owner team gets no team limit.
 func TestLoadReadsLimits(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{})
+	e := newLoadEnv(t, &config.Config{})
 	spent(t, e.st, 1, e.a, 10)
 	spent(t, e.st, 2, e.b, 10)
 	limit(t, e.st, e.a, 0, 10)      // used up

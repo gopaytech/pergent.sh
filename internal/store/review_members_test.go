@@ -670,11 +670,11 @@ func TestCountRunningCountsReviewMembers(t *testing.T) {
 	if n, err := s.CountRunning(ctx); err != nil || n != 3 {
 		t.Errorf("CountRunning = %d, %v; want 3 (a run and 2 members, not the skipped one)", n, err)
 	}
-	// A panel member still counts too, until the panel tables go.
-	p := panelRun(t, s, mr3, "c1")
-	dispatchMember(t, s, memberOf(t, s, p, "a").ID, "tok-p")
-	if n, err := s.CountRunning(ctx); err != nil || n != 5 {
-		t.Errorf("CountRunning = %d, %v; want 5 (with 2 panel members)", n, err)
+	// A legacy panel member a main build left holds no slot.
+	p := legacyPanelRun(t, s, mr3, "c1")
+	runLegacyMember(t, s, legacyMemberOf(t, s, p, "a").ID, "tok-p")
+	if n, err := s.CountRunning(ctx); err != nil || n != 3 {
+		t.Errorf("CountRunning = %d, %v; want 3 (a legacy panel member is not counted)", n, err)
 	}
 }
 
@@ -835,10 +835,10 @@ func TestReviewMemberResultToken(t *testing.T) {
 			t.Errorf("run %s: StoreReviewMemberResult = %v, %v; want unauthorized", run, out, err)
 		}
 	}
-	// A panel member's token is no review member's.
-	p := panelRun(t, s, mr3, "c1")
-	pa := memberOf(t, s, p, "a")
-	dispatchMember(t, s, pa.ID, "tok-pa")
+	// A legacy panel member's token is no review member's.
+	p := legacyPanelRun(t, s, mr3, "c1")
+	pa := legacyMemberOf(t, s, p, "a")
+	runLegacyMember(t, s, pa.ID, "tok-pa")
 	if out, err := s.StoreReviewMemberResult(ctx, p, pa.ID, "tok-pa", []byte(`{}`), t0); err != nil || out != ResultUnauthorized {
 		t.Errorf("panel member: StoreReviewMemberResult = %v, %v; want unauthorized", out, err)
 	}
@@ -928,8 +928,8 @@ func TestSupersedeMultiReviewSupersedesMembers(t *testing.T) {
 	if r := getRun(t, s, other); r.State != Queued {
 		t.Errorf("queued run = %s; want left alone", r.State)
 	}
-	// A panel's waiting run is not a multi review's.
-	p := panelRun(t, s, mr3, "c1")
+	// A legacy panel's waiting run is not a multi review's.
+	p := legacyPanelRun(t, s, mr3, "c1")
 	if err := s.SupersedeMultiReview(ctx, p, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -961,7 +961,7 @@ func TestMultiReviewRun(t *testing.T) {
 	if r, found, err := s.MultiReviewRun(ctx, id); err != nil || !found || r.ID != later {
 		t.Errorf("MultiReviewRun = %s %v, %v; want the later attempt", r.ID, found, err)
 	}
-	p := panelRun(t, s, mr3, "c1")
+	p := legacyPanelRun(t, s, mr3, "c1")
 	if _, found, err := s.MultiReviewRun(ctx, p); err != nil || found {
 		t.Errorf("MultiReviewRun of a panel run = %v, %v; want none", found, err)
 	}
@@ -1599,9 +1599,7 @@ func TestPanelMembersUntouched(t *testing.T) {
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordPanelOff(ctx, id, "legacy"); err != nil {
-		t.Fatal(err)
-	}
+	legacyPanelOff(t, s, id, "legacy")
 	if err := s.RecordMultiReviewOff(ctx, id, "no other reviewer can start"); err != nil {
 		t.Fatal(err)
 	}
@@ -1649,5 +1647,16 @@ func TestPanelMembersUntouched(t *testing.T) {
 		if n != 0 {
 			t.Errorf("%s has %d rows; want 0", table, n)
 		}
+	}
+}
+
+// reportAttemptToRunning claims the queued attempt id and records its Job.
+func reportAttemptToRunning(t *testing.T, s *Store, id, token string) {
+	t.Helper()
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkDispatched(ctx, id, "job-"+token, "base", "start", hash(token), time.Now().Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
 	}
 }

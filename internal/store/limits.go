@@ -75,36 +75,23 @@ type EntryTokens struct {
 }
 
 // entryTokensSQL sums the tokens (in plus out) reported from $1 on, per
-// entry and owner team. A run with rows per model counts from those, each on
-// its own entry, and its run_usage rows, the total of all its Jobs, are left
-// out:
-//   - a review panel's members and Job P (run_usage_models: panel_members,
-//     panel_judges);
-//   - a multi review's reviewers and judge (run_usage_by_model, Ruling L8):
-//     each reviewer attempt on its review_members entry, each judge run on
-//     its review_judges entry (none with --no-judge). These rows have no
-//     owner team of their own: it is the one of the run_usage row they were
-//     added to (the same run and skill), so no migration is needed.
+// entry and owner team. A multi review's run has rows per model
+// (run_usage_by_model, Ruling L8) and counts from those, each on its own
+// entry: each reviewer attempt on its review_members entry, each judge run on
+// its review_judges entry (none with --no-judge). Its run_usage rows, the
+// total of all its Jobs, are left out. These rows have no owner team of
+// their own: it is the one of the run_usage row they were added to (the same
+// run and skill), so no migration is needed.
 //
 // Any other run counts its run_usage rows on the run's entry. A run with no
-// entry (before chains) counts on none, and so do Job P's tokens when its
-// result split none per model. A pinned Review API review counts on its
-// entry, which its run records.
+// entry (before chains) counts on none. A pinned Review API review counts on
+// its entry, which its run records.
 const entryTokensSQL = `SELECT source, entry_id, COALESCE(owner_team_id, 0), sum(tokens)::bigint FROM (
 		SELECT COALESCE(r.model_source, 'global') AS source, r.model_entry_id AS entry_id, u.owner_team_id,
 			u.tokens_in + u.tokens_out AS tokens
 		FROM run_usage u JOIN runs r ON r.id = u.run_id
 		WHERE u.reported_at >= $1 AND COALESCE(r.model_entry_id, '') <> ''
-		  AND NOT EXISTS (SELECT 1 FROM run_usage_models m WHERE m.run_id = u.run_id)
 		  AND NOT EXISTS (SELECT 1 FROM run_usage_by_model b WHERE b.run_id = u.run_id)
-		UNION ALL
-		SELECT p.model_source, p.model_entry_id, m.owner_team_id, m.tokens_in + m.tokens_out
-		FROM run_usage_models m JOIN panel_members p ON p.id = m.member_id
-		WHERE m.part = 'member' AND m.reported_at >= $1 AND p.model_entry_id <> ''
-		UNION ALL
-		SELECT j.model_source, j.model_entry_id, m.owner_team_id, m.tokens_in + m.tokens_out
-		FROM run_usage_models m JOIN panel_judges j ON j.run_id = m.run_id AND j.role = m.role
-		WHERE m.part = 'merge' AND m.reported_at >= $1 AND j.model_entry_id <> ''
 		UNION ALL
 		SELECT COALESCE(NULLIF(rm.model_source, ''), 'global'), rm.model_entry_id, u.owner_team_id, b.tokens_in + b.tokens_out
 		FROM run_usage_by_model b JOIN review_members rm ON rm.id = b.member_id

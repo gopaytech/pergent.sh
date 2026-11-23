@@ -853,7 +853,7 @@ func TestRunDetailTokensComeFromUsage(t *testing.T) {
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != (TokensView{In: 105, Out: 11}) {
 		t.Errorf("tokens before usage is recorded = %+v; want the sum of the result", v.Tokens)
 	}
-	if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{usageSkill("own", "no_blocking_issues", 5, 1)}, nil); err != nil {
+	if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{usageSkill("own", "no_blocking_issues", 5, 1)}); err != nil {
 		t.Fatal(err)
 	}
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != (TokensView{In: 5, Out: 1}) {
@@ -2092,7 +2092,7 @@ func TestRunPageMultiReviewJudgeRetry(t *testing.T) {
 	e.addJudge(retry, store.JudgeRow{Reviewers: []int{1}, NoJudge: true, NoJudgeReason: "the judge failed twice"})
 	e.addReviewUsage(split, r1, 1, "code-review", "sonnet", "anthropic", "claude-sonnet-4", 100, 10)
 	e.addReviewUsage(split, "", 0, "code-review", "opus", "anthropic", "claude-opus-4", 30, 3)
-	if err := e.st.RecordUsage(ctx, retry, []store.SkillUsage{usageSkill("code-review", "no_blocking_issues", 20, 2)}, nil); err != nil {
+	if err := e.st.RecordUsage(ctx, retry, []store.SkillUsage{usageSkill("code-review", "no_blocking_issues", 20, 2)}); err != nil {
 		t.Fatal(err)
 	}
 

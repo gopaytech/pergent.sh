@@ -190,8 +190,15 @@ func sameModels(ds []chain.Decision) []chain.SameModel {
 }
 
 // reasonAPINoMultiReview fails a member of an API review: an API review is
-// never split, so such a member is left over (a legacy panel's, or a bug).
+// never split, so such a member is left over (a bug).
 const reasonAPINoMultiReview = "an API review never runs multi review"
+
+// reasonInputsChanged fails a member whose dispatch would change what its run
+// was dispatched with: a member never writes its run.
+const reasonInputsChanged = "the review's inputs changed while the multi review ran"
+
+// errInputsChanged is how subset says it would write to a member's run.
+var errInputsChanged = errors.New(reasonInputsChanged)
 
 // detailRepoQuota is the admin-only detail of an extra reviewer that starts
 // no attempt because the repository's token quota is used up.
@@ -223,50 +230,6 @@ func (e *Engine) dispatchMember(ctx context.Context, m store.ReviewMember) error
 		return d.fail(ctx, reasonAPINoMultiReview)
 	}
 	return d.dispatch(ctx)
-}
-
-// dispatchLegacyMembers handles up to limit queued members of a review panel
-// that a main build left (panel_members). None gets a Job: the member
-// result route takes review_members only, so its result would be refused. A
-// member of an API review fails, and its run is left as it is. A member of a
-// merge request's review makes the engine queue that review again as one
-// review (RecoverLegacyPanels, as at start). The returned error joins store
-// failures.
-func (e *Engine) dispatchLegacyMembers(ctx context.Context, limit int, skip []string) error {
-	ms, err := e.Store.ClaimQueuedMembers(ctx, limit, e.now(), skip...)
-	if err != nil {
-		return fmt.Errorf("dispatch: claim queued legacy panel members: %w", err)
-	}
-	var errs []error
-	recoverPanels := false
-	for _, m := range ms {
-		log := e.log().With("run", m.RunID, "member", m.ID, "role", m.Role)
-		run, found, err := e.Store.PanelRun(ctx, m.RunID)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("dispatch legacy panel member %s: load its run: %w", m.ID, err))
-			if err := e.Store.PostponeMember(ctx, m.ID, e.now().Add(waitDelay)); err != nil {
-				errs = append(errs, fmt.Errorf("postpone legacy panel member %s: %w", m.ID, err))
-			}
-		case !found:
-			// The legacy run took the run meanwhile; the member waits for
-			// the recovery at the next start.
-			if err := e.Store.PostponeMember(ctx, m.ID, e.now().Add(waitDelay)); err != nil {
-				errs = append(errs, fmt.Errorf("postpone legacy panel member %s: %w", m.ID, err))
-			}
-		case run.Kind == store.KindAPI:
-			log.Warn("a legacy panel member of an API review can't start; reporting it as failed", "reason", reasonAPINoMultiReview)
-			if _, err := e.Store.ReportMemberFailure(ctx, m.ID, store.Failure{Reason: reasonAPINoMultiReview}, e.now()); err != nil {
-				errs = append(errs, fmt.Errorf("report legacy panel member %s: %w", m.ID, err))
-			}
-		default:
-			recoverPanels = true
-		}
-	}
-	if recoverPanels {
-		e.RecoverLegacyPanels(ctx)
-	}
-	return errors.Join(errs...)
 }
 
 // resolveMember picks member m's entry from its frozen chain
@@ -558,8 +521,7 @@ const settleBatch = 20
 // before the runs are listed, so a review whose reviewers all failed is
 // published as failed in the same pass. Nothing is posted for a member: no
 // comment, note, thread, approval or status. A member it can't settle now is
-// tried again on the next pass. A legacy panel's members come last
-// (settleLegacyPanels).
+// tried again on the next pass.
 func (e *Engine) settleMembers(ctx context.Context) error {
 	ms, err := e.Store.ReviewMembersToSettle(ctx, settleBatch)
 	if err != nil {
@@ -599,7 +561,7 @@ func (e *Engine) settleMembers(ctx context.Context) error {
 			e.Wake()
 		}
 	}
-	return e.settleLegacyPanels(ctx)
+	return nil
 }
 
 // settleMember decides the reported member m. Its stored result is checked

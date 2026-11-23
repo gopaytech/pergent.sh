@@ -2,7 +2,6 @@ package usage
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -149,10 +148,7 @@ type recorder struct {
 	single, judge []string
 }
 
-func (r *recorder) RecordUsage(_ context.Context, id string, _ []store.SkillUsage, models []store.ModelUsage) error {
-	if models != nil {
-		return errors.New("model rows passed")
-	}
+func (r *recorder) RecordUsage(_ context.Context, id string, _ []store.SkillUsage) error {
 	r.single = append(r.single, id)
 	return nil
 }

@@ -55,7 +55,7 @@ func avoided(avoid []SameModel, m instances.Model) bool {
 // is the models no entry may run on (reviewer k avoids the models reviewers
 // 1 to k-1 run on); nil, or a zero SameModel, avoids none. ModelLimitUsedUp
 // and TeamLimitUsedUp are the entries whose model limit, or whose limit for
-// OwnerTeam, is used up this month; LoadSet reads them.
+// OwnerTeam, is used up this month; Load reads them.
 type Input struct {
 	Scope               string // store.ScopeGlobal, ScopeTeam or ScopeRepo
 	Refs                []store.EntryRef

@@ -89,7 +89,7 @@ type Usage struct {
 
 // Recorder is the part of the store a run's usage is written with.
 type Recorder interface {
-	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage, models []store.ModelUsage) error
+	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error
 	RecordJudgeUsage(ctx context.Context, id string, skills []store.SkillUsage) error
 }
 
@@ -109,10 +109,10 @@ func Rows(body []byte, run store.Run, judge bool) (Usage, error) {
 // rows (RecordJudgeUsage), which hold its reviewers' tokens when it is the
 // run that was split, with one judge row per skill. RecordUsage keeps a row
 // already there, so it would drop the judge's tokens. Any other run is
-// recorded as before, with no model rows.
+// recorded with RecordUsage.
 func (u Usage) Record(ctx context.Context, st Recorder, id string) error {
 	if u.Judge {
 		return st.RecordJudgeUsage(ctx, id, u.Skills)
 	}
-	return st.RecordUsage(ctx, id, u.Skills, nil)
+	return st.RecordUsage(ctx, id, u.Skills)
 }
