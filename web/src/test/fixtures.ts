@@ -23,6 +23,7 @@ import type {
   RepositoryView,
   RepoTeamsView,
   ReviewDetailView,
+  ReviewersView,
   ReviewSummary,
   Role,
   RunDetailView,
@@ -351,7 +352,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   waiting: [],
   instanceTrustedAuthorsOnly: "follow_visibility",
   model: "anthropic / claude-sonnet",
-  panel: { on: false, mode: "inherit" },
+  multiReview: { on: false, reviewers: 1, judge: "" },
   // Only an admin is given the usage against the quotas.
   quota: null,
   graph: {
@@ -1135,26 +1136,23 @@ export const builtInRules: BuiltInRule[] = [
   { name: "ts_js", paths: ["**/*.ts", "**/*.js"], rule: "Check for floating promises." },
 ];
 
-// Chain B of acme/payments while nothing is set anywhere: no entries.
-export const panelRepoInherit: ChainView = {
-  ...chainRepoInherit,
-  source: "global",
-  team: "",
-  mode: "inherit",
-  entries: [],
-};
+// acme/payments' reviewers while it has only reviewer 1, as an admin of it
+// sees them.
+export const reviewersNone: ReviewersView = { readOnly: false, reviewers: [], judge: null, warnings: [], addRefusal: "" };
 
-// Its own chain B: Opus.
-export const panelRepoCustom: ChainView = {
+// reviewerChain is a reviewer chain (or a judge chain) of acme/payments with
+// entries, as an admin of it sees it: every global entry and the team's are
+// choices.
+export const reviewerChain = (...entries: ChainEntryView[]): ChainView => ({
   ...chainRepoCustom,
-  mode: "custom",
-};
+  savedByAdmin: false,
+  entries: entries.map((e, i) => ({ ...e, position: i + 1 })),
+});
 
-// The panel switched off for the repository.
-export const panelRepoOff: ChainView = {
-  ...chainRepoInherit,
-  source: "repository",
-  team: "",
-  mode: "off",
-  entries: [],
-};
+// reviewersWith is acme/payments with reviewers 2.. (each chain's entries
+// in order) and a judge.
+export const reviewersWith = (extra: ChainEntryView[][], judge: ChainEntryView[]): ReviewersView => ({
+  ...reviewersNone,
+  reviewers: extra.map((e, i) => ({ number: i + 2, chain: reviewerChain(...e) })),
+  judge: reviewerChain(...judge),
+});

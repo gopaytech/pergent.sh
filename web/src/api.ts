@@ -437,8 +437,9 @@ export type RepositoryDetailView = {
   // (GET .../chain has the chain); "" when the chain is empty or that entry
   // was removed. Never a base URL or key.
   model: string;
-  // panel is the review panel: whether a chain B is in effect, and its mode.
-  panel: PanelView;
+  // multiReview is the repository's multi review: on with reviewers 2 to 5
+  // (GET .../reviewers), the count of reviewers and the judge's name.
+  multiReview: MultiReviewView;
   // quota is this month's tokens against the quotas; null for anyone but an
   // admin, and when the usage could not be read.
   quota: QuotaView | null;
@@ -966,7 +967,16 @@ export type MarkClass = "quota" | "billing" | "auth";
 export type MarkView = { class: MarkClass; until: string | null; setAt: string; live: boolean };
 
 // EntryState is what reviews do with a chain entry now.
-export type EntryState = "ready" | "exhausted" | "key_rejected" | "removed" | "not_allowed" | "not_owner" | "key_unusable";
+export type EntryState =
+  | "ready"
+  | "exhausted"
+  | "key_rejected"
+  | "removed"
+  | "not_allowed"
+  | "not_owner"
+  | "key_unusable"
+  | "model_limit"
+  | "team_limit";
 
 // ChainEntryView is an entry of a chain, or one that may be put in it
 // (position 0). class and until are its mark's ("" and null with none);
@@ -1000,19 +1010,36 @@ export type ChainView = {
   team: string;
   readOnly: boolean;
   savedByAdmin: boolean;
-  // mode is a repository's chain B mode (GET .../panel-chain and its writes
-  // only): inherit, custom (its own) or off (no panel). Absent on chain A.
-  mode?: PanelMode;
   entries: ChainEntryView[];
   choices: ChainEntryView[];
 };
 
-// PanelMode is how a repository gets its chain B.
-export type PanelMode = "inherit" | "custom" | "off";
+// MultiReviewView is a repository's multi review on its page. on is true
+// with a reviewer beyond reviewer 1. reviewers counts them all, reviewer 1
+// too (1 when off). judge is the name of the judge chain's first entry: ""
+// with no judge, an empty judge chain or a removed entry.
+export type MultiReviewView = { on: boolean; reviewers: number; judge: string };
 
-// PanelView is a repository's review panel: on when a chain B is in effect;
-// a and b name position 1 of each chain while on. Never a key or a URL.
-export type PanelView = { on: boolean; mode: PanelMode; a?: string; b?: string };
+// ReviewerChain is one of reviewers 2 to 5: its number and its chain.
+export type ReviewerChain = { number: number; chain: ChainView };
+
+// ReviewersView is GET .../reviewers: reviewers 2 to 5, reviewer 2 first,
+// and the judge (reviewer 1 is GET .../chain). judge is null with no judge;
+// its entries are empty when its last entry was deleted. warnings are what
+// the card shows. addRefusal says why a reviewer can't be added now ("" when
+// it can). Never a base URL or a key.
+export type ReviewersView = {
+  readOnly: boolean;
+  reviewers: ReviewerChain[];
+  judge: ChainView | null;
+  warnings: string[];
+  addRefusal: string;
+};
+
+// ReviewersUpdate is the body of PUT .../reviewers: reviewers 2 to 5 in
+// order, each its entries, and the judge's entries. One save replaces them
+// all; a reviewer left out is removed.
+export type ReviewersUpdate = { reviewers: ChainRef[][]; judge: ChainRef[] };
 
 // ChainRef names an entry in the body of a chain's PUT.
 export type ChainRef = { source: EntrySource; id: string };
@@ -1548,13 +1575,8 @@ export const paths = {
   // The repository's model chain: GET, PUT {entries}; POST .../reset to inherit again.
   apiRepoChain: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/chain`,
   apiRepoChainReset: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/chain/reset`,
-  // The repository's chain B (the review panel): GET, PUT {entries}; POST .../reset to inherit, .../off for no panel.
-  apiRepoPanelChain: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/panel-chain`,
-  apiRepoPanelChainReset: (instance: string, project: string) =>
-    `/api/repositories/${seg(instance)}/${proj(project)}/panel-chain/reset`,
-  apiRepoPanelChainOff: (instance: string, project: string) =>
-    `/api/repositories/${seg(instance)}/${proj(project)}/panel-chain/off`,
-  apiTeamPanelChain: (id: number) => `/api/teams/${seg(String(id))}/panel-chain`,
+  // The repository's reviewers 2 to 5 and its judge: GET, PUT {reviewers, judge}.
+  apiRepoReviewers: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/reviewers`,
   // The team pages of the user area, and the team routes.
   team: (id: number) => `/teams/${seg(String(id))}`,
   apiTeamModels: (id: number) => `/api/teams/${seg(String(id))}/models`,

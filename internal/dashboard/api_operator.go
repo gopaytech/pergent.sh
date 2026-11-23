@@ -84,8 +84,6 @@ func (d *Dashboard) operatorRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "DELETE /api/admin/models/{id}/team-limits/{teamId}", d.deleteTeamLimit)
 	d.adminRoute(mux, "GET /api/admin/chain", d.getGlobalChain)
 	d.adminRoute(mux, "PUT /api/admin/chain", d.putGlobalChain)
-	d.adminRoute(mux, "GET /api/admin/panel-chain", d.getGlobalPanelChain)
-	d.adminRoute(mux, "PUT /api/admin/panel-chain", d.putGlobalPanelChain)
 	d.adminRoute(mux, "GET /api/admin/defaults", d.getDefaults)
 	d.adminRoute(mux, "PUT /api/admin/defaults", d.putDefaults)
 	d.adminRoute(mux, "GET /api/admin/comment-footer", d.getCommentFooter)

@@ -255,7 +255,6 @@ type RunDetailView struct {
 // RunPanelView is a panel review on its run's page: why it did not start
 // (Off), or its members, the entries Job P judged with on this run, and the
 // tokens per model of the whole review, the same on each attempt's page.
-// (A repository's panel is PanelView.)
 type RunPanelView struct {
 	Off     string            `json:"off,omitempty"`
 	Members []PanelMemberView `json:"members"`
@@ -521,9 +520,10 @@ type RepositoryDetailView struct {
 	// chain is empty or that entry was removed. Anyone who sees the
 	// repository sees it; the base URL and the key are never in it.
 	Model string `json:"model"`
-	// Panel is the repository's review panel: whether a chain B is in
-	// effect, its mode and the entry names at position 1 of each chain.
-	Panel PanelView `json:"panel"`
+	// MultiReview is the repository's multi review: whether it has
+	// reviewers 2 to 5 (GET .../reviewers), how many reviewers in all and
+	// its judge.
+	MultiReview MultiReviewView `json:"multiReview"`
 	// Quota is this month's tokens against the repository's and its
 	// instance's quotas, for an admin; null for anyone else, and when the
 	// usage can't be read.
@@ -533,17 +533,15 @@ type RepositoryDetailView struct {
 	Graph GraphView `json:"graph"`
 }
 
-// PanelView is a repository's review panel. On is whether a chain B is in
-// effect for it (its own, its owner team's or the global one). Mode is its
-// chain B mode: "inherit", "custom" (its own) or "off" (no panel, whatever
-// its team or the global chain B). A and B are the names of the entries at
-// position 1 of chain A and chain B, while On; empty when that entry was
-// removed. Never a model, a base URL or a key.
-type PanelView struct {
-	On   bool   `json:"on"`
-	Mode string `json:"mode"`
-	A    string `json:"a,omitempty"`
-	B    string `json:"b,omitempty"`
+// MultiReviewView is a repository's multi review on its page. On is
+// whether it has a reviewer beyond reviewer 1. Reviewers counts them all,
+// reviewer 1 included: 1 when off. Judge is the name of the judge chain's
+// first entry; "" with no judge, an empty judge chain or a removed entry.
+// Never a model, a base URL or a key.
+type MultiReviewView struct {
+	On        bool   `json:"on"`
+	Reviewers int    `json:"reviewers"`
+	Judge     string `json:"judge"`
 }
 
 // GraphView is a repository's Code graph switch and status. Available is
@@ -1113,11 +1111,10 @@ type LLMView struct {
 //     sees the repository. PUT .../chain {"entries"} and POST
 //     .../chain/reset: admins and maintainers of the owner team (403 for
 //     anyone else who sees it); see api_chains.go.
-//   - GET, PUT .../panel-chain, POST .../panel-chain/reset and POST
-//     .../panel-chain/off: the same for chain B, the review panel's second
-//     chain, with the same rights. A save with entries needs a review image
-//     with a panel (400 otherwise); off and reset need none, and off works
-//     on a repository the config file switches on too.
+//   - GET .../reviewers: ReviewersView, reviewers 2 to 5 and the judge, for
+//     anyone who sees the repository. PUT .../reviewers {"reviewers",
+//     "judge"}: the rights of PUT .../chain; adding a reviewer needs a review
+//     image with multi review (400 otherwise); see api_reviewers.go.
 //   - GET /api/admin/linkable?instance=&repo=&search= (admins only): LinkableView,
 //     the repositories the instance's review App reaches (at most 200, by name),
 //     each with whether `repo` (a repository switched on, GitHub only; 400 for
@@ -1598,19 +1595,40 @@ type MarkView struct {
 // naming it) or "global". ReadOnly is true when the session may not change
 // it. SavedByAdmin is whether an admin saved the chain shown (a repository
 // chain an admin saved may name global entries teams may not use). Choices
-// are the entries the session may put in it, empty when ReadOnly. Mode is
-// set on a repository's chain B (GET .../panel-chain) only: "inherit",
-// "custom" or "off" (no entries, Source "repository"). The same view serves
-// chain B, at the same 3 levels.
+// are the entries the session may put in it, empty when ReadOnly.
 type ChainView struct {
 	Scope        string           `json:"scope"`
 	Source       string           `json:"source"`
 	Team         string           `json:"team"`
 	ReadOnly     bool             `json:"readOnly"`
 	SavedByAdmin bool             `json:"savedByAdmin"`
-	Mode         string           `json:"mode,omitempty"`
 	Entries      []ChainEntryView `json:"entries"`
 	Choices      []ChainEntryView `json:"choices"`
+}
+
+// ReviewersView is GET .../reviewers: reviewers 2 to 5 and the judge
+// (reviewer 1 is GET .../chain). Each ChainView is the repository chain's
+// shape, its choices included. Never a base URL or a key. ReadOnly is true
+// when the session may not change them. Reviewers are in order, reviewer 2
+// first. Judge is null with no judge row; its entries are empty when its
+// last entry was deleted. Warnings are what the card shows above them:
+// "No judge: findings are merged without checking", and "Reviewer <k>
+// starts with the same model as reviewer <j>, so it runs on its next entry"
+// when reviewer 1's chain or an entry removed outside the card made them
+// equal. AddRefusal is why a reviewer can't be added now ("" when it can):
+// the image check, or at most 5 reviewers.
+type ReviewersView struct {
+	ReadOnly   bool            `json:"readOnly"`
+	Reviewers  []ReviewerChain `json:"reviewers"`
+	Judge      *ChainView      `json:"judge"`
+	Warnings   []string        `json:"warnings"`
+	AddRefusal string          `json:"addRefusal"`
+}
+
+// ReviewerChain is one of reviewers 2 to 5: its number and its chain.
+type ReviewerChain struct {
+	Number int       `json:"number"`
+	Chain  ChainView `json:"chain"`
 }
 
 // ChainEntryView is an entry of a chain, or one that may be put in it. Source
