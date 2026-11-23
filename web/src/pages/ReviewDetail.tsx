@@ -10,15 +10,15 @@ import {
   type CheckView,
   type CIJobResult,
   type FindingView,
+  type JudgeView,
   type MemberAttemptView,
   type MemberState,
-  type ModelCostView,
-  type PanelRole,
   type RerunStatus,
   type ReviewDetailView,
   type ReviewHeader,
+  type ReviewerView,
   type RunDetailView,
-  type RunPanelView,
+  type RunMultiReviewView,
   type RunSummary,
   type SkillView,
 } from "../api";
@@ -433,9 +433,7 @@ function CIJobs({ jobs, deadline }: { jobs: CIJobResult[]; deadline: string | nu
   );
 }
 
-const roleName = (role: PanelRole) => role.toUpperCase();
-
-// memberStateText is a member attempt's state as people read it.
+// memberStateText is a reviewer attempt's state as people read it.
 const memberStateText: Record<MemberState, string> = {
   queued: "queued",
   running: "running",
@@ -444,6 +442,7 @@ const memberStateText: Record<MemberState, string> = {
   failed: "failed",
   fell_back: "fell back to the next model",
   superseded: "superseded",
+  skipped: "skipped",
 };
 
 // attemptState is an attempt's state, with where and why a failed one failed.
@@ -453,110 +452,124 @@ function attemptState(a: MemberAttemptView) {
   return `${state}${a.step ? ` at ${a.step}` : ""}: ${a.failure}`;
 }
 
-// costLabel says which Job a model's tokens were used in: the member and,
-// when it had more than one, its attempt; or Job P's role and, in a review
-// of more than one attempt, which attempt (run) it was.
-function costLabel(c: ModelCostView, panel: RunPanelView, runId: string, attempts: RunDetailView["attempts"]) {
-  if (c.part === "member") {
-    const tries = panel.members.find((m) => m.role === c.role)?.attempts ?? [];
-    const n = tries.findIndex((a) => a.id === c.member);
-    return `Member ${roleName(c.role)}${tries.length > 1 && n >= 0 ? `, attempt ${n + 1}` : ""}`;
-  }
-  const label = `Merge (judge ${roleName(c.role)})`;
-  if (attempts.length === 0) return label;
-  const n = attempts.findIndex((a) => a.runId === c.run);
-  const which = n >= 0 ? `attempt ${n + 1}` : "another attempt";
-  return `${label}, ${which}${c.run === runId ? " (this run)" : ""}`;
+// liveStates are the states of a reviewer that has no answer yet.
+const liveStates: MemberState[] = ["queued", "running", "reported"];
+
+// reviewerState is a reviewer's final state, with why it has no result.
+function reviewerState(r: ReviewerView) {
+  const state = memberStateText[r.state] ?? r.state;
+  return r.skipped === "" ? state : `${state}: ${r.skipped}`;
 }
 
-// Panel is a panel review on its run's page: why it did not start, or its
-// members A and B with each attempt (and its log), the entries Job P judged
-// with on this run, and the tokens of each model in the whole review with
-// their total (the same on each attempt's page). Names are entry and model
-// names, shown as text.
-function Panel({ runId, panel, attempts }: { runId: string; panel: RunPanelView; attempts: RunDetailView["attempts"] }) {
-  if (panel.off !== undefined) {
+// optionalModel is "provider / model", or "" when neither was recorded.
+const optionalModel = (provider: string, model: string) =>
+  provider === "" && model === "" ? "" : modelText(provider || null, model || null);
+
+// judgeState says how the run judged: with a model, or with none and why,
+// and how many judge runs the review has when more than one.
+function judgeState(j: JudgeView) {
+  const state = j.noJudge ? (j.reason ? `no judge: ${j.reason}` : "no judge") : "judged";
+  return j.attempts > 1 ? `${state} · ${plural(j.attempts, "judge run")}` : state;
+}
+
+// MultiReview is a multi review on its run's page: why it did not start, or
+// one row per reviewer (its entry, model, state, findings and tokens), the
+// judge row and the total of the whole review (the same on each attempt's
+// page), then each reviewer's attempts with their logs. The merged findings
+// are the run's own. Names are entry and model names, shown as text.
+function MultiReview({ runId, review }: { runId: string; review: RunMultiReviewView }) {
+  if (review.off !== undefined) {
     return (
-      <section className="card" aria-label="Review panel">
-        <h2>Review panel</h2>
-        <div className="pad">Panel off: {panel.off}. The review ran on chain A alone.</div>
+      <section className="card" aria-label="Multi review">
+        <h2>Multi review</h2>
+        <div className="pad">Multi review off: {review.off}. The review ran with reviewer 1 alone.</div>
       </section>
     );
   }
-  const total = panel.cost.reduce((t, c) => ({ in: t.in + c.in, out: t.out + c.out }), { in: 0, out: 0 });
+  const judge = review.judge;
   return (
-    <section className="card" aria-label="Review panel">
-      <h2>Review panel</h2>
+    <section className="card" aria-label="Multi review">
+      <h2>Multi review</h2>
+      <table className="table" aria-label="Reviewers">
+        <thead>
+          <tr>
+            <th>Reviewer</th>
+            <th>Entry</th>
+            <th>Model</th>
+            <th>State</th>
+            <th>Findings</th>
+            <th>In</th>
+            <th>Out</th>
+          </tr>
+        </thead>
+        <tbody>
+          {review.reviewers.map((r) => (
+            <tr key={r.number}>
+              <td>Reviewer {r.number}</td>
+              <td>{r.entry}</td>
+              <td className="mono">{optionalModel(r.provider, r.model)}</td>
+              <td>{reviewerState(r)}</td>
+              <td>{r.skipped === "" && !liveStates.includes(r.state) ? r.findings : ""}</td>
+              <td>{count(r.in)}</td>
+              <td>{count(r.out)}</td>
+            </tr>
+          ))}
+          {judge && (
+            <tr>
+              <td>Judge</td>
+              <td>{judge.entry}</td>
+              <td className="mono">{optionalModel(judge.provider, judge.model)}</td>
+              <td>{judgeState(judge)}</td>
+              <td></td>
+              <td>{count(judge.in)}</td>
+              <td>{count(judge.out)}</td>
+            </tr>
+          )}
+          <tr>
+            <td>
+              <b>Total</b>
+            </td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td>{count(review.total.in)}</td>
+            <td>{count(review.total.out)}</td>
+          </tr>
+        </tbody>
+      </table>
       <div className="facts">
-        {panel.members.map((m) => (
-          <div key={m.role}>
-            <h3 className="group">Member {roleName(m.role)}</h3>
-            <ol className="attempts" aria-label={`Member ${roleName(m.role)} attempts`}>
-              {m.attempts.map((a, i) => (
-                <MemberAttempt key={a.id} runId={runId} role={m.role} n={i + 1} attempt={a} />
+        {!judge && <div className="meta">No judge ran on this run.</div>}
+        {review.reviewers.map((r) => (
+          <div key={r.number}>
+            <h3 className="group">Reviewer {r.number}</h3>
+            <ol className="attempts" aria-label={`Reviewer ${r.number} attempts`}>
+              {r.attempts.map((a, i) => (
+                <MemberAttempt key={a.id} runId={runId} reviewer={r.number} n={i + 1} attempt={a} />
               ))}
             </ol>
           </div>
         ))}
-        {panel.judges.length > 0 && (
-          <div>
-            Judged by{" "}
-            {panel.judges.map((j) => `${roleName(j.role)}: ${j.entry} (${modelText(j.provider, j.model)})`).join(" · ")}
-          </div>
-        )}
       </div>
-      {panel.cost.length > 0 && (
-        <table className="table" aria-label="Tokens per model">
-          <thead>
-            <tr>
-              <th>Job</th>
-              <th>Entry</th>
-              <th>Model</th>
-              <th>In</th>
-              <th>Out</th>
-            </tr>
-          </thead>
-          <tbody>
-            {panel.cost.map((c) => (
-              <tr key={`${c.part}/${c.role}/${c.run}/${c.member}/${c.entry}/${c.provider}/${c.model}`}>
-                <td>{costLabel(c, panel, runId, attempts)}</td>
-                <td>{c.entry}</td>
-                <td className="mono">{modelText(c.provider, c.model)}</td>
-                <td>{count(c.in)}</td>
-                <td>{count(c.out)}</td>
-              </tr>
-            ))}
-            <tr>
-              <td>
-                <b>Total</b>
-              </td>
-              <td></td>
-              <td></td>
-              <td>{count(total.in)}</td>
-              <td>{count(total.out)}</td>
-            </tr>
-          </tbody>
-        </table>
-      )}
     </section>
   );
 }
 
-// MemberAttempt is one attempt of a member, with a button that shows its
+// MemberAttempt is one attempt of a reviewer, with a button that shows its
 // log and what was kept of its Job, read only when asked for.
-function MemberAttempt({ runId, role, n, attempt }: { runId: string; role: PanelRole; n: number; attempt: MemberAttemptView }) {
+function MemberAttempt({ runId, reviewer, n, attempt }: { runId: string; reviewer: number; n: number; attempt: MemberAttemptView }) {
   const [open, setOpen] = useState(false);
-  const model = attempt.model === "" && attempt.provider === "" ? "" : ` · ${modelText(attempt.provider || null, attempt.model || null)}`;
+  const model = optionalModel(attempt.provider, attempt.model);
   return (
     <li>
       Attempt {n}: {attempt.entry || "not started"}
       {attempt.position > 0 && ` (entry ${attempt.position})`}
-      {model} · {attemptState(attempt)}{" "}
+      {model && ` · ${model}`} · {attemptState(attempt)}{" "}
       <button
         type="button"
         className="btn small"
         aria-expanded={open}
-        aria-label={`Log of member ${roleName(role)}, attempt ${n}`}
+        aria-label={`Log of reviewer ${reviewer}, attempt ${n}`}
         onClick={() => setOpen(!open)}
       >
         {open ? "Hide log" : "Log"}
@@ -565,7 +578,7 @@ function MemberAttempt({ runId, role, n, attempt }: { runId: string; role: Panel
         <RunLog
           logPath={paths.apiRunMemberLog(runId, attempt.id)}
           diagnosticsPath={paths.apiRunMemberDiagnostics(runId, attempt.id)}
-          what="member"
+          what="reviewer attempt"
         />
       )}
     </li>
@@ -593,7 +606,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
   return (
     <>
       {(view.ciJobs !== null || view.ciDeadline !== null) && <CIJobs jobs={view.ciJobs ?? []} deadline={view.ciDeadline} />}
-      {view.panel && <Panel runId={id} panel={view.panel} attempts={view.attempts} />}
+      {view.multiReview && <MultiReview runId={id} review={view.multiReview} />}
       <section className="card" aria-label="Skills">
         <h2>Skills</h2>
         {view.skills.length === 0 && (

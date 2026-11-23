@@ -238,32 +238,45 @@ export type RunDetailView = {
   // attempts are every attempt of the review this run is one of, oldest
   // first, this run included; empty for a review of one attempt.
   attempts: AttemptView[];
-  // panel is the review panel of a panel review; the key is absent for any
-  // other run.
-  panel?: RunPanelView;
+  // multiReview is the multi review of a run that was split, or of a later
+  // attempt of its judge; the key is absent for any other run.
+  multiReview?: RunMultiReviewView;
 };
 
-// RunPanelView is a review panel on its run's page. off says why it did not
-// start (the lists are then empty); otherwise its members, the entries Job P
-// judged with on this run, and the tokens of each model in the whole review
-// (every member attempt and every Job P attempt).
-export type RunPanelView = {
+// RunMultiReviewView is a multi review on its run's page. off says why it did
+// not start (reviewers is then empty and judge null); otherwise one row per
+// reviewer, the judge this run judged with (null when it recorded none), and
+// the tokens of the whole review (every reviewer attempt and every judge
+// run). The merged findings are the run's own result.
+export type RunMultiReviewView = {
   off?: string;
-  members: PanelMemberView[];
-  judges: PanelJudgeView[];
-  cost: ModelCostView[];
+  reviewers: ReviewerView[];
+  judge: JudgeView | null;
+  total: { in: number; out: number };
 };
 
-export type PanelRole = "a" | "b";
+export type MemberState = "queued" | "running" | "reported" | "done" | "failed" | "fell_back" | "superseded" | "skipped";
 
-// PanelMemberView is member A or B, its attempts oldest first.
-export type PanelMemberView = { role: PanelRole; attempts: MemberAttemptView[] };
+// ReviewerView is one reviewer, by its number (1 to 5): the entry (its name
+// in the frozen copy of the chain), model and state of its final attempt,
+// why it has no result ("" when it has one, or while it runs), the findings
+// of its result, the tokens of all its attempts, and its attempts.
+export type ReviewerView = {
+  number: number;
+  entry: string;
+  provider: string;
+  model: string;
+  state: MemberState;
+  skipped: string;
+  findings: number;
+  in: number;
+  out: number;
+  attempts: MemberAttemptView[];
+};
 
-export type MemberState = "queued" | "running" | "reported" | "done" | "failed" | "fell_back" | "superseded";
-
-// MemberAttemptView is one attempt of a member: the entry it ran on and its
-// place in the chain, the model, its state, and why it failed ("" when it
-// did not) at which step.
+// MemberAttemptView is one attempt of a reviewer: the entry it ran on and its
+// place in the chain (0 when it never started), the model, its state, and
+// why it failed ("" when it did not) at which step. Its log is read by id.
 export type MemberAttemptView = {
   id: string;
   entry: string;
@@ -275,19 +288,15 @@ export type MemberAttemptView = {
   step: string;
 };
 
-export type PanelJudgeView = { role: PanelRole; entry: string; provider: string; model: string };
-
-// ModelCostView is the tokens one model used in the review: part "member"
-// (a member's review) or "merge" (Job P); run is the run they count on and
-// member the member attempt ("" for a merge).
-export type ModelCostView = {
-  part: "member" | "merge";
-  role: PanelRole;
-  run: string;
-  member: string;
+// JudgeView is the judge this run judged with, or noJudge and why; attempts
+// is how many judge runs the review has, and in and out their tokens.
+export type JudgeView = {
   entry: string;
   provider: string;
   model: string;
+  noJudge: boolean;
+  reason: string;
+  attempts: number;
   in: number;
   out: number;
 };

@@ -48,7 +48,7 @@ func LoadReviewers(ctx context.Context, st *store.Store, reg *instances.Registry
 // blank is base's entries, marks, owner team, limits used up and now, with
 // no chain, no tried entry, no avoided model and no instance quota. The
 // limits are per entry and owner team, so every chain of the review reads
-// the ones LoadSet read for chain A. Its maps are copies, so a caller that
+// the ones Load read for chain A. Its maps are copies, so a caller that
 // edits one Input changes no other.
 func blank(base Input) Input {
 	return Input{Entries: maps.Clone(base.Entries), Marks: maps.Clone(base.Marks), OwnerTeam: base.OwnerTeam,

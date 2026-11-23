@@ -452,3 +452,39 @@ func TestDeleteTeamModelOneAtATimePerTeamReviewers(t *testing.T) {
 		t.Errorf("%d reviewer chains left; want none", chains)
 	}
 }
+
+func mustRepo(t *testing.T, s *Store, project string) DashboardRepo {
+	t.Helper()
+	r, found, err := s.AnyDashboardRepo(ctx, "main", project)
+	if err != nil || !found {
+		t.Fatalf("AnyDashboardRepo(%s) = %v, %v", project, found, err)
+	}
+	return r
+}
+
+func addRepos(t *testing.T, s *Store, projects ...string) {
+	t.Helper()
+	for _, p := range projects {
+		if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: p}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// waitBlocked waits until a backend other than skip is blocked by one of
+// pids, and returns it.
+func waitBlocked(t *testing.T, s *Store, skip int32, pids ...int32) int32 {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var pid int32
+		err := s.pool.QueryRow(ctx, `SELECT pid FROM pg_stat_activity
+			WHERE pid <> $1 AND pg_blocking_pids(pid) && $2::int[] LIMIT 1`, skip, pids).Scan(&pid)
+		if err == nil {
+			return pid
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("no backend waited on the repository's row")
+	return 0
+}

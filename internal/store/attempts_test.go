@@ -223,7 +223,7 @@ func TestRecordUsageSource(t *testing.T) {
 	}
 	onGlobal := reported(t, s, mr2, "b1", `{}`)
 	for _, id := range []string{onTeam, onGlobal} {
-		if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "security", In: 1, Out: 1}}, nil); err != nil {
+		if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "security", In: 1, Out: 1}}); err != nil {
 			t.Fatal(err)
 		}
 	}

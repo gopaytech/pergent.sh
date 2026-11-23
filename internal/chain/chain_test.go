@@ -317,7 +317,7 @@ func TestDecisionRunsUnderInstanceQuota(t *testing.T) {
 }
 
 // Avoid skips an entry on the same provider and model, whatever the case and
-// the key: a panel's member B never runs on the model A runs on. A chain of
+// the key: reviewer k never runs on a model reviewers 1 to k-1 run on. A chain of
 // only that entry is exhausted, never held or waited on.
 func TestResolveAvoid(t *testing.T) {
 	in := input(store.ScopeGlobal, g("a"), g("b"))

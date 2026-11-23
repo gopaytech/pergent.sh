@@ -3,7 +3,6 @@ package usage
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -30,10 +29,7 @@ func (f *fakeRuns) RunsWithoutUsage(ctx context.Context, limit int) ([]store.Run
 	return page, nil
 }
 
-func (f *fakeRuns) RecordUsage(ctx context.Context, id string, skills []store.SkillUsage, models []store.ModelUsage) error {
-	if models != nil {
-		return errors.New("model rows passed")
-	}
+func (f *fakeRuns) RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error {
 	f.recorded[id] = skills
 	return nil
 }

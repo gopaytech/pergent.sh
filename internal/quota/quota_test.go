@@ -112,7 +112,7 @@ func seedUsageOn(t *testing.T, st *store.Store, instance string, projectID, iid 
 		t.Fatalf("StoreResult = %v, %v", out, err)
 	}
 	zero := int64(0)
-	if err := st.RecordUsage(ctx, id, []store.SkillUsage{{Skill: "a", Verdict: "no_blocking_issues", In: in, Out: out, CacheRead: &zero, CacheWrite: &zero, Reasoning: &zero}}, nil); err != nil {
+	if err := st.RecordUsage(ctx, id, []store.SkillUsage{{Skill: "a", Verdict: "no_blocking_issues", In: in, Out: out, CacheRead: &zero, CacheWrite: &zero, Reasoning: &zero}}); err != nil {
 		t.Fatalf("RecordUsage: %v", err)
 	}
 }

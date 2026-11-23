@@ -60,9 +60,6 @@ type Deps struct {
 	// code graph (the engine). Nil, when the install keeps no graphs: the
 	// routes are absent.
 	Graphs callback.GraphResults
-	// Panel serves a panel's merge Job (Job P) its done members' results:
-	// the store. Nil leaves the route absent.
-	Panel callback.PanelResults
 	// Reviewers serves a multi review's judge Job its reviewers' results:
 	// GET /runs/{id}/reviewers/{n}. Nil leaves the route off.
 	Reviewers callback.ReviewerResults
@@ -89,8 +86,6 @@ type Deps struct {
 //     when ReadinessScans is set;
 //   - POST /graphs/{id}/result: a graph build Job's graph, and GET
 //     /runs/{id}/graph: a review Job's code graph, when Graphs is set;
-//   - GET /runs/{id}/panel/{role}: a panel member's result for the merge
-//     Job, when Panel is set;
 //   - GET /runs/{id}/reviewers/{n}: reviewer n's result for the judge Job of a
 //     multi review, when Reviewers is set (401 for a bad token, 404 for no
 //     result);
@@ -133,9 +128,6 @@ func Routes(d Deps) *http.ServeMux {
 	if d.Graphs != nil {
 		mux.Handle("POST /graphs/{id}/result", &callback.GraphHandler{Graphs: d.Graphs, Log: d.Log})
 		mux.Handle("GET /runs/{id}/graph", &callback.RunGraphHandler{Graphs: d.Graphs, Log: d.Log})
-	}
-	if d.Panel != nil {
-		mux.Handle("GET /runs/{id}/panel/{role}", &callback.PanelHandler{Panel: d.Panel, Log: d.Log})
 	}
 	if d.Reviewers != nil {
 		mux.Handle("GET /runs/{id}/reviewers/{n}", &callback.ReviewersHandler{Reviewers: d.Reviewers, Log: d.Log})

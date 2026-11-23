@@ -72,37 +72,41 @@ func TestBuildReviewerJob(t *testing.T) {
 	}
 }
 
-// withoutReviewMarks drops the 2 reviewer labels, then the panel marks
-// (--no-skill-verify), from a golden's JSON, and prints it again.
+// withoutReviewMarks drops the 2 reviewer labels and --no-skill-verify from
+// a golden's JSON, and prints it again.
 func withoutReviewMarks(t *testing.T, text string) string {
 	t.Helper()
 	var v any
 	if err := json.Unmarshal([]byte(text), &v); err != nil {
 		t.Fatal(err)
 	}
-	var walk func(any)
-	walk = func(v any) {
+	var walk func(any) any
+	walk = func(v any) any {
 		switch x := v.(type) {
 		case map[string]any:
 			if l, ok := x["labels"].(map[string]any); ok {
 				delete(l, LabelReviewMember)
 				delete(l, LabelReviewer)
 			}
-			for _, e := range x {
-				walk(e)
+			for k, e := range x {
+				x[k] = walk(e)
 			}
 		case []any:
+			out := x[:0:0]
 			for _, e := range x {
-				walk(e)
+				if e != "--no-skill-verify" {
+					out = append(out, walk(e))
+				}
 			}
+			return out
 		}
+		return v
 	}
-	walk(v)
-	b, err := json.Marshal(v)
+	b, err := json.MarshalIndent(walk(v), "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return withoutPanelMarks(t, string(b))
+	return string(b)
 }
 
 func TestBuildJudgeJob(t *testing.T) {
@@ -302,12 +306,6 @@ func TestBuildJudgeJobKeys(t *testing.T) {
 	if string(sec.Data["llm-api-key"]) != "judge-key-value" {
 		t.Error("the judge key is not llm-api-key")
 	}
-	// A stray key B is never stored.
-	s := judgeSecrets
-	s.LLMKeyB = "stray-key"
-	if _, ok := BuildSecret(p, job, s).Data["llm-api-key-b"]; ok {
-		t.Error("a judge Job holds llm-api-key-b")
-	}
 	refs := keyRefs(allContainers(p))
 	want := map[string]map[string]string{
 		"checkout":  {"GIT_TOKEN": "git-token"},
@@ -344,6 +342,59 @@ func TestBuildJudgeJobNoJudge(t *testing.T) {
 		for _, e := range c.Env {
 			if e.Name == "OPENCODE_API_KEY" {
 				t.Errorf("%s names OPENCODE_API_KEY with --no-judge", c.Name)
+			}
+		}
+	}
+}
+
+func countOf(list []string, s string) int {
+	n := 0
+	for _, v := range list {
+		if v == s {
+			n++
+		}
+	}
+	return n
+}
+
+func names(cs []corev1.Container) []string {
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+// keyRefs are the secret keys each container's env reads, by variable name.
+func keyRefs(job []corev1.Container) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for _, c := range job {
+		out[c.Name] = map[string]string{}
+		for _, e := range c.Env {
+			if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+				out[c.Name][e.Name] = e.ValueFrom.SecretKeyRef.Key
+			}
+		}
+	}
+	return out
+}
+
+func allContainers(p JobParams) []corev1.Container {
+	spec := BuildJob(p).Spec.Template.Spec
+	return append(slices.Clone(spec.InitContainers), spec.Containers...)
+}
+
+// noKeyIn fails when any of objs holds one of judgeSecrets' values.
+func noKeyIn(t *testing.T, objs ...any) {
+	t.Helper()
+	for _, o := range objs {
+		b, err := json.Marshal(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range []string{judgeSecrets.LLMKey, judgeSecrets.GitToken, judgeSecrets.ResultToken} {
+			if strings.Contains(string(b), v) {
+				t.Errorf("%T holds %q", o, v)
 			}
 		}
 	}

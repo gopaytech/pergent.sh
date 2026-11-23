@@ -55,7 +55,6 @@ type fake struct {
 type recordedUsage struct {
 	id     string
 	skills []store.SkillUsage
-	models []store.ModelUsage
 	judge  bool // RecordJudgeUsage
 }
 
@@ -91,12 +90,12 @@ func (f *fake) ReplaceWithFailure(_ context.Context, id string, fail store.Failu
 	return f.replErr
 }
 
-func (f *fake) RecordUsage(ctx context.Context, id string, skills []store.SkillUsage, models []store.ModelUsage) error {
+func (f *fake) RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error {
 	if f.onRecord != nil {
 		f.onRecord()
 	}
 	f.recordCtx = ctx.Err()
-	f.recorded = append(f.recorded, recordedUsage{id: id, skills: skills, models: models})
+	f.recorded = append(f.recorded, recordedUsage{id: id, skills: skills})
 	return f.recordErr
 }
 
@@ -593,9 +592,9 @@ func TestResultUsageJudgeRun(t *testing.T) {
 		if rec := e.post(runID, "Bearer good", body); rec.Code != http.StatusOK {
 			t.Fatalf("judge %v: status = %d: %s", judge, rec.Code, rec.Body)
 		}
-		if len(f.recorded) != 1 || f.recorded[0].judge != judge || f.recorded[0].models != nil ||
+		if len(f.recorded) != 1 || f.recorded[0].judge != judge ||
 			len(f.recorded[0].skills) != 1 || f.recorded[0].skills[0].In != 3 {
-			t.Errorf("judge %v: recorded = %+v; want the skill's tokens, judge %v, no model rows", judge, f.recorded, judge)
+			t.Errorf("judge %v: recorded = %+v; want the skill's tokens, judge %v", judge, f.recorded, judge)
 		}
 	}
 }

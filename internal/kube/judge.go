@@ -3,6 +3,7 @@ package kube
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -23,16 +24,33 @@ const (
 	LabelReviewer     = "pergent.sh/reviewer"
 	ReviewerJudge     = "judge"
 
-	// JudgeTimeout is the judge Job's --timeout; JudgeFetchTimeout bounds
-	// get-reviewers. M4.2 moves the values here and drops the Panel names.
-	JudgeTimeout      = PanelTimeout
-	JudgeFetchTimeout = PanelFetchTimeout
+	// JudgeTimeout is the judge Job's --timeout. Its deadline adds the clone
+	// and deliver allowances (Deadline).
+	JudgeTimeout = 10 * time.Minute
+	// JudgeFetchTimeout bounds get-reviewers in the reviewers container,
+	// every result and every try. The judge Job's deadline adds it to
+	// JudgeTimeout.
+	JudgeFetchTimeout = 2 * time.Minute
 
 	// MRDismissalsFile is where the judge's pergent reads --mr-dismissals.
 	MRDismissalsFile = "/in/mr-dismissals.json"
 
 	containerReviewers = "reviewers"
 	keyMRDismissals    = "mr-dismissals.json"
+
+	// keyLegacyKeyB is model B's key in the Secret of a legacy panel's merge
+	// Job, which a main build made. No Job stores it now. JobSecrets still
+	// reads it, so a log of such a Job never shows it. Remove it in the next
+	// release.
+	keyLegacyKeyB = "llm-api-key-b"
+
+	// The judge Job's reviewers volume. Its name and path are the ones the
+	// review panel used, so the judge Job's spec does not change.
+	reviewersVolumeName = "panel"
+	reviewersMount      = "/panel"
+	// reviewersSize bounds the reviewers volume: 5 results of at most 10 MiB
+	// each, and a temp file while one downloads.
+	reviewersSize = "64Mi"
 )
 
 // JudgeParams is what a judge Job needs beyond a review Job's checkout.
@@ -49,7 +67,7 @@ type JudgeParams struct {
 }
 
 // forJudge is p as the judge Job is built from it: the inputs pergent refuses
-// with --multi-review are left out (as forPanel does), and the timeout is
+// with --multi-review are left out (dropRefusedInputs), and the timeout is
 // JudgeTimeout. p itself is not changed.
 func forJudge(p JobParams) JobParams {
 	if p.Judge == nil {
@@ -58,6 +76,30 @@ func forJudge(p JobParams) JobParams {
 	p = dropRefusedInputs(p)
 	p.Timeout = JudgeTimeout
 	return p
+}
+
+// dropRefusedInputs is p without the inputs pergent refuses with
+// --multi-review: previous, carried, description, linked repositories, CI
+// results, graph and --no-skill-verify. p itself is not changed.
+func dropRefusedInputs(p JobParams) JobParams {
+	if p.Inputs != nil {
+		in := *p.Inputs
+		in.Previous, in.Carried, in.Description, in.Linked, in.CIResults = nil, nil, nil, nil, nil
+		p.Inputs = &in
+	}
+	p.LinkedClones = nil
+	p.GraphURL, p.GraphImage = "", ""
+	p.SkipSkillVerify = false
+	return p
+}
+
+// deadline is the Job's activeDeadlineSeconds. The judge Job's counts the
+// result fetch too.
+func deadline(p JobParams) time.Duration {
+	if p.Judge != nil {
+		return Deadline(p.Timeout+JudgeFetchTimeout, p.CloneAllowance)
+	}
+	return Deadline(p.Timeout, p.CloneAllowance)
 }
 
 // judgeArgs are the judge Job's own flags.
@@ -75,7 +117,7 @@ func judgeArgs(jp *JudgeParams) []string {
 
 // reviewerFile is where reviewer n's result is in the judge Job.
 func reviewerFile(n int) string {
-	return panelMount + "/reviewer-" + strconv.Itoa(n) + ".json"
+	return reviewersMount + "/reviewer-" + strconv.Itoa(n) + ".json"
 }
 
 // mrDismissalsData is the file's content: the dismissals, or [] for none.
@@ -87,7 +129,7 @@ func mrDismissalsData(jp *JudgeParams) string {
 }
 
 // reviewersContainer is the judge Job's reviewers init container:
-// pergent.sh's own image, the result token alone, the panel volume alone. It
+// pergent.sh's own image, the result token alone, the reviewers volume alone. It
 // always exits 0; a reviewer with no result gets no file.
 func reviewersContainer(p JobParams) corev1.Container {
 	nums := make([]string, len(p.Judge.Reviewers))
@@ -106,11 +148,11 @@ func reviewersContainer(p JobParams) corev1.Container {
 			"get-reviewers",
 			"--base-url=" + p.Judge.BaseURL,
 			"--reviewers=" + strings.Join(nums, ","),
-			"--dir=" + panelMount,
+			"--dir=" + reviewersMount,
 		},
 		Env: []corev1.EnvVar{secretEnv("PERGENT_RESULT_TOKEN", secretsName(p), keyResultToken)},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "panel", MountPath: panelMount},
+			{Name: reviewersVolumeName, MountPath: reviewersMount},
 		},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
@@ -121,4 +163,11 @@ func reviewersContainer(p JobParams) corev1.Container {
 		},
 		SecurityContext: sc,
 	}
+}
+
+// reviewersVolume is the judge Job's reviewers volume.
+func reviewersVolume() corev1.Volume {
+	return corev1.Volume{Name: reviewersVolumeName, VolumeSource: corev1.VolumeSource{
+		EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr(resource.MustParse(reviewersSize))},
+	}}
 }

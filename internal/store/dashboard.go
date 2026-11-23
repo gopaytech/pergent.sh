@@ -97,10 +97,6 @@ type DashboardRepo struct {
 	// ChainMode is "custom" when the repository has its own chain, "inherit"
 	// otherwise. Only the chain writes set it.
 	ChainMode string
-	// PanelChainMode is the repository's chain B mode: PanelCustom when it
-	// has its own chain B, PanelOff when it turned the panel off,
-	// PanelInherit otherwise. Only the chain B writes set it.
-	PanelChainMode string
 }
 
 // TrustedAuthor is one user on a repository's allowlist: the platform's user
@@ -194,7 +190,7 @@ const dashboardRepoColumns = `instance, project, approve, review_drafts, failure
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
 	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
 	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs, enabled, graph_context,
-	chain_mode, panel_chain_mode, rule_sets, built_in_rules`
+	chain_mode, rule_sets, built_in_rules`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
@@ -203,7 +199,7 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout,
 		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota, &r.CheckDeleted, &ci, &r.Enabled, &r.GraphContext,
-		&r.ChainMode, &r.PanelChainMode, &r.RuleSets, &r.BuiltInRules)
+		&r.ChainMode, &r.RuleSets, &r.BuiltInRules)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -615,8 +611,8 @@ func (s *Store) RunLog(ctx context.Context, runID string) (string, bool, error) 
 }
 
 // PruneRunLogs deletes the logs and the diagnostics of runs, of review
-// members and of panel members stored before the given time and returns how
-// many there were in all.
+// members and of legacy panel members (a main build left them) stored before
+// the given time and returns how many there were in all.
 func (s *Store) PruneRunLogs(ctx context.Context, before time.Time) (int, error) {
 	n := 0
 	for _, table := range []string{"run_logs", "run_diagnostics", "review_member_logs", "review_member_diagnostics",

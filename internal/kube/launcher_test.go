@@ -18,8 +18,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
-
-	"github.com/gopaytech/pergent.sh/internal/config"
 )
 
 func fakeLauncher() (*Launcher, *fake.Clientset) {
@@ -281,17 +279,29 @@ func TestLaunchJobSecrets(t *testing.T) {
 	}
 }
 
-// Job P's Secret gives model B's key back too, so its logs hide it.
-func TestLaunchJobSecretsPanel(t *testing.T) {
-	l, _ := fakeLauncher()
+// A legacy panel merge Job's Secret (a main build made it) gives model B's
+// key back too, so its logs hide it. No Job stores the key now.
+func TestJobSecretsLegacyKeyB(t *testing.T) {
+	l, cs := fakeLauncher()
 	p := testParams()
-	p.Panel = &PanelParams{AURL: "https://cb.example.com/runs/r/panel/a", BURL: "https://cb.example.com/runs/r/panel/b",
-		B: config.LLM{Provider: "openai", Model: "gpt-b"}, Image: "img"}
-	want := Secrets{GitToken: "g1", LLMKey: "l1", LLMKeyB: "lb", ResultToken: "r1"}
-	if err := l.Launch(context.Background(), p, want); err != nil {
+	p.Namespace = l.Namespace
+	sec := BuildSecret(p, nil, Secrets{GitToken: "g1", LLMKey: "l1", ResultToken: "r1"})
+	sec.Data[keyLegacyKeyB] = []byte("lb")
+	if _, err := cs.CoreV1().Secrets(l.Namespace).Create(context.Background(), sec, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
+	want := Secrets{GitToken: "g1", LLMKey: "l1", LegacyKeyB: "lb", ResultToken: "r1"}
 	if got, err := l.JobSecrets(context.Background(), p.Name); err != nil || got != want {
 		t.Errorf("JobSecrets = %+v, %v; want %+v", got, err, want)
+	}
+}
+
+// No Job's Secret holds llm-api-key-b, even when a caller passes the key.
+func TestBuildSecretNeverStoresLegacyKeyB(t *testing.T) {
+	for name, p := range map[string]JobParams{"review": testParams(), "judge": judgeParams()} {
+		sec := BuildSecret(p, nil, Secrets{GitToken: "g", LLMKey: "l", LegacyKeyB: "stray", ResultToken: "r"})
+		if _, ok := sec.Data[keyLegacyKeyB]; ok {
+			t.Errorf("%s: the Secret holds %s", name, keyLegacyKeyB)
+		}
 	}
 }
