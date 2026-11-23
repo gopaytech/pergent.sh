@@ -221,6 +221,67 @@ func TestTemplateRetiresOldHash(t *testing.T) {
 	}
 }
 
+// A template, build or free copy of another migration hash stays while a
+// running binary uses that hash: another worktree with other migrations can
+// run its tests on the same server. It goes once no binary uses the hash.
+func TestTemplateKeepsLiveHash(t *testing.T) {
+	open(t) // sets shared up
+	st := shared
+	other := "fedcba9876543210"
+	if other == st.tmpl.hash() {
+		t.Fatal("the other hash is the current hash")
+	}
+	lock, err := pgx.Connect(ctx, st.base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close(ctx)
+	if _, err := lock.Exec(ctx, `SELECT pg_advisory_lock_shared($1, $2)`, hashLockClass, hashKey(other)); err != nil {
+		t.Fatal(err)
+	}
+	kept := []string{
+		"pergent_tmpl_" + other,
+		"pergent_build_" + other,
+		prefixFree + other + "_a",
+	}
+	for _, name := range kept {
+		st.drop(ctx, name)
+		if _, err := st.admin.Exec(ctx, "CREATE DATABASE "+ident(name)); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.drop(context.Background(), name) })
+	}
+	if _, err := st.admin.Exec(ctx, "ALTER DATABASE "+ident(kept[0])+" WITH IS_TEMPLATE true"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loadTemplate(ctx, st, st.tmpl.name, store.OpenInSchema); err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	all := databases(t, "pergent_")
+	for _, name := range kept {
+		if !slices.Contains(all, name) {
+			t.Errorf("%s was retired while a binary uses its hash", name)
+		}
+	}
+	if !slices.Contains(all, st.tmpl.name) {
+		t.Errorf("the current template %s is gone", st.tmpl.name)
+	}
+
+	if _, err := lock.Exec(ctx, `SELECT pg_advisory_unlock_shared($1, $2)`, hashLockClass, hashKey(other)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadTemplate(ctx, st, st.tmpl.name, store.OpenInSchema); err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	all = databases(t, "pergent_")
+	for _, name := range kept {
+		if slices.Contains(all, name) {
+			t.Errorf("%s is still there after no binary uses its hash", name)
+		}
+	}
+}
+
 func databases(t *testing.T, prefix string) []string {
 	t.Helper()
 	rows, err := shared.admin.Query(ctx, `SELECT datname FROM pg_database WHERE starts_with(datname, $1)`, prefix)
