@@ -204,10 +204,8 @@ func (e *Engine) fateJob(ctx, bctx context.Context, job store.FateJob, log *slog
 		switch {
 		case err != nil:
 			return err
-		case untold != nil && byBot:
-			log.Info("pergent.sh can't say whether the change's author is a bot; leaving it out as a bot's", "error", e.redact(untold.Error()))
 		case untold != nil:
-			log.Info("couldn't tell whether a bot opened the change; counting it as a person's", "error", e.redact(untold.Error()))
+			log.Info("pergent.sh can't say whether the change's author is a bot; leaving it out as a bot's", "error", e.redact(untold.Error()))
 		}
 	}
 	return e.storeFates(ctx, job, fateRows(decided), merged, byBot, log)
@@ -332,12 +330,10 @@ func fatesInput(runs []store.Run, ds []store.Dismissal) fates.Input {
 
 // fateAuthorIsBot tells whether a bot opened the change: GitHub says so in the
 // change itself, GitLab is asked (GitHub's IsBot is always false). When the
-// platform answers that it can't tell (forge.ErrBotUnknown), untold says so
-// and the change is left out as a bot's, never counted as a person's. When it
-// can't be asked, untold says why and the change counts as a person's, except
-// when the budget ran out: merged fates are final, so that is err and the job
-// is tried again. The budget is checked, not the error's cause, as the clients
-// flatten it.
+// platform answers that it can't tell (forge.ErrBotUnknown) or has no such
+// user (forge.ErrNotFound), untold says so and the change is left out as a
+// bot's. Any other failure is err, and the job is tried again: merged fates
+// are final, so a change is never counted as a person's without an answer.
 func fateAuthorIsBot(bctx context.Context, f forge.Forge, change forge.Change) (bot bool, untold, err error) {
 	if change.AuthorIsBot {
 		return true, nil, nil
@@ -346,12 +342,10 @@ func fateAuthorIsBot(bctx context.Context, f forge.Forge, change forge.Change) (
 	switch {
 	case askErr == nil:
 		return bot, nil, nil
-	case errors.Is(askErr, forge.ErrBotUnknown):
+	case errors.Is(askErr, forge.ErrBotUnknown), errors.Is(askErr, forge.ErrNotFound):
 		return true, askErr, nil
-	case bctx.Err() != nil:
-		return false, nil, fmt.Errorf("tell whether a bot opened the change: %w", askErr)
 	}
-	return false, askErr, nil
+	return false, nil, fmt.Errorf("tell whether a bot opened the change: %w", askErr)
 }
 
 // fateCompare is fates.Compare over the platform's compare. A comparison the
