@@ -61,6 +61,26 @@ describe("TeamModels: model limits", () => {
     await waitFor(() => expect(fake.find("DELETE", "/api/teams/2/models/t-qwen/limit")).toHaveLength(1));
   });
 
+  it("drops the server's message when a later value is refused before any request", async () => {
+    fakeApi({
+      ...routes(),
+      "PUT /api/teams/2/models/t-qwen/limit": { status: 400, body: { error: "the server says no" } },
+    });
+    renderApp("/teams/2");
+    const own = await within(await card()).findByRole("group", { name: "qwen3.5 limit" });
+    const input = within(own).getByLabelText("Limit of qwen3.5");
+    const save = within(own).getByRole("button", { name: "Save the limit of qwen3.5" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "800");
+    await userEvent.click(save);
+    expect(await within(own).findByText("the server says no")).toBeInTheDocument();
+    await userEvent.clear(input);
+    await userEvent.type(input, "abc");
+    await userEvent.click(save);
+    expect(await within(own).findByText(/whole number from 1 to/)).toBeInTheDocument();
+    expect(within(own).queryByText("the server says no")).not.toBeInTheDocument();
+  });
+
   it("lets an admin change the team's limit on a global model with the admin route", async () => {
     const fake = fakeApi({
       ...routes(ssoAdmin, { ...teamModelsPayments, role: "admin" }),

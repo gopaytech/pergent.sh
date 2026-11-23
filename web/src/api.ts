@@ -29,7 +29,7 @@ export type TrustMode = "follow_visibility" | "on" | "off";
 export type TrustedAuthor = { id?: number; username: string };
 
 // WaitingView is a change whose review waits for someone with write access to
-// start it. reason is "untrusted_author", "trust_check_failed" or
+// start it. reason is "untrusted_author", "trust_check_failed",
 // "quota_used_up" (the monthly token quota held it; only an admin starts it) or
 // "limit_used_up" (held the same way, and a model limit or a team limit took part).
 export type WaitingView = {

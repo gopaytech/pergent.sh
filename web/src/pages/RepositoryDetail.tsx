@@ -120,7 +120,8 @@ const heldForTokens = (w: WaitingView) => w.reason === "quota_used_up" || w.reas
 
 // Waiting is the changes whose review waits for someone to start it: authors
 // the repository doesn't trust (a maintainer or an admin starts those) and
-// changes held by a used-up token quota (only an admin starts those).
+// changes held by a used-up token quota, model limit or team limit (only an
+// admin starts those).
 function Waiting({
   instance,
   project,

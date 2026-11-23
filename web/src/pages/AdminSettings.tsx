@@ -904,6 +904,7 @@ function TeamLimitRow({ m, t, onChanged }: { m: ModelAdminView; t: TeamLimitView
         key={t.limit}
         label={`Limit of ${t.team} on ${m.name}`}
         saveLabel={`Save the limit of ${t.team} on ${m.name}`}
+        hint="Empty: no limit for this team."
         limit={t.limit}
         path={paths.apiAdminModelTeamLimit(m.id, t.teamId)}
         onSaved={onChanged}

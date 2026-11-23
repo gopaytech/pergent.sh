@@ -174,7 +174,7 @@ func (d *Dashboard) chainEntries(ctx context.Context) (chain.Input, error) {
 // repositories team owns (0: the model limits alone), so a chain view tags an
 // entry at its limit as the resolver skips it (chain.EntryReason).
 func (d *Dashboard) chainViewLimits(ctx context.Context, in *chain.Input, team int64) error {
-	lim, err := quota.ReadLimits(ctx, d.Store, d.now(), team)
+	lim, err := quota.ReadLimits(ctx, d.Store, in.Now, team)
 	if err != nil {
 		return err
 	}

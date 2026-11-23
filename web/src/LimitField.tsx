@@ -35,6 +35,7 @@ export default function LimitField({
   const submit = () => {
     const n = parseQuota(text);
     if (n === undefined) {
+      save.reset();
       setProblem(limitProblem);
       return;
     }
