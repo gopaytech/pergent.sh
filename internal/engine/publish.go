@@ -530,7 +530,7 @@ func (e *Engine) reviewComment(ctx context.Context, run store.Run) (reviewCommen
 		name := ""
 		switch {
 		case served != nil:
-			name = attemptEntryName(*served)
+			name = served.EntryName()
 		case first != nil && len(first.Chain.Entries) > 0:
 			name = first.Chain.Entries[0].Name
 		}
@@ -607,28 +607,11 @@ func droppedReviewer(ms []store.ReviewMember, reviewers []int, mr *result.MultiR
 	return 0, false
 }
 
-// attemptEntryName is the name, in its frozen chain, of the entry reviewer
-// attempt m ran on (its position, 1-based); the name its dispatch recorded
-// when the frozen chain has none.
-func attemptEntryName(m store.ReviewMember) string {
-	if p := m.Entry.Position; p >= 1 && p <= len(m.Chain.Entries) && m.Chain.Entries[p-1].Name != "" {
-		return m.Chain.Entries[p-1].Name
-	}
-	if m.Entry.Name != "" {
-		return m.Entry.Name
-	}
-	if len(m.Chain.Entries) > 0 {
-		return m.Chain.Entries[0].Name
-	}
-	return ""
-}
-
 // skippedWords is why a reviewer gave no result, from its newest attempt's
 // failure reason: a skip reason of the split or of its dispatch, or why a
 // provider refused its model, as they are; anything else (a reason that can
 // hold model text) is skipReviewFailed.
 func skippedWords(reason string) string {
-	reason = strings.TrimPrefix(reason, reasonMemberRefused)
 	switch reason {
 	case skipSame, skipQuota, skipNone,
 		chain.ReasonWords(store.ClassQuota), chain.ReasonWords(store.ClassBilling), chain.ReasonWords(store.ClassAuth):

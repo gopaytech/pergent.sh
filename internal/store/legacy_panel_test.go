@@ -128,7 +128,7 @@ func legacyPanelOff(t *testing.T, s *Store, id, reason string) {
 	}
 }
 
-// A legacy panel review whose merge left no result (panelNoResult's
+// A legacy panel review whose merge left no result (multiReviewNoResult's
 // panel_members clause): its members' tokens count as wasted, and the
 // review counts as one with no result, never as a review in the metrics.
 func TestUsageLegacyPanelNoResult(t *testing.T) {

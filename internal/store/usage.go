@@ -698,8 +698,8 @@ func (s *Store) UsageByMR(ctx context.Context, instance string, projectID int64,
 func (s *Store) UsageWasted(ctx context.Context, instance string, projectID int64, since time.Time) (WastedUsage, error) {
 	var w WastedUsage
 	// A failed skill, or a multi review's member tokens when its judge left
-	// no result (panelNoResult): both are wasted.
-	failed := `(verdict = 'failed' OR ` + panelNoResult + `)`
+	// no result (multiReviewNoResult): both are wasted.
+	failed := `(verdict = 'failed' OR ` + multiReviewNoResult + `)`
 	err := s.pool.QueryRow(ctx, `SELECT
 			COALESCE(sum(tokens_in)  FILTER (WHERE `+failed+`), 0),
 			COALESCE(sum(tokens_out) FILTER (WHERE `+failed+`), 0),
@@ -1031,7 +1031,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	// A dropped attempt (fell_back) is not a review: the next attempt is. Its
 	// tokens were spent, so Tokens keeps them.
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, trigger, incremental, count(DISTINCT run_id)
-		FROM run_usage WHERE instance <> '' AND `+notFellBack+` AND NOT `+panelNoResult+`
+		FROM run_usage WHERE instance <> '' AND `+notFellBack+` AND NOT `+multiReviewNoResult+`
 		GROUP BY instance, project_path, trigger, incremental`); err != nil {
 		return MetricsTotals{}, err
 	}
@@ -1074,7 +1074,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	}
 
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, skill, verdict, count(*)
-		FROM run_usage WHERE instance <> '' AND `+notFellBack+` AND NOT `+panelNoResult+`
+		FROM run_usage WHERE instance <> '' AND `+notFellBack+` AND NOT `+multiReviewNoResult+`
 		GROUP BY instance, project_path, skill, verdict`); err != nil {
 		return MetricsTotals{}, err
 	}
@@ -1206,14 +1206,14 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	return t, nil
 }
 
-// panelNoResult is a run_usage row of a multi review whose judge run left
-// no result (or whose every reviewer failed), or of a legacy review panel
-// (panel_members, a main build left it) whose merge left none: only its
-// members' tokens are there, with no verdict. Such a review is a review with no result, as a single review with
-// none is, so the review counts leave it out (runs count it as no result)
-// and its tokens are wasted. An off row is a single review: it never
-// matches.
-const panelNoResult = `EXISTS (SELECT 1 FROM runs nr WHERE nr.id = run_usage.run_id AND nr.result IS NULL
+// multiReviewNoResult is a run_usage row of a multi review whose judge run
+// left no result (or whose every reviewer failed), or of a legacy review
+// panel (panel_members, a main build left it) whose merge left none: only
+// its members' tokens are there, with no verdict. Such a review is a review
+// with no result, as a single review with none is, so the review counts
+// leave it out (runs count it as no result) and its tokens are wasted. An
+// off row is a single review: it never matches.
+const multiReviewNoResult = `EXISTS (SELECT 1 FROM runs nr WHERE nr.id = run_usage.run_id AND nr.result IS NULL
 	AND nr.failure_reason <> '' AND (EXISTS (SELECT 1 FROM panel_members pm
 		WHERE pm.run_id = COALESCE(nr.attempt_of, nr.id) AND pm.state <> 'off')
 	  OR EXISTS (SELECT 1 FROM review_members rm

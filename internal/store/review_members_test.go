@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -1003,6 +1004,18 @@ func TestSupersedeOrphanReviewMembers(t *testing.T) {
 	}
 }
 
+// reviewerResult is ReviewerResultAuth's body and found, the answer the
+// judge Job gets once its token is accepted.
+func reviewerResult(s *Store, runID, token string, n int) ([]byte, bool, error) {
+	return reviewerResultAt(s, runID, token, n, time.Now())
+}
+
+// reviewerResultAt is reviewerResult with the token's expiry checked at now.
+func reviewerResultAt(s *Store, runID, token string, n int, now time.Time) ([]byte, bool, error) {
+	body, _, found, err := s.ReviewerResultAuthAt(ctx, runID, token, n, now)
+	return body, found, err
+}
+
 // ReviewerResult serves reviewer n's newest attempt that is done, or failed
 // with its result kept, to the judge run holding its live token.
 func TestReviewerResult(t *testing.T) {
@@ -1026,7 +1039,7 @@ func TestReviewerResult(t *testing.T) {
 	failedReviewer(t, s, next, "R4b broke")
 
 	// The run waits: no token yet.
-	if body, found, err := s.ReviewerResult(ctx, id, "tok-p", 2); err != nil || found || body != nil {
+	if body, found, err := reviewerResult(s, id, "tok-p", 2); err != nil || found || body != nil {
 		t.Errorf("ReviewerResult before the judge = %s, %v, %v; want nothing", body, found, err)
 	}
 	if _, authed, _, err := s.ReviewerResultAuth(ctx, id, "tok-p", 2); err != nil || authed {
@@ -1043,7 +1056,7 @@ func TestReviewerResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n, want := range map[int]string{2: `{"reviewer": 2}`, 3: `{"reviewer": 3}`} {
-		if body, found, err := s.ReviewerResult(ctx, id, "tok-p", n); err != nil || !found || string(body) != want {
+		if body, found, err := reviewerResult(s, id, "tok-p", n); err != nil || !found || string(body) != want {
 			t.Errorf("ReviewerResult(%d) = %s, %v, %v; want %s", n, body, found, err, want)
 		}
 	}
@@ -1064,11 +1077,11 @@ func TestReviewerResult(t *testing.T) {
 		{"unknown run", "00000000-0000-0000-0000-000000000000", "tok-p", 2},
 		{"bad id", "x", "tok-p", 2},
 	} {
-		if body, found, err := s.ReviewerResult(ctx, c.run, c.token, c.n); err != nil || found || body != nil {
+		if body, found, err := reviewerResult(s, c.run, c.token, c.n); err != nil || found || body != nil {
 			t.Errorf("%s: ReviewerResult = %s, %v, %v; want nothing", c.name, body, found, err)
 		}
 	}
-	if _, found, err := s.ReviewerResultAt(ctx, id, "tok-p", 2, time.Now().Add(2*time.Hour)); err != nil || found {
+	if _, found, err := reviewerResultAt(s, id, "tok-p", 2, time.Now().Add(2*time.Hour)); err != nil || found {
 		t.Errorf("expired token: found %v, %v; want nothing", found, err)
 	}
 	// ReviewerResultAuth tells a refused token (authed false) from a
@@ -1107,10 +1120,10 @@ func TestReviewerResult(t *testing.T) {
 		t.Fatal(retry, created, err)
 	}
 	reportAttemptToRunning(t, s, retry, "tok-p2")
-	if body, found, err := s.ReviewerResult(ctx, retry, "tok-p2", 3); err != nil || !found || string(body) != `{"reviewer": 3}` {
+	if body, found, err := reviewerResult(s, retry, "tok-p2", 3); err != nil || !found || string(body) != `{"reviewer": 3}` {
 		t.Errorf("later attempt: ReviewerResult = %s, %v, %v; want the root's reviewer 3", body, found, err)
 	}
-	if _, found, err := s.ReviewerResult(ctx, id, "tok-p", 2); err != nil || found {
+	if _, found, err := reviewerResult(s, id, "tok-p", 2); err != nil || found {
 		t.Errorf("superseded first attempt: found %v, %v; want nothing", found, err)
 	}
 }
@@ -1658,5 +1671,38 @@ func reportAttemptToRunning(t *testing.T, s *Store, id, token string) {
 	}
 	if err := s.MarkDispatched(ctx, id, "job-"+token, "base", "start", hash(token), time.Now().Add(time.Hour), t0); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// EntryName names an attempt by the entry at its position in its frozen
+// chain, else by the name its dispatch recorded, else by the chain's first
+// entry: the one rule of the MR comment, the failure text and the run page.
+func TestReviewMemberEntryName(t *testing.T) {
+	chain := FrozenChain{Entries: []FrozenEntry{{Name: "first"}, {Name: ""}, {Name: "third"}}}
+	for _, tc := range []struct {
+		name string
+		m    ReviewMember
+		want string
+	}{
+		{"at its position", ReviewMember{Chain: chain, Entry: RunEntry{Position: 3, Name: "recorded"}}, "third"},
+		{"no frozen name there", ReviewMember{Chain: chain, Entry: RunEntry{Position: 2, Name: "recorded"}}, "recorded"},
+		{"never started", ReviewMember{Chain: chain}, "first"},
+		{"out of range", ReviewMember{Chain: chain, Entry: RunEntry{Position: 9, Name: "recorded"}}, "recorded"},
+		{"no chain", ReviewMember{Entry: RunEntry{Position: 1, Name: "recorded"}}, "recorded"},
+		{"nothing", ReviewMember{}, ""},
+	} {
+		if got := tc.m.EntryName(); got != tc.want {
+			t.Errorf("%s: EntryName = %q; want %q", tc.name, got, tc.want)
+		}
+	}
+	raw, err := json.Marshal(chain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := frozenEntryName(raw, 3, "recorded"); got != "third" {
+		t.Errorf("frozenEntryName = %q; want third", got)
+	}
+	if got := frozenEntryName([]byte("not json"), 1, "recorded"); got != "recorded" {
+		t.Errorf("frozenEntryName of a bad chain = %q; want recorded", got)
 	}
 }

@@ -186,13 +186,12 @@ func mustJudgeRun(t *testing.T, e *e2e, id string) store.Run {
 // can hold model text) as "its review failed".
 func TestSkippedWords(t *testing.T) {
 	for in, want := range map[string]string{
-		skipQuota:                            skipQuota,
-		skipSame:                             skipSame,
-		skipNone:                             skipNone,
-		"out of quota":                       "out of quota",
-		reasonMemberRefused + "key rejected": "key rejected",
-		"the model gpt-x said no":            skipReviewFailed,
-		"":                                   skipReviewFailed,
+		skipQuota:                 skipQuota,
+		skipSame:                  skipSame,
+		skipNone:                  skipNone,
+		"out of quota":            "out of quota",
+		"the model gpt-x said no": skipReviewFailed,
+		"":                        skipReviewFailed,
 	} {
 		if got := skippedWords(in); got != want {
 			t.Errorf("skippedWords(%q) = %q; want %q", in, got, want)

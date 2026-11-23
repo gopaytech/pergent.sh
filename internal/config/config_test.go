@@ -1937,7 +1937,7 @@ func TestPanelImageShippedDefault(t *testing.T) {
 // With no floor, no image passes; with one, only a tag that is a version at
 // or above it does.
 func TestPanelImage(t *testing.T) {
-	const none = "no review image supports a review panel yet"
+	const none = "no review image supports multi review yet"
 	for _, tc := range []struct {
 		min, image string
 		ok         bool
