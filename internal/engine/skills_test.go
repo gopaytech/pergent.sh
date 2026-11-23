@@ -82,6 +82,7 @@ func queue(env *testEnv) (id, head string) {
 // settings: with no dashboard.url (and no skills_dir) a review still reads its
 // skills from the store.
 func TestLibraryWithoutDashboard(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	if env.Engine.Config.DashboardEnabled() {
 		t.Fatal("the test config has the dashboard on")
@@ -98,6 +99,7 @@ func TestLibraryWithoutDashboard(t *testing.T) {
 }
 
 func TestNullSkillsUsesDefaults(t *testing.T) {
+	t.Parallel()
 	repoKinds(t, nil, func(t *testing.T, env *testEnv) {
 		env.AddSkill("style", styleSkill)
 		env.SetDefaultSkills("style")
@@ -113,6 +115,7 @@ func TestNullSkillsUsesDefaults(t *testing.T) {
 }
 
 func TestNamedSkillsExactly(t *testing.T) {
+	t.Parallel()
 	repoKinds(t, []string{"style"}, func(t *testing.T, env *testEnv) {
 		env.AddSkill("style", styleSkill) // default list: security and style
 		id, _ := queue(env)
@@ -130,6 +133,7 @@ func TestNamedSkillsExactly(t *testing.T) {
 // that skill's name, with no fallback to the other skills; the failed review
 // is never approved.
 func TestMissingLibrarySkillFailsRun(t *testing.T) {
+	t.Parallel()
 	repoKinds(t, []string{"security", "gone"}, func(t *testing.T, env *testEnv) {
 		id, head := queue(env)
 
@@ -160,6 +164,7 @@ func TestMissingLibrarySkillFailsRun(t *testing.T) {
 // behind its back (raw SQL here: the store refuses it). The run fails; no
 // skill is dropped and nothing falls back to the rest of the library.
 func TestDispatchDashboardRepoMissingSkillsFailsRun(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		skills []string
@@ -190,6 +195,7 @@ func TestDispatchDashboardRepoMissingSkillsFailsRun(t *testing.T) {
 }
 
 func TestNoFallbackWhenAllNamedGone(t *testing.T) {
+	t.Parallel()
 	repoKinds(t, []string{"gone", "also-gone"}, func(t *testing.T, env *testEnv) {
 		env.AddSkill("style", styleSkill)
 		id, _ := queue(env)
@@ -208,6 +214,7 @@ func TestNoFallbackWhenAllNamedGone(t *testing.T) {
 // A detected repository skill that is turned on but gone from the target
 // branch fails the run.
 func TestTurnedOnRepoSkillGoneFailsRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].RepoSkills = []string{"team"}
 	id, _ := queue(env)
@@ -229,6 +236,7 @@ func TestTurnedOnRepoSkillGoneFailsRun(t *testing.T) {
 // A repository skill in .pergent/skills counts: a repository with an empty
 // library still reviews.
 func TestRepoSkillAloneIsAReview(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.SetDefaultSkills()
 	id, _ := queue(env)
@@ -250,6 +258,7 @@ func TestRepoSkillAloneIsAReview(t *testing.T) {
 // With no skills at all there is no review: no Job, no comment and no status,
 // and "Needs attention" says why.
 func TestNoSkillsSkips(t *testing.T) {
+	t.Parallel()
 	repoKinds(t, nil, func(t *testing.T, env *testEnv) {
 		env.SetDefaultSkills()
 		id, head := queue(env)
@@ -280,6 +289,7 @@ func TestNoSkillsSkips(t *testing.T) {
 
 // Problems clear when a run of the repository dispatches a Job.
 func TestAttentionClearedWhenAJobStarts(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	for _, kind := range []string{attNoSkills, attSkillMissing} {
 		if err := env.Store.SetAttention(env.ctx, testInstance, testProjectPath, kind, "old"); err != nil {
@@ -301,6 +311,7 @@ func TestAttentionClearedWhenAJobStarts(t *testing.T) {
 // A skill_missing problem is stale once the repository's skills all resolve,
 // also when they turn out to be none: the list then shows no_skills alone.
 func TestNoSkillsClearsSkillMissing(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.SetDefaultSkills()
 	if err := env.Store.SetAttention(env.ctx, testInstance, testProjectPath, attSkillMissing, "old"); err != nil {
@@ -324,6 +335,7 @@ func TestNoSkillsClearsSkillMissing(t *testing.T) {
 // An approval of the head a skipped run was to review is withdrawn: nothing
 // reviewed it, so nothing stands behind it.
 func TestSkippedRunWithdrawsApprovalOfSameHead(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	env.Publish(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -357,6 +369,7 @@ func TestSkippedRunWithdrawsApprovalOfSameHead(t *testing.T) {
 // When the approve bot can't withdraw right now the withdrawal is owed, and
 // the approval sweep makes it later.
 func TestSkippedRunOwesWithdrawalWhenItFails(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	env.Publish(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -384,6 +397,7 @@ func TestSkippedRunOwesWithdrawalWhenItFails(t *testing.T) {
 // A push that is skipped leaves the earlier head's approval stale: the
 // cleanup lists it and takes it off.
 func TestSkippedRunOnNewHeadIsStaleApproval(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	h1, h2 := sha('a'), sha('c')
 	env.Publish(1, h1, resultFor(t, h1, reviewed("no_blocking_issues", "a.go")))
@@ -418,6 +432,7 @@ func TestSkippedRunOnNewHeadIsStaleApproval(t *testing.T) {
 // A repeated webhook for a skipped head queues nothing; a re-run command
 // reviews it again, now that the repository has skills.
 func TestRerunOfSkippedHeadDispatches(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	env.SetDefaultSkills()
@@ -447,6 +462,7 @@ func TestRerunOfSkippedHeadDispatches(t *testing.T) {
 
 // The skills are read when the run is dispatched, not when it was queued.
 func TestEditBetweenEnqueueAndDispatch(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id, _ := queue(env)
 	const edited = "Look for injection problems."

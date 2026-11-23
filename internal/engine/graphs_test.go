@@ -130,6 +130,7 @@ func hasGraph(job *batchv1.Job) bool {
 // graph, no row is read or made, and no head check is asked for, even with
 // graph storage on.
 func TestDispatchGraphOff(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, false)
 	id, _ := queue(env)
 	dispatch(t, env)
@@ -152,6 +153,7 @@ func TestDispatchGraphOff(t *testing.T) {
 // branch the stored graph was built from gets the graph init container and
 // PERGENT_GRAPH; a change into another branch does not.
 func TestDispatchGraphOn(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, branch string
 		stored, want bool
@@ -196,6 +198,7 @@ func TestDispatchGraphOn(t *testing.T) {
 // Without graph storage in the install, a repository with the switch on gets
 // no graph and asks for nothing.
 func TestDispatchGraphStorageOff(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, true)
 	env.Engine.GraphDir = ""
 	id, _ := queue(env)
@@ -211,6 +214,7 @@ func TestDispatchGraphStorageOff(t *testing.T) {
 // A good graph is stored encoded again, in a file named by a hash, and the
 // row says what it holds.
 func TestCompleteGraphStores(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, true)
 	id, token := startedBuild(t, env, "main", sha('d'))
 	if out, err := env.Engine.CompleteGraph(env.ctx, id, "wrong", testGraphFile(t, sha('d'))); err != nil || out != codegraph.Unauthorized {
@@ -244,6 +248,7 @@ func TestCompleteGraphStores(t *testing.T) {
 // each a failed build in pergent.sh's words; the stored graph and its file
 // stay.
 func TestCompleteGraphFailures(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		body func(t *testing.T) []byte
@@ -282,6 +287,7 @@ func TestCompleteGraphFailures(t *testing.T) {
 
 // A build that ends after the switch went off writes nothing.
 func TestCompleteGraphAfterSwitchOff(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, true)
 	id, token := startedBuild(t, env, "main", sha('d'))
 	if _, _, err := env.Store.SetDashboardRepoGraph(env.ctx, testInstance, testProjectPath, false); err != nil {
@@ -300,6 +306,7 @@ func TestCompleteGraphAfterSwitchOff(t *testing.T) {
 
 // DropGraph deletes the row, the running build's Job and the file.
 func TestDropGraph(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, true)
 	storeTestGraph(t, env, "main", sha('d'))
 	id, _ := startedBuild(t, env, "main", sha('e'))
@@ -333,6 +340,7 @@ func resultToken(t *testing.T, env *testEnv, id string) string {
 // which stays usable for the result. A wrong token, the switch off, or no
 // graph is codegraph.ErrNoGraph.
 func TestRunGraph(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, true)
 	storeTestGraph(t, env, "main", sha('d'))
 	id, _ := queue(env)
@@ -367,6 +375,7 @@ func TestRunGraph(t *testing.T) {
 // build of a new head, and the loop starts its Job, which clones that commit
 // and runs graphify with no secret.
 func TestGraphHeadCheckAndLaunch(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, true)
 	serveScanRepo(env, testProjectID, testProjectPath, sha('c'))
 	env.Engine.checkGraphHead(env.ctx, testInstance, testProjectPath)
@@ -404,6 +413,7 @@ func TestGraphHeadCheckAndLaunch(t *testing.T) {
 // A head check of a repository with the switch off makes no row and reads
 // nothing.
 func TestGraphHeadCheckOff(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, false)
 	serveScanRepo(env, testProjectID, testProjectPath, sha('c'))
 	env.Engine.checkGraphHead(env.ctx, testInstance, testProjectPath)
@@ -417,6 +427,7 @@ func TestGraphHeadCheckOff(t *testing.T) {
 
 // A build past its deadline fails, and its Job goes.
 func TestSweepGraphs(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, true)
 	id, _ := startedBuild(t, env, "main", sha('d'))
 	env.SetNow(env.Now().Add(2 * time.Hour))
@@ -429,6 +440,7 @@ func TestSweepGraphs(t *testing.T) {
 
 // Pausing a repository keeps its graph; removing it deletes the graph.
 func TestReconcileGraphPauseAndRemove(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, true)
 	serveProject(env, testProjectID, testProjectPath)
 	reconcile(t, env)
@@ -461,6 +473,7 @@ func TestReconcileGraphPauseAndRemove(t *testing.T) {
 // A graph as graphify 0.9.112 and pergent's converter really write it (of
 // internal/kube, at a made-up commit) is taken and stored.
 func TestCompleteGraphConverterOutput(t *testing.T) {
+	t.Parallel()
 	b, err := os.ReadFile("testdata/graph-converted.json")
 	if err != nil {
 		t.Fatal(err)
@@ -480,6 +493,7 @@ func TestCompleteGraphConverterOutput(t *testing.T) {
 // still stores, a queued one is not started (and nothing is deleted), and no
 // head check reads the platform.
 func TestGraphWhilePaused(t *testing.T) {
+	t.Parallel()
 	env := graphEnv(t, true)
 	storeTestGraph(t, env, "main", sha('d'))
 	id, token := startedBuild(t, env, "main", sha('e'))

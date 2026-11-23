@@ -56,6 +56,7 @@ func jobVar(t *testing.T, env *testEnv, id, name string) (string, bool) {
 }
 
 func TestDispatchRulesOrder(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].RuleSets = []string{"b", "a"}
 	addRuleSet(t, env, "a", setAYAML)
@@ -80,6 +81,7 @@ func TestDispatchRulesOrder(t *testing.T) {
 // The rules come from the target side, as the repository skills do: a change
 // cannot edit its own rules.
 func TestDispatchRulesFromTargetRef(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
 	id, head := queue(env)
@@ -101,6 +103,7 @@ func TestDispatchRulesFromTargetRef(t *testing.T) {
 }
 
 func TestDispatchBrokenRulesFileFails(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, "rules:\n  - path: api/\n    rule: x\n")
 	id, _ := queue(env)
@@ -120,6 +123,7 @@ func TestDispatchBrokenRulesFileFails(t *testing.T) {
 }
 
 func TestDispatchMissingRuleSetFails(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].RuleSets = []string{"gone"}
 	id, _ := queue(env)
@@ -136,6 +140,7 @@ func TestDispatchMissingRuleSetFails(t *testing.T) {
 }
 
 func TestDispatchConfigSetWins(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.RuleSets = []config.ConfigRuleSet{{Name: "a", Content: setBYAML}}
 	env.Engine.Config.Repositories[0].RuleSets = []string{"a"}
@@ -150,6 +155,7 @@ func TestDispatchConfigSetWins(t *testing.T) {
 }
 
 func TestDispatchBuiltInSwitch(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	off := false
 	env.Engine.Config.Repositories[0].BuiltInRules = &off
@@ -169,6 +175,7 @@ func TestDispatchBuiltInSwitch(t *testing.T) {
 // PERGENT_NO_BUILT_IN_RULES, one that turns them on runs without it, and the
 // rules hash records the switch, so flipping it gives one full review.
 func TestDispatchBuiltInRulesOptIn(t *testing.T) {
+	t.Parallel()
 	on, off := true, false
 	for _, c := range []struct {
 		name   string
@@ -200,6 +207,7 @@ func TestDispatchBuiltInRulesOptIn(t *testing.T) {
 }
 
 func TestDispatchRulesHashStored(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
 	id, _ := queue(env)
@@ -216,6 +224,7 @@ func TestDispatchRulesHashStored(t *testing.T) {
 // The built-in texts ship inside the Jobs image: a run on another image gets
 // another hash, so its next push reviews every skill with rules in full.
 func TestDispatchRulesHashHasTheImage(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Jobs.Image = "ghcr.io/gopaytech/pergent:v9.9.9"
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
@@ -231,6 +240,7 @@ func TestDispatchRulesHashHasTheImage(t *testing.T) {
 }
 
 func TestDispatchRulesAttentionCleared(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].RuleSets = []string{"later"}
 	queue(env)

@@ -346,6 +346,7 @@ func ghReport(t *testing.T, env *testEnv, n int64, head string, result []byte) s
 // one repository with contents:read, as x-access-token, from the pull
 // request's ref. The token is in the Job's Secret and nowhere else.
 func TestDispatchGitHub(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	head := sha('a')
@@ -420,6 +421,7 @@ func TestDispatchGitHub(t *testing.T) {
 // The review App isn't installed on the repository (any more): the run is
 // reported with that reason, and no clone token is asked for.
 func TestDispatchGitHubReviewAppNotInstalled(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	env.SeedGitHub(func(p *store.Project) { p.InstallationID = 0 })
@@ -442,6 +444,7 @@ func TestDispatchGitHubReviewAppNotInstalled(t *testing.T) {
 // The installation was removed after reconcile stored it: GitHub refuses the
 // clone token with 404, which is the same failure, at once.
 func TestDispatchGitHubCloneTokenNotFound(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	head := sha('a')
@@ -482,6 +485,7 @@ func ghProject(t *testing.T, env *testEnv) (store.Project, bool) {
 // URL; an approve App that isn't installed is stored as approve_available =
 // false with a warning, and is not an error.
 func TestReconcileGitHub(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	if err := env.Store.DeleteProject(env.ctx, ghInstance, ghRepoID); err != nil {
@@ -524,6 +528,7 @@ func TestReconcileGitHub(t *testing.T) {
 
 // The token approver reaches a repository its token can read.
 func TestReconcileGitHubTokenApprover(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	plat, _ := env.Engine.Platforms.Get(ghInstance)
@@ -553,6 +558,7 @@ func TestReconcileGitHubTokenApprover(t *testing.T) {
 // no installation, so its runs are reported as not installed, and the pass
 // reports the error.
 func TestReconcileGitHubReviewAppUninstalled(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	gh.Uninstall(ghReviewApp, ghRepoPath)
@@ -571,6 +577,7 @@ func TestReconcileGitHubReviewAppUninstalled(t *testing.T) {
 // A GitHub repository removed from the config loses its row and nothing
 // else: there is no webhook or token to delete.
 func TestReconcileGitHubRemoved(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	env.Engine.Config.Repositories = env.Engine.Config.Repositories[:1]
@@ -615,6 +622,7 @@ func onlyCheckRun(t *testing.T, gh *fakeGitHub) map[string]any {
 }
 
 func TestPublishGitHubApproves(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	head := sha('a')
@@ -644,6 +652,7 @@ func TestPublishGitHubApproves(t *testing.T) {
 // The approve App isn't installed on the repository: the review is
 // published with its status and a note, never approved and never retried.
 func TestPublishGitHubApproveUnavailable(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	head := sha('a')
@@ -695,6 +704,7 @@ func ghApproved(t *testing.T, env *testEnv, n int64, head string) {
 // A closed pull request GitHub reports as merged: the approval record is
 // cleared without any GitHub write, as for GitLab's merged.
 func TestSweepGitHubMerged(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	ghApproved(t, env, 3, sha('a'))
@@ -715,6 +725,7 @@ func TestSweepGitHubMerged(t *testing.T) {
 // The head moved without a webhook: the approve App's approval is dismissed
 // and the current head is queued.
 func TestSweepGitHubMovedHead(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	ghApproved(t, env, 3, sha('a'))
@@ -746,6 +757,7 @@ func TestSweepGitHubMovedHead(t *testing.T) {
 // pull request, so it keeps the approval record and tries again; it never
 // forgets an approval that may still stand.
 func TestSweepGitHubReviewMintFailsKeepsApproval(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	ghApproved(t, env, 3, sha('a'))
@@ -774,6 +786,7 @@ func reconcileGitHubSetup(env *testEnv, gh *fakeGitHub) {
 // The approve App is uninstalled after a pass found it (and the approver
 // remembered its installation): the next pass records it as unreachable.
 func TestReconcileGitHubApproveAppUninstalled(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	reconcileGitHubSetup(env, gh)
@@ -794,6 +807,7 @@ func TestReconcileGitHubApproveAppUninstalled(t *testing.T) {
 // approve: the pass stores the repository as unreachable and records the
 // item; once the permission is accepted, the next pass undoes both.
 func TestReconcileGitHubApproveAppWithoutPullRequestsWrite(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	reconcileGitHubSetup(env, gh)
@@ -829,6 +843,7 @@ func TestReconcileGitHubApproveAppWithoutPullRequestsWrite(t *testing.T) {
 // Pull requests permission, on every pass: read-only turns it off, write turns
 // it back on.
 func TestReconcileGitHubInlineAvailable(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	reconcileGitHubSetup(env, gh)
@@ -874,6 +889,7 @@ func TestReconcileGitHubInlineAvailable(t *testing.T) {
 // installation's Administration permission, on every pass; an installation that
 // reports no permissions counts as allowed.
 func TestReconcileGitHubProtectionReadable(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	reconcileGitHubSetup(env, gh)
@@ -918,6 +934,7 @@ func TestReconcileGitHubProtectionReadable(t *testing.T) {
 // The approve side can't be asked (GitHub refuses the lookup): the pass
 // reports it and keeps the stored answer.
 func TestReconcileGitHubApproveCheckErrorKeepsStored(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	reconcileGitHubSetup(env, gh)
@@ -941,6 +958,7 @@ func TestReconcileGitHubApproveCheckErrorKeepsStored(t *testing.T) {
 // With approve_token_env the approve side is a bot user: a repository it
 // can't reach is published with that note, not the App's.
 func TestPublishGitHubTokenApproverUnavailable(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	inst := &env.Engine.Config.GitHub[len(env.Engine.Config.GitHub)-1]
@@ -972,6 +990,7 @@ func TestPublishGitHubTokenApproverUnavailable(t *testing.T) {
 // With approve_with_review_app the approve side is the review App: an
 // unavailable approver names its missing Pull requests: write.
 func TestPublishGitHubReviewAppApproverUnavailable(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	inst := &env.Engine.Config.GitHub[len(env.Engine.Config.GitHub)-1]
@@ -999,6 +1018,7 @@ func TestPublishGitHubReviewAppApproverUnavailable(t *testing.T) {
 // after a publish that was cut short), but the approve App's latest review
 // already approves the head: the run is published, not retried.
 func TestPublishGitHubApproveRefusedButAlreadyApproved(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	head := sha('a')
@@ -1034,6 +1054,7 @@ func TestPublishGitHubApproveRefusedButAlreadyApproved(t *testing.T) {
 // Without an approval of the head to fall back on, a refused approval is a
 // failed publish, retried later.
 func TestPublishGitHubApproveRefusedNotApproved(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	head := sha('a')
@@ -1058,6 +1079,7 @@ func TestPublishGitHubApproveRefusedNotApproved(t *testing.T) {
 // recorded ahead of the attempt stays, as on GitLab: removing it later is
 // harmless.
 func TestPublishGitHubApproverSeesHeadMoved(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	head := sha('a')
@@ -1103,6 +1125,7 @@ func TestPublishGitHubApproverSeesHeadMoved(t *testing.T) {
 // A pull request closed without merging (it could be reopened): the sweep
 // dismisses the approve App's approval, clears the record and queues nothing.
 func TestSweepGitHubClosedDismisses(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	ghApproved(t, env, 3, sha('a'))
@@ -1134,6 +1157,7 @@ func TestSweepGitHubClosedDismisses(t *testing.T) {
 // A GitHub repository set to neutral: the Check Run of a review that can't be
 // posted is completed as neutral, with the same title, and nothing is approved.
 func TestPublishGitHubGiveUpNeutralCheckRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	for i := range env.Engine.Config.Repositories {
@@ -1166,6 +1190,7 @@ func TestPublishGitHubGiveUpNeutralCheckRun(t *testing.T) {
 // With neutral, a review with blocking findings that can't be posted still
 // completes its Check Run as a failure.
 func TestPublishGitHubGiveUpNeutralCIBlockedIsFailure(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	for i := range env.Engine.Config.Repositories {
@@ -1191,6 +1216,7 @@ func TestPublishGitHubGiveUpNeutralCIBlockedIsFailure(t *testing.T) {
 }
 
 func TestPublishGitHubGiveUpNeutralBlockingIsFailure(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	for i := range env.Engine.Config.Repositories {
@@ -1217,6 +1243,7 @@ func TestPublishGitHubGiveUpNeutralBlockingIsFailure(t *testing.T) {
 // attempt the in-progress Check Run is completed as a failure, once, and the
 // pull request is never approved.
 func TestPublishGitHubFailedCompletesCheckRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	head := sha('a')
@@ -1245,6 +1272,7 @@ func TestPublishGitHubFailedCompletesCheckRun(t *testing.T) {
 // Reconcile warns when one approving review is enough to merge a GitHub
 // repository's default branch and the approve side can reach it.
 func TestReconcileWarnsSingleApprovalGitHub(t *testing.T) {
+	t.Parallel()
 	prRule := func(n int) map[string]any {
 		return map[string]any{"type": "pull_request", "parameters": map[string]any{"required_approving_review_count": n}}
 	}
@@ -1313,6 +1341,7 @@ func TestReconcileWarnsSingleApprovalGitHub(t *testing.T) {
 // An approve side that can't reach the repository approves nothing there, so
 // the repository's merge rules aren't checked.
 func TestReconcileSingleApprovalSkippedWithoutApprover(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	serveProject(env, testProjectID, testProjectPath)
@@ -1330,6 +1359,7 @@ func TestReconcileSingleApprovalSkippedWithoutApprover(t *testing.T) {
 // stored on every pass, for logs and reports and for waking a waiting run; an
 // installation that reports neither counts as allowed.
 func TestReconcileGitHubCIAccess(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	reconcileGitHubSetup(env, gh)

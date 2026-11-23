@@ -97,6 +97,7 @@ func publishedHead(t *testing.T, env *testEnv, head string) string {
 // A writer's review command on a used-up quota gets a 👎 and the note, and
 // queues nothing: the review of the head, its status and its approval stay.
 func TestReviewCommandRefusedOnUsedUpQuota(t *testing.T) {
+	t.Parallel()
 	e := quotaCommands(t, 10)
 	env := e.env
 	head := sha('a')
@@ -130,6 +131,7 @@ func TestReviewCommandRefusedOnUsedUpQuota(t *testing.T) {
 // The note is posted once a month on a change: another writer refused later
 // gets the 👎 only.
 func TestSecondQuotaRefusalHasNoReply(t *testing.T) {
+	t.Parallel()
 	e := quotaCommands(t, 10)
 	env := e.env
 	publishedHead(t, env, sha('a'))
@@ -150,6 +152,7 @@ func TestSecondQuotaRefusalHasNoReply(t *testing.T) {
 // The quota is looked at after trust: a writer's start of an untrusted
 // author's change, refused for the quota, leaves it waiting for trust.
 func TestWriterStartRefusedForQuotaKeepsTrustWait(t *testing.T) {
+	t.Parallel()
 	e, head := trustedCommands(t, userReporter, "rep")
 	env := e.env
 	q := int64(10)
@@ -173,6 +176,7 @@ func TestWriterStartRefusedForQuotaKeepsTrustWait(t *testing.T) {
 // With room under the quota the command queues the re-run as always, marked
 // as checked so the dispatcher doesn't look at the quota again.
 func TestReviewCommandWithRoomRuns(t *testing.T) {
+	t.Parallel()
 	e := quotaCommands(t, 9)
 	env := e.env
 	publishedHead(t, env, sha('a'))
@@ -193,6 +197,7 @@ func TestReviewCommandWithRoomRuns(t *testing.T) {
 // A run a quota held last month is waiting still on the 1st; a writer's
 // review command then reviews its head.
 func TestReviewCommandAfterTheFirstReviewsHeldHead(t *testing.T) {
+	t.Parallel()
 	e := quotaCommands(t, 0)
 	env := e.env
 	oct := time.Date(2026, time.October, 20, 12, 0, 0, 0, time.UTC)
@@ -233,6 +238,7 @@ func TestReviewCommandAfterTheFirstReviewsHeldHead(t *testing.T) {
 // the command is answered as any request for it is, not refused, and the
 // note stays unclaimed.
 func TestReviewCommandWhileReviewRunsNotRefused(t *testing.T) {
+	t.Parallel()
 	e := quotaCommands(t, 10)
 	env := e.env
 	head := sha('a')

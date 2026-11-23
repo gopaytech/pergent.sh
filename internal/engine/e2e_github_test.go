@@ -110,6 +110,7 @@ func (e *ghE2E) checkRuns(t *testing.T, head string) []map[string]any {
 // published and approved by the approve App, a push that dismisses the
 // approval, and a merge that forgets it without writing to GitHub.
 func TestEndToEndGitHub(t *testing.T) {
+	t.Parallel()
 	e := newGitHubE2E(t)
 	env, gh := e.env, e.gh
 	headA, headB, headC := sha('a'), sha('c'), sha('d')
@@ -285,6 +286,7 @@ func TestEndToEndGitHub(t *testing.T) {
 // A captured delivery sent again doesn't count: the signature has no time in
 // it, and the old head's run would supersede the newest head's.
 func TestEndToEndGitHubReplayedDelivery(t *testing.T) {
+	t.Parallel()
 	e := newGitHubE2E(t)
 	env := e.env
 	headA, headB := sha('a'), sha('c')

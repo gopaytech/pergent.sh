@@ -53,6 +53,7 @@ func waitingRun(t *testing.T, env *testEnv, head string) string {
 // A Developer who isn't the author starts the untrusted change's review even
 // with the command gate on.
 func TestStartByWriterPassesGate(t *testing.T) {
+	t.Parallel()
 	e, head := trustedCommands(t, userReporter, "rep")
 	env := e.env
 	id := waitingRun(t, env, head)
@@ -81,6 +82,7 @@ func TestStartByWriterPassesGate(t *testing.T) {
 // The untrusted author can't start their own review, and a second try within
 // two minutes gets no answer at all.
 func TestAuthorCannotStartOwnUntrusted(t *testing.T) {
+	t.Parallel()
 	e, head := trustedCommands(t, userReporter, "rep")
 	env := e.env
 	id := waitingRun(t, env, head)
@@ -104,6 +106,7 @@ func TestAuthorCannotStartOwnUntrusted(t *testing.T) {
 // Write access gets past the gate only to start a review: a Developer's
 // dismiss on someone else's change is refused by the gate as before.
 func TestDismissStillGatedForWriter(t *testing.T) {
+	t.Parallel()
 	e, head := trustedCommands(t, userReporter, "rep")
 	waitingRun(t, e.env, head)
 
@@ -115,6 +118,7 @@ func TestDismissStillGatedForWriter(t *testing.T) {
 
 // A trusted author's change is re-run as before, against both caps.
 func TestTrustedChangeRerunUnchanged(t *testing.T) {
+	t.Parallel()
 	e, head := trustedCommands(t, userDeveloper, "dev")
 	env := e.env
 	servePublish(env, 1, head)
@@ -139,6 +143,7 @@ func TestTrustedChangeRerunUnchanged(t *testing.T) {
 // A start counts against the change's cap only: with the repository's cap
 // used up it still goes ahead, and the change's cap stops it.
 func TestStartCaps(t *testing.T) {
+	t.Parallel()
 	e, head := trustedCommands(t, userReporter, "rep")
 	env := e.env
 	one := 1
@@ -169,6 +174,7 @@ func TestStartCaps(t *testing.T) {
 // A start reviews only a head that existed when it was asked for: a push
 // that lands after the comment, before it is handled, waits again.
 func TestStartRefusesHeadPushedAfterComment(t *testing.T) {
+	t.Parallel()
 	e, head := trustedCommands(t, userReporter, "rep")
 	env := e.env
 	first := waitingRun(t, env, head)

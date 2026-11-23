@@ -108,6 +108,7 @@ func linkedEntries(t *testing.T, env *testEnv, id string) []linkedEntry {
 }
 
 func TestDispatchRecordsTheLinks(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	head := sha('a')
 	id := ghEnqueue(t, env, 3, head)
@@ -157,6 +158,7 @@ func TestDispatchRecordsTheLinks(t *testing.T) {
 // With the setting on and nothing matched, the review is the one it always
 // was: no env, no file, no extra repository in the token, nothing recorded.
 func TestDispatchLinksNothingMatched(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	head := sha('a')
 	id := ghEnqueue(t, env, 3, head)
@@ -193,6 +195,7 @@ func TestDispatchLinksNothingMatched(t *testing.T) {
 
 // The setting off: the repository's links are not even looked at.
 func TestDispatchLinksSettingOff(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	off := false
 	repos := env.Engine.Config.Repositories
@@ -219,6 +222,7 @@ func TestDispatchLinksSettingOff(t *testing.T) {
 // A link that the rules refuse, or whose visibility can't be read, is an
 // error entry and is never cloned. The review itself goes on.
 func TestDispatchRefusedLinkIsAnError(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	// A public repository can't link a private one.
 	gh.Reply(http.MethodGet, ghRepoAPI, http.StatusOK, map[string]any{"id": ghRepoID, "private": false, "visibility": "public"})
@@ -250,6 +254,7 @@ func TestDispatchRefusedLinkIsAnError(t *testing.T) {
 }
 
 func TestDispatchVisibilityErrorIsAnError(t *testing.T) {
+	t.Parallel()
 	for name, reply := range map[string]map[string]any{
 		"GitHub does not say":   {"id": linkedTargetID, "private": false},
 		"GitHub contradicts":    {"id": linkedTargetID, "private": true, "visibility": "public"},
@@ -388,6 +393,7 @@ func blockingImpact() map[string]any {
 // while the last impact result is failed or has an open blocking finding, and
 // stops when it comes back clean.
 func TestDispatchOpenImpactMatchesEverything(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		impact map[string]any
@@ -421,6 +427,7 @@ func TestDispatchOpenImpactMatchesEverything(t *testing.T) {
 // A blocking finding nobody dismissed keeps the check running; a dismissed
 // one doesn't.
 func TestDispatchDismissedImpactDoesNotMatch(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	ghPublished(t, env, gh, sha('1'), []string{"a.go"}, impactSkillJSON("has_blocking_issues", blockingImpact()))
 	if _, err := env.Store.Dismiss(env.ctx, store.Dismissal{
@@ -444,6 +451,7 @@ func TestDispatchDismissedImpactDoesNotMatch(t *testing.T) {
 // An incremental review matches the new commits' files only: the pull
 // request touched a watched path before, and the push did not.
 func TestIncrementalMatchesNewCommitsOnly(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	on := true
 	repos := env.Engine.Config.Repositories
@@ -498,6 +506,7 @@ func teachGH(t *testing.T, env *testEnv, n int64, skill, fp, severity, reason st
 // What people rejected in the linked repositories' check goes to its next
 // run, next to the skills', when the review has one.
 func TestDispatchPassesImpactDismissals(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	head := sha('a')
 	id := ghEnqueue(t, env, 3, head)
@@ -519,6 +528,7 @@ func TestDispatchPassesImpactDismissals(t *testing.T) {
 
 // With Learn from dismissals off, the check is told nothing either.
 func TestDispatchImpactDismissalsNeedTheSetting(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	off := false
 	repos := env.Engine.Config.Repositories
@@ -540,6 +550,7 @@ func TestDispatchImpactDismissalsNeedTheSetting(t *testing.T) {
 // A change that touches no watched path does not run the check, and the Job
 // carries nothing of it: the same dismissals file as with no links.
 func TestDispatchImpactDismissalsLeftOutWhenTheCheckDoesNotRun(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	head := sha('a')
 	id := ghEnqueue(t, env, 3, head)

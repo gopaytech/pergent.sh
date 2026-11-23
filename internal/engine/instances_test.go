@@ -52,6 +52,7 @@ func registerLab(t *testing.T, env *testEnv) string {
 // goes on when the instance is connected. The wait is logged at Warn at most
 // once a minute per instance.
 func TestDispatchWaitsForAnUnconnectedInstance(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := registerLab(t, env)
 
@@ -89,6 +90,7 @@ func TestDispatchWaitsForAnUnconnectedInstance(t *testing.T) {
 
 // Only an instance that is gone, or going, drops its queued runs.
 func TestDispatchSupersedesRunsOfAnUnregisteredOrRemovingInstance(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		edit func(env *testEnv)
@@ -115,6 +117,7 @@ func TestDispatchSupersedesRunsOfAnUnregisteredOrRemovingInstance(t *testing.T) 
 // status appears, and the wait is logged at Warn once a minute. Once an
 // operator saves an LLM, the next pass dispatches with that model and key.
 func TestDispatchWaitsWithoutLLM(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.LLM = config.LLM{}
 	head := sha('a')
@@ -175,6 +178,7 @@ func TestDispatchWaitsWithoutLLM(t *testing.T) {
 // Every LLM key the engine has held is hidden from text bound for a log or a
 // stored reason, the one in use and those it replaced.
 func TestRedactsEveryLLMKeySeen(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.LLM = config.LLM{}
 	var id string // the one entry, created by the first save, its key replaced by the next
@@ -225,6 +229,7 @@ func removingLab(t *testing.T, env *testEnv) {
 // store, not before; then its secrets go, the registry forgets it and the
 // hook is told. Other instances are left alone.
 func TestFinishRemovals(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	removingLab(t, env)
 	var gone []string
@@ -277,6 +282,7 @@ func TestFinishRemovals(t *testing.T) {
 // connected to can't be reached: its project rows are forgotten with a
 // warning, so the removal doesn't wait for ever.
 func TestReconcileFinishesRemoval(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	removingLab(t, env)
@@ -302,6 +308,7 @@ func TestReconcileFinishesRemoval(t *testing.T) {
 // and there can be any number of them: they must take no slot, so a connected
 // instance's run is claimed in the first pass.
 func TestWaitingRunsDoNotStarveOtherInstances(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	first := registerLab(t, env)
 	waiting := []string{first}
@@ -336,6 +343,7 @@ func TestWaitingRunsDoNotStarveOtherInstances(t *testing.T) {
 // with an instance-wide "Needs attention" item naming it; reconcile keeps
 // trying, and the item goes when the removal finishes.
 func TestStuckRemovalIsReported(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	removingLab(t, env)
 	if err := env.Store.UpsertProject(env.ctx, store.Project{Instance: "lab", ProjectID: 4, Path: "acme/gadgets", HookID: 11}); err != nil {
@@ -412,6 +420,7 @@ func jobEnv(env *testEnv, id string) map[string]string {
 // and base URL, and its Secret holds that entry's key and no other, whatever
 // the default is.
 func TestDispatchUsesTheRepositorysModel(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	addModel(t, env, "openai", "gpt-example", "https://llm.example.com/v1", "key-default")
 	chosen := addModel(t, env, "litellm", "gpt-chosen", "https://proxy.example.com/v1", "key-chosen")
@@ -452,6 +461,7 @@ func TestDispatchUsesTheRepositorysModel(t *testing.T) {
 // A repository that chose none follows the default as it is when the run
 // starts, so changing the default moves the next review.
 func TestDispatchFollowsDefault(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.LLM = config.LLM{}
 	first := addModel(t, env, "openai", "gpt-first", "https://one.example.com/v1", "key-first")
@@ -488,6 +498,7 @@ func TestDispatchFollowsDefault(t *testing.T) {
 // names nothing of it, and never runs on the default instead: the code would
 // go to a provider the repository did not ask for.
 func TestDispatchFailsWhenChosenModelIsGone(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.LLM = config.LLM{}
 	addModel(t, env, "openai", "gpt-default", "https://default.example.com/v1", "key-default")
@@ -538,6 +549,7 @@ func addUnopenableModel(t *testing.T, env *testEnv, provider, model string) stri
 // A default whose key can't be opened doesn't stop a repository that chose
 // another entry: it runs on its own entry, and only that key is in the Job.
 func TestDispatchRunsTheChosenModelWhenTheDefaultIsUnusable(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.LLM = config.LLM{}
 	addUnopenableModel(t, env, "openai", "gpt-default") // the first entry is the default
@@ -565,6 +577,7 @@ func TestDispatchRunsTheChosenModelWhenTheDefaultIsUnusable(t *testing.T) {
 // is: no fallback. The failed review keeps the model it tried, for the
 // dashboard, while the reason that reaches the comment names nothing.
 func TestDispatchFailsWhenChosenModelHasNoUsableKey(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.LLM = config.LLM{}
 	addModel(t, env, "openai", "gpt-default", "https://default.example.com/v1", "key-default")
@@ -597,6 +610,7 @@ func TestDispatchFailsWhenChosenModelHasNoUsableKey(t *testing.T) {
 // run is claimed and waits, as it does when the list is empty: nothing is
 // failed or counted as an attempt.
 func TestDispatchWaitsWithoutAnyModel(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.LLM = config.LLM{}
 	if _, err := env.Store.CreateLLMModel(env.ctx, store.LLMModel{Provider: "openai", Model: "gpt-example",
@@ -626,6 +640,7 @@ func TestDispatchWaitsWithoutAnyModel(t *testing.T) {
 // The provider and model are recorded before the Job is launched: a launch
 // that fails leaves them on the run, and the next push compares with them.
 func TestRunRecordsProviderBeforeLaunch(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Kube.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("apiserver unavailable")

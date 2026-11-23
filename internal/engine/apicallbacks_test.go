@@ -177,6 +177,7 @@ func signs(secret string, at int64, body []byte, v1 string) bool {
 
 // A published review is posted once, signed, with the body GET returns.
 func TestCallbackDelivered(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, nil)
 	a := newCallbackE2E(t, rc.srv.URL+"/hook")
 	env := a.env
@@ -235,6 +236,7 @@ func TestCallbackDelivered(t *testing.T) {
 // A failed callback is tried again after the backoff, under the same
 // delivery ID.
 func TestCallbackRetriesSameDelivery(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, func(n int, w http.ResponseWriter, _ *http.Request) {
 		if n == 0 {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -286,6 +288,7 @@ func TestCallbackRetriesSameDelivery(t *testing.T) {
 
 // A redirect is a failed attempt: it is never followed, whatever the client.
 func TestCallbackRedirectIsFailure(t *testing.T) {
+	t.Parallel()
 	var elsewhere atomic.Int32
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		elsewhere.Add(1)
@@ -323,6 +326,7 @@ func TestCallbackRedirectIsFailure(t *testing.T) {
 
 // No answer within the client's timeout is a failed attempt.
 func TestCallbackTimeout(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, func(_ int, w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
@@ -348,6 +352,7 @@ func TestCallbackTimeout(t *testing.T) {
 
 // Once 24 hours passed since the review ended, a failed attempt gives up.
 func TestCallbackGivesUpAfter24h(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, answerWith(http.StatusServiceUnavailable))
 	a := newCallbackE2E(t, rc.srv.URL)
 	env := a.env
@@ -379,6 +384,7 @@ func TestCallbackGivesUpAfter24h(t *testing.T) {
 // During a rotation's overlap a callback carries both signatures, the current
 // one first; after it, only the current one.
 func TestCallbackRotationSendsBoth(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, nil)
 	a := newCallbackE2E(t, rc.srv.URL)
 	env := a.env
@@ -422,6 +428,7 @@ func TestCallbackRotationSendsBoth(t *testing.T) {
 
 // A superseded review's callback says so, with the body GET returns.
 func TestSupersededReviewGetsCallback(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, nil)
 	a := newCallbackE2E(t, rc.srv.URL)
 	env := a.env
@@ -444,6 +451,7 @@ func TestSupersededReviewGetsCallback(t *testing.T) {
 
 // A review whose publish gave up gets its callback, which reads failed.
 func TestGaveUpAPIReviewGetsCallback(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, nil)
 	a := newCallbackE2E(t, rc.srv.URL)
 	env := a.env
@@ -482,6 +490,7 @@ func TestGaveUpAPIReviewGetsCallback(t *testing.T) {
 // A removed client's callbacks are gone with it: nothing is sent, and nothing
 // is logged as an error, also for one listed just before the removal.
 func TestRemovedClientNoCallback(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, nil)
 	a := newCallbackE2E(t, rc.srv.URL)
 	env := a.env
@@ -513,6 +522,7 @@ func TestRemovedClientNoCallback(t *testing.T) {
 // A client whose callback URL was emptied gives up at once, with a fixed
 // error, and nothing is sent.
 func TestCallbackNoURLGivesUp(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, nil)
 	a := newCallbackE2E(t, rc.srv.URL)
 	env := a.env
@@ -534,6 +544,7 @@ func TestCallbackNoURLGivesUp(t *testing.T) {
 // Three undelivered callbacks in 24 hours raise callback_failing, for admins,
 // and a delivery that brings them to two clears it.
 func TestCallbackFailingAttention(t *testing.T) {
+	t.Parallel()
 	var succeed atomic.Int32
 	rc := newReceiver(t, func(_ int, w http.ResponseWriter, _ *http.Request) {
 		if succeed.Add(-1) >= 0 {
@@ -597,6 +608,7 @@ func TestCallbackFailingAttention(t *testing.T) {
 // Emptying the URL is not a delivery failure: the callbacks it gives up on
 // stop counting, and the item goes in that pass.
 func TestCallbackFailingClearedWhenURLEmptied(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, answerWith(http.StatusBadGateway))
 	a := newCallbackE2E(t, rc.srv.URL)
 	env := a.env
@@ -632,6 +644,7 @@ func TestCallbackFailingClearedWhenURLEmptied(t *testing.T) {
 // A failed attempt's stored error has the URL's path and query and the
 // secrets replaced, and is short.
 func TestCallbackErrorRedacted(t *testing.T) {
+	t.Parallel()
 	closed := httptest.NewServer(http.NotFoundHandler())
 	url := closed.URL + "/hook?token=abc"
 	closed.Close()

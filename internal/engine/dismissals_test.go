@@ -46,6 +46,7 @@ func dismiss(t *testing.T, env *testEnv, iid int64, severity, reason string) {
 }
 
 func TestDismissalUnblocksApproval(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
@@ -79,6 +80,7 @@ func TestDismissalUnblocksApproval(t *testing.T) {
 }
 
 func TestSuggestionDismissalDoesNotCoverBlocking(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
@@ -105,6 +107,7 @@ func TestSuggestionDismissalDoesNotCoverBlocking(t *testing.T) {
 // leaves the comment as the review renders: findings in place, nothing
 // dismissed, the draft note before the findings block.
 func TestNoDismissalsKeepsOriginalComment(t *testing.T) {
+	t.Parallel()
 	for name, withUnrelated := range map[string]bool{"none": false, "unrelated": true} {
 		t.Run(name, func(t *testing.T) {
 			env := newTestEnv(t)
@@ -143,6 +146,7 @@ func TestNoDismissalsKeepsOriginalComment(t *testing.T) {
 
 // A restored finding blocks again: the head's approval is withdrawn.
 func TestRedecideWithdrawsApproval(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
@@ -180,6 +184,7 @@ func TestRedecideWithdrawsApproval(t *testing.T) {
 // A review that was never approved, or approved at another head, has nothing
 // to withdraw.
 func TestRedecideWithoutApprovalForThisHeadWithdrawsNothing(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
@@ -213,6 +218,7 @@ func pending(t *testing.T, env *testEnv) []store.Approval {
 // are out, the approval stays recorded as owed, and the approval sweep takes
 // it off once the approve bot can.
 func TestWithdrawalFailureIsRetriedBySweep(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
@@ -272,6 +278,7 @@ func TestWithdrawalFailureIsRetriedBySweep(t *testing.T) {
 // without a call, at publish time and by the sweep. A closed one could be
 // reopened with the approval in place, so it is withdrawn as an open one is.
 func TestWithdrawalOfMergedOrGoneClearsRecord(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"merged", "gone"} {
 		setState := func(env *testEnv, head string) {
 			if state == "gone" {
@@ -336,6 +343,7 @@ func TestWithdrawalOfMergedOrGoneClearsRecord(t *testing.T) {
 }
 
 func TestWithdrawalOfClosedChangeStillUnapproves(t *testing.T) {
+	t.Parallel()
 	closed := func(env *testEnv, head string) {
 		mr := openMR(1, head)
 		mr.State = "closed"
@@ -400,6 +408,7 @@ func TestWithdrawalOfClosedChangeStillUnapproves(t *testing.T) {
 // The change turned into a draft between the draft check and the approval:
 // nothing is approved, and an approval of this head from before is withdrawn.
 func TestHeldDraftWithdrawsExistingApproval(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	// With inline findings on, the publish reads the change once before the
 	// draft check (to post threads); this test is about the two reads of the
@@ -436,6 +445,7 @@ func TestHeldDraftWithdrawsExistingApproval(t *testing.T) {
 }
 
 func TestFailedSkillNotUnblockedByDismissal(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	failed := skillWithFinding(t, "failed", "blocking")

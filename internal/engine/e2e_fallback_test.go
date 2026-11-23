@@ -71,6 +71,7 @@ func wantFellBack(t *testing.T, env *testEnv, id, class string) {
 // Entry 1 out of quota: the run falls back, the next attempt runs entry 2,
 // and its comment says it was reviewed with a backup.
 func TestE2EFallbackQuota(t *testing.T) {
+	t.Parallel()
 	e, _ := newFallbackE2E(t, "team-a", "team-b")
 	env := e.env
 	head := sha('a')
@@ -98,6 +99,7 @@ func TestE2EFallbackQuota(t *testing.T) {
 
 // A rejected key falls back the same way, and its mark has no end.
 func TestE2EFallbackAuth(t *testing.T) {
+	t.Parallel()
 	e, refs := newFallbackE2E(t, "team-a", "team-b")
 	env := e.env
 	head := sha('a')
@@ -119,6 +121,7 @@ func TestE2EFallbackAuth(t *testing.T) {
 // A plain 429 is no fallback: the review fails as today, and no second Job
 // starts.
 func TestE2ENoFallbackPlain429(t *testing.T) {
+	t.Parallel()
 	e, refs := newFallbackE2E(t, "team-a", "team-b")
 	env := e.env
 	head := sha('a')
@@ -142,6 +145,7 @@ func TestE2ENoFallbackPlain429(t *testing.T) {
 // Every entry out of quota: the review fails with each entry's reason, never
 // passes, and approves nothing.
 func TestE2EAllExhaustedFails(t *testing.T) {
+	t.Parallel()
 	e, _ := newFallbackE2E(t, "team-a", "team-b")
 	env := e.env
 	head := sha('a')
@@ -185,6 +189,7 @@ func TestE2EAllExhaustedFails(t *testing.T) {
 // A dropped attempt posts nothing but the shared status: no comment, no
 // thread, no approval, even with a blocking finding in its result.
 func TestE2EDroppedAttemptPostsOnlyStatus(t *testing.T) {
+	t.Parallel()
 	e, _ := newFallbackE2E(t, "team-a", "team-b")
 	env := e.env
 	head := sha('a')
@@ -208,6 +213,7 @@ func TestE2EDroppedAttemptPostsOnlyStatus(t *testing.T) {
 // Each entry is tried once: 3 entries out of quota are 3 Jobs, on 3 keys,
 // then the review fails.
 func TestE2EEachEntryOnce(t *testing.T) {
+	t.Parallel()
 	e, _ := newFallbackE2E(t, "team-a", "team-b", "team-c")
 	env := e.env
 	head := sha('a')
@@ -231,6 +237,7 @@ func TestE2EEachEntryOnce(t *testing.T) {
 // A dropped attempt's tokens count: in Usage, and in the repository quota the
 // next attempt is checked against.
 func TestE2EDroppedTokensCount(t *testing.T) {
+	t.Parallel()
 	e, _ := newFallbackE2E(t, "team-a", "team-b")
 	env := e.env
 	env.SetNow(novemberMid)
@@ -258,6 +265,7 @@ func TestE2EDroppedTokensCount(t *testing.T) {
 // The chain is read again for each attempt: an entry removed after the first
 // is not run, the next one is.
 func TestE2EChainEditBetweenAttempts(t *testing.T) {
+	t.Parallel()
 	e, refs := newFallbackE2E(t, "team-a", "team-b", "team-c")
 	env := e.env
 	head := sha('a')
@@ -279,6 +287,7 @@ func TestE2EChainEditBetweenAttempts(t *testing.T) {
 // A re-run after a fallback is a new review: it starts at position 1 (here
 // the mark is cleared, so entry 1 runs).
 func TestE2ERerunStartsAtOne(t *testing.T) {
+	t.Parallel()
 	e, refs := newFallbackE2E(t, "team-a", "team-b")
 	env := e.env
 	head := sha('a')
@@ -306,6 +315,7 @@ func TestE2ERerunStartsAtOne(t *testing.T) {
 // nothing more is posted for the old head, and the new head's review starts
 // at position 1.
 func TestFallbackThenPush(t *testing.T) {
+	t.Parallel()
 	e, refs := newFallbackE2E(t, "team-a", "team-b")
 	env := e.env
 	headA, headB := sha('a'), sha('c')
@@ -348,6 +358,7 @@ func TestFallbackThenPush(t *testing.T) {
 
 // On GitHub the attempts share one Check Run: one create, then updates only.
 func TestE2EGitHubOneCheckRun(t *testing.T) {
+	t.Parallel()
 	e := newGitHubE2E(t)
 	env, gh := e.env, e.gh
 	env.Engine.Config.LLM = config.LLM{}

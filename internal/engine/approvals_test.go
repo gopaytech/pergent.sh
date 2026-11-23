@@ -61,6 +61,7 @@ func liveRun(t *testing.T, env *testEnv, iid int64, head, target string) store.R
 // GitLab doesn't retry a failed webhook delivery: a push pergent.sh never
 // heard of must still withdraw the bot's approval and get a review.
 func TestSweepMissedPush(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
 	env.GitLab.SetMR(openMR(1, sha('c')))
@@ -88,6 +89,7 @@ func TestSweepMissedPush(t *testing.T) {
 // A retarget pergent.sh never heard of withdraws the approval too, and the
 // head is reviewed against the new target.
 func TestSweepMissedRetarget(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
 	mr := openMR(1, sha('a'))
@@ -107,6 +109,7 @@ func TestSweepMissedRetarget(t *testing.T) {
 }
 
 func TestSweepMergedMRClearsWithoutWriting(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
 	mr := openMR(1, sha('c'))
@@ -129,6 +132,7 @@ func TestSweepMergedMRClearsWithoutWriting(t *testing.T) {
 // A closed MR can be reopened, so its approval is withdrawn before the record
 // goes.
 func TestSweepClosedMRUnapproves(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
 	mr := openMR(1, sha('a'))
@@ -147,6 +151,7 @@ func TestSweepClosedMRUnapproves(t *testing.T) {
 }
 
 func TestSweepCurrentApprovalKept(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
 	env.GitLab.SetMR(openMR(1, sha('a')))
@@ -163,6 +168,7 @@ func TestSweepCurrentApprovalKept(t *testing.T) {
 
 // A repository switched off still loses its stale approval, but gets no run.
 func TestSweepUnconfiguredRepositoryNoRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
 	env.GitLab.SetMR(openMR(1, sha('c')))
@@ -185,6 +191,7 @@ func TestSweepUnconfiguredRepositoryNoRun(t *testing.T) {
 // One merge request's trouble is logged and skipped; the others are swept,
 // and the failed one is tried again next time.
 func TestSweepErrorsAreSkipped(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
 	approved(t, env, 2, sha('a'))
@@ -215,6 +222,7 @@ func TestSweepErrorsAreSkipped(t *testing.T) {
 
 // Without bots for the instance, the approval is left alone, quietly.
 func TestSweepUnknownInstanceQuiet(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
 	env.Engine.Platforms = syncmap.New(map[string]Platform{})
@@ -232,6 +240,7 @@ func TestSweepUnknownInstanceQuiet(t *testing.T) {
 // A retarget the webhook did report gets its own run, and the approval of
 // the old target is withdrawn by the cleanup pass.
 func TestRetargetWithdrawsApproval(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
 	if _, created, err := env.Store.EnqueueRun(env.ctx, env.MRKey(1), testProjectPath, sha('a'), "develop"); err != nil || !created {
@@ -252,6 +261,7 @@ func TestRetargetWithdrawsApproval(t *testing.T) {
 
 // The approval records the target the run was reviewed against.
 func TestPublishRecordsApprovedTarget(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -284,6 +294,7 @@ func setApprove(t *testing.T, env *testEnv, instance, project string, approve *b
 // stands: the next cleanup pass withdraws it (GitLab unapproves), the record
 // is cleared, and the next clean review is published without an approval.
 func TestApprovalOffWithdrawsApproval(t *testing.T) {
+	t.Parallel()
 	off := false
 	for _, tc := range []struct {
 		name   string
@@ -351,6 +362,7 @@ func TestApprovalOffWithdrawsApproval(t *testing.T) {
 // A clean review published after its repository was switched off is not
 // approved: it is posted like a review with approval turned off.
 func TestPublishAfterSwitchOffIsNotApproved(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -372,6 +384,7 @@ func TestPublishAfterSwitchOffIsNotApproved(t *testing.T) {
 
 // The same on GitHub: the approve App's approval is dismissed.
 func TestApprovalOffWithdrawsApprovalGitHub(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	// acme/gadgets is the dashboard's, not the config's.
@@ -431,6 +444,7 @@ func TestApprovalOffWithdrawsApprovalGitHub(t *testing.T) {
 // Approval off for a repository leaves the approvals of others alone, and an
 // approval the bot can't withdraw waits out the unapprove backoff.
 func TestApprovalOffOnlyItsRepositoryWithBackoff(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	ghApproved(t, env, 3, sha('a'))
@@ -469,6 +483,7 @@ func TestApprovalOffOnlyItsRepositoryWithBackoff(t *testing.T) {
 // only forgotten: nothing is written to it. One on a closed merge request,
 // which could be reopened, is withdrawn as on an open one.
 func TestApprovalOffMergedOnlyClears(t *testing.T) {
+	t.Parallel()
 	off := false
 	for _, tc := range []struct {
 		name     string

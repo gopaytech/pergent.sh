@@ -124,6 +124,7 @@ func (e *dashE2E) addLab(t *testing.T, ops dashUser) {
 // platform and then finishes the removal, so the registry has no trace of it,
 // its secrets are gone and its webhooks are unknown.
 func TestRemoveInstanceWithQueuedRuns(t *testing.T) {
+	t.Parallel()
 	e, conn := newOperatorE2E(t)
 	env := e.env
 	gl := env.GitLab
@@ -242,6 +243,7 @@ func TestRemoveInstanceWithQueuedRuns(t *testing.T) {
 // next dispatch: the Job's Secret holds the new key, its env the new model.
 // Until then nothing is dispatched.
 func TestLLMEditable(t *testing.T) {
+	t.Parallel()
 	e, _ := newOperatorE2E(t)
 	env := e.env
 	env.Engine.Config.LLM = config.LLM{} // the LLM is the dashboard's

@@ -517,6 +517,7 @@ func (e *cmdE2E) adminAlice(t *testing.T) dashUser {
 // the platform: the thread says which finding, a reason is needed for a
 // blocking one, and a refusal is answered in the thread.
 func TestEndToEndDismissFromTheThread(t *testing.T) {
+	t.Parallel()
 	e := newCommandsE2E(t)
 	env := e.env
 	gl := env.GitLab
@@ -578,6 +579,7 @@ func TestEndToEndDismissFromTheThread(t *testing.T) {
 // Note Hook to the platform and the audit log, and the author, who has only
 // read access, is let in.
 func TestEndToEndCommandGate(t *testing.T) {
+	t.Parallel()
 	e := newCommandsE2E(t)
 	env := e.env
 	gl := env.GitLab
