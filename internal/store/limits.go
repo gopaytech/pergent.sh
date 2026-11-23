@@ -81,7 +81,8 @@ type EntryTokens struct {
 // Any other run counts its run_usage rows on the run's entry. A run with no
 // entry (before chains) counts on none, and so do Job P's tokens when its
 // result split none per model. A pinned Review API review counts on its
-// entry, which its run records.
+// entry, which its run records. Multi review (not live yet) is not counted
+// per entry: run_usage_by_model has no owner team and is not read here.
 const entryTokensSQL = `SELECT source, entry_id, COALESCE(owner_team_id, 0), sum(tokens)::bigint FROM (
 		SELECT COALESCE(r.model_source, 'global') AS source, r.model_entry_id AS entry_id, u.owner_team_id,
 			u.tokens_in + u.tokens_out AS tokens
