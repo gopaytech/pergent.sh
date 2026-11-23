@@ -18,15 +18,16 @@ A Job **cannot** see: the review bot token, the approve bot token, the GitHub Ap
 
 Each Job's Secret and inputs ConfigMap are owned by the Job, so deleting the Job removes them. Finished Jobs are removed after an hour.
 
-**A review panel's Jobs** ([Review panel](review-panel.md)) are locked down as a review Job is, with fewer keys:
+**A multi review's Jobs** ([Multi review](multi-review.md)) are locked down as a review Job is, with fewer keys:
 
 | Job | Keys in its Secret |
 | --- | --- |
-| Member A, member B | One: the key of its own entry. |
-| Job P (merge) | At most 2: the key of each judge entry. None when it runs with no judge (the token quota stopped the cross-check). |
+| Reviewer 1 to 5 | One: the key of its own entry. |
+| Judge | One: the key of the judge's entry. None when it runs with `--no-judge`. |
 
-- Members hold no key of the other member and no token that can write. They post only their result, with their own one-time token.
-- Job P has an extra init container, `panel-inputs` (pergent.sh's own image). It gets only the run's result token, and downloads both members' results to a volume outside the checkout.
+- A reviewer holds no key of another reviewer and no token that can write. It posts only its result, with its own one-time token.
+- The judge Job has an extra init container, `reviewers` (pergent.sh's own image). It gets only the run's result token, and downloads each reviewer's result to a volume outside the checkout.
+- The judge Job also gets the merge request's dismissals, and only the fingerprint and severity of each. It gets no dismissal reason and no name.
 
 **A skill fetch Job** reads the skills of a public `https` URL an admin gives in the dashboard, so the pergent.sh pod never fetches an address an admin typed. It runs in the Jobs namespace under the same NetworkPolicy, for at most 2 minutes (its image pull and its limits, 512Mi of memory for the clone and 1Gi of scratch space, count against them), as user 65532 with a read-only root filesystem and no service account token. Its `clone` container (the `jobs.image`) gets no token of any kind: it fetches the one branch or tag at depth 1 with hooks off and https only. Its `send` container (pergent.sh's own image, which the chart passes as `PERGENT_SH_IMAGE`) reads the skills of the folder without following any symbolic link (one where a skill would be is listed as a problem) and posts them to `<callback_url>/skill-fetches/<id>/result` with a one-time token, its only secret. pergent.sh then drops the text of any skill holding a secret it holds or over 128 KiB. A URL outside `jobEgress.cidrs` can't be reached; the fetch then fails with `could not fetch <url> at <ref>; the URL, branch or tag may be wrong, or outside jobEgress.cidrs`.
 

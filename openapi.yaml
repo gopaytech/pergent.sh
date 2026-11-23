@@ -589,7 +589,8 @@ paths:
         unknown run) is the same 401, so the answer never shows whether a
         run exists. 404 goes only to the run's own judge Job, for a reviewer
         with no result or an `n` that is not 1 to 5: the judge reads 404 as
-        "no result", so an auth failure is never a 404.
+        "no result", so an auth failure is never a 404. The judge Job fails on
+        every other answer, so a lost reviewer never becomes a pass.
       x-pergent-access: none
       security:
         - runResultToken: []
@@ -3122,7 +3123,7 @@ paths:
         As adding one. The entry leaves every chain that names it in the same
         step (`usedIn` lists them first), and its mark goes. Audited as
         `team_model_removed`, with the chains it left, then (`removed from
-        chain B:`) the chain B chains it left, when there are any.
+        reviewer chains:`) the reviewer chains it left, when there are any.
       x-pergent-access: session
       security:
         - sessionCookie: []
