@@ -25,7 +25,7 @@
 | 7 | The admin's 409 is "shown beside the button" | It already is: **Start review** (`RepositoryDetail.tsx`) and **Re-run** (`ReviewDetail.tsx`) put the server's text in an `ErrorBox` | No code. Task 4 adds a test for each that pins the team-limit text. Those 2 tests pass at once |
 | 8 | Bars "amber from 80% and red when used up, as for the quotas" | `QuotaLine` (`web/src/quota.tsx`) draws exactly that, and with no limit shows the usage with no bar | Every bar here is a `QuotaLine` |
 
-## Open questions (each has a default the plan uses)
+## Decided questions (the owner accepted all defaults on 2026-11-23)
 
 1. **The server change of spec note 3.** The brief asked for web only unless a task truly needs a server change. Without it the global and team chain editors never show the new tags. Default: do Task 3 (one helper and 2 calls in `internal/dashboard`, one DB test). If the owner wants web only, drop Task 3 and the chain sentence in Task 8; the repository chain editors still get the tags.
 2. **Who sees a limit tag in a chain.** A team's chain is read by every member, viewers too, and a repository's chain by everyone who sees the repository (PR 1 already sends the tags there). The tags show a state, never a number. Default: every reader of the chain sees the tags; only the **Model limits** card, which has the numbers, is for maintainers and admins.
