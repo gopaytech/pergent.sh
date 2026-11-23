@@ -480,7 +480,11 @@ func TestFateAuthorIsBot(t *testing.T) {
 		{name: "GitHub person: IsBot is false", change: forge.Change{AuthorID: 5}, wantCalls: 1},
 		{name: "GitLab bot", change: forge.Change{AuthorID: 5}, forge: botForge{bot: true}, want: true, wantCalls: 1},
 		{name: "GitLab person", change: forge.Change{AuthorID: 5}, wantCalls: 1},
-		{name: "a request error: a person's", change: forge.Change{AuthorID: 5}, forge: botForge{err: boom}, untold: true, wantCalls: 1},
+		// A failed request is no answer: the job is tried again, and the
+		// change is never counted as a person's.
+		{name: "a request error: tried again", change: forge.Change{AuthorID: 5}, forge: botForge{err: boom}, wantErr: true, wantCalls: 1},
+		// GitLab has no such user: asking again can't tell either.
+		{name: "no such user: left out", change: forge.Change{AuthorID: 5}, forge: botForge{err: forge.ErrNotFound}, want: true, untold: true, wantCalls: 1},
 		// The platform answered, and the answer is that it can't tell: left
 		// out as a bot's, never a person's.
 		{name: "can't say whether a bot: left out", change: forge.Change{AuthorID: 5}, forge: botForge{err: forge.ErrBotUnknown}, want: true, untold: true, wantCalls: 1},
@@ -897,10 +901,10 @@ func TestWorkFatesBotAuthor(t *testing.T) {
 			env.Engine.Platforms.Set(testInstance, Platform{Kind: config.PlatformGitHub, Forge: &fakeChangeForge{
 				change: forge.Change{Number: 1, State: forge.StateMerged, AuthorID: 5}}})
 		}, false},
-		// When GitLab can't be asked, the change counts as a person's.
-		{"unknown", func(env *testEnv) {
-			env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusForbidden, `{"message":"403 Forbidden"}`)
-		}, false},
+		// GitLab has no such user: left out, never a person's.
+		{"no such user", func(env *testEnv) {
+			env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusNotFound, `{"message":"404 User Not Found"}`)
+		}, true},
 		// When GitLab answers but the answer can't tell a bot (no bot
 		// attribute, a person's username), the change is left out.
 		{"can't say whether a bot", func(env *testEnv) {
@@ -924,6 +928,27 @@ func TestWorkFatesBotAuthor(t *testing.T) {
 				t.Errorf("fates = %+v; want by_bot %v\n%s", got, tc.byBot, env.Logs())
 			}
 		})
+	}
+}
+
+// When GitLab can't be asked whether the author is a bot, the change is not
+// counted as a person's: the job is tried again, and nothing is stored.
+func TestWorkFatesBotRequestFailsIsTriedAgain(t *testing.T) {
+	env := newTestEnv(t)
+	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
+	serveChange(env, 1, sha('a'), "merged", 55)
+	env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusForbidden, `{"message":"403 Forbidden"}`)
+	requestFates(t, env, 1, true)
+	start := env.Now()
+
+	workFates(t, env)
+
+	j := fateJobOf(t, env, 1)
+	if !j.Found || j.Finished || j.Attempts != 1 || j.NotBefore == nil || !j.NotBefore.Equal(start.Add(5*time.Minute)) {
+		t.Errorf("job = %+v; want unfinished, 1 attempt, held until %s\n%s", j, start.Add(5*time.Minute), env.Logs())
+	}
+	if got := storedFates(t, env, 1); len(got) != 0 {
+		t.Errorf("fates = %+v; want none", got)
 	}
 }
 
