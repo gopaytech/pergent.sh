@@ -2,7 +2,6 @@ package engine
 
 import (
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -62,10 +61,10 @@ func legacyMembers(t *testing.T, env *testEnv, root string) []legacyMember {
 	return out
 }
 
-// legacyConn opens a connection in the test's schema.
+// legacyConn opens a connection to the test's own database, in its schema.
 func legacyConn(t *testing.T, env *testEnv) *pgx.Conn {
 	t.Helper()
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}
