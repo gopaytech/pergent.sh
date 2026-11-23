@@ -46,6 +46,7 @@ func fates(skill, hash, severity, fate string, count int) []store.FindingFate {
 
 // The tab lists one row a skill and severity, with Addressed worked out.
 func TestSkillResultsTab(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	at := e.clock.now().Add(-24 * time.Hour)
@@ -66,6 +67,7 @@ func TestSkillResultsTab(t *testing.T) {
 // Ten findings are enough for a percentage; the window is 30 days unless the
 // request says 90.
 func TestSkillResultsAddressedFromTenFindings(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	e.decidedFates(buttonProject, 1, true, e.clock.now().Add(-48*time.Hour), append(fates("style", "h1", "suggestion", "fixed", 4),
@@ -84,6 +86,7 @@ func TestSkillResultsAddressedFromTenFindings(t *testing.T) {
 }
 
 func TestSkillResultsSortsLowestFirst(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	at := e.clock.now().Add(-time.Hour)
@@ -106,6 +109,7 @@ func TestSkillResultsSortsLowestFirst(t *testing.T) {
 }
 
 func TestSkillResultsBadDays(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInRole(store.RoleViewer)
 	for _, q := range []string{"?days=7", "?days=0", "?days=x", "?days=", "?days=365"} {
@@ -119,6 +123,7 @@ func TestSkillResultsBadDays(t *testing.T) {
 // A repository the user can't see is not found, and one with nothing decided
 // has an empty list.
 func TestSkillResultsNoAccess(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/payments"), Path: "acme/payments"}); err != nil {
 		t.Fatal(err)
@@ -183,6 +188,7 @@ func (e *env) tokensFixture() {
 
 // An admin reads each skill's tokens on the changes the tab counts.
 func TestSkillTokensOnDecidedChanges(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.tokensFixture()
 	c := e.operator()
@@ -202,6 +208,7 @@ func TestSkillTokensOnDecidedChanges(t *testing.T) {
 // The tab itself keeps its rows, and a repository with nothing decided has an
 // empty list.
 func TestSkillTokensEmpty(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	rec := e.get(c, tokensURL(buttonProject, ""))
@@ -213,6 +220,7 @@ func TestSkillTokensEmpty(t *testing.T) {
 
 // Anyone but an admin gets the 404 of a repository that is not there.
 func TestSkillTokensAreForAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.tokensFixture()
 	viewer := e.signInRole(store.RoleViewer)
@@ -230,6 +238,7 @@ func TestSkillTokensAreForAdmins(t *testing.T) {
 }
 
 func TestSkillTokensBadDays(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	for _, q := range []string{"?days=7", "?days=0", "?days=x", "?days=", "?days=365"} {
@@ -246,6 +255,7 @@ func TestSkillTokensBadDays(t *testing.T) {
 // A path that was reused by another project shows the project the session
 // sees, and the same project ID on another instance is another project.
 func TestSkillResultsProjectID(t *testing.T) {
+	t.Parallel()
 	const oldID = 999
 	setup := func() *env {
 		e := newEnv(t, nil)

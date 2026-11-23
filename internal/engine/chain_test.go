@@ -110,6 +110,7 @@ func reportedWith(t *testing.T, env *testEnv, iid int64, head string, ref store.
 
 // A repository's own chain wins over its owner team's.
 func TestDispatchUsesCustomChain(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team := teamOwning(t, env, "Payments")
 	teamA := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -123,6 +124,7 @@ func TestDispatchUsesCustomChain(t *testing.T) {
 
 // A repository with no chain of its own uses its owner team's.
 func TestDispatchUsesOwnerTeamChain(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team := teamOwning(t, env, "Payments")
 	ref := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -138,6 +140,7 @@ func TestDispatchUsesOwnerTeamChain(t *testing.T) {
 // An owner team with no chain: its repositories use the global chain, here
 // the config's entry, as today.
 func TestDispatchGlobalWhenOwnerHasNoChain(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team := teamOwning(t, env, "Payments")
 	addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -149,6 +152,7 @@ func TestDispatchGlobalWhenOwnerHasNoChain(t *testing.T) {
 // The entry is on the run before the Job starts: source, ID, name, team,
 // position and why position 1 was passed over.
 func TestDispatchRecordsEntry(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team := teamOwning(t, env, "Payments")
 	first := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -170,6 +174,7 @@ func TestDispatchRecordsEntry(t *testing.T) {
 // Every entry skipped: the review fails with each entry's reason, and no Job
 // starts.
 func TestDispatchExhaustedFails(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team := teamOwning(t, env, "Payments")
 	first := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -197,6 +202,7 @@ func TestDispatchExhaustedFails(t *testing.T) {
 
 // A chain with nothing in it waits, as an empty model list does today.
 func TestDispatchEmptyChainWaits(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.LLM = config.LLM{}
 	team := teamOwning(t, env, "Payments")
@@ -222,6 +228,7 @@ func TestDispatchEmptyChainWaits(t *testing.T) {
 // The instance quota counts global keys only: a used-up instance skips the
 // global entry and runs the team's.
 func TestDispatchInstanceQuotaRunsTeamEntry(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 0, 0)
 	instQuota := int64(500)
 	env.Engine.Config.GitLab[0].MonthlyTokenQuota = &instQuota
@@ -250,6 +257,7 @@ func TestDispatchInstanceQuotaRunsTeamEntry(t *testing.T) {
 // The repository quota counts every token: it holds the run whatever the
 // chain holds.
 func TestDispatchRepoQuotaHoldsAll(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 100, 100)
 	team := teamOwning(t, env, "Payments")
 	own := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -265,6 +273,7 @@ func TestDispatchRepoQuotaHoldsAll(t *testing.T) {
 // The Job gets the key of the entry it runs and no other: not in its Secret,
 // not anywhere in its spec.
 func TestDispatchOnlyTheEntryKeyInSecret(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team := teamOwning(t, env, "Payments")
 	first := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -292,6 +301,7 @@ func TestDispatchOnlyTheEntryKeyInSecret(t *testing.T) {
 // An attempt is the same review as its first run: the author was checked
 // then, so the trust check does not run again.
 func TestAttemptSkipsTrustCheck(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team := teamOwning(t, env, "Payments")
 	first := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -316,6 +326,7 @@ func TestAttemptSkipsTrustCheck(t *testing.T) {
 // An attempt's running status says it is a backup: its number in the review
 // and the chain's length.
 func TestAttemptRunningDescription(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team := teamOwning(t, env, "Payments")
 	a := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -345,6 +356,7 @@ func TestAttemptRunningDescription(t *testing.T) {
 
 // A client that names a model runs on it, as today, even when it is marked.
 func TestAPIReviewPinnedModelUnchanged(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	pinned := globalRef(t, env, "gpt-pinned", "key-pinned")
@@ -361,6 +373,7 @@ func TestAPIReviewPinnedModelUnchanged(t *testing.T) {
 // A client with no model of its own uses the global chain, and a marked entry
 // is skipped when its review starts.
 func TestAPIReviewSkipsMarkedGlobal(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	env.Engine.Config.LLM = config.LLM{}
@@ -383,6 +396,7 @@ func TestAPIReviewSkipsMarkedGlobal(t *testing.T) {
 // of the upgrade is an admin's. The same chain saved by the team's maintainer
 // skips it.
 func TestDispatchAdminSavedRepoChainKeepsGlobal(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team := teamOwning(t, env, "Payments")
 	global := globalRef(t, env, "gpt-global", "key-global")
@@ -406,6 +420,7 @@ func TestDispatchAdminSavedRepoChainKeepsGlobal(t *testing.T) {
 // entry, not on the global one in front of it. With no team entry it goes
 // ahead on the global one, as a checked run did before chains.
 func TestCheckedRunUnderInstanceQuotaPrefersTeamEntry(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		teamEntry bool

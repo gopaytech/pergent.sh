@@ -149,6 +149,7 @@ func TestAdminChainPut(t *testing.T) {
 // it is unique ignoring case. Two entries of one model, told apart by name,
 // are allowed.
 func TestModelNameRequired(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	body := func(name any) map[string]any {
@@ -186,6 +187,7 @@ func TestModelNameRequired(t *testing.T) {
 }
 
 func TestTwoKeysSameModel(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	for _, name := range []string{"first key", "second key"} {
@@ -200,6 +202,7 @@ func TestTwoKeysSameModel(t *testing.T) {
 // A model chains name is removed all the same: the chains keep it, show it
 // as removed, and every view said where it was used.
 func TestRemoveModelInUseWarns(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	one := e.addModel("anthropic", "sonnet", "", llmKeyOne)
@@ -225,6 +228,7 @@ func TestRemoveModelInUseWarns(t *testing.T) {
 
 // Turning teams may use on or off is audited, once per change.
 func TestTeamsMayUseAudit(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	m := decode[ModelAdminView](t, e.sendJSON(c, "POST", modelsURL,
@@ -248,6 +252,7 @@ func TestTeamsMayUseAudit(t *testing.T) {
 
 // An admin sees and clears a global entry's mark; it is audited.
 func TestAdminClearMark(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	m := e.addModel("openai", "gpt-x", "", llmKeyOne)
@@ -288,6 +293,7 @@ func TestAdminRoutesStay404(t *testing.T) {
 // No response, log line or audit entry of the models and chain API holds a
 // key.
 func TestNoKeyInAnyModelResponse(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	m := decode[ModelAdminView](t, e.sendJSON(c, "POST", modelsURL,
@@ -350,6 +356,7 @@ func (te *teamsEnv) sharedAndPrivate() (shared, private store.LLMModel) {
 // A repository that inherits shows the chain in effect and where it comes
 // from: its owner team's, else the global one. A viewer may not edit it.
 func TestRepoChainInheritShowsSource(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	te.addModel("openai", "gpt-default", "", llmKeyOne)
 	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
@@ -377,6 +384,7 @@ func TestRepoChainInheritShowsSource(t *testing.T) {
 // the team's entries and the global ones teams may use; the chain is
 // team-saved and audited on the repository.
 func TestRepoChainCustomByOwnerMaintainer(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	shared, private := te.sharedAndPrivate()
 	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
@@ -418,6 +426,7 @@ func TestRepoChainCustomByOwnerMaintainer(t *testing.T) {
 // A repository with no owner team: only an admin gives it a chain, from
 // global entries only.
 func TestRepoChainNoOwnerAdminOnlyGlobal(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	_, private := te.sharedAndPrivate()
 	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
@@ -444,6 +453,7 @@ func TestRepoChainNoOwnerAdminOnlyGlobal(t *testing.T) {
 // and a viewer of the owner team, get 403 on a write; someone who doesn't
 // see the repository gets 404.
 func TestRepoChainOtherTeam403(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
 	url := repoChainURL("acme/payments")
@@ -465,6 +475,7 @@ func TestRepoChainOtherTeam403(t *testing.T) {
 
 // Reset drops the repository's own chain: it inherits again.
 func TestRepoChainReset(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
 	url := repoChainURL("acme/payments")
@@ -488,6 +499,7 @@ func TestRepoChainReset(t *testing.T) {
 // teams may not use ready on an owned repository; the owner team's
 // maintainer can't save it as it is, and a save of theirs is team-saved.
 func TestRepoChainAdminSavedKeepsGlobal(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	shared, private := te.sharedAndPrivate()
 	url := repoChainURL("acme/payments")
@@ -510,6 +522,7 @@ func TestRepoChainAdminSavedKeepsGlobal(t *testing.T) {
 
 // The model is the chain's now: the settings body refuses the key.
 func TestSettingsModelKeyRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	m := e.addModel("openai", "gpt-x", "", llmKeyOne)
@@ -532,6 +545,7 @@ func TestSettingsModelKeyRefused(t *testing.T) {
 // The review page names the entry a run used, its place in the chain, and
 // every attempt of the review with why it fell back.
 func TestRunDetailAttempts(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.userOnMain(false, "acme/widgets")
 	now := e.clock.now()
@@ -565,6 +579,7 @@ func TestRunDetailAttempts(t *testing.T) {
 // The review list and the overview's recent reviews say how many attempts the
 // newest review of a change took: 2 for one that fell back, 1 otherwise.
 func TestReviewsListCountsAttempts(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.userOnMain(false, "acme/widgets")
 	now := e.clock.now()
@@ -594,6 +609,7 @@ func TestReviewsListCountsAttempts(t *testing.T) {
 // the chain decides what reviews try first; a full chain without the entry
 // is a 409 that says so.
 func TestSetDefaultMovesAdminChain(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	var ids []string

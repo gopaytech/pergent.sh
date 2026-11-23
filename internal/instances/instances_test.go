@@ -152,6 +152,7 @@ func TestRegistryMergesConfigFirst(t *testing.T) {
 // A config instance and a browser instance of one name stop startup, naming
 // the instance and both places.
 func TestRegistryClash(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	box := newBox(t, 1)
 	addRow(t, st, box, store.InstanceRow{Name: "gh", Platform: config.PlatformGitLab, URL: "https://x.example.com"}, nil)
@@ -250,6 +251,7 @@ func TestSecretsOAuthOnlyWithDashboard(t *testing.T) {
 // A value sealed with another key can't be opened: it is reported by field
 // ("not set"), not as an error, and the others still come back.
 func TestSecretsUnopenable(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	other := newBox(t, 9)
 	box := newBox(t, 1)
@@ -363,6 +365,7 @@ func TestLLMFromConfigOrStore(t *testing.T) {
 
 // A stored key that can't be opened (another secret key) counts as not set.
 func TestLLMKeyUnopenable(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	other := newBox(t, 2)
 	addModel(t, st, "anthropic", "m", "", other.Seal([]byte("plain-llm-value-9")), time.Now())
@@ -539,6 +542,7 @@ func TestModelsListsConfigThenStore(t *testing.T) {
 // Every entry's key, and a key replaced since start, is remembered and
 // hidden by Redact.
 func TestLLMKeysCoverEveryEntry(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	box := newBox(t, 1)
 	a := addModel(t, st, "anthropic", "a", "", box.Seal([]byte("key-a-secret")), time.Now())
@@ -587,6 +591,7 @@ func TestRedactLongestKeyFirst(t *testing.T) {
 // An entry whose key is sealed under another secret key warns and is not
 // usable, while the entries before and after it still are.
 func TestUnopenableKeyIsNotUsable(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	box := newBox(t, 1)
 	good := addModel(t, st, "anthropic", "good", "", box.Seal([]byte("key-good")), time.Now())
@@ -695,6 +700,7 @@ func TestHeldSecretsConfigEnvOneByOne(t *testing.T) {
 // The check fails closed: a dashboard instance's secrets that can't be read
 // or opened are an error, never a shorter list.
 func TestHeldSecretsFailClosed(t *testing.T) {
+	t.Parallel()
 	t.Run("a secret that can't be opened", func(t *testing.T) {
 		st := newStore(t)
 		addRow(t, st, newBox(t, 1), store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, URL: "https://lab.example.com"},
@@ -859,6 +865,7 @@ func TestHeldSecretsHoldsTheSignInClientSecret(t *testing.T) {
 // [CI] The stored client secret is held; one that can't be opened fails the
 // check closed, and the error holds no secret.
 func TestHeldSecretsHoldsTheStoredSignInClientSecret(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	box := newBox(t, 1)
 	if err := st.PutSignInSettings(ctx, store.SignInSettings{Mode: store.SignInModeOIDC, Issuer: "https://idp.example.com",
@@ -969,6 +976,7 @@ func addTeamModel(t *testing.T, st *store.Store, team, name string, sealedKey []
 // A team's key is held like a global one: in LLMKeys, so Redact hides it,
 // and in HeldSecrets.
 func TestTeamKeysAreHeldAndRedacted(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	box := newBox(t, 1)
 	m := addTeamModel(t, st, "Payments", "team-gpt", box.Seal([]byte("team-key-secret")))
@@ -1003,6 +1011,7 @@ func TestTeamKeysAreHeldAndRedacted(t *testing.T) {
 // A team key that can't be opened leaves its entry in the list with no key,
 // and the log names the entry, never the key.
 func TestTeamKeyUnsealFails(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	m := addTeamModel(t, st, "Payments", "team-gpt", newBox(t, 2).Seal([]byte("team-key-unopened")))
 	r := New(testConfig(), st, newBox(t, 1))
@@ -1066,6 +1075,7 @@ func TestGlobalModelsOrder(t *testing.T) {
 
 // Stored entries follow the config's, with their names and teams may use.
 func TestGlobalModelsStoredAfterConfig(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	box := newBox(t, 1)
 	a := addModel(t, st, "openai", "a", "", box.Seal([]byte("key-a")), time.Now())

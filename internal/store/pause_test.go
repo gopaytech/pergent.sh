@@ -9,6 +9,7 @@ import (
 // A paused row is not "switched on": the safe reads skip it, the all-rows
 // reads return it with Enabled false, and its settings stay.
 func TestPausedDashboardRepo(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", Approve: ptrTo(false), CreatedBy: "alice"}); err != nil {
 		t.Fatal(err)
@@ -81,6 +82,7 @@ func TestPausedDashboardRepo(t *testing.T) {
 // Remove deletes the row and the team links to it, in any case, and leaves
 // whole-instance links and links to the same path on another instance.
 func TestRemoveDashboardRepo(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for _, p := range []string{"Acme/Widgets", "acme/gadgets"} {
 		if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: p}); err != nil {
@@ -140,6 +142,7 @@ func TestRemoveDashboardRepo(t *testing.T) {
 
 // The enabled column is NOT NULL and defaults to true.
 func TestDashboardReposEnabledColumn(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	var nullable, def string
 	if err := s.pool.QueryRow(ctx, `SELECT is_nullable, column_default FROM information_schema.columns
@@ -153,6 +156,7 @@ func TestDashboardReposEnabledColumn(t *testing.T) {
 
 // A paused repository's project row is not scanned; resumed, it is.
 func TestUnscannedProjectsSkipsPaused(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for _, p := range []Project{{Instance: "main", ProjectID: 1, Path: "acme/paused"}, {Instance: "cfg", ProjectID: 2, Path: "acme/config"}} {
 		if err := s.UpsertProject(ctx, p); err != nil {
@@ -181,6 +185,7 @@ func TestUnscannedProjectsSkipsPaused(t *testing.T) {
 // A paused repository still counts as using its skills, so a resume never
 // meets a missing one.
 func TestDeleteInUseByPausedRepo(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newSkill(t, s, "a", "x")
 	newModel(t, s, "anthropic", "sonnet", "", nil) // the first is the default

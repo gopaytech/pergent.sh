@@ -155,6 +155,7 @@ func item(t *testing.T, c *readiness.Checklist, key string) readiness.Item {
 // A repository never scanned has no latest scan and no checklist; Scan now
 // is offered to maintainers and admins only.
 func TestReadinessNotScanned(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		role    string
 		canScan bool
@@ -192,6 +193,7 @@ func TestReadinessNotScanned(t *testing.T) {
 // skills now; the live single_approval item makes approvals a warning.
 // "Couldn't check" stays unknown, never passed.
 func TestReadinessChecklist(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.withReadiness()
 	e.skill("go", "Review Go.")
@@ -252,6 +254,7 @@ func TestReadinessChecklist(t *testing.T) {
 // A failed scan still shows the settings the pod read; the file checks say
 // why they couldn't be read. A queued scan is the active one.
 func TestReadinessFailedScan(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.withReadiness()
 	e.dashboardRepo("main", "acme/gadgets", nil)
@@ -280,6 +283,7 @@ func TestReadinessFailedScan(t *testing.T) {
 // for the view and for Scan now, with nothing of the repository in it, and
 // nothing is queued.
 func TestReadinessHiddenRepo404(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := e.withReadiness()
 	e.dashboardRepo("main", "acme/hidden", nil)
@@ -321,6 +325,7 @@ func TestReadinessHiddenRepo404(t *testing.T) {
 
 // Scan now is for maintainers and admins, config repositories included.
 func TestScanNowRoles(t *testing.T) {
+	t.Parallel()
 	t.Run("viewer", func(t *testing.T) {
 		e := newEnv(t, nil)
 		f := e.withReadiness()
@@ -363,6 +368,7 @@ func TestScanNowRoles(t *testing.T) {
 // A repository switched off under the request, or scans being off, is the
 // generic 404; so is a dashboard with no engine for the scans.
 func TestScanNowNotOn(t *testing.T) {
+	t.Parallel()
 	for _, fail := range []error{readiness.ErrNotSwitchedOn, readiness.ErrScansOff, nil} {
 		name := "no engine"
 		if fail != nil {
@@ -392,6 +398,7 @@ func TestScanNowNotOn(t *testing.T) {
 // of the latest one it is 429 with the wait, rounded up to whole minutes in
 // the message.
 func TestScanNowTwice(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.withReadiness()
 	e.dashboardRepo("main", "acme/gadgets", nil)
@@ -437,6 +444,7 @@ func TestScanNowTwice(t *testing.T) {
 
 // Only an accepted Scan now is audited.
 func TestScanNowAudited(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.withReadiness()
 	e.dashboardRepo("main", "acme/gadgets", nil)
@@ -457,6 +465,7 @@ func TestScanNowAudited(t *testing.T) {
 
 // POST .../settings/reset still resets; any other POST suffix is 404.
 func TestResetStillWorks(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.withReadiness()
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.Approve = ptr(true) })
@@ -479,6 +488,7 @@ func TestResetStillWorks(t *testing.T) {
 // anything else doesn't. Saving the default list rechecks every repository
 // that follows it.
 func TestRecheckOnSettingsSave(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := e.withReadiness()
 	e.skill("go", "Review Go.")
@@ -533,6 +543,7 @@ func TestRecheckOnSettingsSave(t *testing.T) {
 // rechecks every repository ("*"): any of them may use it. A save that
 // changes nothing, or is refused, rechecks none.
 func TestRecheckOnSkillContentChange(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := e.withReadiness()
 	e.skill("go", "Review Go.")
@@ -572,6 +583,7 @@ func TestRecheckOnSkillContentChange(t *testing.T) {
 // Use these skills starts from today's list: the default list for a
 // repository that follows it, else the repository's own.
 func TestApplyBase(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.withReadiness()
 	e.skill("go", "Review Go.")

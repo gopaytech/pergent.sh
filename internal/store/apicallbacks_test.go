@@ -47,6 +47,7 @@ func dueFor(t *testing.T, s *Store, now time.Time) map[string]APICallback {
 // A review superseded by a request of its subject, and a finished one, each
 // get a callback, only when their client has a callback URL.
 func TestAPICallbackRowsMade(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newCallbackClient(t, s, "gateway")
 	none := newAPIClient(t, s, "quiet")
@@ -116,6 +117,7 @@ func TestAPICallbackRowsMade(t *testing.T) {
 // The URL and secrets are read when the callbacks are listed, so a change
 // since the review ended is what is used.
 func TestDueAPICallbacksReadClientNow(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newCallbackClient(t, s, "gateway")
 	old := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -140,6 +142,7 @@ func TestDueAPICallbacksReadClientNow(t *testing.T) {
 }
 
 func TestRecordAPICallbackAttempt(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newCallbackClient(t, s, "gateway")
 	id := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -195,6 +198,7 @@ func TestRecordAPICallbackAttempt(t *testing.T) {
 }
 
 func TestAPICallbackGivesUp(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newCallbackClient(t, s, "gateway")
 	id := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -216,6 +220,7 @@ func TestAPICallbackGivesUp(t *testing.T) {
 // A removed client takes its callbacks and their attempts with it, and its
 // callback_failing item; an attempt recorded after that is no error.
 func TestDeleteAPIClientDropsCallbacks(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newCallbackClient(t, s, "gateway")
 	id := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -259,6 +264,7 @@ func TestDeleteAPIClientDropsCallbacks(t *testing.T) {
 // Undelivered counts the callbacks of a client made since a time, not
 // delivered, with at least one failed attempt.
 func TestCountUndeliveredAPICallbacks(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newCallbackClient(t, s, "gateway")
 	other := newCallbackClient(t, s, "other")

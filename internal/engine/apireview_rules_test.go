@@ -16,6 +16,7 @@ import (
 // An API review has no repository: it gets the admin default rule sets and
 // Built-in rules switch, reads no rules file and records its hash.
 func TestAPIReviewRules(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	if err := env.Store.CreateRuleSet(env.ctx, "a", setAYAML, env.Now()); err != nil {
@@ -46,6 +47,7 @@ func TestAPIReviewRules(t *testing.T) {
 // With no admin default, an API review gets no built-in rules: they are
 // opt-in.
 func TestAPIReviewBuiltInRulesOffByDefault(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	id := a.ask(t, "route:1", twoFiles())
@@ -59,6 +61,7 @@ func TestAPIReviewBuiltInRulesOffByDefault(t *testing.T) {
 }
 
 func TestAPIReviewMissingDefaultSet(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	if err := env.Store.CreateRuleSet(env.ctx, "gone", setAYAML, env.Now()); err != nil {

@@ -212,6 +212,7 @@ func TestResolverConfigKeys(t *testing.T) {
 }
 
 func TestResolverConfigWins(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "ACME/widgets", Approve: ptr(false), CreatedBy: "alice"})
 	cfg := testConfig()
@@ -233,6 +234,7 @@ func TestResolverConfigWins(t *testing.T) {
 }
 
 func TestResolverDefaultsAndOverrides(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	if _, err := st.CreateLibrarySkill(ctx, store.NewSkill{Name: "security", Content: "x"}); err != nil {
 		t.Fatal(err)
@@ -305,6 +307,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 }
 
 func TestResolverBadDashboardMemoryFallsBack(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	cfg := testConfig()
 	cfg.Jobs.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
@@ -349,6 +352,7 @@ func TestResolverWithoutRegistry(t *testing.T) {
 // the dashboard, under what a repository sets itself, and to no repository of
 // the config.
 func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	cfg := testConfig()
 	cfg.Jobs.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
@@ -410,6 +414,7 @@ func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
 // A stored default that can't be used (a memory limit below the Job's
 // request) is ignored: the built-in one applies.
 func TestBrowserDefaultsBadValuesFallBack(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	cfg := testConfig()
 	cfg.Jobs.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
@@ -507,6 +512,7 @@ func TestResolverIgnoresUnusableMaxTurns(t *testing.T) {
 
 // A config repository ignores the step limit stored as the dashboard's default.
 func TestResolverConfigIgnoresStoredMaxTurns(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	cfg := testConfig()
 	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
@@ -813,6 +819,7 @@ func TestResolveLinks(t *testing.T) {
 // A repository's trusted-authors mode is its own when set, else its
 // instance's; the allowlist is the repository's.
 func TestTrustedAuthorsOnlyResolution(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	alice := []store.TrustedAuthor{{ID: 5, Username: "alice"}}
 	for _, instMode := range []string{"", config.TrustOn, config.TrustOff} {
@@ -863,6 +870,7 @@ func TestTrustedAuthorsOnlyResolution(t *testing.T) {
 // A repository's own quota and its instance's are both resolved; the
 // repository without one has none of its own.
 func TestTokenQuotaResolution(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	cfg := testConfig()
 	reg := instances.New(cfg, st, nil)
@@ -899,6 +907,7 @@ func TestTokenQuotaResolution(t *testing.T) {
 
 // A stored quota outside 1 to 10^15 is ignored.
 func TestTokenQuotaIgnoresInvalidStoredValue(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	cfg := testConfig()
 	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
@@ -919,6 +928,7 @@ func TestTokenQuotaIgnoresInvalidStoredValue(t *testing.T) {
 
 // A quota set in the config wins over a dashboard row of the same repository.
 func TestConfigQuotaWins(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	cfg := testConfig()
 	cfg.Repositories[0].MonthlyTokenQuota = ptr(int64(3))
@@ -931,6 +941,7 @@ func TestConfigQuotaWins(t *testing.T) {
 }
 
 func TestResolverCIJobs(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	jobs := store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{
 		{Name: "test", Read: "log", BlocksApproval: true},
@@ -969,6 +980,7 @@ func TestResolverCIJobs(t *testing.T) {
 // out. ListAll and GetAny show it, with its settings and Paused set. The
 // config still wins over a paused row of its own repository.
 func TestResolverPausedRepo(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/gadgets", Approve: ptr(false), CreatedBy: "alice"})
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "ACME/widgets", CreatedBy: "alice"})
@@ -1011,6 +1023,7 @@ func TestResolverPausedRepo(t *testing.T) {
 // The Code graph switch comes from the dashboard row; a repository of the
 // config file has none, so it is off there.
 func TestResolverGraphContext(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/gadgets", CreatedBy: "alice"})
 	cfg := testConfig()

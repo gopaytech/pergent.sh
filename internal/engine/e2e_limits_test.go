@@ -69,6 +69,7 @@ func configName(t *testing.T, env *testEnv) string {
 // A global entry at its model limit and a team entry at its team's limit are
 // skipped: the review runs on the next entry.
 func TestLimitsRunNextEntry(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.SetNow(novemberMid)
 	team := teamOwning(t, env, "Payments")
@@ -92,6 +93,7 @@ func TestLimitsRunNextEntry(t *testing.T) {
 // A fallback whose entry fallen back from still has its mark fails, naming the
 // limit of the entry left.
 func TestFallbackFailsOnMarkAndLimit(t *testing.T) {
+	t.Parallel()
 	e, refs := newFallbackE2E(t, "team-a", "team-b")
 	env := e.env
 	env.SetNow(novemberMid)
@@ -122,6 +124,7 @@ func TestFallbackFailsOnMarkAndLimit(t *testing.T) {
 
 // An API review has no owner team: a team's used-up limit does not stop it.
 func TestAPIReviewIgnoresTeamLimits(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	env.SetNow(novemberMid)
@@ -137,6 +140,7 @@ func TestAPIReviewIgnoresTeamLimits(t *testing.T) {
 
 // An API review at the model limit fails, naming the entry: it is never held.
 func TestAPIReviewAtModelLimitFails(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	env.SetNow(novemberMid)
@@ -154,6 +158,7 @@ func TestAPIReviewAtModelLimitFails(t *testing.T) {
 // When the usage can't be read, the dispatch is tried again; nothing starts
 // unchecked.
 func TestLimitReadErrorRetries(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 0, 0)
 	setLimit(t, env, configRef(), 0, 100)
 	execSQL(t, env, "DROP TABLE run_usage_by_model")
@@ -188,6 +193,7 @@ func wantLimitHeld(t *testing.T, env *testEnv, id string) {
 // quota: the same pending status and note, naming no limit. A 1-entry chain
 // ignores marks, not limits.
 func TestModelLimitHoldsPush(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 0, 0)
 	seedEntryUsage(t, env, configRef(), 100)
 	setLimit(t, env, configRef(), 0, 100)
@@ -208,6 +214,7 @@ func TestModelLimitHoldsPush(t *testing.T) {
 // A fallback whose entries left are stopped by limits alone is held once the
 // mark of the entry it fell back from has ended.
 func TestFallbackHeldOnLimit(t *testing.T) {
+	t.Parallel()
 	e, refs := newFallbackE2E(t, "team-a", "team-b")
 	env := e.env
 	env.SetNow(novemberMid)
@@ -239,6 +246,7 @@ func TestFallbackHeldOnLimit(t *testing.T) {
 // on the first global entry with no mark; the team entry at its team's own
 // limit stays skipped.
 func TestStartGoesPastAdminLimits(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 0, 0)
 	team := teamOwning(t, env, "Payments")
 	a := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -265,6 +273,7 @@ func TestStartGoesPastAdminLimits(t *testing.T) {
 // A start whose chain is only the team's entry at the team's own limit can't
 // be held (a start never is) and can't run: it fails, naming the limit.
 func TestStartStoppedByTeamOwnLimitFails(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 0, 0)
 	team := teamOwning(t, env, "Payments")
 	a := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -292,6 +301,7 @@ func TestStartStoppedByTeamOwnLimitFails(t *testing.T) {
 // A client that pinned a model at its model limit fails, naming the entry: a
 // pinned model is a chain of 1, and an API review is never held.
 func TestAPIReviewPinnedModelAtLimitFails(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	env.SetNow(novemberMid)
@@ -339,6 +349,7 @@ func TestAPIReviewPinnedModelAtLimitEmptyGlobalChainFails(t *testing.T) {
 // A pinned review's tokens count toward the model limit of its entry, so the
 // run records that entry.
 func TestAPIReviewPinnedModelRecordsEntry(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	env.SetNow(novemberMid)
@@ -363,6 +374,7 @@ func TestAPIReviewPinnedModelRecordsEntry(t *testing.T) {
 // A writer's review command is refused when only limits stop every entry:
 // 👎 and the quota's note, as for a used-up quota.
 func TestReviewCommandRefusedAtModelLimit(t *testing.T) {
+	t.Parallel()
 	e := quotaCommands(t, 0)
 	env := e.env
 	publishedHead(t, env, sha('a'))

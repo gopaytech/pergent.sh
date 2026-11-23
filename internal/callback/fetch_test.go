@@ -50,6 +50,7 @@ func postFetch(t *testing.T, h http.Handler, id, token, body string) int {
 // second post or one after the sweep failed the fetch is 409, a body over
 // MaxFetchBytes is 413, and none of them changes what was stored.
 func TestFetchCallbackOneTime(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	ctx := context.Background()
 	clock := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)

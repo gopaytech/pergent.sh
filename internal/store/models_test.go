@@ -164,6 +164,7 @@ func TestMigrationKeepsPreviousReleaseModels(t *testing.T) {
 }
 
 func TestCreateLLMModelFirstIsDefault(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	first, err := s.CreateLLMModel(ctx, LLMModel{ID: "ignored", Default: false, Provider: "anthropic", Model: "sonnet",
 		APIKeySealed: []byte("k1")}, t0)
@@ -194,6 +195,7 @@ func TestCreateLLMModelFirstIsDefault(t *testing.T) {
 // The same provider, model and base URL is another entry now: names tell
 // them apart (0045 dropped the rule, and the store no longer checks it).
 func TestCreateLLMModelSameModelTwice(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newModel(t, s, "anthropic", "sonnet", "", nil)
 	if _, err := s.CreateLLMModel(ctx, LLMModel{Name: "second key", Provider: "anthropic", Model: "sonnet"}, t0); err != nil {
@@ -205,6 +207,7 @@ func TestCreateLLMModelSameModelTwice(t *testing.T) {
 }
 
 func TestUpdateLLMModelKeepsKeyOnNil(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newModel(t, s, "anthropic", "sonnet", "", []byte("k1"))
 	m := newModel(t, s, "openai", "gpt", "", []byte("k2"))
@@ -234,6 +237,7 @@ func TestUpdateLLMModelKeepsKeyOnNil(t *testing.T) {
 
 // A base URL that makes an entry the same as another is allowed.
 func TestUpdateLLMModelBaseURLSameAsAnother(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newModel(t, s, "anthropic", "sonnet", "https://a.example.com", nil)
 	m := newModel(t, s, "anthropic", "sonnet", "https://b.example.com", nil)
@@ -261,6 +265,7 @@ func modelByID(t *testing.T, s *Store, id string) LLMModel {
 }
 
 func TestSetDefaultLLMModel(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newModel(t, s, "anthropic", "sonnet", "", []byte("ka"))
 	b := newModel(t, s, "openai", "gpt", "https://llm.example.com", []byte("kb"))
@@ -296,6 +301,7 @@ func TestSetDefaultLLMModel(t *testing.T) {
 // llm_settings, which the previous release reads, always matches the default
 // entry: a rollback runs on the current default.
 func TestSetDefaultWritesLLMSettings(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, found := settings(t, s); found {
 		t.Fatal("llm_settings has a row before any entry")
@@ -340,6 +346,7 @@ func TestSetDefaultWritesLLMSettings(t *testing.T) {
 }
 
 func TestUpdateDefaultWritesLLMSettings(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newModel(t, s, "anthropic", "sonnet", "", []byte("ka"))
 	b := newModel(t, s, "openai", "gpt", "", []byte("kb"))
@@ -373,6 +380,7 @@ func TestUpdateDefaultWritesLLMSettings(t *testing.T) {
 // naming it, so the resolver skips it as removed (spec: "skip, and the
 // dashboard warns").
 func TestDeleteLLMModelInUse(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newModel(t, s, "anthropic", "sonnet", "", nil)
 	b := newModel(t, s, "openai", "gpt", "", nil)
@@ -394,6 +402,7 @@ func TestDeleteLLMModelInUse(t *testing.T) {
 }
 
 func TestDeleteDefaultRefused(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newModel(t, s, "anthropic", "sonnet", "", []byte("ka"))
 	b := newModel(t, s, "openai", "gpt", "", nil)
@@ -427,6 +436,7 @@ func TestDeleteDefaultRefused(t *testing.T) {
 // entry is dormant: it may be deleted, and the oldest entry left takes the
 // flag, in llm_settings too.
 func TestDeleteShadowedDefault(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	// Added an hour apart, so "oldest" is not a tie.
 	add := func(provider, model string, key string, hours time.Duration) LLMModel {
@@ -481,6 +491,7 @@ func mustModels(t *testing.T, s *Store) []LLMModel {
 }
 
 func TestDeleteLLMModelMissing(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.DeleteLLMModel(ctx, "no-such-id", false); !errors.Is(err, ErrModelNotFound) {
 		t.Errorf("DeleteLLMModel of a missing entry = %v; want ErrModelNotFound", err)
@@ -493,6 +504,7 @@ func TestDeleteLLMModelMissing(t *testing.T) {
 
 // A repository's model round-trips through every way to store a repository.
 func TestDashboardRepoModelID(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newModel(t, s, "anthropic", "sonnet", "", nil)
 	b := newModel(t, s, "openai", "gpt", "", nil)
@@ -557,6 +569,7 @@ func TestDashboardRepoModelID(t *testing.T) {
 // A repository naming a model that isn't in the list is not saved, by any of
 // the three ways.
 func TestSavingARepoNeedsItsModel(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web"}); err != nil {
 		t.Fatal(err)
@@ -583,6 +596,7 @@ func TestSavingARepoNeedsItsModel(t *testing.T) {
 // Saving a repository holds its model's row FOR KEY SHARE until the
 // transaction ends, which blocks a delete (FOR UPDATE) and not another save.
 func TestSavingARepoLocksItsModel(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newModel(t, s, "anthropic", "sonnet", "", nil)
 	m := newModel(t, s, "openai", "gpt", "", nil)
@@ -632,6 +646,7 @@ func TestSavingARepoLocksItsModel(t *testing.T) {
 // repository never ends up pointing at nothing.
 // Two entries created together on an empty list: one default, no error.
 func TestCreateLLMModelRaceHasOneDefault(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	nils, errs := race(
 		func() error { _, err := s.CreateLLMModel(ctx, LLMModel{Provider: "a", Model: "x"}, t0); return err },
@@ -653,6 +668,7 @@ func TestCreateLLMModelRaceHasOneDefault(t *testing.T) {
 }
 
 func TestSetRunModel(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "aaa")
 	if r := getRun(t, s, id); r.Provider != nil || r.Model != nil {
@@ -697,6 +713,7 @@ func TestSetRunModel(t *testing.T) {
 
 // Entry names are unique among global entries, ignoring case.
 func TestLLMModelNameUnique(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newModel(t, s, "openai", "gpt-5", "", []byte("k1"))
 	b := newModel(t, s, "openai", "gpt-5", "https://llm.example.com", []byte("k2"))
@@ -734,6 +751,7 @@ func TestLLMModelNameUnique(t *testing.T) {
 
 // A row the previous release wrote has no name and reads as provider/model.
 func TestLLMModelNameNullReadsProviderModel(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, err := s.pool.Exec(ctx, `INSERT INTO llm_models (id, provider, model, base_url, is_default, created_at, updated_at)
 		VALUES ('old', 'anthropic', 'sonnet', '', true, $1, $1)`, t0); err != nil {
@@ -752,6 +770,7 @@ func TestLLMModelNameNullReadsProviderModel(t *testing.T) {
 // A repository whose model was removed (the removal is no longer refused)
 // still saves its other settings: only a new model must be in the list.
 func TestSaveRepoAfterItsModelWasRemoved(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newModel(t, s, "anthropic", "sonnet", "", nil)
 	b := newModel(t, s, "openai", "gpt", "", nil)

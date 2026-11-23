@@ -200,6 +200,7 @@ func wantNoApproval(t *testing.T, env *testEnv, iid int64) {
 }
 
 func TestPublishApproves(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "api/handler.go")))
@@ -233,6 +234,7 @@ func TestPublishApproves(t *testing.T) {
 }
 
 func TestPublishUpdatesExistingNote(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
@@ -263,6 +265,7 @@ func TestPublishUpdatesExistingNote(t *testing.T) {
 }
 
 func TestPublishFindsExistingNote(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("has_blocking_issues", "a.go")))
@@ -286,6 +289,7 @@ func TestPublishFindsExistingNote(t *testing.T) {
 }
 
 func TestPublishRecreatesDeletedNote(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("has_blocking_issues", "a.go")))
@@ -306,6 +310,7 @@ func TestPublishRecreatesDeletedNote(t *testing.T) {
 }
 
 func TestPublishHeadMovedNoApprove(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		setup func(env *testEnv)
 		// recorded is the approval left recorded. When GitLab refuses the
@@ -399,6 +404,7 @@ func (a *gitlabApprovals) serve(env *testEnv, approver int64) {
 // A shutdown right after the approval reached GitLab: the approval was
 // recorded before it was made, so a stale approval can always be removed.
 func TestPublishRecordsApprovalBeforeApproving(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -424,6 +430,7 @@ func TestPublishRecordsApprovalBeforeApproving(t *testing.T) {
 // the publish: GitLab refuses the second approval, the bot is listed as an
 // approver, and the run is published without a second comment.
 func TestPublishRetryAfterApprovalLanded(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -455,6 +462,7 @@ func TestPublishRetryAfterApprovalLanded(t *testing.T) {
 }
 
 func TestPublishAlreadyApprovedByBot(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -474,6 +482,7 @@ func TestPublishAlreadyApprovedByBot(t *testing.T) {
 }
 
 func TestPublishApproveRefusedNotPublished(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -496,6 +505,7 @@ func TestPublishApproveRefusedNotPublished(t *testing.T) {
 }
 
 func TestPublishBlockingNoApprove(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("has_blocking_issues", "a.go")))
@@ -509,6 +519,7 @@ func TestPublishBlockingNoApprove(t *testing.T) {
 }
 
 func TestPublishNothingReviewedNoApprove(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	s := reviewed("no_blocking_issues")
@@ -527,6 +538,7 @@ func TestPublishNothingReviewedNoApprove(t *testing.T) {
 }
 
 func TestPublishNeutralIsSuccessOnGitLab(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
 	head := sha('a')
@@ -541,6 +553,7 @@ func TestPublishNeutralIsSuccessOnGitLab(t *testing.T) {
 }
 
 func TestPublishFailureReasonComment(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(1, head)
@@ -561,6 +574,7 @@ func TestPublishFailureReasonComment(t *testing.T) {
 }
 
 func TestPublishUnusableResult(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		result func(t *testing.T, head string) []byte
 		want   string
@@ -612,6 +626,7 @@ func TestPublishUnusableResult(t *testing.T) {
 }
 
 func TestPublishRepositoryGoneUsesFailed(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
 	head := sha('a')
@@ -647,6 +662,7 @@ func wantAdvice(t *testing.T, what, text, advice string) {
 // A repository switched off since the run was queued can only be switched on
 // again in the dashboard.
 func TestPublishReplacesStepLimitAdvice(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		setup  func(t *testing.T, env *testEnv)
@@ -683,6 +699,7 @@ func TestPublishReplacesStepLimitAdvice(t *testing.T) {
 // A re-run of some skills is published with the advice replaced in the skills
 // kept from before too: their results may predate the upgrade.
 func TestPublishReplacesStepLimitAdviceInKeptSkills(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head, stepLimited("security"), stepLimited("style")))
@@ -714,6 +731,7 @@ func TestPublishReplacesStepLimitAdviceInKeptSkills(t *testing.T) {
 // stored result, which the dashboard shows, keeps the full text. A run that
 // recorded no model is left as it is.
 func TestPublishHidesTheModelInBatchFailures(t *testing.T) {
+	t.Parallel()
 	const baseURL = "https://llm.example.com/v1"
 	failing := func() result.Skill {
 		s := reviewed("failed", "a.go")
@@ -765,6 +783,7 @@ func TestPublishHidesTheModelInBatchFailures(t *testing.T) {
 
 // A result without the phrase is stored and published as it came.
 func TestPublishLeavesResultWithoutStepLimitAdvice(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	res := resultFor(t, head, reviewed("no_blocking_issues", "api/handler.go"))
@@ -790,6 +809,7 @@ func canonicalJSON(t *testing.T, data []byte) string {
 }
 
 func TestPublishRetriesOnGitLabError(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -853,6 +873,7 @@ func TestPublishBackoff(t *testing.T) {
 }
 
 func TestPublishOneFailureDoesNotStopOthers(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	bad := env.Report(1, sha('a'), resultFor(t, sha('a'), reviewed("has_blocking_issues", "a.go")))
 	good := env.Report(2, sha('c'), resultFor(t, sha('c'), reviewed("has_blocking_issues", "a.go")))
@@ -893,6 +914,7 @@ func createJob(t *testing.T, env *testEnv, name string) {
 }
 
 func TestCleanupDeletesJobAndCancelsStatus(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	old := sha('a')
 	id := env.Dispatched(1, old)
@@ -921,6 +943,7 @@ func TestCleanupDeletesJobAndCancelsStatus(t *testing.T) {
 // the new run's now, so the cleanup leaves it alone, and still deletes the Job
 // and marks the run cleaned up.
 func TestCleanUpKeepsStatusOfANewerRunOfTheHead(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	base := env.Publish(1, sha('c'), resultFor(t, sha('c'), reviewed("no_blocking_issues", "a.go")))
 	head := sha('a')
@@ -954,6 +977,7 @@ func TestCleanUpKeepsStatusOfANewerRunOfTheHead(t *testing.T) {
 // A superseded run's log is kept, redacted, before its Job is deleted; a
 // log that can't be read doesn't stop the cleanup.
 func TestCleanupKeepsSupersededRunLog(t *testing.T) {
+	t.Parallel()
 	for _, readable := range []bool{true, false} {
 		env := newTestEnv(t)
 		const clone = "glpat-clone-token-superseded"
@@ -987,6 +1011,7 @@ func TestCleanupKeepsSupersededRunLog(t *testing.T) {
 }
 
 func TestCleanupNeverDispatchedRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Enqueue(1, sha('a'))
 	env.Enqueue(1, sha('c'))
@@ -1010,6 +1035,7 @@ func TestCleanupNeverDispatchedRun(t *testing.T) {
 }
 
 func TestCleanupFailureLeavesRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	old := sha('a')
 	id := env.Dispatched(1, old)
@@ -1029,6 +1055,7 @@ func TestCleanupFailureLeavesRun(t *testing.T) {
 }
 
 func TestStaleApprovalUnapproved(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Publish(1, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
 	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('a'), "main"); err != nil {
@@ -1051,6 +1078,7 @@ func TestStaleApprovalUnapproved(t *testing.T) {
 
 // An approval made after the stale list was read is not cleared by it.
 func TestStaleApprovalClearIsConditional(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Publish(1, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
 	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('a'), "main"); err != nil {
@@ -1073,6 +1101,7 @@ func TestStaleApprovalClearIsConditional(t *testing.T) {
 }
 
 func TestStaleApprovalFailureAndUnknownInstance(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Publish(1, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
 	env.Publish(2, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
@@ -1114,6 +1143,7 @@ func TestStaleApprovalFailureAndUnknownInstance(t *testing.T) {
 // the next attempt waits 30 s × 2^(failures before), at most 5 minutes. The
 // record is kept throughout, and a removal that works clears it.
 func TestStaleApprovalUnapproveBackoff(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Publish(1, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
 	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('a'), "main"); err != nil {
@@ -1180,6 +1210,7 @@ func TestStaleApprovalUnapproveBackoff(t *testing.T) {
 // ready, its published review is decided again: the comment loses the draft
 // note, and the head is approved.
 func TestPublishDraftThenReady(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -1235,6 +1266,7 @@ func TestPublishDraftThenReady(t *testing.T) {
 // A draft with blocking findings is failed as before, and the MR is never
 // read for the draft flag.
 func TestPublishDraftBlockingFails(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("has_blocking_issues", "a.go")))
@@ -1256,6 +1288,7 @@ func TestPublishDraftBlockingFails(t *testing.T) {
 // The MR can't be read for the draft flag: nothing is posted, and the run is
 // retried, as for any GitLab error.
 func TestPublishDraftFlagUnreadableRetries(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -1277,6 +1310,7 @@ func TestPublishDraftFlagUnreadableRetries(t *testing.T) {
 // may not be installed): a project stored without it is reviewed and gets
 // its status, but isn't approved.
 func TestPublishApproveUnavailable(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	plat, _ := env.Engine.Platforms.Get(testInstance)
 	plat.Kind, plat.GitLab = config.PlatformGitHub, nil // not a GitLab instance
@@ -1299,6 +1333,7 @@ func TestPublishApproveUnavailable(t *testing.T) {
 // On GitLab the approve bot is a user that can always approve: the stored
 // flag is never read as missing.
 func TestPublishGitLabIgnoresApproveAvailable(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.SeedProject(func(p *store.Project) { p.InstallationID, p.ApproveAvailable = 99, false })
 	head := sha('a')
@@ -1319,6 +1354,7 @@ func TestPublishGitLabIgnoresApproveAvailable(t *testing.T) {
 // webhook's Republish finds the run reported; the publish still ends, and the
 // next pass decides again and approves.
 func TestPublishReadyDuringPublish(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -1385,6 +1421,7 @@ func publishUntilGivenUp(t *testing.T, env *testEnv, id string) {
 // gets one final failed status, so a required check isn't left running, and
 // is never approved.
 func TestPublishFailedSetsFinalStatusOnce(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -1414,6 +1451,7 @@ func TestPublishFailedSetsFinalStatusOnce(t *testing.T) {
 // up too: on GitLab that is success, still with the give-up description and
 // never approved.
 func TestPublishGiveUpNeutralIsSuccessOnGitLab(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
 	head := sha('a')
@@ -1433,6 +1471,7 @@ func TestPublishGiveUpNeutralIsSuccessOnGitLab(t *testing.T) {
 // Blocking findings are failed whatever failure_status says, also when the
 // review with them can't be posted.
 func TestPublishGiveUpNeutralBlockingIsFailed(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
 	head := sha('a')
@@ -1452,6 +1491,7 @@ func TestPublishGiveUpNeutralBlockingIsFailed(t *testing.T) {
 // A blocking CI job that isn't passed is never softened to neutral by a
 // give-up, whether the review itself is clean or failed.
 func TestPublishGiveUpNeutralCIBlockedIsFailed(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		result func(t *testing.T, head string) []byte
 	}{
@@ -1485,6 +1525,7 @@ func TestPublishGiveUpNeutralCIBlockedIsFailed(t *testing.T) {
 // A run that failed before its CI was read has no snapshot; a give-up still
 // holds its repository's blocking job to the gate, so neutral is not used.
 func TestPublishGiveUpNeutralFailedWithoutCIIsFailed(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
 	env.Engine.Config.Repositories[0].CIJobs = &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{
@@ -1510,6 +1551,7 @@ func TestPublishGiveUpNeutralFailedWithoutCIIsFailed(t *testing.T) {
 // A run that failed at dispatch, before its CI was read, is published failed
 // on a neutral repository with a blocking job: the gate isn't skipped.
 func TestPublishNeutralFailedWithoutCIIsFailed(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
 	env.Engine.Config.Repositories[0].CIJobs = &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{
@@ -1534,6 +1576,7 @@ func TestPublishNeutralFailedWithoutCIIsFailed(t *testing.T) {
 // A repository removed before the give-up can't say it wants neutral: the
 // final status fails closed.
 func TestPublishGiveUpRepositoryGoneIsFailed(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
 	head := sha('a')
@@ -1551,6 +1594,7 @@ func TestPublishGiveUpRepositoryGoneIsFailed(t *testing.T) {
 // Settings that can't be read at the give-up fail closed too: the dashboard
 // repository is set to neutral, but its defaults can no longer be read.
 func TestPublishGiveUpUnreadableSettingsIsFailed(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories = nil
 	neutral := string(config.FailureStatusNeutral)
@@ -1599,6 +1643,7 @@ func TestPublishGiveUpUnreadableSettingsIsFailed(t *testing.T) {
 // The final status is best effort: when it can't be set either, the run stays
 // publish_failed and nothing is tried again.
 func TestPublishFailedFinalStatusRefused(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -1621,6 +1666,7 @@ func TestPublishFailedFinalStatusRefused(t *testing.T) {
 // stand: the run that gives up withdraws it, through the owed-withdrawal path
 // the approval sweep keeps trying.
 func TestPublishGiveUpWithdrawsApprovalOfItsHead(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	// R1 approved the head with its blocking finding dismissed.
@@ -1676,6 +1722,7 @@ func TestPublishGiveUpWithdrawsApprovalOfItsHead(t *testing.T) {
 
 // With a working approver the approval goes at the moment of giving up.
 func TestPublishGiveUpWithdrawsApprovalNow(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -1699,6 +1746,7 @@ func TestPublishGiveUpWithdrawsApprovalNow(t *testing.T) {
 // A run that gives up is not the approved head's: its approval is not its to
 // withdraw.
 func TestPublishGiveUpKeepsApprovalOfAnotherHead(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -1725,6 +1773,7 @@ func TestPublishGiveUpKeepsApprovalOfAnotherHead(t *testing.T) {
 // A merged change has nothing to withdraw: at give-up the record is only
 // cleared.
 func TestPublishGiveUpMergedClearsRecord(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -1795,6 +1844,7 @@ func TestPublishGiveUpWithdrawalSurvivesAHangingFinalStatus(t *testing.T) {
 // between the give-up and its bookkeeping, or a row from an older version);
 // an approval of another head is not touched.
 func TestSweepWithdrawsApprovalOfAPublishFailedRun(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		approved string
 		want     string
@@ -1893,6 +1943,7 @@ func wantRestarted(t *testing.T, env *testEnv, id, head string) {
 }
 
 func TestIncrementalMergedBeforePublish(t *testing.T) {
+	t.Parallel()
 	const kept, fresh, gone = "aaaaaa000001", "bbbbbb000001", "cccccc000001"
 	env := newTestEnv(t)
 	headA, headB := sha('a'), sha('c')
@@ -1949,6 +2000,7 @@ func TestIncrementalMergedBeforePublish(t *testing.T) {
 // The merge is done once: publishing the run again works on the merged result,
 // and the run is not replaced by a full review.
 func TestIncrementalMergesOnce(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	headA, headB := sha('a'), sha('c')
 	base := env.Publish(1, headA, resultFor(t, headA, reviewed("no_blocking_issues", "a.go", "b.go")))
@@ -1977,6 +2029,7 @@ func TestIncrementalMergesOnce(t *testing.T) {
 // An incremental review that can't be completed with the last one is not
 // published: a full review of the head takes its place.
 func TestIncrementalBaseGoneRestartsFull(t *testing.T) {
+	t.Parallel()
 	headA, headB := sha('a'), sha('c')
 	for name, tc := range map[string]struct {
 		base    []byte
@@ -2034,6 +2087,7 @@ func TestIncrementalBaseGoneRestartsFull(t *testing.T) {
 // that replaces the incremental run is then not queued: it would supersede the
 // push's run.
 func TestIncrementalRestartSkippedForASupersededRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	headA, headB, headC := sha('a'), sha('c'), sha('d')
 	// The base did not review a.go, so the merge fails.
@@ -2062,6 +2116,7 @@ func TestIncrementalRestartSkippedForASupersededRun(t *testing.T) {
 // A partial with every file carried over reviews nothing again: the last
 // review's verdict, status and approval stand.
 func TestIncrementalNothingToReview(t *testing.T) {
+	t.Parallel()
 	headA, headB := sha('a'), sha('c')
 	for name, tc := range map[string]struct {
 		verdict  string
@@ -2124,6 +2179,7 @@ func TestIncrementalNothingToReview(t *testing.T) {
 // A finding carried over from the last review is still the same finding: its
 // thread gets no "Fixed" reply and stays open.
 func TestIncrementalKeepsThreads(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	headB := sha('c')
 	e.review(t, sha('a'), with("no_blocking_issues", finding(fpSuggestion, "db/query.go", 11, 0, "suggestion", "")))
@@ -2161,6 +2217,7 @@ func TestIncrementalKeepsThreads(t *testing.T) {
 // A partial with status error is published as an error, as any error result
 // is: nothing is merged and no full review is queued.
 func TestIncrementalErrorResultPublishedAsIs(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	headA, headB := sha('a'), sha('c')
 	base := env.Publish(1, headA, resultFor(t, headA, reviewed("no_blocking_issues", "a.go", "b.go")))
@@ -2195,6 +2252,7 @@ func TestIncrementalErrorResultPublishedAsIs(t *testing.T) {
 // An incremental run that failed to produce a result is reported as failed,
 // as any run is: there is nothing to merge and nothing to restart.
 func TestIncrementalFailureReasonPublishedAsIs(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	headA, headB := sha('a'), sha('c')
 	base := env.Publish(1, headA, resultFor(t, headA, reviewed("no_blocking_issues", "a.go", "b.go")))
@@ -2269,6 +2327,7 @@ func wantQuietComment(t *testing.T, body string, quiet bool) {
 // A run that was never marked (one from before the setting, or one whose
 // dispatch did not record it) is off, whatever the repository says now.
 func TestPublishNullQuietRunIsOff(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	quietOn(env, true)
 	head := sha('a')
@@ -2309,6 +2368,7 @@ func publishQuietPair(t *testing.T, quiet, setting bool) (*inlineEnv, string) {
 // The run was quiet when it was dispatched; the setting was turned off since.
 // The comment and the threads follow the run.
 func TestPublishQuietRunAfterSettingOff(t *testing.T) {
+	t.Parallel()
 	e, body := publishQuietPair(t, true, false)
 	wantQuietComment(t, body, true)
 	if !strings.Contains(body, "Title of bbb") || !strings.Contains(body, threads.NoteKeptQuiet) {
@@ -2324,6 +2384,7 @@ func TestPublishQuietRunAfterSettingOff(t *testing.T) {
 
 // The run was off when it was dispatched; the setting was turned on since.
 func TestPublishOffRunAfterSettingOn(t *testing.T) {
+	t.Parallel()
 	e, body := publishQuietPair(t, false, true)
 	wantQuietComment(t, body, false)
 	if strings.Contains(body, threads.NoteKeptQuiet) {
@@ -2357,6 +2418,7 @@ func reportIncrementalQuiet(t *testing.T, env *testEnv, head, base string, res [
 // carried suggestion, the meta line holds the combined note and the run stays
 // quiet through the merge.
 func TestPublishQuietMergesACarriedResult(t *testing.T) {
+	t.Parallel()
 	const kept = "aaaaaa000001"
 	env := newTestEnv(t)
 	headA, headB := sha('a'), sha('c')
@@ -2477,6 +2539,7 @@ func publishWithLayout(t *testing.T, layout, setting []string) string {
 // The run recorded a layout; the setting was changed since. The comment
 // follows the run, whether the setting is now another layout or none.
 func TestPublishLayoutFollowsTheRun(t *testing.T) {
+	t.Parallel()
 	t.Run("the setting was cleared", func(t *testing.T) {
 		wantFindingsOnlyComment(t, publishWithLayout(t, layoutFindingsOnly, nil))
 	})
@@ -2491,11 +2554,13 @@ func TestPublishLayoutFollowsTheRun(t *testing.T) {
 // A run whose list render refuses (a block of a later release) gets the
 // default comment, and the review is published as usual.
 func TestPublishBadLayoutIsTheDefault(t *testing.T) {
+	t.Parallel()
 	wantDefaultComment(t, publishWithLayout(t, []string{"timeline:open", "findings:open"}, nil))
 }
 
 // A layout never touches the status, the approval or the description.
 func TestPublishLayoutKeepsTheDecision(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	reportLayout(t, env, 1, head, resultFor(t, head, reviewed("no_blocking_issues", "api/handler.go")), layoutFindingsOnly)
@@ -2528,6 +2593,7 @@ func reportIncrementalLayout(t *testing.T, env *testEnv, head, base string, res 
 // An incremental run with a layout over a base run with none: the merge keeps
 // the carried suggestion and the comment follows the incremental run's layout.
 func TestPublishMergedKeepsTheLayout(t *testing.T) {
+	t.Parallel()
 	t.Run("incremental", func(t *testing.T) {
 		const kept = "aaaaaa000001"
 		env := newTestEnv(t)
@@ -2590,6 +2656,7 @@ func TestPublishMergedKeepsTheLayout(t *testing.T) {
 // The text an admin set reaches the comment, in place of the built-in one, and
 // a mention in it stays plain text.
 func TestPublishUsesFooterNote(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
@@ -2736,6 +2803,7 @@ func serveNote(env *testEnv, iid, id int64, body string) {
 // A republish whose comment is byte-identical to the one on the change edits
 // nothing.
 func TestUpsertSkipsIdenticalBody(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "api/handler.go")))
@@ -2766,6 +2834,7 @@ func TestUpsertSkipsIdenticalBody(t *testing.T) {
 // A blocking CI job that turns passed approves, one that turns failed
 // withdraws the approval, and an unchanged result edits no comment.
 func TestCIRedecideAfterPublish(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))

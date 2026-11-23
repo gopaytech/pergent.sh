@@ -17,6 +17,7 @@ func mustChain(t *testing.T, s *Store, scope string, teamID int64, instance, pro
 }
 
 func TestSaveChainLimit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	var six []EntryRef
@@ -52,6 +53,7 @@ func TestSaveChainLimit(t *testing.T) {
 // Position 1 of the global chain is the default, which the previous release
 // reads from llm_settings; the config entry leaves the stored default alone.
 func TestSaveGlobalChainSyncsDefault(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newModel(t, s, "anthropic", "sonnet", "", []byte("ka"))
 	b := newModel(t, s, "openai", "gpt-5", "https://llm.example.com", []byte("kb"))
@@ -80,6 +82,7 @@ func TestSaveGlobalChainSyncsDefault(t *testing.T) {
 // A custom repository chain keeps model_id at its first entry when global,
 // NULL when a team's.
 func TestSaveRepoChainSyncsModelID(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -119,6 +122,7 @@ func TestSaveRepoChainSyncsModelID(t *testing.T) {
 }
 
 func TestResetRepoChain(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/api"}); err != nil {
@@ -143,6 +147,7 @@ func TestResetRepoChain(t *testing.T) {
 // rewrites the repository chain: a model is a custom 1-entry chain, none is
 // inherit. A write that leaves the model alone leaves the chain alone.
 func TestModelSettingWritesRepoChain(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	a := newModel(t, s, "anthropic", "sonnet", "", nil)
@@ -196,6 +201,7 @@ func TestModelSettingWritesRepoChain(t *testing.T) {
 // Two marks of the same entry both succeed; the later until wins, and an
 // auth mark (no until) stays until its key is edited.
 func TestMarksUpsertTwice(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	upsert := func(m Mark) {
 		t.Helper()
@@ -249,6 +255,7 @@ func TestMarksUpsertTwice(t *testing.T) {
 }
 
 func TestChainsNaming(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -290,6 +297,7 @@ func TestChainsNaming(t *testing.T) {
 // SetMark stores a mark on its own, as upsertMark does inside a transaction:
 // an API review marks the entry it ran on with no attempt to queue.
 func TestSetMark(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ref := EntryRef{SourceGlobal, "m1"}
 	until := t0.Add(time.Hour)
@@ -308,6 +316,7 @@ func TestSetMark(t *testing.T) {
 // A chain records whether an admin saved it; each save says so again. The
 // old model setting is an admin's, so the chain it writes is admin-saved.
 func TestSaveChainSavedByAdmin(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/api"}); err != nil {
@@ -362,6 +371,7 @@ func TestSavedByAdminMigration(t *testing.T) {
 
 // Chains reads every chain with its entries, by ID.
 func TestChains(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -383,6 +393,7 @@ func TestChains(t *testing.T) {
 // Removing a repository drops its own chain with its settings and team
 // links, so one added again starts by inheriting, as its settings do.
 func TestRemoveRepoDropsItsChain(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
 	for _, p := range []string{"acme/api", "acme/web"} {
@@ -409,6 +420,7 @@ func TestRemoveRepoDropsItsChain(t *testing.T) {
 // in their order. An entry not in a full chain is ErrChainTooLong, and then
 // nothing changes. With no stored chain there is nothing to move.
 func TestSetDefaultMovesGlobalChain(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	var refs []EntryRef
 	for _, m := range []string{"m1", "m2", "m3", "m4", "m5", "m6"} {

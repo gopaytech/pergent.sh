@@ -12,6 +12,7 @@ import (
 // Run first puts back a run stranded between claim and dispatch by an earlier
 // stop, then dispatches it, and returns once its context is done.
 func TestRunRecoversStrandedRunAndStops(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(1, head)
@@ -50,6 +51,7 @@ func TestRunRecoversStrandedRunAndStops(t *testing.T) {
 
 // Run reconciles once at start, from its own goroutine.
 func TestRunReconcilesAtStart(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 
@@ -78,6 +80,7 @@ func TestRunReconcilesAtStart(t *testing.T) {
 // Run sweeps the approvals once at start, so a push missed while pergent.sh
 // was down withdraws the approval without waiting for the watch tick.
 func TestRunSweepsApprovalsAtStart(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
 	env.GitLab.SetMR(openMR(1, sha('c')))
@@ -105,6 +108,7 @@ func TestRunSweepsApprovalsAtStart(t *testing.T) {
 // Run sweeps the fates once at start: a merge missed while pergent.sh was
 // down is asked for without waiting for the hourly tick.
 func TestRunSweepsFatesAtStart(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	serveChange(env, 1, sha('a'), "merged", 55)
@@ -213,6 +217,7 @@ func TestReconcileSoonNeverBlocks(t *testing.T) {
 // before the hourly tick: a repository switched on in the dashboard gets its
 // webhook within seconds.
 func TestRunReconcilesSoonOnRequest(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	serveProject(env, 9, "acme/gadgets")

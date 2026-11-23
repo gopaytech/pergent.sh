@@ -32,6 +32,7 @@ func (e *loadEnv) loadReviewers(t *testing.T, run store.Run) Reviewers {
 // With no stored reviewer, reviewer 1 is Load's input and there is no other
 // reviewer and no judge.
 func TestLoadReviewersNoneIsOne(t *testing.T) {
+	t.Parallel()
 	e := newLoadEnv(t, &config.Config{})
 	e.save(t, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.a, e.b}})
 	r := e.loadReviewers(t, store.Run{})
@@ -50,6 +51,7 @@ func TestLoadReviewersNoneIsOne(t *testing.T) {
 // The stored reviewers come in slot order, then the judge, each with its own
 // saved_by_admin and the entries, marks and owner team of reviewer 1.
 func TestLoadReviewersOrder(t *testing.T) {
+	t.Parallel()
 	e := newLoadEnv(t, &config.Config{})
 	e.repoRow(t)
 	if err := e.st.SetMark(ctx, store.Mark{Ref: e.b, Class: store.ClassQuota, Until: at(time.Hour), SetAt: now}); err != nil {
@@ -98,6 +100,7 @@ func TestLoadReviewersOrder(t *testing.T) {
 
 // An API review is never a multi review: it reads no stored reviewer.
 func TestLoadReviewersAPIHasNone(t *testing.T) {
+	t.Parallel()
 	e := newLoadEnv(t, &config.Config{})
 	e.repoRow(t)
 	e.saveReviewers(t, [][]store.EntryRef{{e.b}}, []store.EntryRef{e.a}, true)

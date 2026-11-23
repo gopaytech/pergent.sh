@@ -84,6 +84,7 @@ var deliveryUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89
 // headers and signature, with a new delivery ID each time. Its body says it is
 // a test and that nothing was reviewed, so it is never taken for a pass.
 func TestTestCallbackSigned(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	rc := newHook(t, http.StatusNoContent)
@@ -154,6 +155,7 @@ func TestTestCallbackSigned(t *testing.T) {
 // During a rotation's overlap the test callback is signed with both secrets,
 // as a real one is; after it, with the new one alone.
 func TestTestCallbackSignsWithBothSecretsInOverlap(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	rc := newHook(t, http.StatusOK)
@@ -177,6 +179,7 @@ func TestTestCallbackSignsWithBothSecretsInOverlap(t *testing.T) {
 
 // A client with no URL has nothing to send to.
 func TestTestCallbackNoURL(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(func(m map[string]any) { m["callbackUrl"] = "" }))
@@ -192,6 +195,7 @@ func TestTestCallbackNoURL(t *testing.T) {
 // redirect is a failure that is not followed; one that does not answer gives
 // an error with no part of the URL's path or query and no secret in it.
 func TestTestCallbackFailuresAreShown(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	var elsewhere atomic.Int32
@@ -247,6 +251,7 @@ func sameAttempt(a, b APICallbackAttemptView) bool {
 
 // The review page lists the callback's state and every attempt, oldest first.
 func TestAPIReviewDetailCallbackAttempts(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))

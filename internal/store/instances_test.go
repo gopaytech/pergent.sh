@@ -11,6 +11,7 @@ import (
 )
 
 func TestCreateInstanceAndSecrets(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	row := InstanceRow{
 		Name: "lab", Platform: "github", APIURL: "https://api.example.com", ReviewAppID: 11, ApproveAppID: 12,
@@ -66,6 +67,7 @@ func TestCreateInstanceAndSecrets(t *testing.T) {
 
 // A GitLab instance's review bot approving is stored and read back.
 func TestCreateInstanceApproveWithReviewBot(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	row := InstanceRow{Name: "lab", Platform: "gitlab", URL: "https://gitlab.example.com", ApproveWithReviewBot: true}
 	if err := st.CreateInstance(ctx, row, nil, time.Now()); err != nil {
@@ -82,6 +84,7 @@ func TestCreateInstanceApproveWithReviewBot(t *testing.T) {
 }
 
 func TestCreateInstanceTakenLeavesNoSecrets(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.CreateInstance(ctx, InstanceRow{Name: "lab", Platform: "gitlab"}, map[string][]byte{"review_token": []byte("one")}, t0); err != nil {
 		t.Fatal(err)
@@ -96,6 +99,7 @@ func TestCreateInstanceTakenLeavesNoSecrets(t *testing.T) {
 }
 
 func TestUpdateInstanceKeepsOtherSecrets(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	err := s.CreateInstance(ctx, InstanceRow{Name: "lab", Platform: "gitlab", URL: "https://gitlab.example.com", OAuthClientID: "client-1"},
 		map[string][]byte{"review_token": []byte("old-review"), "approve_token": []byte("approve")}, t0)
@@ -148,6 +152,7 @@ func TestUpdateInstanceKeepsOtherSecrets(t *testing.T) {
 }
 
 func TestMarkInstanceRemovingAndDelete(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.CreateInstance(ctx, InstanceRow{Name: "lab", Platform: "gitlab"}, map[string][]byte{"review_token": []byte("x")}, t0); err != nil {
 		t.Fatal(err)
@@ -176,6 +181,7 @@ func TestMarkInstanceRemovingAndDelete(t *testing.T) {
 }
 
 func TestDeleteInstanceDataCascades(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for _, name := range []string{"lab", "main"} {
 		if err := s.CreateInstance(ctx, InstanceRow{Name: name, Platform: "gitlab"}, map[string][]byte{"review_token": []byte("x")}, t0); err != nil {
@@ -291,6 +297,7 @@ func TestDeleteInstanceDataCascades(t *testing.T) {
 }
 
 func TestLLMRowKeepsKey(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, found, err := s.LLM(ctx); found || err != nil {
 		t.Fatalf("LLM before any put = %v, %v", found, err)
@@ -326,6 +333,7 @@ func TestLLMRowKeepsKey(t *testing.T) {
 }
 
 func TestLLMWithoutKey(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.PutLLM(ctx, "ollama", "llama", "http://ollama:11434", nil, t0); err != nil {
 		t.Fatal(err)
@@ -337,6 +345,7 @@ func TestLLMWithoutKey(t *testing.T) {
 }
 
 func TestRepoDefaultsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	got, err := s.RepoDefaults(ctx)
 	if err != nil || got.Approve != nil || got.ReviewDrafts != nil || got.FailureStatus != nil ||
@@ -386,6 +395,7 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 // the instance, one merge request at a time, and leaves other instances'
 // runs alone.
 func TestSupersedeInstance(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	enqueue := func(instance string, project, iid int64, head string) string {
 		id, _, err := s.EnqueueRun(ctx, MRKey{Instance: instance, ProjectID: project, IID: iid}, "acme/x", head, "main")
@@ -436,6 +446,7 @@ func TestSupersedeInstance(t *testing.T) {
 // A removing instance can't be changed: the update finds it removing, and
 // leaves its row and secrets as they were.
 func TestUpdateInstanceRefusesARemovingInstance(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.CreateInstance(ctx, InstanceRow{Name: "lab", Platform: "gitlab", OAuthClientID: "c1"},
 		map[string][]byte{"review_token": []byte("old")}, t0); err != nil {
@@ -462,6 +473,7 @@ func TestUpdateInstanceRefusesARemovingInstance(t *testing.T) {
 // AddDefaultSkills appends to the list and touches no other default; two at
 // once lose nothing; a name outside the library changes nothing.
 func TestAddDefaultSkills(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for _, n := range []string{"a", "b", "c"} {
 		if _, err := s.CreateLibrarySkill(ctx, NewSkill{Name: n, Content: n + " text.", At: t0}); err != nil {
@@ -541,6 +553,7 @@ func TestAddDefaultSkills(t *testing.T) {
 // quiet_reviews in the defaults is NULL (unset), true or false; a put
 // replaces it.
 func TestRepoDefaultsQuietReviews(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	read := func() *bool {
 		t.Helper()
@@ -570,6 +583,7 @@ func TestRepoDefaultsQuietReviews(t *testing.T) {
 // comment_layout in the defaults is NULL (unset) or a list whose order is
 // kept; a put replaces it, and an empty list is stored as NULL.
 func TestRepoDefaultsCommentLayout(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	read := func() []string {
 		t.Helper()
@@ -602,6 +616,7 @@ func TestRepoDefaultsCommentLayout(t *testing.T) {
 // linked_repos_enabled in the defaults is NULL (unset, off) or a bool; a put
 // replaces it. The defaults hold no links.
 func TestRepoDefaultsLinkedRepos(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	read := func() *bool {
 		t.Helper()

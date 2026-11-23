@@ -71,6 +71,7 @@ func TestModelLimitsMigrationOnlyAdds(t *testing.T) {
 // One limit per entry and team, the model limit (no team) included; a team
 // entry has no model limit; the number is in the quotas' range.
 func TestModelLimitsKey(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	ins := func(source string, teamID any, n int64) error {
@@ -101,6 +102,7 @@ func TestModelLimitsKey(t *testing.T) {
 // The previous release writes usage rows with no owner team: they still go
 // in, with none.
 func TestModelLimitsMigrationPreviousReleaseInsert(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "h1", `{"schema_version":1,"status":"completed","skills":[]}`)
 	if _, err := s.pool.Exec(ctx, `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid, trigger,
@@ -145,6 +147,7 @@ func wantOwner(t *testing.T, what string, got *int64, want int64) {
 // repository's own owner, else its instance's, else none. A repository that
 // moves to another team leaves its earlier rows with the old one.
 func TestUsageRecordsOwnerTeam(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	row := skillRow("security", "no_blocking_issues", 1, 1)
 	none := seedUsage(t, s, usageMR(7, 1), t0, TriggerPush, false, "gpt", row)
@@ -169,6 +172,7 @@ func TestUsageRecordsOwnerTeam(t *testing.T) {
 }
 
 func TestSetAndClearModelLimit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := EntryRef{Source: SourceGlobal, ID: "m1"}
@@ -214,6 +218,7 @@ func TestSetAndClearModelLimit(t *testing.T) {
 
 // Removing a team removes its limits, on global and team entries.
 func TestDeleteTeamDropsItsLimits(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := EntryRef{Source: SourceGlobal, ID: "m1"}
@@ -258,6 +263,7 @@ func entryUsage(t *testing.T, s *Store, ref EntryRef, at time.Time, in, out int6
 // row with no owner team counts under 0; a run that recorded no entry counts
 // on none.
 func TestEntryTokensSince(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	since := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	g := EntryRef{Source: SourceGlobal, ID: "m1"}
@@ -297,6 +303,7 @@ func TestEntryTokensSince(t *testing.T) {
 // on the run's entry (reviewer 1's). A --no-judge run's own tokens count on
 // no entry.
 func TestEntryTokensSinceMultiReview(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	ownRepo(t, s, team, mr1.Instance, "acme/widgets")
@@ -358,6 +365,7 @@ func TestEntryTokensSinceMultiReview(t *testing.T) {
 // fallback on global e2b; the judge on team j1, its retry on global j2. The
 // runs' own entry (reviewer 1's) gets none of them.
 func TestEntryTokensSinceMultiReviewAttempts(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	ownRepo(t, s, team, mr1.Instance, "acme/widgets")

@@ -79,6 +79,7 @@ func reported(t *testing.T, s *Store, mr MRKey, head, body string) string {
 }
 
 func TestEnqueueSupersedesOlderHead(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := enqueue(t, s, mr1, "aaa")
 	other := enqueue(t, s, mr2, "ooo")
@@ -102,6 +103,7 @@ func TestEnqueueSupersedesOlderHead(t *testing.T) {
 }
 
 func TestEnqueueSupersedesRunningRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := dispatched(t, s, mr1, "aaa", "tok")
 	enqueue(t, s, mr1, "bbb")
@@ -123,6 +125,7 @@ func TestEnqueueSupersedesRunningRun(t *testing.T) {
 }
 
 func TestEnqueueSameHeadIsIdempotent(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id1, created1, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "main")
 	if err != nil || !created1 {
@@ -138,6 +141,7 @@ func TestEnqueueSameHeadIsIdempotent(t *testing.T) {
 }
 
 func TestEnqueueSameHeadAfterSupersededCreatesNewRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := enqueue(t, s, mr1, "aaa")
 	enqueue(t, s, mr1, "bbb")
@@ -148,6 +152,7 @@ func TestEnqueueSameHeadAfterSupersededCreatesNewRun(t *testing.T) {
 }
 
 func TestSupersedeMR(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := enqueue(t, s, mr1, "aaa")
 	enqueue(t, s, mr2, "ooo")
@@ -166,6 +171,7 @@ func TestSupersedeMR(t *testing.T) {
 // A draft's runs are superseded with SupersededDraft as their reason, which
 // a plain supersede leaves as it was.
 func TestSupersedeDraft(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := enqueue(t, s, mr1, "aaa")
 	other := enqueue(t, s, mr2, "ooo")
@@ -206,6 +212,7 @@ func TestSupersedeDraft(t *testing.T) {
 }
 
 func TestClaimQueuedRespectsNotBeforeAndLimit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	ids := make([]string, 0, 4)
 	for i, head := range []string{"h1", "h2", "h3", "h4"} {
@@ -264,6 +271,7 @@ func runIDs(rs []Run) []string {
 }
 
 func TestMarkDispatchedRecordsFields(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaa", "tok")
 	r := getRun(t, s, id)
@@ -279,6 +287,7 @@ func TestMarkDispatchedRecordsFields(t *testing.T) {
 }
 
 func TestStoreResultOutcomes(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	body := []byte(`{"status":"completed","verdict":"no_blocking_issues"}`)
 
@@ -393,6 +402,7 @@ func TestStoreResultOutcomes(t *testing.T) {
 }
 
 func TestStoreResultKeepsHashForSingleUse(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaa", "super-secret-token")
 	var raw []byte
@@ -416,6 +426,7 @@ func TestStoreResultKeepsHashForSingleUse(t *testing.T) {
 }
 
 func TestReportFailureOnlyMovesUnreportedRuns(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	queued := enqueue(t, s, mr1, "aaa")
 	ok, err := s.ReportFailure(ctx, queued, Failure{Reason: "no job"}, t0)
@@ -438,6 +449,7 @@ func TestReportFailureOnlyMovesUnreportedRuns(t *testing.T) {
 }
 
 func TestRunsToPublishAndMarkPublished(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := reported(t, s, MRKey{mr1.Instance, 9, 1}, "a", `{"status":"completed"}`)
 	b := reported(t, s, MRKey{mr1.Instance, 9, 2}, "b", `{"status":"completed"}`)
@@ -468,6 +480,7 @@ func TestRunsToPublishAndMarkPublished(t *testing.T) {
 }
 
 func TestRunWithFailureReasonIsPublishable(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaa", "tok")
 	if ok, err := s.ReportFailure(ctx, id, Failure{Reason: "boom"}, t0); err != nil || !ok {
@@ -480,6 +493,7 @@ func TestRunWithFailureReasonIsPublishable(t *testing.T) {
 }
 
 func TestPublishRetryGivesUpAtTen(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
 	for i := 1; i <= 10; i++ {
@@ -510,6 +524,7 @@ func TestPublishRetryGivesUpAtTen(t *testing.T) {
 // The give-up records the final status it set on a publish_failed run, and
 // only there.
 func TestSetGaveUpStatus(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
 	if err := s.SetGaveUpStatus(ctx, id, "neutral"); err == nil {
@@ -529,6 +544,7 @@ func TestSetGaveUpStatus(t *testing.T) {
 }
 
 func TestPublishRetryCountsFromReport(t *testing.T) {
+	t.Parallel()
 	// Dispatch retries must not eat into the publish budget.
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "aaa")
@@ -552,6 +568,7 @@ func TestPublishRetryCountsFromReport(t *testing.T) {
 }
 
 func TestRunsToCleanUp(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := dispatched(t, s, mr1, "aaa", "tok")
 	enqueue(t, s, mr1, "bbb")
@@ -571,6 +588,7 @@ func TestRunsToCleanUp(t *testing.T) {
 }
 
 func TestLastReview(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, ok, err := s.LastReview(ctx, mr1, ""); err != nil || ok {
 		t.Fatalf("empty MR = %v, %v", ok, err)
@@ -616,6 +634,7 @@ func TestLastReview(t *testing.T) {
 }
 
 func TestNoteIDAndApproval(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if id, err := s.NoteID(ctx, mr1); err != nil || id != 0 {
 		t.Fatalf("NoteID empty = %d, %v", id, err)
@@ -642,6 +661,7 @@ func TestNoteIDAndApproval(t *testing.T) {
 }
 
 func TestApproval(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, ok, err := s.Approval(ctx, mr1); err != nil || ok {
 		t.Fatalf("no approval: ok = %v, err = %v", ok, err)
@@ -671,6 +691,7 @@ func TestApproval(t *testing.T) {
 }
 
 func TestPendingWithdrawals(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := time.Now()
 	pending := func() []Approval {
@@ -734,6 +755,7 @@ func TestPendingWithdrawals(t *testing.T) {
 }
 
 func TestStaleApprovals(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	enqueue(t, s, mr1, "A")
 	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
@@ -767,6 +789,7 @@ func TestStaleApprovals(t *testing.T) {
 // A failed unapprove puts the stale approval aside for 30 s × 2^failures,
 // at most 5 minutes; recording or clearing an approval starts over.
 func TestUnapproveFailedBackoff(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	enqueue(t, s, mr1, "A")
 	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
@@ -841,6 +864,7 @@ func TestUnapproveFailedBackoff(t *testing.T) {
 }
 
 func TestClearApprovedSHA(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	enqueue(t, s, mr1, "A")
 	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
@@ -873,6 +897,7 @@ func TestClearApprovedSHA(t *testing.T) {
 }
 
 func TestProjects(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	inst := "https://gitlab.example.com"
 	if _, ok, err := s.Project(ctx, inst, 7); err != nil || ok {
@@ -932,6 +957,7 @@ func TestProjects(t *testing.T) {
 }
 
 func TestMigrateTwice(t *testing.T) {
+	t.Parallel()
 	s := newStore(t) // already migrated once
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("second Migrate: %v", err)
@@ -992,6 +1018,7 @@ func TestMigrateConcurrent(t *testing.T) {
 }
 
 func TestEnqueueSupersedesReportedRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := reported(t, s, mr1, "A", `{"status":"completed"}`)
 	other := reported(t, s, mr2, "O", `{"status":"completed"}`)
@@ -1022,6 +1049,7 @@ func TestEnqueueSupersedesReportedRun(t *testing.T) {
 }
 
 func TestSupersedeMRSupersedesReportedRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := reported(t, s, mr1, "A", `{"status":"completed"}`)
 	other := reported(t, s, mr2, "O", `{"status":"completed"}`)
@@ -1038,6 +1066,7 @@ func TestSupersedeMRSupersedesReportedRun(t *testing.T) {
 }
 
 func TestSupersedeMRWaitsForEnqueueLock(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -1068,6 +1097,7 @@ func TestSupersedeMRWaitsForEnqueueLock(t *testing.T) {
 }
 
 func TestMarkDispatchedRequiresRunning(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mark := func(id string) error {
 		return s.MarkDispatched(ctx, id, "job", "b", "s", hash("tok"), t0.Add(time.Hour), t0)
@@ -1106,6 +1136,7 @@ func TestMarkDispatchedRequiresRunning(t *testing.T) {
 }
 
 func TestRunLookup(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaa", "tok")
 	r, ok, err := s.Run(ctx, id)
@@ -1124,6 +1155,7 @@ func TestRunLookup(t *testing.T) {
 }
 
 func TestReplaceWithFailure(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
 	if err := s.ReplaceWithFailure(ctx, id, Failure{Reason: "unusable", Step: "delivery"}); err != nil {
@@ -1155,6 +1187,7 @@ func TestReplaceWithFailure(t *testing.T) {
 }
 
 func TestSupersede(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	queued := enqueue(t, s, mr1, "aaa")
 	running := dispatched(t, s, mr2, "bbb", "tok")
@@ -1184,6 +1217,7 @@ func TestSupersede(t *testing.T) {
 }
 
 func TestPostpone(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "aaa")
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
@@ -1229,6 +1263,7 @@ func TestPostpone(t *testing.T) {
 // MarkDispatched) goes back to the queue once its claim is old enough, without
 // counting an attempt. Dispatched runs and recent claims are left alone.
 func TestRecoverUnlaunched(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	stranded := enqueue(t, s, mr1, "aaaa")
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
@@ -1277,6 +1312,7 @@ func TestRecoverUnlaunched(t *testing.T) {
 }
 
 func TestEnqueueRetargetIsANewRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := enqueue(t, s, mr1, "aaa")
 	b, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "develop")
@@ -1296,6 +1332,7 @@ func TestEnqueueRetargetIsANewRun(t *testing.T) {
 }
 
 func TestEnqueueRetargetKeepsPublishedRunsOfOtherTarget(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
 	if err := s.MarkPublished(ctx, a, RunDecision{}); err != nil {
@@ -1340,6 +1377,7 @@ func published(t *testing.T, s *Store, mr MRKey, head, target string) string {
 // published run is superseded as history: its Job finished and its status
 // was posted, so there is nothing to clean up or cancel.
 func TestEnqueueRetargetBackIsANewRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mainRun := published(t, s, mr1, "aaa", "main")
 	devRun := published(t, s, mr1, "aaa", "develop")
@@ -1369,6 +1407,7 @@ func TestEnqueueRetargetBackIsANewRun(t *testing.T) {
 // A head pushed again after another head (A, B, then A) is reviewed again
 // for the same reason.
 func TestEnqueueHeadBackIsANewRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := published(t, s, mr1, "aaa", "main")
 	published(t, s, mr1, "bbb", "main")
@@ -1381,6 +1420,7 @@ func TestEnqueueHeadBackIsANewRun(t *testing.T) {
 // A repeated webhook for the newest run's head and target, published or
 // not, is not a new review.
 func TestEnqueueNewestPublishedRunIsKept(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := published(t, s, mr1, "aaa", "main")
 	again, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "main")
@@ -1396,6 +1436,7 @@ func TestEnqueueNewestPublishedRunIsKept(t *testing.T) {
 // old run of the target the merge request moves back to: moving back while
 // it is live still gives a fresh run.
 func TestEnqueueRetargetBackWhileOtherTargetLive(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mainRun := published(t, s, mr1, "aaa", "main")
 	dev, _, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "develop")
@@ -1412,6 +1453,7 @@ func TestEnqueueRetargetBackWhileOtherTargetLive(t *testing.T) {
 }
 
 func TestStaleApprovalsAfterRetarget(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	enqueue(t, s, mr1, "A")
 	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
@@ -1448,6 +1490,7 @@ func TestStaleApprovalsAfterRetarget(t *testing.T) {
 }
 
 func TestApprovals(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if got, err := s.Approvals(ctx); err != nil || len(got) != 0 {
 		t.Fatalf("empty: %v, %v", got, err)
@@ -1473,6 +1516,7 @@ func TestApprovals(t *testing.T) {
 // Migration 0003 records the target of approvals made before it, from the
 // newest run of the approved commit.
 func TestMigration0003BackfillsApprovedTarget(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	enqueue(t, s, mr1, "A")
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET target_branch = 'release'`); err != nil {
@@ -1502,6 +1546,7 @@ func TestMigration0003BackfillsApprovedTarget(t *testing.T) {
 // Republish puts the newest run back to reported when it is published at the
 // given head, so the publisher decides again (a draft marked ready).
 func TestRepublish(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := published(t, s, mr1, "A", "main")
 	if _, err := s.PublishRetry(ctx, id, "", t0); err == nil {
@@ -1532,6 +1577,7 @@ func TestRepublish(t *testing.T) {
 }
 
 func TestRepublishOnlyTheNewestPublishedHead(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	old := published(t, s, mr1, "A", "main")
 	newer := reported(t, s, mr1, "B", `{"status":"completed"}`)
@@ -1562,6 +1608,7 @@ func TestRepublishOnlyTheNewestPublishedHead(t *testing.T) {
 // of a repository that doesn't review drafts): the published review of the
 // head is for the old target and is not decided again for the new one.
 func TestRepublishOtherTarget(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := published(t, s, mr1, "A", "main")
 	if ok, err := s.Republish(ctx, mr1, "A", "develop"); err != nil || ok {
@@ -1579,6 +1626,7 @@ func TestRepublishOtherTarget(t *testing.T) {
 // A published run of the head that isn't the newest run (another target was
 // queued since) is not republished.
 func TestRepublishNotNewest(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := published(t, s, mr1, "A", "main")
 	if _, _, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "A", "develop"); err != nil {
@@ -1595,6 +1643,7 @@ func TestRepublishNotNewest(t *testing.T) {
 // Migration 0004 adds the GitHub fields; a row stored before it gets
 // installation 0 and an approve side that is available.
 func TestProjectGitHubFields(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	inst := "https://gitlab.example.com"
 	if _, err := s.pool.Exec(ctx, `INSERT INTO projects (instance, project_id, path) VALUES ($1, 5, 'acme/old')`, inst); err != nil {
@@ -1654,6 +1703,7 @@ func TestProjectGitHubFields(t *testing.T) {
 // flag already read): Republish asks for another decision, and MarkPublished
 // leaves the run reported once so the publisher decides again.
 func TestRepublishWhileReported(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "A", `{"status":"completed"}`)
 
@@ -1686,6 +1736,7 @@ func TestRepublishWhileReported(t *testing.T) {
 // dismissal restored while the run of a new head is being published must be
 // decided again after that publish.
 func TestRepublishNewestWhileReportedOfAnotherHead(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	old := published(t, s, mr1, "A", "main")
 	id := reported(t, s, mr1, "B", `{"status":"completed"}`)
@@ -1708,6 +1759,7 @@ func TestRepublishNewestWhileReportedOfAnotherHead(t *testing.T) {
 // A same-head re-run (the head is already published) whose publish is under
 // way: the newest run is flagged, though LatestDecidedRun doesn't see it.
 func TestRepublishNewestSameHeadRerun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	published(t, s, mr1, "A", "main")
 	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "A", "main", TriggerRerun, nil, nil, false, false)
@@ -1738,6 +1790,7 @@ func TestRepublishNewestSameHeadRerun(t *testing.T) {
 }
 
 func TestRepublishNewestPublishedOfAnotherTarget(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := published(t, s, mr1, "A", "develop")
 	if ok, err := s.RepublishNewest(ctx, mr1); err != nil || !ok {
@@ -1751,6 +1804,7 @@ func TestRepublishNewestPublishedOfAnotherTarget(t *testing.T) {
 // A queued or running newest run loads the dismissals when it is published,
 // and a change nobody reviewed has nothing: no flag, nothing to do.
 func TestRepublishNewestNothingToDo(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if ok, err := s.RepublishNewest(ctx, mr1); err != nil || ok {
 		t.Errorf("no runs: RepublishNewest = %v, %v; want false", ok, err)
@@ -1771,6 +1825,7 @@ func TestRepublishNewestNothingToDo(t *testing.T) {
 // Republish of a reported run keeps its backoff: it only asks for another
 // decision after the current one.
 func TestRepublishWhileReportedKeepsBackoff(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "A", `{"status":"completed"}`)
 	if _, err := s.PublishRetry(ctx, id, "boom", t0.Add(time.Hour)); err != nil {
@@ -1788,6 +1843,7 @@ func TestRepublishWhileReportedKeepsBackoff(t *testing.T) {
 // A failed publish decides afresh on its retry, so it drops the pending
 // request for another decision; the retry's MarkPublished publishes.
 func TestPublishRetryClearsRedecide(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "A", `{"status":"completed"}`)
 	if ok, err := s.Republish(ctx, mr1, "A", "main"); err != nil || !ok {
@@ -1808,6 +1864,7 @@ func TestPublishRetryClearsRedecide(t *testing.T) {
 // installation (the review App was uninstalled): a GitHub row never reads as
 // approvable just because its installation is gone.
 func TestUpsertGitHubProjectKeepsApproveAvailable(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	gh := Project{Instance: "github", ProjectID: 900, Path: "acme/widgets", HTTPURLToRepo: "https://github.com/acme/widgets.git",
 		InstallationID: 0, ApproveAvailable: false}
@@ -1838,6 +1895,7 @@ func TestUpsertGitHubProjectKeepsApproveAvailable(t *testing.T) {
 // backoff is over, with its project's stored path ("" when the project isn't
 // stored).
 func TestApprovalsDue(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mr3 := MRKey{Instance: mr1.Instance, ProjectID: 9, IID: 1}
 	if err := s.UpsertProject(ctx, Project{Instance: mr1.Instance, ProjectID: mr1.ProjectID, Path: "acme/widgets"}); err != nil {
@@ -1882,6 +1940,7 @@ func TestApprovalsDue(t *testing.T) {
 // ClaimQueued leaves the runs of the instances it is told to skip queued and
 // unclaimed, however old they are, so they take no slot from the others.
 func TestClaimQueuedSkipsInstances(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := int64(1); i <= 5; i++ {
 		if _, _, err := s.EnqueueRun(ctx, MRKey{Instance: "lab", ProjectID: 1, IID: i}, "acme/x", strings.Repeat("a", 40), "main"); err != nil {
@@ -1908,6 +1967,7 @@ func TestClaimQueuedSkipsInstances(t *testing.T) {
 // a row that references the run takes) is claimed, not skipped. A run that
 // another claim or a delete locked is still skipped.
 func TestClaimQueuedTakesKeyShared(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	shared := enqueue(t, s, mr1, sha('a'))
 	locked := enqueue(t, s, MRKey{mr1.Instance, mr1.ProjectID, mr1.IID + 1}, sha('b'))
@@ -1936,6 +1996,7 @@ func TestClaimQueuedTakesKeyShared(t *testing.T) {
 
 // Queued runs are counted per instance, for the instances asked about.
 func TestCountQueuedByInstance(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i, in := range []string{"lab", "lab", "main"} {
 		if _, _, err := s.EnqueueRun(ctx, MRKey{Instance: in, ProjectID: 1, IID: int64(i + 1)}, "acme/x", strings.Repeat("a", 40), "main"); err != nil {
@@ -1953,6 +2014,7 @@ func TestCountQueuedByInstance(t *testing.T) {
 // publish_failed, so no crash can lose it. An approval of another commit or
 // target is not its debt, and neither is any earlier failed attempt.
 func TestPublishRetryGivingUpRecordsTheWithdrawalOwed(t *testing.T) {
+	t.Parallel()
 	later := time.Now().Add(time.Hour)
 	giveUp := func(t *testing.T, s *Store, id string) {
 		t.Helper()
@@ -1999,6 +2061,7 @@ func TestPublishRetryGivingUpRecordsTheWithdrawalOwed(t *testing.T) {
 // from before, a crash), until the approval is gone. Another head, another
 // target, or a newer run that is not publish_failed leaves it alone.
 func TestPendingWithdrawalsFailClosedOnPublishFailed(t *testing.T) {
+	t.Parallel()
 	later := time.Now().Add(time.Hour)
 	failed := func(t *testing.T, s *Store, mr MRKey, head string) string {
 		t.Helper()

@@ -22,6 +22,7 @@ func (e *env) pausedRepo(instance, project string, edit func(*store.DashboardRep
 // A paused repository is listed with health "paused", even with a setup
 // problem left from before, and stays out of the overview's Needs attention.
 func TestPausedRepoHealthAndOverview(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.pausedRepo("main", "acme/tools", nil)
@@ -57,6 +58,7 @@ func TestPausedRepoHealthAndOverview(t *testing.T) {
 // Whoever could see a repository while it ran still sees it, and its
 // reviews, while it is paused. Others still get 404.
 func TestPausedRepoStaysVisible(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.pausedRepo("main", "acme/tools", nil)
 	e.addRun(runFix{project: "acme/tools", number: 4, head: head('4'), title: "Tool change"})
@@ -85,6 +87,7 @@ func TestPausedRepoStaysVisible(t *testing.T) {
 
 // The picker leaves a paused repository out: it was added already.
 func TestPickerHidesPausedRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/tools", "acme/new")
 	e.pausedRepo("main", "acme/tools", nil)
@@ -96,6 +99,7 @@ func TestPickerHidesPausedRepo(t *testing.T) {
 
 // Settings of a paused repository save, keep it paused, and set nothing up.
 func TestSettingsEditOnPausedRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.pausedRepo("main", "acme/tools", nil)
 	c := e.userOnMain(true)
@@ -124,6 +128,7 @@ func TestSettingsEditOnPausedRepo(t *testing.T) {
 
 // A team may cover a paused repository.
 func TestTeamMayCoverPausedRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.pausedRepo("main", "acme/tools", nil)
 	c := e.userOnMain(true)
@@ -138,6 +143,7 @@ func TestTeamMayCoverPausedRepo(t *testing.T) {
 
 // Usage tells a running, a paused and a removed repository apart.
 func TestUsageMarksPausedRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageFixture() // acme/widgets (on), acme/old (removed)
 	e.pausedRepo("main", "acme/tools", nil)

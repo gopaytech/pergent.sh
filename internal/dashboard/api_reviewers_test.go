@@ -444,6 +444,7 @@ func TestReviewersMaintainerRemovesBeforeAdminReviewer(t *testing.T) {
 // The repository page: on with the count and the judge's first entry name,
 // off with none stored.
 func TestRepositoryViewMultiReview(t *testing.T) {
+	t.Parallel()
 	re := newReviewersEnv(t)
 	multi := func() map[string]any {
 		t.Helper()
@@ -489,6 +490,7 @@ func TestReviewersNoKeyInResponses(t *testing.T) {
 // entry whose model limit is used up reads model_limit, and a team entry at
 // the owner team's limit reads team_limit, in a reviewer and in the judge.
 func TestReviewersShowLimitStates(t *testing.T) {
+	t.Parallel()
 	re := newReviewersEnv(t)
 	re.storeReviewers(true, []string{teamRef(re.own)}, []string{globalRef(re.shared), teamRef(re.own)})
 	used := re.usageRun(runFix{project: reviewersProject, number: 99, head: head('9')}, usageSkill("code-review", "no_blocking_issues", 6, 4))

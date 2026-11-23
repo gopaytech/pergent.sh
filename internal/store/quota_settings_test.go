@@ -8,6 +8,7 @@ import (
 // The repository's quota is stored by the upsert and the update, and nil
 // clears it.
 func TestDashboardRepoKeepsQuota(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	read := func() *int64 {
 		t.Helper()
@@ -53,6 +54,7 @@ func TestDashboardRepoKeepsQuota(t *testing.T) {
 }
 
 func TestSetInstanceTokenQuota(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.CreateInstance(ctx, InstanceRow{Name: "lab", Platform: "gitlab"}, nil, t0); err != nil {
 		t.Fatal(err)

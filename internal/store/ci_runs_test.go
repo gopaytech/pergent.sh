@@ -12,6 +12,7 @@ var ciDeadline = t0.Add(30 * time.Minute)
 // A queued push run and a start run (claimed, not dispatched) are held for
 // CI; a dispatched run and one CI was already looked at for are not.
 func TestHoldForCIHoldsQueuedAndStartedRuns(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	push := enqueue(t, s, mr1, sha('a'))
 	hold := func(id string) {
@@ -77,6 +78,7 @@ func TestHoldForCIHoldsQueuedAndStartedRuns(t *testing.T) {
 // ReleaseCI queues a ci_pending run once, and touches nothing else: not an
 // untrusted author's waiting run, not a superseded run.
 func TestReleaseCIOnlyCIPending(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if ok, err := s.HoldForCI(ctx, id, ciDeadline); err != nil || !ok {
@@ -129,6 +131,7 @@ func TestReleaseCIOnlyCIPending(t *testing.T) {
 // Starting a ci_pending run marks CI looked at; starting an untrusted
 // author's run does not.
 func TestStartRunOnCIPendingMarksChecked(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if ok, err := s.HoldForCI(ctx, id, ciDeadline); err != nil || !ok {
@@ -157,6 +160,7 @@ func TestStartRunOnCIPendingMarksChecked(t *testing.T) {
 // marks CI looked at, as it does the quota: the CI hold then leaves the run
 // alone, and the start skips the wait.
 func TestStartRunDuringGateMarksCIChecked(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if claimed, err := s.ClaimQueued(ctx, 10, t0.Add(time.Hour)); err != nil || len(claimed) != 1 {
@@ -174,6 +178,7 @@ func TestStartRunDuringGateMarksCIChecked(t *testing.T) {
 }
 
 func TestSetRunCIRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if r := mustRun(t, s, id); r.CIJobs != nil || r.CIChecked || r.CIDeadline != nil {
@@ -214,6 +219,7 @@ func ids(runs []Run) []string {
 }
 
 func TestCIPendingRuns(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	later := enqueue(t, s, mr1, sha('a'))
 	sooner := enqueue(t, s, mr2, sha('b'))
@@ -237,6 +243,7 @@ func TestCIPendingRuns(t *testing.T) {
 // CIRunsForHead gives the ci_pending runs of the head and the newest published
 // run of each merge request of that head; no other.
 func TestCIRunsForHead(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	head := sha('a')
 	pending := enqueue(t, s, mr1, head)
@@ -279,6 +286,7 @@ func TestCIRunsForHead(t *testing.T) {
 // CIRunsForMR gives the ci_pending runs of one merge request and its newest
 // published run, whatever their head; no other merge request's.
 func TestCIRunsForMR(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	published(t, s, mr1, sha('b'), "main")
 	newest := published(t, s, mr1, sha('c'), "main")
@@ -309,6 +317,7 @@ func TestCIRunsForMR(t *testing.T) {
 // CIRecheckRuns gives the newest published run of each merge request, since a
 // time, whose snapshot has a result other than passed.
 func TestCIRecheckRuns(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mk := func(iid int64) MRKey { return MRKey{Instance: mr1.Instance, ProjectID: mr1.ProjectID, IID: iid} }
 	failed := published(t, s, mk(80), sha('a'), "main")
@@ -337,6 +346,7 @@ func TestCIRecheckRuns(t *testing.T) {
 }
 
 func TestSetProjectCIAccess(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.UpsertProject(ctx, Project{Instance: "gh", ProjectID: 9, Path: "acme/widgets"}); err != nil {
 		t.Fatal(err)
@@ -366,6 +376,7 @@ func TestSetProjectCIAccess(t *testing.T) {
 }
 
 func TestDashboardRepoCIJobsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	jobs := &CIJobs{WaitSeconds: 1800, Jobs: []CIJob{
 		{Name: "test", Read: "log", BlocksApproval: true},
@@ -452,6 +463,7 @@ func TestCIJSONHelpers(t *testing.T) {
 }
 
 func TestRecentRunHeads(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	enqueue(t, s, mr1, sha('a'))
 	enqueue(t, s, mr1, sha('b'))

@@ -94,6 +94,7 @@ func checkItem(t *testing.T, name string, got readiness.PodItem, state, reason s
 }
 
 func TestSettingsGitLab(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveGitLabSettings(env)
 
@@ -158,6 +159,7 @@ func TestSettingsGitLab(t *testing.T) {
 // Every rule that matches the default branch counts, its own and wildcards
 // alike, as GitLab applies the most permissive of them.
 func TestSettingsGitLabWildcardProtection(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveGitLabSettings(env)
 	for _, tc := range []struct {
@@ -206,6 +208,7 @@ func TestSettingsGitLabWildcardProtection(t *testing.T) {
 }
 
 func TestSettingsGitHub(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	serveGitHubSettings(gh)
@@ -314,6 +317,7 @@ func TestSettingsGitHub(t *testing.T) {
 // protection stops a direct push; a classic rule that only blocks force
 // pushes or deletion is a warning, and one the App can't read is unknown.
 func TestSettingsGitHubClassicProtection(t *testing.T) {
+	t.Parallel()
 	const protectionAPI = ghBranchAPI + "/protection"
 	for _, tc := range []struct {
 		name          string
@@ -405,6 +409,7 @@ func unknownHasReason(t *testing.T, pod readiness.PodResult) {
 }
 
 func TestSettingsRefusedIsUnknown(t *testing.T) {
+	t.Parallel()
 	const refused = `{"message":"403 Forbidden"}`
 	t.Run("gitlab approval rules", func(t *testing.T) {
 		env := newTestEnv(t)
@@ -537,6 +542,7 @@ func TestSettingsRefusedIsUnknown(t *testing.T) {
 }
 
 func TestSettingsNoRawErrors(t *testing.T) {
+	t.Parallel()
 	// A refusal whose body holds a URL and a token. A 500 is retried with
 	// real sleeps (7 s), so only one read per platform answers 500.
 	const leakURL = "https://internal.example.com/admin"
@@ -601,6 +607,7 @@ func TestSettingsNoRawErrors(t *testing.T) {
 }
 
 func TestSettingsEmptyRepo(t *testing.T) {
+	t.Parallel()
 	const want = "the repository has no default branch yet"
 	t.Run("gitlab no default branch", func(t *testing.T) {
 		env := newTestEnv(t)
@@ -644,6 +651,7 @@ func TestSettingsEmptyRepo(t *testing.T) {
 // The other reasons a scan stops on. No clone token still stores what the
 // pod read, and the reason is dispatch's own.
 func TestSettingsStopReasons(t *testing.T) {
+	t.Parallel()
 	t.Run("not set up", func(t *testing.T) {
 		env := newTestEnv(t)
 		serveGitLabSettings(env)
@@ -708,6 +716,7 @@ func TestSettingsStopReasons(t *testing.T) {
 // The CI access items are read only for a GitHub repository that has ci_jobs:
 // the review App's Actions: Read permission and its Check run event.
 func TestSettingsGitHubCIAccess(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	serveGitHubSettings(gh)

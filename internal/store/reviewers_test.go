@@ -53,6 +53,7 @@ func reviewerRows(t *testing.T, s *Store) (chains, entries int) {
 // Reviewers 2 and 3 and the judge are saved and read back in slot order;
 // reviewer 1's chain A and the repository's row are left as they were.
 func TestReviewersRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g1 := newModel(t, s, "anthropic", "sonnet", "", nil)
@@ -105,6 +106,7 @@ func TestReviewersRoundTrip(t *testing.T) {
 
 // Each refused save stores nothing.
 func TestSaveReviewersRefusals(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -143,6 +145,7 @@ func TestSaveReviewersRefusals(t *testing.T) {
 // A maintainer's save that changes only reviewer 3 keeps the flag and date
 // of the admin's reviewer 2 and judge.
 func TestSaveReviewersKeepsUnchangedSlotFlag(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	g1 := newModel(t, s, "anthropic", "sonnet", "", nil)
 	g2 := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -164,6 +167,7 @@ func TestSaveReviewersKeepsUnchangedSlotFlag(t *testing.T) {
 
 // A save with no extra reviewer deletes every slot, the judge too.
 func TestSaveReviewersRemoveLastDropsJudge(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
 	G := EntryRef{SourceGlobal, g.ID}
@@ -183,6 +187,7 @@ func TestSaveReviewersRemoveLastDropsJudge(t *testing.T) {
 // [P9] A maintainer removes reviewer 2: the admin's reviewers 3 and 4 move
 // down to 2 and 3 with their flag, as unchanged.
 func TestSaveReviewersRemoveKeepsMovedFlag(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	g1 := newModel(t, s, "anthropic", "sonnet", "", nil)
 	g2 := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -217,6 +222,7 @@ func TestSaveReviewersRemoveKeepsMovedFlag(t *testing.T) {
 // 2 loses the entry, and the emptied judge stays with no entries. Chain A
 // loses it as before.
 func TestDeleteTeamModelCompactsReviewers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g1 := newModel(t, s, "anthropic", "sonnet", "", nil)
@@ -272,6 +278,7 @@ func TestDeleteTeamModelCompactsReviewers(t *testing.T) {
 // The entry is the only entry of the only extra reviewer: no reviewer row
 // and no judge row is left.
 func TestDeleteTeamModelLastExtraDropsJudge(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -289,6 +296,7 @@ func TestDeleteTeamModelLastExtraDropsJudge(t *testing.T) {
 // Deleting a team takes its entries out of the reviewer chains of every
 // repository, with the same compaction.
 func TestDeleteTeamCompactsReviewers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -313,6 +321,7 @@ func TestDeleteTeamCompactsReviewers(t *testing.T) {
 // A removed global entry stays in the reviewer chains, as in chain A: the
 // resolver skips it.
 func TestRemoveGlobalModelKeepsReviewerEntry(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	g1 := newModel(t, s, "anthropic", "sonnet", "", nil)
 	g2 := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -333,6 +342,7 @@ func TestRemoveGlobalModelKeepsReviewerEntry(t *testing.T) {
 // Removing a repository drops its reviewer chains, so one added again has
 // one reviewer.
 func TestRemoveRepositoryDropsReviewers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
 	G := []EntryRef{{SourceGlobal, g.ID}}
@@ -354,6 +364,7 @@ func TestRemoveRepositoryDropsReviewers(t *testing.T) {
 // chains, as a save does, so a save that holds the row and then writes the
 // chains does not deadlock with it.
 func TestDeleteTeamModelLocksTheRepoBeforeReviewers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -400,6 +411,7 @@ func TestDeleteTeamModelLocksTheRepoBeforeReviewers(t *testing.T) {
 // its reviewer pass: a deadlock (40P01). The holder stalls both removals
 // between the 2 passes (it holds the reviewer entries table).
 func TestDeleteTeamModelOneAtATimePerTeamReviewers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := newModel(t, s, "openai", "gpt-5", "", nil)

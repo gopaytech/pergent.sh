@@ -100,6 +100,7 @@ func dispatchRerun(t *testing.T, env *testEnv, head, base string) store.Run {
 // A run records the library version of each library skill it used; skills of
 // the repository's own folders have none.
 func TestRunRecordsSkillVersions(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.AddSkill("a", "---\nname: a\n---\nCheck a.\n")
 	editSkill(t, env, "a", 1)
@@ -124,6 +125,7 @@ func TestRunRecordsSkillVersions(t *testing.T) {
 // The merged review's record shows what each of its results was made under:
 // a kept skill keeps the earlier run's version, a re-run skill gets the new.
 func TestRerunFailedKeepsBaseVersions(t *testing.T) {
+	t.Parallel()
 	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
 	editSkill(t, env, "a", 1) // the failed skill may change: it is run again
 
@@ -140,6 +142,7 @@ func TestRerunFailedKeepsBaseVersions(t *testing.T) {
 // A re-run of the failed skills keeps the base run it was queued with: the
 // decision about incremental reviews is for pushes, and must not clear it.
 func TestRerunFailedKeepsBaseRunID(t *testing.T) {
+	t.Parallel()
 	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
 
 	r := dispatchRerun(t, env, head, base)
@@ -155,6 +158,7 @@ func TestRerunFailedKeepsBaseRunID(t *testing.T) {
 // The merged review records the hash of every skill: a kept skill keeps the
 // earlier run's, a re-run skill gets the new one.
 func TestRerunFailedKeepsBaseHashes(t *testing.T) {
+	t.Parallel()
 	env, head, base := twoSkills(t, nil)
 	if err := env.Store.SetRunInputs(env.ctx, base, "m", 0,
 		map[string]string{"a": "library", "b": "library"}, map[string]int{"a": 1, "b": 1},
@@ -178,6 +182,7 @@ func TestRerunFailedKeepsBaseHashes(t *testing.T) {
 // A skill that is kept was edited since its result: the results would mix two
 // texts of the skill, so everything is reviewed again.
 func TestRerunFailedAfterEditIsFull(t *testing.T) {
+	t.Parallel()
 	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
 	editSkill(t, env, "b", 1)
 
@@ -197,6 +202,7 @@ func TestRerunFailedAfterEditIsFull(t *testing.T) {
 // A run made before versions were recorded can't show its skills are the
 // same, so a re-run of some of its skills reviews everything.
 func TestRerunFailedBaseWithoutVersionsIsFull(t *testing.T) {
+	t.Parallel()
 	env, head, base := twoSkills(t, nil)
 
 	r := dispatchRerun(t, env, head, base)
@@ -210,6 +216,7 @@ func TestRerunFailedBaseWithoutVersionsIsFull(t *testing.T) {
 }
 
 func TestRerunFailedUnchangedStaysSubset(t *testing.T) {
+	t.Parallel()
 	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
 
 	r := dispatchRerun(t, env, head, base)
@@ -222,6 +229,7 @@ func TestRerunFailedUnchangedStaysSubset(t *testing.T) {
 // A kept skill that came from the library then and from the repository's own
 // folder now is a changed skill too.
 func TestRerunFailedKeptSkillNowFromRepoIsFull(t *testing.T) {
+	t.Parallel()
 	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
 	env.GitLab.Reply(http.MethodGet, treePath(), http.StatusOK, []gitlab.TreeEntry{
 		{Name: "b.md", Path: ".pergent/skills/b.md", Type: "blob"},
@@ -236,6 +244,7 @@ func TestRerunFailedKeptSkillNowFromRepoIsFull(t *testing.T) {
 }
 
 func TestSubsetJobGetsOnlyThoseSkills(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
@@ -284,6 +293,7 @@ func TestSubsetJobGetsOnlyThoseSkills(t *testing.T) {
 }
 
 func TestSubsetOfSkillsThatAreGoneIsAFullRerun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
@@ -325,6 +335,7 @@ func resultAt(t *testing.T, base, head string, skills ...result.Skill) []byte {
 // review of this very diff by the skills that are configured now. When they
 // are not, everything is reviewed again, so nothing is approved on a subset.
 func TestSubsetThatCannotBeKeptIsAFullRerun(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	both := func(t *testing.T) []result.Skill {
 		return []result.Skill{namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")}
@@ -386,6 +397,7 @@ func TestSubsetThatCannotBeKeptIsAFullRerun(t *testing.T) {
 // The sources recorded for a re-run are the whole review's: kept skills keep
 // the earlier run's, re-run skills get the new ones.
 func TestSubsetRecordsKeptSkillSources(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
@@ -426,6 +438,7 @@ func reportRerun(t *testing.T, env *testEnv, id, head string, res []byte) {
 }
 
 func TestMergedResultKeepsOtherSkills(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head,
@@ -464,6 +477,7 @@ func TestMergedResultKeepsOtherSkills(t *testing.T) {
 // The merge is done once: publishing the run again (a dismissal, a retry)
 // works on the merged result.
 func TestMergedResultIsRenderedAgainAfterARedecide(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head,
@@ -508,6 +522,7 @@ func TestMergedResultIsRenderedAgainAfterARedecide(t *testing.T) {
 // A kept and a new finding whose fingerprints start alike get IDs that tell
 // them apart, in the comment and in the stored result.
 func TestMergedIDsStayUnique(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head,
@@ -544,6 +559,7 @@ func TestMergedIDsStayUnique(t *testing.T) {
 }
 
 func TestMergeBaseUnreadable(t *testing.T) {
+	t.Parallel()
 	for name, baseResult := range map[string]string{
 		"does not parse": `{"status":"completed"}`,
 		"another commit": string(resultFor(t, sha('c'), namedSkill(t, "security", "no_blocking_issues", "", ""))),
@@ -590,6 +606,7 @@ func TestMergeBaseUnreadable(t *testing.T) {
 // like one whose base is unreadable: noted, never published as the whole
 // review, never approved.
 func TestMergeSubsetWithoutBaseRunIsNotAWholeReview(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main",
@@ -614,6 +631,7 @@ func TestMergeSubsetWithoutBaseRunIsNotAWholeReview(t *testing.T) {
 
 // A run that is not a re-run (no base run) is not touched.
 func TestMergeLeavesOtherRunsAlone(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", "")))
@@ -632,6 +650,7 @@ func TestMergeLeavesOtherRunsAlone(t *testing.T) {
 // A skill that was asked for but is missing from the re-run's result is
 // failed: the review is not clean and not approved.
 func TestMergedSubsetSkillMissingFromResultIsFailed(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head,

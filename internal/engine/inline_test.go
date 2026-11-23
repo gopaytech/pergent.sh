@@ -1900,6 +1900,7 @@ func (e *inlineEnv) rows(t *testing.T) map[string]store.InlineThread {
 }
 
 func TestInlinePostsFindingsOnDiff(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	head := sha('a')
 	e.review(t, head, with("has_blocking_issues",
@@ -1946,6 +1947,7 @@ func TestInlinePostsFindingsOnDiff(t *testing.T) {
 }
 
 func TestInlineSuggestionBlockGitLab(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	e.review(t, sha('a'), with("has_blocking_issues", finding(fpBlocking, "db/query.go", 11, 12, "blocking", "b2\nc2")))
 	posts := e.disc.Posted()
@@ -1958,6 +1960,7 @@ func TestInlineSuggestionBlockGitLab(t *testing.T) {
 }
 
 func TestInlineResolvesFixedOnNextReview(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	e.review(t, sha('a'), with("has_blocking_issues", finding(fpBlocking, "db/query.go", 11, 0, "blocking", "")))
 	next := sha('c')
@@ -1983,6 +1986,7 @@ func TestInlineResolvesFixedOnNextReview(t *testing.T) {
 }
 
 func TestInlineSkippedForOldHead(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	head := sha('a')
 	servePublish(e.env, 1, head)
@@ -2008,6 +2012,7 @@ func TestInlineSkippedForOldHead(t *testing.T) {
 }
 
 func TestInlineAdoptsUnrecordedThreads(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	e.disc.Seed("Earlier\n"+render.InlineMarker(fpBlocking), "db/query.go", 11, false)
 	e.review(t, sha('a'), with("has_blocking_issues", finding(fpBlocking, "db/query.go", 11, 0, "blocking", "")))
@@ -2024,6 +2029,7 @@ func TestInlineAdoptsUnrecordedThreads(t *testing.T) {
 }
 
 func TestInlineDropsRedactedSuggestion(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	if e.env.Engine.redact(testLLMKey) == testLLMKey {
 		t.Fatal("the redactor doesn't know the LLM key")
@@ -2040,6 +2046,7 @@ func TestInlineDropsRedactedSuggestion(t *testing.T) {
 }
 
 func TestInlineFailureKeepsPublish(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	e.disc.fail = http.StatusInternalServerError
 	head := sha('a')
@@ -2060,6 +2067,7 @@ func TestInlineFailureKeepsPublish(t *testing.T) {
 }
 
 func TestInlineOffBySetting(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	off := false
 	e.env.Engine.Config.Repositories[0].InlineFindings = &off
@@ -2082,6 +2090,7 @@ func TestInlineOffBySetting(t *testing.T) {
 }
 
 func TestInlineDismissResolvesThread(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	e.review(t, sha('a'), with("has_blocking_issues", finding(fpBlocking, "db/query.go", 11, 0, "blocking", "")))
 	if _, err := e.env.Store.Dismiss(e.env.ctx, store.Dismissal{
@@ -2119,6 +2128,7 @@ func TestInlineDismissResolvesThread(t *testing.T) {
 }
 
 func TestInlineRuleKeepsSuggestions(t *testing.T) {
+	t.Parallel()
 	e := newInlineEnv(t)
 	e.env.GitLab.Reply(http.MethodGet, projectPath(), http.StatusOK,
 		map[string]any{"id": testProjectID, "only_allow_merge_if_all_discussions_are_resolved": true})
@@ -2142,6 +2152,7 @@ func TestInlineRuleKeepsSuggestions(t *testing.T) {
 // becomes a thread: it stays in the comment, shown as on a deleted file with
 // no link, whatever the platform's diff says about the file.
 func TestNoThreadOnDeletedFile(t *testing.T) {
+	t.Parallel()
 	const gone = "pkg/gone.go"
 	for _, flagged := range []bool{true, false} {
 		t.Run(fmt.Sprintf("platform marks it deleted %v", flagged), func(t *testing.T) {

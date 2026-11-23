@@ -67,6 +67,7 @@ func jobOf(t *testing.T, s *Store, mr MRKey) (job FateJob, finished, found bool)
 }
 
 func TestReplaceFatesReplaces(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	first := []FindingFate{fate("a", "sec", "h1", "blocking", "fixed"), fate("b", "sec", "h1", "suggestion", "open")}
 	storeFates(t, s, mr1, "acme/widgets", first, false, false, t0)
@@ -124,6 +125,7 @@ func TestReplaceFatesReplaces(t *testing.T) {
 
 // One fingerprint can be a finding of two skills, and both are stored.
 func TestReplaceFatesKeepsOneFingerprintOfTwoSkills(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	rows := []FindingFate{fate("x", "sec", "", "blocking", "fixed"), fate("x", "style", "", "suggestion", "open")}
 	storeFates(t, s, mr1, "acme/widgets", rows, true, false, t0)
@@ -135,6 +137,7 @@ func TestReplaceFatesKeepsOneFingerprintOfTwoSkills(t *testing.T) {
 // A pass works on the job it claimed: a webhook that asked again meanwhile,
 // a job already finished or one dropped is left to its own turn.
 func TestReplaceFatesOnlyActsOnTheClaimedJob(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.RequestFates(ctx, mr1, "acme/widgets", false, t0); err != nil {
 		t.Fatal(err)
@@ -176,6 +179,7 @@ func TestReplaceFatesOnlyActsOnTheClaimedJob(t *testing.T) {
 
 // The job's path and merged are the ones of the pass that finished it.
 func TestReplaceFatesUpdatesTheJob(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.RequestFates(ctx, mr1, "acme/old-name", false, t0); err != nil {
 		t.Fatal(err)
@@ -191,6 +195,7 @@ func TestReplaceFatesUpdatesTheJob(t *testing.T) {
 }
 
 func TestRequestFatesAfterAMergeDoesNothing(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.RequestFates(ctx, mr1, "acme/widgets", true, t0); err != nil {
 		t.Fatal(err)
@@ -214,6 +219,7 @@ func TestRequestFatesAfterAMergeDoesNothing(t *testing.T) {
 // A change can't un-merge: a close that arrives late, while the merge is
 // still to be worked out, leaves the merged job as it is.
 func TestRequestFatesAfterAPendingMergeDoesNothing(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.RequestFates(ctx, mr1, "acme/widgets", true, t0); err != nil {
 		t.Fatal(err)
@@ -238,6 +244,7 @@ func TestRequestFatesAfterAPendingMergeDoesNothing(t *testing.T) {
 }
 
 func TestRequestFatesAfterACloseResets(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.RequestFates(ctx, mr1, "acme/widgets", false, t0); err != nil {
 		t.Fatal(err)
@@ -275,6 +282,7 @@ func TestRequestFatesAfterACloseResets(t *testing.T) {
 }
 
 func TestClaimFateJobsSkipsStoppedAndFutureOnes(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mrs := []MRKey{mr1, mr2, mr3, {Instance: mr1.Instance, ProjectID: 7, IID: 6}, {Instance: mr1.Instance, ProjectID: 7, IID: 7}}
 	for i, mr := range mrs {
@@ -336,6 +344,7 @@ func TestClaimFateJobsSkipsStoppedAndFutureOnes(t *testing.T) {
 // A failure is recorded on the job a pass claimed, as long as it is still
 // to do: a finished job, or one requested again, is left as it is.
 func TestFateJobFailedLeavesOtherJobsAlone(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.RequestFates(ctx, mr1, "acme/widgets", true, t0); err != nil {
 		t.Fatal(err)
@@ -374,6 +383,7 @@ func decidedRun(t *testing.T, s *Store, mr MRKey, head string, created time.Time
 }
 
 func TestDecidedRunsIncludesSupersededRuns(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := decidedRun(t, s, mr1, "aaa", t0)
 	b := decidedRun(t, s, mr1, "bbb", t0.Add(time.Hour))
@@ -402,6 +412,7 @@ func TestDecidedRunsIncludesSupersededRuns(t *testing.T) {
 
 // A run decided again (a dismissal) goes back to reported and keeps its outcome.
 func TestDecidedRunsIncludesRunsToBeDecidedAgain(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := decidedRun(t, s, mr1, "aaa", t0)
 	if ok, err := s.Republish(ctx, mr1, "aaa", "main"); err != nil || !ok {
@@ -414,6 +425,7 @@ func TestDecidedRunsIncludesRunsToBeDecidedAgain(t *testing.T) {
 }
 
 func TestDecidedRunsLeavesOutUndecidedOnes(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := decidedRun(t, s, mr1, "aaa", t0)
 	// A queued run, and a published one with no outcome (before outcomes were recorded).
@@ -428,6 +440,7 @@ func TestDecidedRunsLeavesOutUndecidedOnes(t *testing.T) {
 }
 
 func TestChangesWithoutFates(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := time.Now()
 	since := now.Add(-24 * time.Hour)
@@ -464,6 +477,7 @@ func TestChangesWithoutFates(t *testing.T) {
 // unchecked ones oldest first: open changes that were looked at, or are newer,
 // don't keep a missed merge from being found.
 func TestChangesWithoutFatesRotates(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := time.Now()
 	since := now.Add(-24 * time.Hour)
@@ -518,6 +532,7 @@ func TestChangesWithoutFatesRotates(t *testing.T) {
 // A change closed and counted, then reopened and merged without the merge
 // being recorded, is offered again once it has a review after the close.
 func TestChangesWithoutFatesAfterAClose(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := time.Now()
 	since := now.Add(-24 * time.Hour)
@@ -574,6 +589,7 @@ func seedResults(t *testing.T, s *Store, at time.Time) {
 }
 
 func TestSkillResultsCountsMergedPeople(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	other := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 1}
 	storeFates(t, s, other, "acme/other", []FindingFate{fate("a", "sec", "h1", "blocking", "fixed")}, true, false, t0)
@@ -606,6 +622,7 @@ func TestSkillResultsCountsMergedPeople(t *testing.T) {
 }
 
 func TestSkillResultsDismissedOnClosedCounts(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	seedResults(t, s, t0)
 	got, err := s.SkillResults(ctx, mr1.Instance, mr1.ProjectID, t0)
@@ -625,6 +642,7 @@ func TestSkillResultsDismissedOnClosedCounts(t *testing.T) {
 // closed must not raise anything: 10 fixed on merged changes and 10 dismissed
 // on closed ones is 10 raised, not 20.
 func TestSkillResultsRaisedIsMergedOnly(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	var fixed, dismissed []FindingFate
 	for i := 0; i < 10; i++ {
@@ -650,6 +668,7 @@ func TestSkillResultsRaisedIsMergedOnly(t *testing.T) {
 }
 
 func TestSkillResultsLeavesOutBots(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	// Merged by a bot, and closed by a bot with a dismissed finding: none counts.
 	storeFates(t, s, mr3, "acme/widgets", []FindingFate{fate("a", "sec", "h1", "blocking", "fixed")}, true, true, t0)
@@ -666,6 +685,7 @@ func TestSkillResultsLeavesOutBots(t *testing.T) {
 }
 
 func TestSkillResultsEditedAt(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	rows := func(hash string) []FindingFate {
 		return []FindingFate{fate("a", "sec", hash, "blocking", "fixed"), fate("b", "sec", hash, "suggestion", "open"), fate("z", "style", "same", "suggestion", "open")}
@@ -718,6 +738,7 @@ func TestSkillResultsEditedAt(t *testing.T) {
 // The newest hash is the one that appeared last, whatever the dates of its
 // findings: a change that took long to merge brings an old hash late.
 func TestSkillResultsEditedAtNamesTheNewestHash(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	day := 24 * time.Hour
 	one := func(hash string) []FindingFate { return []FindingFate{fate("a", "sec", hash, "blocking", "fixed")} }
@@ -731,6 +752,7 @@ func TestSkillResultsEditedAtNamesTheNewestHash(t *testing.T) {
 }
 
 func TestPruneFates(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	old, recent := t0, t0.Add(400*24*time.Hour)
 	storeFates(t, s, mr1, "acme/widgets", []FindingFate{fate("a", "sec", "", "blocking", "fixed"), fate("b", "sec", "", "blocking", "open")}, true, false, old)
@@ -763,6 +785,7 @@ func TestPruneFates(t *testing.T) {
 }
 
 func TestDeleteProjectRemovesFates(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	otherProject := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 3}
 	otherInstance := MRKey{Instance: "lab", ProjectID: 7, IID: 3}

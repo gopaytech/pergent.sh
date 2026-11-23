@@ -8,6 +8,7 @@ import (
 // A queued push run and an automatic re-run (the publisher's, which checked
 // nothing) are both held for the quota, and the dispatcher never claims them.
 func TestHoldForQuotaHoldsPushAndAutoRerun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	push := enqueue(t, s, mr1, sha('a'))
 	rerun, created, err := s.EnqueueRerun(ctx, mr2, "acme/widgets", sha('b'), "main", TriggerRerun, nil, nil, true, false)
@@ -43,6 +44,7 @@ func TestHoldForQuotaHoldsPushAndAutoRerun(t *testing.T) {
 
 // A run someone asked for (quota checked) or one already dispatched is not held.
 func TestHoldForQuotaLeavesCheckedRuns(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	dispatchedID := dispatched(t, s, mr2, sha('b'), "tok-b")
 	if ok, err := s.HoldForQuota(ctx, dispatchedID); err != nil || ok {
@@ -67,6 +69,7 @@ func TestHoldForQuotaLeavesCheckedRuns(t *testing.T) {
 // A start that came before the hold makes the run a start, and the hold that
 // follows leaves it alone, whether the run was queued or already claimed.
 func TestHoldForQuotaLeavesAStartAlone(t *testing.T) {
+	t.Parallel()
 	for _, claim := range []bool{false, true} {
 		t.Run(map[bool]string{false: "queued", true: "claimed"}[claim], func(t *testing.T) {
 			s := newStore(t)
@@ -97,6 +100,7 @@ func TestHoldForQuotaLeavesAStartAlone(t *testing.T) {
 // A start made by the previous release (during a rolling deploy) has no quota
 // flag; it is still never held.
 func TestHoldForQuotaLeavesAnUnflaggedStart(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET trigger = 'start', quota_checked = false WHERE id = $1::uuid`, id); err != nil {
@@ -113,6 +117,7 @@ func TestHoldForQuotaLeavesAnUnflaggedStart(t *testing.T) {
 // A start that lands on the publisher's own re-run makes that run checked, so
 // the dispatcher doesn't hold a run a person asked for.
 func TestStartRunMarksExistingAutoRerunChecked(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", sha('a'), "main", TriggerRerun, nil, nil, true, false)
 	if err != nil || !created {
@@ -133,6 +138,7 @@ func TestStartRunMarksExistingAutoRerunChecked(t *testing.T) {
 // A person's re-run that lands on the publisher's own re-run makes it checked;
 // an automatic one landing on a run changes nothing.
 func TestManualRerunMarksExistingAutoRerunChecked(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", sha('a'), "main", TriggerRerun, nil, nil, true, false)
 	if err != nil || !created {
@@ -157,6 +163,7 @@ func TestManualRerunMarksExistingAutoRerunChecked(t *testing.T) {
 
 // Starting a run the quota held queues it as a start, past the quota.
 func TestStartRunMarksQuotaChecked(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if ok, err := s.HoldForQuota(ctx, id); err != nil || !ok {
@@ -184,6 +191,7 @@ func TestStartRunMarksQuotaChecked(t *testing.T) {
 // The quota note is claimed once a calendar month, and a failed post gives
 // the claim back.
 func TestClaimQuotaNoteOncePerMonth(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	day := func(m time.Month, d int) time.Time { return time.Date(2026, m, d, 12, 0, 0, 0, time.UTC) }
 	claim := func(want bool, now, monthStart time.Time) {
@@ -208,6 +216,7 @@ func TestClaimQuotaNoteOncePerMonth(t *testing.T) {
 }
 
 func TestTokensSince(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	at := func(m time.Month, d, h, mi, sec int) time.Time { return time.Date(2026, m, d, h, mi, sec, 0, time.UTC) }
 	main1 := MRKey{Instance: "main", ProjectID: 1, IID: 1}
@@ -283,6 +292,7 @@ func TestMigrationKeepsPreviousReleaseQuota(t *testing.T) {
 
 // A run a concurrent HoldForQuota just moved to waiting is not marked checked.
 func TestMarkQuotaCheckedLeavesAWaitingRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if ok, err := s.HoldForQuota(ctx, id); err != nil || !ok {
@@ -308,6 +318,7 @@ func TestMarkQuotaCheckedLeavesAWaitingRun(t *testing.T) {
 // run waits, a run asked for or a start is left alone, and a start takes the
 // waiting run.
 func TestHoldForLimit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "h1")
 	if ok, err := s.HoldForLimit(ctx, id); err != nil || !ok {

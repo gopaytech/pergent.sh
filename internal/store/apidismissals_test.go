@@ -14,6 +14,7 @@ func apiDismissal(clientID int64, tenant, subject, fingerprint string) APIDismis
 // A finding dismissed twice is one row and one event; the second call leaves
 // the first one's reason and actor.
 func TestDismissAPIFindingTwiceIsNoop(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "gateway")
 	run := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -51,6 +52,7 @@ func TestDismissAPIFindingTwiceIsNoop(t *testing.T) {
 // A restore removes the row, and records who did it on the review it was done
 // on; restoring what is not dismissed changes nothing.
 func TestUndismissAPIFinding(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "gateway")
 	run := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -96,6 +98,7 @@ func TestUndismissAPIFinding(t *testing.T) {
 
 // The list is one client's, one tenant's, one subject's; oldest first.
 func TestAPIDismissalsBySubject(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "gateway")
 	other := newAPIClient(t, s, "other")

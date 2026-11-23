@@ -95,6 +95,7 @@ func (e *e2e) newJob(t *testing.T, known ...string) string {
 }
 
 func TestEndToEnd(t *testing.T) {
+	t.Parallel()
 	e := newE2E(t)
 	env := e.env
 	headA, headB, headC := sha('a'), sha('c'), sha('d')
@@ -207,6 +208,7 @@ func (e *e2e) postHook(t *testing.T, attrs, changes map[string]any) {
 // Retargeting an approved merge request reviews its head again against the
 // new target and withdraws the approval; a title edit does neither.
 func TestE2ERetargetReviewsAgainAndUnapproves(t *testing.T) {
+	t.Parallel()
 	e := newE2E(t)
 	env := e.env
 	head := sha('a')
@@ -248,6 +250,7 @@ func TestE2ERetargetReviewsAgainAndUnapproves(t *testing.T) {
 // to main must be reviewed against main again: the earlier main review is
 // no longer what the comment, the status and the approval show.
 func TestE2ERetargetBackToEarlierTargetReviewsAgain(t *testing.T) {
+	t.Parallel()
 	e := newE2E(t)
 	env := e.env
 	head := sha('a')

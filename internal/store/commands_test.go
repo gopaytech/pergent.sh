@@ -12,6 +12,7 @@ func command(kind, arg string, comment int64) Command {
 }
 
 func TestInsertCommandRedelivery(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := command("dismiss", "abc123", 100)
 	c.Reason = "not a bug"
@@ -46,6 +47,7 @@ func TestInsertCommandRedelivery(t *testing.T) {
 }
 
 func TestInsertCommandRefusesAnUnknownKind(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, err := s.InsertCommand(ctx, command("explode", "", 1)); err == nil {
 		t.Error("InsertCommand accepted an unknown kind")
@@ -58,6 +60,7 @@ func TestInsertCommandRefusesAnUnknownKind(t *testing.T) {
 }
 
 func TestClaimCommandsOnce(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	const total = 12
 	for i := int64(1); i <= total; i++ {
@@ -111,6 +114,7 @@ func TestClaimCommandsOnce(t *testing.T) {
 
 // Commands are claimed oldest first, at most limit at a time.
 func TestClaimCommandsOrderAndLimit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := int64(1); i <= 3; i++ {
 		if _, err := s.InsertCommand(ctx, command("review", "", i)); err != nil {
@@ -128,6 +132,7 @@ func TestClaimCommandsOrderAndLimit(t *testing.T) {
 }
 
 func TestRecentCommand(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	insert := func(mr MRKey, kind, arg string, comment int64, at time.Time) int64 {
 		t.Helper()
@@ -211,6 +216,7 @@ func TestRecentCommand(t *testing.T) {
 // answered since a time, whatever the command, unless it was carried out
 // (CommandDone) or throttled.
 func TestRecentAnswered(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	finish := func(mr MRKey, author int64, comment int64, outcome string, at time.Time) {
 		t.Helper()
@@ -292,6 +298,7 @@ func TestRecentAnswered(t *testing.T) {
 }
 
 func TestFinishCommand(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, err := s.InsertCommand(ctx, command("review", "", 1)); err != nil {
 		t.Fatal(err)
@@ -320,6 +327,7 @@ func TestFinishCommand(t *testing.T) {
 // DeferCommand puts a claimed command back for later with its attempts as
 // they were.
 func TestDeferCommand(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, err := s.InsertCommand(ctx, command("review", "", 1)); err != nil {
 		t.Fatal(err)
@@ -352,6 +360,7 @@ func TestDeferCommand(t *testing.T) {
 }
 
 func TestReleaseCommand(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, err := s.InsertCommand(ctx, command("review", "", 1)); err != nil {
 		t.Fatal(err)
@@ -394,6 +403,7 @@ func TestReleaseCommand(t *testing.T) {
 // A claim not renewed within five minutes is taken to be lost; a fresh one
 // holds the command.
 func TestClaimCommandsReclaimsStaleClaim(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, err := s.InsertCommand(ctx, command("review", "", 1)); err != nil {
 		t.Fatal(err)
@@ -415,6 +425,7 @@ func TestClaimCommandsReclaimsStaleClaim(t *testing.T) {
 }
 
 func TestClaimCommandsSkipsInstances(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	other := command("review", "", 2)
 	other.MR = MRKey{Instance: "https://other.example.com", ProjectID: 7, IID: 3}
@@ -435,6 +446,7 @@ func TestClaimCommandsSkipsInstances(t *testing.T) {
 }
 
 func TestPruneCommands(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := int64(1); i <= 3; i++ {
 		if _, err := s.InsertCommand(ctx, command("review", "", i)); err != nil {
@@ -463,6 +475,7 @@ func TestPruneCommands(t *testing.T) {
 // Deleting a project or an instance's data takes its dismissals and
 // commands with it, and only those.
 func TestDeletesRemoveDismissalsAndCommands(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	otherProject := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 3}
 	otherInstance := MRKey{Instance: "lab", ProjectID: 7, IID: 3}
@@ -516,6 +529,7 @@ func TestDeletesRemoveDismissalsAndCommands(t *testing.T) {
 // A command written as a reply in a thread keeps the discussion and the
 // comment it replies to; a plain comment has neither.
 func TestCommandThreadFields(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	plain := command("review", "", 1)
 	gitlab := command("dismiss", "abc123", 2)
@@ -545,6 +559,7 @@ func TestCommandThreadFields(t *testing.T) {
 // RefusedBefore tells whether an earlier, finished command of the author on
 // the change ended with the outcome.
 func TestRefusedBefore(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	const why = "refused: not the author or a maintainer"
 	finish := func(mr MRKey, author, comment int64, outcome string, at time.Time) {
@@ -602,6 +617,7 @@ func TestRefusedBefore(t *testing.T) {
 }
 
 func TestDeliveries(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a, b := []byte("sum-a"), []byte("sum-b")
 	if seen, err := s.DeliverySeen(ctx, "gh", a); seen || err != nil {

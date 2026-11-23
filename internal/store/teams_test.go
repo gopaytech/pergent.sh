@@ -25,6 +25,7 @@ func memberIDs(ms []TeamMember) []int64 {
 }
 
 func TestCreateTeam(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	tm, err := s.CreateTeam(ctx, "Platform", t0)
 	if err != nil {
@@ -51,6 +52,7 @@ func TestCreateTeam(t *testing.T) {
 }
 
 func TestUpdateTeamReplaces(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustSSO(t, s, "alice@example.com")
 	b := mustSSO(t, s, "bob@example.com")
@@ -111,6 +113,7 @@ func TestUpdateTeamReplaces(t *testing.T) {
 }
 
 func TestTeamsListAndDelete(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustSSO(t, s, "alice@example.com")
 	t1, _ := s.CreateTeam(ctx, "zeta", t0)
@@ -148,6 +151,7 @@ func TestTeamsListAndDelete(t *testing.T) {
 }
 
 func TestAccountTeams(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustSSO(t, s, "alice@example.com")
 	b := mustSSO(t, s, "bob@example.com")
@@ -183,6 +187,7 @@ func TestAccountTeams(t *testing.T) {
 // A member that isn't an account (any more) is ErrUnknownAccount, and
 // nothing of the update is kept.
 func TestUpdateTeamUnknownMember(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustSSO(t, s, "alice@example.com")
 	tm, _ := s.CreateTeam(ctx, "devs", t0)
@@ -201,6 +206,7 @@ func TestUpdateTeamUnknownMember(t *testing.T) {
 // DeleteTeam hands the team to check under a row lock: an error from it
 // keeps the team, and a change in flight is seen by it.
 func TestDeleteTeamChecked(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	tm, _ := s.CreateTeam(ctx, "devs", t0)
 
@@ -256,6 +262,7 @@ func TestDeleteTeamChecked(t *testing.T) {
 // roles come back on Team and on AccountTeams, an account named twice is one
 // member with the higher role, and a platform account can't be a member.
 func TestTeamMemberRoles(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustSSO(t, s, "alice@example.com")
 	b := mustSSO(t, s, "bob@example.com")
@@ -332,6 +339,7 @@ func TestTeamMemberRoles(t *testing.T) {
 // Platform accounts stay on a team in the database (the previous release
 // reads them) but are never listed, and a change to the team leaves them.
 func TestTeamKeepsPlatformMembershipsUnlisted(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	p := mustPlatform(t, s, "main", 1, "pat")
 	a := mustSSO(t, s, "alice@example.com")
@@ -361,6 +369,7 @@ func setOwner(t *testing.T, s *Store, teamID int64, repos ...TeamRepo) error {
 // The owner of the repository entry wins over the owner of the instance
 // entry.
 func TestOwnerMostSpecific(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a, _ := s.CreateTeam(ctx, "Platform", t0)
 	b, _ := s.CreateTeam(ctx, "Payments", t0)
@@ -400,6 +409,7 @@ func TestOwnerMostSpecific(t *testing.T) {
 
 // A second owner at the same level is refused with the owner's name.
 func TestOwnerTakenError(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a, _ := s.CreateTeam(ctx, "Payments", t0)
 	b, _ := s.CreateTeam(ctx, "Growth", t0)

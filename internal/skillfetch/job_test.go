@@ -42,6 +42,7 @@ const urlSource = "https://example.com/acme/skills.git"
 // Job with the URL, the ref and the folder, and a fresh one-time token, the
 // only secret the Job gets. The token completes the fetch once.
 func TestStartURLLaunchesJob(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	const held = "glpat-held-SECRET"
 	l := &fakeLauncher{}
@@ -111,6 +112,7 @@ func TestStartURLLaunchesJob(t *testing.T) {
 
 // Without the pergent.sh image (set by the chart) no URL can be read.
 func TestStartURLNeedsImage(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	l := &fakeLauncher{}
 	f := jobFetcher(st, l)
@@ -127,6 +129,7 @@ func TestStartURLNeedsImage(t *testing.T) {
 
 // A Job that can't be started fails its fetch at once, with a plain message.
 func TestStartURLLaunchFails(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	l := &fakeLauncher{err: errors.New("jobs is forbidden: SECRET-ish detail")}
 	f := jobFetcher(st, l)
@@ -153,6 +156,7 @@ func startJob(t *testing.T, f *Fetcher, l *fakeLauncher) (id, token string) {
 // secret or an oversize text is not kept, a bad skill gets its problem, and
 // a body that isn't a result, or a commit that isn't one, fails the fetch.
 func TestCompleteJobChecksFiles(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	const held = "glpat-held-SECRET"
 	l := &fakeLauncher{}
@@ -215,6 +219,7 @@ func TestCompleteJobChecksFiles(t *testing.T) {
 // The error a Job reports is kept, bounded, on one line and without a held
 // secret.
 func TestCompleteJobError(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	const held = "glpat-held-SECRET"
 	l := &fakeLauncher{}
@@ -252,6 +257,7 @@ func TestCompleteJobError(t *testing.T) {
 
 // A body over MaxFetchBytes fails the fetch, with the token only.
 func TestJobTooLarge(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	l := &fakeLauncher{}
 	f := jobFetcher(st, l)
@@ -272,6 +278,7 @@ func TestJobTooLarge(t *testing.T) {
 
 // A fetch read by the pod has no token: no Job result can complete it.
 func TestCompleteJobRefusesInstanceFetch(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	id, err := st.CreateSkillFetch(ctx, store.SkillFetch{Kind: store.SourceKindInstance, Instance: "lab", Repo: "acme/skills",
 		Ref: "main", Purpose: store.FetchInstall, CreatedAt: t0, ExpiresAt: t0.Add(time.Hour)}, nil)
@@ -292,6 +299,7 @@ func TestCompleteJobRefusesInstanceFetch(t *testing.T) {
 // secrets are not read and the result is not checked. The right token still
 // completes the fetch afterwards.
 func TestCompleteJobWrongTokenDoesNoWork(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	l := &fakeLauncher{}
 	f := jobFetcher(st, l, "glpat-held-SECRET")

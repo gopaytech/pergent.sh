@@ -273,7 +273,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	ctx := context.Background()
 	dbURL := storetest.URL(t, store.OpenInSchema)
 	schema := storetest.Schema
-	st, err := store.OpenInSchema(ctx, dbURL, schema)
+	st, err := store.OpenInSchema(ctx, storetest.PoolURL(dbURL), schema)
 	if err != nil {
 		t.Fatalf("OpenInSchema: %v", err)
 	}
@@ -285,8 +285,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 	gl := newFakeGitLab(t)
 	cs, launcher := newFakeKube()
-	// The config's llm: block names this variable.
-	t.Setenv("OPENCODE_API_KEY", testLLMKey)
+	// The config's llm: block names OPENCODE_API_KEY; TestMain sets it.
 	cfg := testConfig(gl.URL())
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("test config is invalid: %v", err)

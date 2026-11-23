@@ -86,6 +86,7 @@ func instanceQuotaRepo() settings.Effective {
 // resolver still finds a team entry (owner ruling 2026-11-20), and are
 // refused as before when it finds none.
 func TestRerunAndStartUnderInstanceQuotaAskTheChain(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		teamEntry bool
@@ -119,6 +120,7 @@ func TestRerunAndStartUnderInstanceQuotaAskTheChain(t *testing.T) {
 // A team entry left does not help a used-up repository quota: it counts
 // every token.
 func TestRerunUnderRepoQuotaStillRefused(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
 	repo := quotaRepo()

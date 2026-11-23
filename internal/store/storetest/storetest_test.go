@@ -135,6 +135,20 @@ func TestWithDatabase(t *testing.T) {
 	}
 }
 
+// A test's store pool is capped, in both URL forms, so parallel tests stay
+// under the server's max_connections.
+func TestPoolURL(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"postgres://h/db", "postgres://h/db?pool_max_conns=4"},
+		{"postgres://h/db?sslmode=disable", "postgres://h/db?sslmode=disable&pool_max_conns=4"},
+		{"host=h dbname=db", "host=h dbname=db pool_max_conns=4"},
+	} {
+		if got := PoolURL(c.in); got != c.want {
+			t.Errorf("PoolURL(%q) = %q; want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // A new template retires what an older migration hash left: its template,
 // build and free copies, and the copies of binaries that stopped. A copy
 // whose owner still runs stays.

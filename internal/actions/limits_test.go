@@ -24,6 +24,7 @@ func setLimit(t *testing.T, st *store.Store, ref store.EntryRef, team, tokens in
 // go ahead while an entry has room, and are refused as for the quota when
 // limits alone stop every entry.
 func TestRequestsByHandAskTheLimits(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	m := newChainModels(t, st, true)
 	seedUsageOn(t, st, 1000, quotaNow.Add(-time.Hour), 10, &m.global)
@@ -51,6 +52,7 @@ func TestRequestsByHandAskTheLimits(t *testing.T) {
 // with no mark, and is refused, naming the team, only when nothing but team
 // entries at their team's own limit is left.
 func TestAdminRequestStopsAtTeamOwnLimit(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	m := newChainModels(t, st, true)
 	seedUsageOn(t, st, 1000, quotaNow.Add(-time.Hour), 10, &m.global)

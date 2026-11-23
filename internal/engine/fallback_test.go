@@ -83,6 +83,7 @@ func wantNoFallback(t *testing.T, env *testEnv, id string, refs ...store.EntryRe
 // run closes as fell_back with nothing posted but the shared status, and the
 // next attempt is queued.
 func TestFallBackOnQuota(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	_, first, _ := twoTeamEntries(t, env)
 	head := sha('a')
@@ -122,6 +123,7 @@ func TestFallBackOnQuota(t *testing.T) {
 // An auth error marks the entry with no end: it lasts until its key is
 // edited, which clears it.
 func TestFallBackOnAuthMarksUntilEdit(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team, first, _ := twoTeamEntries(t, env)
 	head := sha('a')
@@ -148,6 +150,7 @@ func TestFallBackOnAuthMarksUntilEdit(t *testing.T) {
 // A plain rate limit is no reason to fall back: the review is posted as
 // today.
 func TestNoFallBackOnRateLimit(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	_, first, _ := twoTeamEntries(t, env)
 	head := sha('a')
@@ -161,6 +164,7 @@ func TestNoFallBackOnRateLimit(t *testing.T) {
 
 // A 1-entry chain never falls back.
 func TestNoFallBackOnOneEntryChain(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	team := teamOwning(t, env, "Payments")
 	only := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
@@ -177,6 +181,7 @@ func TestNoFallBackOnOneEntryChain(t *testing.T) {
 
 // A pergent image that writes no provider_error gives today's behaviour.
 func TestNoFallBackOldImage(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	_, first, _ := twoTeamEntries(t, env)
 	head := sha('a')
@@ -190,6 +195,7 @@ func TestNoFallBackOldImage(t *testing.T) {
 // An API review fails as today: there is no second attempt, since its inputs
 // are gone. The entry is still marked, so the next review skips it.
 func TestNoFallBackForAPIReview(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	env.Engine.Config.LLM = config.LLM{}

@@ -3,6 +3,7 @@ package store
 import "testing"
 
 func TestCommentFooterNote(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if note, err := s.CommentFooterNote(ctx); err != nil || note != "" {
 		t.Fatalf("unset: %q, %v", note, err)

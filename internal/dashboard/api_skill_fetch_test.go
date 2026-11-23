@@ -173,6 +173,7 @@ func wantResults(t *testing.T, got []SkillFetchResultView, want ...SkillFetchRes
 // any instance, or a public URL: nothing asks what the admin could read on the
 // platform. A read names its instance. Someone who is no admin reads nothing.
 func TestAnyAdminReadsAnySource(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	files := map[string]string{"style.md": "Be kind."}
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, files)
@@ -211,6 +212,7 @@ func TestAnyAdminReadsAnySource(t *testing.T) {
 // a maintainer and a viewer get 404 on each, even holding the ID of an admin's
 // read, and nothing is installed.
 func TestInstallSkillNeedsAdmin(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"style.md": "Be kind."})
 	admin := e.userOnMain(true)
@@ -251,6 +253,7 @@ func TestInstallSkillNeedsAdmin(t *testing.T) {
 
 // Only the admin who started a read sees it and acts on it.
 func TestFetchOnlyRequesterSees(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"style.md": "Be kind."})
 	admin := e.userOnMain(true)
@@ -277,6 +280,7 @@ func TestFetchOnlyRequesterSees(t *testing.T) {
 // the default list when asked (within the budget), and is audited without
 // the text or the private repository's path.
 func TestInstallRecordsSourceAndDefaults(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skillRepo("main", "acme/private-skills", "v1.0", commitV1, map[string]string{
 		"skills/style.md":        "---\nname: style\n---\nBe kind.\n",
@@ -358,6 +362,7 @@ func TestInstallRecordsSourceAndDefaults(t *testing.T) {
 
 // A name written into the library after the read can't be installed over.
 func TestInstallNameTakenSinceFetch(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"style.md": "From git."})
 	op := e.operator()
@@ -429,6 +434,7 @@ func TestFetchMarksSecretAndOversize(t *testing.T) {
 // Check for updates at a new tag shows each installed skill's text against
 // the tag's, and Update saves it with the new ref and commit.
 func TestUpdateNewRefShowsDiff(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"skills/style.md": "Old text.", "skills/same.md": "Same."})
 	e.skillRepo("main", "acme/skills", "v1.1", commitV11, map[string]string{"skills/style.md": "New text.", "skills/same.md": "Same."})
@@ -472,6 +478,7 @@ func TestUpdateNewRefShowsDiff(t *testing.T) {
 // A skill gone from its path is "removed at the source", one whose file now
 // names another skill is "renamed at the source"; neither is updated.
 func TestUpdateRemovedAndRenamed(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"a.md": "A.", "b.md": "B."})
 	e.skillRepo("main", "acme/skills", "v2.0", commitV11, map[string]string{"a.md": "---\nname: alpha\n---\nA.", "c.md": "C."})
@@ -505,6 +512,7 @@ func TestUpdateRemovedAndRenamed(t *testing.T) {
 // and a URL source is public. (Every admin may read every repository the bot
 // or App reaches, so there is no per-user check.)
 func TestPrivateSourceHiddenFromUsers(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.installedSkill("alpha", "Alpha text.")
 	src := store.SkillSource{Kind: store.SourceKindURL, URL: "https://example.com/skills.git", Ref: "main", Path: "beta.md", Commit: "c"}
@@ -566,7 +574,7 @@ func (e *env) holdLibrary(start, change func()) {
 	for {
 		var waiting int
 		if err := e.db.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND query LIKE '%library_skills%'`).Scan(&waiting); err != nil {
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%library_skills%'`).Scan(&waiting); err != nil {
 			e.t.Fatal(err)
 		}
 		if waiting > 0 {
@@ -587,6 +595,7 @@ func (e *env) holdLibrary(start, change func()) {
 // nothing else: a change to the other defaults made while the skill is being
 // saved (approve here) stays.
 func TestAddToDefaultsKeepsOtherDefaultChanges(t *testing.T) {
+	t.Parallel()
 	check := func(t *testing.T, e *env, send func() *httptest.ResponseRecorder) {
 		t.Helper()
 		done := make(chan *httptest.ResponseRecorder, 1)

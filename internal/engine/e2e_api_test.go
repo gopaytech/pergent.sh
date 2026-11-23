@@ -200,6 +200,7 @@ func secretExists(t *testing.T, env *testEnv, name string) bool {
 // An API review goes through the queue, the Job, the result handler and the
 // publisher, with no forge call, and reads back completed.
 func TestAPIReviewEndToEnd(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	im, err := reviewapi.BuildImport(twoFiles())
@@ -310,6 +311,7 @@ func TestE2EAPIReviewNeverMultiReview(t *testing.T) {
 
 // API and merge request reviews share jobs.max_running, first in first out.
 func TestAPIReviewSharesMaxRunning(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	env.Engine.Config.Jobs.MaxRunning = 1
@@ -335,6 +337,7 @@ func TestAPIReviewSharesMaxRunning(t *testing.T) {
 // A client whose skills were emptied after the request fails at the start,
 // with the text the 409 has, and no Job.
 func TestAPIReviewNoSkillsFails(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	id := a.ask(t, "route:1", twoFiles())
@@ -357,6 +360,7 @@ func TestAPIReviewNoSkillsFails(t *testing.T) {
 
 // A client whose model is gone fails, and never falls back to the default.
 func TestAPIReviewModelGoneFails(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	id := a.ask(t, "route:1", twoFiles())
@@ -376,6 +380,7 @@ func TestAPIReviewModelGoneFails(t *testing.T) {
 // A result for another head is refused by the result handler, and the review
 // is failed at delivery.
 func TestAPIReviewWrongCommitFails(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	im, err := reviewapi.BuildImport(twoFiles())
@@ -405,6 +410,7 @@ func TestAPIReviewWrongCommitFails(t *testing.T) {
 // A stored result the publisher can't read is published as failed at
 // delivery, with a fixed reason, and never as a pass.
 func TestAPIReviewUnusableResultFails(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	id := a.ask(t, "route:1", twoFiles())
@@ -433,6 +439,7 @@ func TestAPIReviewUnusableResultFails(t *testing.T) {
 // The files' Secret is deleted once the checkout is done, not before, and the
 // watcher writes no repository's rows for an API review.
 func TestWatchDeletesFilesAfterCheckout(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	id := a.ask(t, "route:1", twoFiles())
@@ -480,6 +487,7 @@ func TestWatchDeletesFilesAfterCheckout(t *testing.T) {
 // A failed API review Job is reported with its files deleted, and no
 // repository gets a "Needs attention" item for it.
 func TestWatchReportsAPIReviewWithoutAttention(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	ids := []string{a.ask(t, "route:1", twoFiles()), a.ask(t, "route:2", twoFiles())}
@@ -539,6 +547,7 @@ func wantNoRepoRows(t *testing.T, env *testEnv) {
 // A review superseded by a newer request of its subject has its Job deleted
 // by the cleanup, which sets no status.
 func TestSupersededAPIReviewCleanedUp(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	first := a.ask(t, "route:1", twoFiles())
@@ -568,6 +577,7 @@ func TestSupersededAPIReviewCleanedUp(t *testing.T) {
 // Each pass drops the sealed files no Job will need: those of a review
 // superseded before its Job. A queued review keeps its own.
 func TestPassDropsSpentAPIInputs(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	first := a.ask(t, "route:1", twoFiles())
