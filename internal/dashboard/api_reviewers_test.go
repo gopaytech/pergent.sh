@@ -22,9 +22,9 @@ const (
 	reviewersAuditName = "reviewers_changed"
 )
 
-// setPanelFloor sets the first pergent with multi review and the review
+// setReviewerFloor sets the first pergent with multi review and the review
 // image, the floor going back to its default after the test.
-func setPanelFloor(t *testing.T, e *env, floor, image string) {
+func setReviewerFloor(t *testing.T, e *env, floor, image string) {
 	t.Helper()
 	old := config.PanelMinVersion
 	config.PanelMinVersion = floor
@@ -149,7 +149,7 @@ func numbersAndRefs(v ReviewersView) []string {
 // With the floor unset, adding reviewer 2 is refused and nothing is stored.
 func TestReviewersRefusedWithoutFloor(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, "", reviewerImageOK)
+	setReviewerFloor(t, re.env, "", reviewerImageOK)
 	rec := re.sendJSON(re.admin, "PUT", reviewersURL(reviewersProject), reviewersBody([]string{globalRef(re.shared)}, []string{globalRef(re.shared)}))
 	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgNoReviewerYet {
 		t.Errorf("PUT = %d %s", rec.Code, rec.Body)
@@ -164,7 +164,7 @@ func TestReviewersRefusedWithoutFloor(t *testing.T) {
 // GET shows them, and each slot is audited once, by entry names only.
 func TestReviewersSavedWithFloor(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	setReviewerFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	body := reviewersBody([]string{globalRef(re.shared)}, []string{globalRef(re.shared), teamRef(re.own)}, []string{globalRef(re.private)}, []string{teamRef(re.own2)})
 	v := decode[ReviewersView](t, re.sendJSON(re.admin, "PUT", reviewersURL(reviewersProject), body), "PUT", http.StatusOK)
 	want := []string{"2: " + globalRef(re.shared) + " " + teamRef(re.own), "3: " + globalRef(re.private), "4: " + teamRef(re.own2)}
@@ -199,7 +199,7 @@ func TestReviewersSavedWithFloor(t *testing.T) {
 // An image older than the floor is refused with its tag in the message.
 func TestReviewersImageTooOld(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, "ghcr.io/x/pergent:v8.0.0")
+	setReviewerFloor(t, re.env, reviewerFloor, "ghcr.io/x/pergent:v8.0.0")
 	rec := re.sendJSON(re.admin, "PUT", reviewersURL(reviewersProject), reviewersBody([]string{globalRef(re.shared)}, []string{globalRef(re.shared)}))
 	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgReviewerNeeds+"v8.0.0" {
 		t.Errorf("PUT = %d %s", rec.Code, rec.Body)
@@ -207,11 +207,28 @@ func TestReviewersImageTooOld(t *testing.T) {
 	re.wantNothingStored("after the refusal")
 }
 
+// An image whose tag is not a version is refused, and so is an image with no
+// tag, each with its own words.
+func TestReviewersImageNotVersion(t *testing.T) {
+	for image, want := range map[string]string{
+		"ghcr.io/x/pergent:main": msgReviewerNeeds + "main (not a version)",
+		"ghcr.io/x/pergent":      msgReviewerNeeds + "not a version",
+	} {
+		re := newReviewersEnv(t)
+		setReviewerFloor(t, re.env, reviewerFloor, image)
+		rec := re.sendJSON(re.admin, "PUT", reviewersURL(reviewersProject), reviewersBody([]string{globalRef(re.shared)}, []string{globalRef(re.shared)}))
+		if rec.Code != http.StatusBadRequest || errorOf(t, rec) != want {
+			t.Errorf("image %s: PUT = %d %s; want 400 %q", image, rec.Code, rec.Body, want)
+		}
+		re.wantNothingStored("after the refusal")
+	}
+}
+
 // Only a save that adds a reviewer needs the image: with the floor unset, a
 // maintainer edits a stored reviewer and removes one.
 func TestReviewersRemoveNeedsNoImage(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, "", reviewerImageOK)
+	setReviewerFloor(t, re.env, "", reviewerImageOK)
 	re.storeReviewers(true, []string{teamRef(re.own)}, []string{globalRef(re.shared)}, []string{teamRef(re.own2)})
 	url := reviewersURL(reviewersProject)
 	decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{teamRef(re.own)}, []string{teamRef(re.own2)}, []string{globalRef(re.shared)})),
@@ -234,7 +251,7 @@ func TestReviewersRemoveNeedsNoImage(t *testing.T) {
 // does not see it 404, and a maintainer of the owner team saves.
 func TestReviewersRights(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	setReviewerFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	url, body := reviewersURL(reviewersProject), reviewersBody([]string{teamRef(re.own)}, []string{globalRef(re.shared)})
 
 	rec := re.sendJSON(re.viewer, "PUT", url, body)
@@ -266,7 +283,7 @@ func TestReviewersRights(t *testing.T) {
 // the judge.
 func TestReviewersForeignEntry(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	setReviewerFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	foreign := re.addTeamModel(re.otherMaintainer, re.widgets, "theirs", teamKeyTwo)
 	for name, body := range map[string]map[string]any{
 		"reviewer": reviewersBody([]string{teamRef(re.own)}, []string{teamRef(foreign)}),
@@ -284,7 +301,7 @@ func TestReviewersForeignEntry(t *testing.T) {
 // backup may repeat one.
 func TestReviewersSameFirstModel(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	setReviewerFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	loud := decode[TeamModelView](t, re.sendJSON(re.maintainer, "POST", teamURL(re.payments, "/models"),
 		map[string]any{"name": "loud", "provider": "OpenAI", "model": "GPT-One", "apiKey": teamKeyOne}), "POST team model", http.StatusCreated)
 	url := reviewersURL(reviewersProject)
@@ -311,7 +328,7 @@ func TestReviewersSameFirstModel(t *testing.T) {
 // entry is looked at.
 func TestReviewersCountsAndEmpties(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	setReviewerFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	j := []string{globalRef(re.shared)}
 	five := [][]string{{"global/a"}, {"global/b"}, {"global/c"}, {"global/d"}, {"global/e"}}
 	for name, tc := range map[string]struct {
@@ -341,7 +358,7 @@ func TestReviewersCountsAndEmpties(t *testing.T) {
 // and when reviewer 1's chain now starts with reviewer 2's model.
 func TestReviewersWarnings(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	setReviewerFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	url := reviewersURL(reviewersProject)
 	decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{teamRef(re.own2)}, []string{teamRef(re.own)}, []string{globalRef(re.shared)})),
 		"PUT", http.StatusOK)
@@ -363,7 +380,7 @@ func TestReviewersWarnings(t *testing.T) {
 // refused.
 func TestReviewersSameFirstModelUnchangedPairWarns(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	setReviewerFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	url := reviewersURL(reviewersProject)
 	re.storeReviewers(false, []string{teamRef(re.own2)}, []string{globalRef(re.shared)}, []string{teamRef(re.own)})
 	decode[ChainView](t, re.sendJSON(re.maintainer, "PUT", repoChainURL(reviewersProject), entryBody(teamRef(re.own))), "chain A", http.StatusOK)
@@ -389,7 +406,7 @@ func TestReviewersSameFirstModelUnchangedPairWarns(t *testing.T) {
 // moves reviewer 3 down and empties its slot; the judge did not change.
 func TestReviewersAuditPerSlot(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	setReviewerFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	re.storeReviewers(false, []string{teamRef(re.own2)}, []string{globalRef(re.shared)}, []string{teamRef(re.own)})
 	decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", reviewersURL(reviewersProject), reviewersBody([]string{teamRef(re.own2)}, []string{teamRef(re.own)})),
 		"remove reviewer 2", http.StatusOK)
@@ -407,7 +424,7 @@ func TestReviewersAuditPerSlot(t *testing.T) {
 // keeps saved_by_admin. A changed chain with that entry is refused.
 func TestReviewersMaintainerRemovesBeforeAdminReviewer(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	setReviewerFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	re.storeReviewers(true, []string{teamRef(re.own)}, []string{globalRef(re.shared)}, []string{globalRef(re.private)})
 	url := reviewersURL(reviewersProject)
 	rec := re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{teamRef(re.own)}, []string{globalRef(re.shared)}, []string{globalRef(re.private), teamRef(re.own2)}))
@@ -451,7 +468,7 @@ func TestRepositoryViewMultiReview(t *testing.T) {
 // log.
 func TestReviewersNoKeyInResponses(t *testing.T) {
 	re := newReviewersEnv(t)
-	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	setReviewerFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	url := reviewersURL(reviewersProject)
 	decode[ReviewersView](t, re.sendJSON(re.admin, "PUT", url,
 		reviewersBody([]string{globalRef(re.private)}, []string{globalRef(re.shared), teamRef(re.own)}, []string{globalRef(re.private)})), "PUT as the admin", http.StatusOK)
