@@ -27,7 +27,7 @@ type fakeMembers struct {
 	outcome  store.ResultOutcome
 	storeErr error
 	token    string
-	members  map[string][]store.PanelMember // by the run of the path
+	members  map[string][]store.ReviewMember // by the run of the path
 	run      store.Run
 	waits    bool
 
@@ -35,20 +35,20 @@ type fakeMembers struct {
 	replaced []store.Failure
 	reported []store.Failure
 	replErr  error
-	usage    map[string][]store.SkillUsage // RecordMemberUsage calls, by member
+	usage    map[string][]store.SkillUsage // RecordReviewMemberUsage calls, by member
 	usageErr error
-	// usageGate, when set, holds RecordMemberUsage until it is closed.
+	// usageGate, when set, holds RecordReviewMemberUsage until it is closed.
 	usageGate chan struct{}
 }
 
-func (f *fakeMembers) PanelRun(_ context.Context, root string) (store.Run, bool, error) {
+func (f *fakeMembers) MultiReviewRun(_ context.Context, root string) (store.Run, bool, error) {
 	if root != f.run.ID {
 		return store.Run{}, false, nil
 	}
 	return f.run, f.waits, nil
 }
 
-func (f *fakeMembers) StoreMemberResult(_ context.Context, runID, id, token string, body []byte, _ time.Time) (store.ResultOutcome, error) {
+func (f *fakeMembers) StoreReviewMemberResult(_ context.Context, runID, id, token string, body []byte, _ time.Time) (store.ResultOutcome, error) {
 	if f.storeErr != nil {
 		return 0, f.storeErr
 	}
@@ -61,17 +61,17 @@ func (f *fakeMembers) StoreMemberResult(_ context.Context, runID, id, token stri
 	return f.outcome, nil
 }
 
-func (f *fakeMembers) ReportMemberFailure(_ context.Context, id string, fail store.Failure, _ time.Time) (bool, error) {
+func (f *fakeMembers) ReportReviewMemberFailure(_ context.Context, id string, fail store.Failure, _ time.Time) (bool, error) {
 	f.reported = append(f.reported, fail)
 	return true, nil
 }
 
-func (f *fakeMembers) ReplaceMemberWithFailure(_ context.Context, id string, fail store.Failure) error {
+func (f *fakeMembers) ReplaceReviewMemberWithFailure(_ context.Context, id string, fail store.Failure) error {
 	f.replaced = append(f.replaced, fail)
 	return f.replErr
 }
 
-func (f *fakeMembers) RecordMemberUsage(_ context.Context, id string, skills []store.SkillUsage) error {
+func (f *fakeMembers) RecordReviewMemberUsage(_ context.Context, id string, skills []store.SkillUsage) error {
 	if f.usageGate != nil {
 		<-f.usageGate
 	}
@@ -96,10 +96,10 @@ func newFakeMembers() *fakeMembers {
 	return &fakeMembers{
 		outcome: store.ResultStored, token: "good", waits: true,
 		run: store.Run{ID: runID, BaseSHA: base, HeadSHA: head},
-		members: map[string][]store.PanelMember{
-			runID: {{ID: memberID, RunID: runID, Role: "a", State: store.MemberRunning}},
+		members: map[string][]store.ReviewMember{
+			runID: {{ID: memberID, RunID: runID, Reviewer: 1, State: store.MemberRunning}},
 			// Another review with a member of its own.
-			otherRun: {{ID: "44444444-4444-4444-4444-444444444444", RunID: otherRun, Role: "a"}},
+			otherRun: {{ID: "44444444-4444-4444-4444-444444444444", RunID: otherRun, Reviewer: 1}},
 		},
 	}
 }

@@ -279,10 +279,10 @@ func TestStatusOf(t *testing.T) {
 	}
 }
 
-// A panel review waiting for its members is running; a review held for
-// another reason is still queued.
-func TestAPIStatusPanelRunning(t *testing.T) {
-	for reason, want := range map[string]string{store.WaitPanel: StatusRunning, store.WaitQuota: StatusQueued, "": StatusQueued} {
+// An API review never splits, so a run that waits is queued, whatever the
+// reason.
+func TestAPIStatusWaitingIsQueued(t *testing.T) {
+	for reason, want := range map[string]string{store.WaitQuota: StatusQueued, store.WaitLimit: StatusQueued, "": StatusQueued} {
 		r := apiReview(store.Waiting, "", "")
 		r.Run.SkipReason = reason
 		if got := StatusOf(r); got != want {

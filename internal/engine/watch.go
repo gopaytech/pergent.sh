@@ -38,8 +38,8 @@ const (
 // log of each finished Job once, and the diagnostics of a failed one (see
 // captureLog), whether its run is still running or already reported.
 //
-// The Jobs of running panel members are watched the same way (watchMember):
-// such a Job fails its member, never the run.
+// The Jobs of a multi review's running reviewers are watched the same way
+// (watchMember): such a Job fails its member, never the run.
 //
 // It also records the checkout time a Job measured, the Job's pod and how far
 // its checkout got, deletes an API review's files once its checkout is done
@@ -59,10 +59,10 @@ func (e *Engine) WatchOnce(ctx context.Context) error {
 		wake = true
 	}
 
-	if n, err := e.Store.RecoverUnlaunchedMembers(ctx, now.Add(-unlaunchedAfter)); err != nil {
-		errs = append(errs, fmt.Errorf("watch: requeue stranded panel members: %w", err))
+	if n, err := e.Store.RecoverUnlaunchedReviewMembers(ctx, now.Add(-unlaunchedAfter)); err != nil {
+		errs = append(errs, fmt.Errorf("watch: requeue stranded reviewers: %w", err))
 	} else if n > 0 {
-		e.log().Warn("requeued panel members stranded before their job started", "members", n)
+		e.log().Warn("requeued reviewers stranded before their job started", "members", n)
 		wake = true
 	}
 
@@ -208,13 +208,13 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 	return true, nil
 }
 
-// watchMembers watches the Job of every running panel member whose run still
+// watchMembers watches the Job of every running reviewer whose run still
 // waits for it. A member whose run is gone is left to the sweep
 // (CleanupOnce). It reports whether it reported a member.
 func (e *Engine) watchMembers(ctx context.Context, now time.Time) (bool, error) {
-	ms, err := e.Store.RunningMembers(ctx)
+	ms, err := e.Store.RunningReviewMembers(ctx)
 	if err != nil {
-		return false, fmt.Errorf("watch: list running panel members: %w", err)
+		return false, fmt.Errorf("watch: list running reviewers: %w", err)
 	}
 	var errs []error
 	reported := false
@@ -228,9 +228,9 @@ func (e *Engine) watchMembers(ctx context.Context, now time.Time) (bool, error) 
 		}
 		run, seen := runs[m.RunID]
 		if !seen {
-			r, found, err := e.Store.PanelRun(ctx, m.RunID)
+			r, found, err := e.Store.MultiReviewRun(ctx, m.RunID)
 			if err != nil {
-				errs = append(errs, fmt.Errorf("watch member %s: load the panel's run: %w", m.ID, err))
+				errs = append(errs, fmt.Errorf("watch member %s: load the multi review's run: %w", m.ID, err))
 				continue
 			}
 			if found {
@@ -250,15 +250,15 @@ func (e *Engine) watchMembers(ctx context.Context, now time.Time) (bool, error) 
 	return reported, errors.Join(errs...)
 }
 
-// watchMember is watch for the Job of the running panel member m, whose run
+// watchMember is watch for the Job of the running reviewer m, whose run
 // waits for it: it records the pod and how far the checkout got, keeps the
 // log of a finished Job, deletes a stuck Job, and fails the member when its
-// Job is stuck, gone or finished without a result past watchGrace. An API
-// member's files go once its checkout is done. It sets no checkout time and
-// raises no "Needs attention" item, and it never touches the run. It
-// reports whether it reported the member.
-func (e *Engine) watchMember(ctx context.Context, m store.PanelMember, run store.Run, now time.Time) (bool, error) {
-	log := e.log().With("run", run.ID, "member", m.ID, "role", m.Role, "instance", run.MR.Instance,
+// Job is stuck, gone or finished without a result past watchGrace. It sets
+// no checkout time and raises no "Needs attention" item, and it never
+// touches the run. An API review never runs multi review, so no member Job
+// has files to delete. It reports whether it reported the member.
+func (e *Engine) watchMember(ctx context.Context, m store.ReviewMember, run store.Run, now time.Time) (bool, error) {
+	log := e.log().With("run", run.ID, "member", m.ID, "reviewer", m.Reviewer, "instance", run.MR.Instance,
 		"project", run.ProjectPath, "mr", run.MR.IID, "head", run.HeadSHA, "job", m.JobName)
 	obs, err := e.Launcher.Inspect(ctx, m.JobName, now)
 	if err != nil {
@@ -266,20 +266,15 @@ func (e *Engine) watchMember(ctx context.Context, m store.PanelMember, run store
 		return false, nil
 	}
 	if obs.PodName != "" && obs.PodName != m.PodName {
-		if err := e.Store.SetMemberPod(ctx, m.ID, obs.PodName); err != nil {
+		if err := e.Store.SetReviewMemberPod(ctx, m.ID, obs.PodName); err != nil {
 			log.Info("couldn't record the member job's pod", "error", e.redact(err.Error()))
 		}
 	}
 	seen := max(m.CheckoutSeen, obs.Checkout)
 	if seen > m.CheckoutSeen {
-		if err := e.Store.AdvanceMemberCheckoutSeen(ctx, m.ID, seen); err != nil {
+		if err := e.Store.AdvanceReviewMemberCheckoutSeen(ctx, m.ID, seen); err != nil {
 			log.Info("couldn't record how far the member's checkout got", "error", e.redact(err.Error()))
 		}
-	}
-	// The files Secret is the member Job's own; the stored copy stays.
-	isAPI := run.Kind == store.KindAPI
-	if isAPI && m.CheckoutSeen < 2 && seen >= 2 {
-		e.deleteFiles(ctx, m.JobName, log)
 	}
 	if obs.Failure.Deadline {
 		if obs.Failure.Step == kube.StepClone {
@@ -320,10 +315,7 @@ func (e *Engine) watchMember(ctx context.Context, m store.PanelMember, run store
 		return false, nil
 	}
 
-	if isAPI {
-		e.deleteFiles(ctx, m.JobName, log)
-	}
-	changed, err := e.Store.ReportMemberFailure(ctx, m.ID, store.Failure{Reason: f.Reason, Step: f.Step, Detail: f.Detail}, now)
+	changed, err := e.Store.ReportReviewMemberFailure(ctx, m.ID, store.Failure{Reason: f.Reason, Step: f.Step, Detail: f.Detail}, now)
 	if err != nil {
 		return false, fmt.Errorf("report member failure: %w", err)
 	}

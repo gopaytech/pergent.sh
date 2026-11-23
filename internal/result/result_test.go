@@ -1225,74 +1225,87 @@ func TestParseProviderError(t *testing.T) {
 	}
 }
 
-const panelResultJSON = `{"schema_version":1,"status":"completed","base":"b","head":"h",
- "panel":{"a":{"provider":"pa","model":"ma"},"b":{"provider":"pb","model":"mb"},"mode":"both","judged":true},
- "provider_error":{"class":"quota","role":"b","provider":"pb","model":"mb"},
- "skills":[{"name":"sec","verdict":"failed",
-  "panel":{"mode":"both","judges":[
-    {"role":"a","status":"ok"},
-    {"role":"b","status":"failed","cause":{"kind":"provider","message":"m","provider_error":{"class":"quota","role":"b"}}},
-    {"role":"a","status":"skipped"}]},
-  "tokens_by_model":[{"role":"a","provider":"pa","model":"ma","tokens":{"input":1,"output":2,"reasoning":3,"cache_read":4,"cache_write":5}}],
+// multiReviewJSON is a judge result of a multi review with every D6 field:
+// the top block, a skill's block (judge failed, reviewer 3 failed), a merged
+// finding with every finding field and one with none.
+const multiReviewJSON = `{"schema_version":1,"status":"completed","base":"b","head":"h",
+ "multi_review":{"reviewers":[{"number":1,"usable":true},{"number":2,"usable":true},{"number":3,"usable":false}],
+   "judge":{"provider":"pj","model":"mj","judged":true}},
+ "provider_error":{"class":"quota","role":"judge","provider":"pj","model":"mj"},
+ "skills":[{"name":"sec","verdict":"has_blocking_issues",
+  "multi_review":{"reviewers":[1,2],"failed":[3],"judge":"failed",
+    "judge_cause":{"kind":"provider","message":"m","provider_error":{"class":"quota","role":"judge","provider":"pj","model":"mj"}}},
   "findings":[{"id":"aaaaaa","fingerprint":"aaaaaa111111","file":"x.go","severity":"blocking","title":"T","explanation":"E",
-    "panel":{"found_by":"both","also":["cccccc333333"],"disagreed_by":"b","reason":"r","rated_suggestion_by":"a","unjudged_by":"b"}},
+    "multi_review":{"found_by":[1,2],"also":["cccccc333333"],"judge_disagreed":true,"reason":"r","rated_suggestion_by":[2],"unjudged":true}},
    {"fingerprint":"bbbbbb222222","file":"y.go","severity":"suggestion","title":"S","explanation":"E2"}],
-  "files":{"reviewed":["x.go"]}}],
+  "files":{"reviewed":["x.go"]}},
+  {"name":"style","verdict":"no_blocking_issues","multi_review":{"reviewers":[1,2,3],"judge":"skipped","exact_merge":true},
+   "findings":[],"files":{"reviewed":["x.go"]}}],
  "comment":{"markdown":"x"}}`
 
-func TestParsePanelResult(t *testing.T) {
-	r, err := Parse([]byte(panelResultJSON))
+// Every D6 field is read: the top block, the skill's (with the judge's
+// status and cause, kept for the run page) and the finding's.
+func TestParseMultiReviewResult(t *testing.T) {
+	r, err := Parse([]byte(multiReviewJSON))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Panel == nil || r.Panel.A.Model != "ma" || r.Panel.B.Provider != "pb" || r.Panel.Mode != "both" || !r.Panel.Judged {
-		t.Errorf("panel = %+v", r.Panel)
+	want := &MultiReview{Reviewers: []MultiReviewer{{1, true}, {2, true}, {3, false}}, Judge: MultiJudge{Provider: "pj", Model: "mj", Judged: true}}
+	if !reflect.DeepEqual(r.MultiReview, want) {
+		t.Errorf("multi_review = %+v; want %+v", r.MultiReview, want)
 	}
-	if r.ProviderError == nil || r.ProviderError.Role != "b" {
-		t.Errorf("provider_error = %+v", r.ProviderError)
+	if r.ProviderError == nil || r.ProviderError.Role != "judge" {
+		t.Errorf("provider_error = %+v; want role judge", r.ProviderError)
 	}
-	s := r.Skills[0]
-	if s.Panel == nil || s.Panel.Mode != "both" || len(s.Panel.Judges) != 3 || s.Panel.Judges[1].Cause == nil ||
-		s.Panel.Judges[1].Cause.ProviderError == nil || s.Panel.Judges[1].Cause.ProviderError.Role != "b" {
-		t.Errorf("skill panel = %+v", s.Panel)
+	sm := r.Skills[0].MultiReview
+	if sm == nil || !slices.Equal(sm.Reviewers, []int{1, 2}) || !slices.Equal(sm.Failed, []int{3}) || sm.Judge != "failed" ||
+		sm.ExactMerge || sm.JudgeCause == nil || sm.JudgeCause.Kind != "provider" || sm.JudgeCause.ProviderError == nil ||
+		sm.JudgeCause.ProviderError.Role != "judge" {
+		t.Errorf("skill multi_review = %+v", sm)
 	}
-	if len(s.TokensByModel) != 1 || s.TokensByModel[0].Role != "a" || s.TokensByModel[0].Tokens.CacheWrite != 5 {
-		t.Errorf("tokens_by_model = %+v", s.TokensByModel)
+	if sm := r.Skills[1].MultiReview; sm == nil || !sm.ExactMerge || sm.Failed != nil || sm.Judge != "skipped" {
+		t.Errorf("exact skill multi_review = %+v; want exact, no failed", sm)
 	}
-	fs := skillFindings(t, s)
-	want := &FindingPanel{FoundBy: "both", Also: []string{"cccccc333333"}, DisagreedBy: "b", Reason: "r", RatedSuggestionBy: "a", UnjudgedBy: "b"}
-	if !reflect.DeepEqual(fs[0].Panel, want) || fs[1].Panel != nil {
-		t.Errorf("finding panels = %+v, %+v", fs[0].Panel, fs[1].Panel)
+	fs := skillFindings(t, r.Skills[0])
+	wantF := &FindingMultiReview{FoundBy: []int{1, 2}, Also: []string{"cccccc333333"}, JudgeDisagreed: true, Reason: "r",
+		RatedSuggestionBy: []int{2}, Unjudged: true}
+	if !reflect.DeepEqual(fs[0].MultiReview, wantF) || fs[1].MultiReview != nil {
+		t.Errorf("finding multi_review = %+v, %+v", fs[0].MultiReview, fs[1].MultiReview)
 	}
 }
 
-func TestToRenderPanelFields(t *testing.T) {
-	r, err := Parse([]byte(panelResultJSON))
+// ToRender maps the skill's block to render's {Reviewers, Failed, Exact}
+// (exact_merge is Exact; an omitted failed stays nil) and the finding's
+// field for field. Also reaches render, so a dismissal of a merged
+// fingerprint dismisses the merged finding.
+func TestToRenderMultiReviewFields(t *testing.T) {
+	r, err := Parse([]byte(multiReviewJSON))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := ToRender(r)
-	// The failed judge b counts, and so does the skipped judge a (not exact).
-	if got[0].Panel == nil || !reflect.DeepEqual(*got[0].Panel, render.SkillPanel{Mode: "both", JudgeFailed: []string{"b", "a"}}) {
-		t.Errorf("skill panel = %+v", got[0].Panel)
+	if p := got[0].MultiReview; p == nil || !reflect.DeepEqual(*p, render.SkillMultiReview{Reviewers: []int{1, 2}, Failed: []int{3}}) {
+		t.Errorf("skill multi review = %+v", p)
 	}
-	want := &render.FindingPanel{FoundBy: "both", Also: []string{"cccccc333333"}, DisagreedBy: "b", Reason: "r", RatedSuggestionBy: "a", UnjudgedBy: "b"}
-	if !reflect.DeepEqual(got[0].Findings[0].Panel, want) || got[0].Findings[1].Panel != nil {
-		t.Errorf("finding panels = %+v, %+v", got[0].Findings[0].Panel, got[0].Findings[1].Panel)
+	if p := got[1].MultiReview; p == nil || !reflect.DeepEqual(*p, render.SkillMultiReview{Reviewers: []int{1, 2, 3}, Exact: true}) {
+		t.Errorf("exact skill multi review = %+v; want Exact and no Failed", p)
+	}
+	want := &render.FindingMultiReview{FoundBy: []int{1, 2}, Also: []string{"cccccc333333"}, JudgeDisagreed: true, Reason: "r",
+		RatedSuggestionBy: []int{2}, Unjudged: true}
+	if !reflect.DeepEqual(got[0].Findings[0].MultiReview, want) || got[0].Findings[1].MultiReview != nil {
+		t.Errorf("finding multi review = %+v, %+v", got[0].Findings[0].MultiReview, got[0].Findings[1].MultiReview)
 	}
 
-	// An exact merge: a skipped judge is not listed, a failed one is.
-	exact := strings.Replace(panelResultJSON, `"mode":"both","judges"`, `"mode":"both","exact_merge":true,"judges"`, 1)
-	r2, err := Parse([]byte(exact))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p := ToRender(r2)[0].Panel; !reflect.DeepEqual(*p, render.SkillPanel{Mode: "both", JudgeFailed: []string{"b"}, Exact: true}) {
-		t.Errorf("exact skill panel = %+v", p)
+	// A dismissal of the fingerprint the judge merged in (also) dismisses
+	// the merged finding, and the skill has no blocking finding left.
+	decided := render.ApplyDismissals(got, []render.Dismissal{{Fingerprint: "cccccc333333", Severity: "blocking"}})
+	if len(decided[0].Dismissed) != 1 || decided[0].Dismissed[0].Finding.Fingerprint != "aaaaaa111111" ||
+		decided[0].Verdict != render.VerdictNoBlockingIssues {
+		t.Errorf("after dismissing the also fingerprint: dismissed %+v, verdict %q", decided[0].Dismissed, decided[0].Verdict)
 	}
 }
 
-func TestToRenderNoPanelUnchanged(t *testing.T) {
+func TestToRenderNoMultiReviewUnchanged(t *testing.T) {
 	data := `{"schema_version":1,"status":"completed","skills":[
 	  {"name":"a","verdict":"no_blocking_issues",
 	   "findings":[{"id":"aaaaaa","fingerprint":"aaaaaa111111","file":"x.go","line":4,"severity":"blocking","title":"T","explanation":"E"}],
@@ -1301,6 +1314,9 @@ func TestToRenderNoPanelUnchanged(t *testing.T) {
 	r, err := Parse([]byte(data))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if r.MultiReview != nil || r.Skills[0].MultiReview != nil {
+		t.Errorf("multi review = %+v, %+v; want none", r.MultiReview, r.Skills[0].MultiReview)
 	}
 	want := []render.Skill{{
 		Name: "a", Verdict: "no_blocking_issues", Reviewed: []string{"x.go"}, Batches: 1, BatchesFinished: 1,
@@ -1311,9 +1327,10 @@ func TestToRenderNoPanelUnchanged(t *testing.T) {
 	}
 }
 
-func TestMergeKeepsPanelFields(t *testing.T) {
-	base := []byte(panelResultJSON)
-	partial := []byte(strings.Replace(panelResultJSON, `"fingerprint":"aaaaaa111111"`, `"fingerprint":"dddddd444444"`, 1))
+// A re-run's merge keeps the multi review fields of the re-run's result.
+func TestMergeKeepsMultiReviewFields(t *testing.T) {
+	base := []byte(multiReviewJSON)
+	partial := []byte(strings.Replace(multiReviewJSON, `"fingerprint":"aaaaaa111111"`, `"fingerprint":"dddddd444444"`, 1))
 	merged, err := Merge(partial, base, []string{"sec"})
 	if err != nil {
 		t.Fatal(err)
@@ -1322,11 +1339,12 @@ func TestMergeKeepsPanelFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Panel == nil || r.Skills[0].Panel == nil || len(r.Skills[0].TokensByModel) != 1 {
-		t.Errorf("merged lost panel fields: %+v", r.Skills[0])
+	if r.MultiReview == nil || r.Skills[0].MultiReview == nil || r.Skills[1].MultiReview == nil {
+		t.Errorf("merged lost multi review fields: %+v", r)
 	}
 	fs := skillFindings(t, r.Skills[0])
-	if fs[0].Fingerprint != "dddddd444444" || fs[0].Panel == nil || fs[0].Panel.FoundBy != "both" || fs[0].Panel.Reason != "r" {
+	if fs[0].Fingerprint != "dddddd444444" || fs[0].MultiReview == nil || !slices.Equal(fs[0].MultiReview.FoundBy, []int{1, 2}) ||
+		fs[0].MultiReview.Reason != "r" {
 		t.Errorf("merged finding = %+v", fs[0])
 	}
 }

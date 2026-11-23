@@ -435,11 +435,15 @@ func explain(t *testing.T, s *Store, sql string, args ...any) string {
 	return b.String()
 }
 
-// A panel waiting for its members is a review being done: the overview counts
-// it, as running. A run held for a start still isn't counted.
-func TestRunStatsCountPanel(t *testing.T) {
+// A multi review waiting for its reviewers (skip reason review_members) is a
+// review being done: the overview counts it, as running. A run held for a
+// start still isn't counted.
+func TestRunStatsCountMultiReview(t *testing.T) {
 	s := newStore(t)
-	panelRun(t, s, mr1, "a1")
+	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
+	if r := getRun(t, s, id); r.State != Waiting || r.SkipReason != WaitReviewers {
+		t.Fatalf("run = %s/%q; want waiting for its reviewers", r.State, r.SkipReason)
+	}
 	heldRun(t, s, mr2, "b1", WaitUntrusted)
 	got, err := s.RunStats(ctx, Visibility{All: true}, t0.Add(-24*time.Hour*365*10))
 	if err != nil {

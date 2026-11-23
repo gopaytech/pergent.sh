@@ -2,10 +2,10 @@
 package usage
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"slices"
-	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -80,94 +80,39 @@ func FromResult(body []byte, run store.Run) ([]store.SkillUsage, error) {
 
 func negative(v *int64) bool { return v != nil && *v < 0 }
 
-// rawModelResult reads only the per-model tokens. The counts are pointers, so
-// a count the result left out stays unknown (result.Tokens can't tell).
-type rawModelResult struct {
-	Merged      bool            `json:"merged"`
-	Incremental json.RawMessage `json:"incremental"`
-	Skills      []struct {
-		Name          string `json:"name"`
-		TokensByModel []struct {
-			Role     string `json:"role"`
-			Provider string `json:"provider"`
-			Model    string `json:"model"`
-			Tokens   struct {
-				Input      int64  `json:"input"`
-				Output     int64  `json:"output"`
-				Reasoning  *int64 `json:"reasoning"`
-				CacheRead  *int64 `json:"cache_read"`
-				CacheWrite *int64 `json:"cache_write"`
-			} `json:"tokens"`
-		} `json:"tokens_by_model"`
-	} `json:"skills"`
+// Usage is what to record of one run's result: what each skill used, and
+// whether the run is a multi review's judge run.
+type Usage struct {
+	Skills []store.SkillUsage
+	Judge  bool
 }
 
-// ModelRows returns the per-model tokens of body's skills (tokens_by_model),
-// in the skills' order, A before B; nil for a result without them. It counts
-// the same skills as FromResult, and like it leaves out a whole skill when any
-// of its rows has a negative count. Only roles "a" and "b" count, and only the
-// first row of each role in a skill.
-func ModelRows(body []byte, run store.Run) ([]store.ModelUsage, error) {
-	var res rawModelResult
-	if err := json.Unmarshal(body, &res); err != nil {
-		return nil, err
-	}
-	subset := run.Trigger == store.TriggerRerunFailed && run.SkillSubset != nil
-	mergedIncremental := res.Merged && len(res.Incremental) > 0 && string(res.Incremental) != "null"
-	var out []store.ModelUsage
-	for _, s := range res.Skills {
-		switch {
-		case s.Name == "":
-			continue
-		case subset && !slices.Contains(run.SkillSubset, s.Name):
-			continue
-		case mergedIncremental && !subset && s.Name == result.ImpactSkill:
-			continue
-		}
-		rows := make([]store.ModelUsage, 0, len(s.TokensByModel))
-		bad := false
-		for _, m := range s.TokensByModel {
-			t := m.Tokens
-			if t.Input < 0 || t.Output < 0 || negative(t.Reasoning) || negative(t.CacheRead) || negative(t.CacheWrite) {
-				bad = true
-				break
-			}
-			if (m.Role != "a" && m.Role != "b") || slices.ContainsFunc(rows, func(r store.ModelUsage) bool { return r.Role == m.Role }) {
-				continue
-			}
-			rows = append(rows, store.ModelUsage{Skill: s.Name, Role: m.Role, Provider: m.Provider, Model: m.Model,
-				In: t.Input, Out: t.Output, Reasoning: t.Reasoning, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite})
-		}
-		if bad {
-			continue
-		}
-		// A before B, whatever order the result lists them in.
-		slices.SortStableFunc(rows, func(x, y store.ModelUsage) int { return strings.Compare(x.Role, y.Role) })
-		out = append(out, rows...)
-	}
-	return out, nil
+// Recorder is the part of the store a run's usage is written with.
+type Recorder interface {
+	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage, models []store.ModelUsage) error
+	RecordJudgeUsage(ctx context.Context, id string, skills []store.SkillUsage) error
 }
 
 // Rows returns what to record of run's result body: what each skill used
-// (FromResult) and, for a review panel's merge (merge true, Job P), its model
-// rows (ModelRows), never nil then, so the store adds P's tokens to the rows
-// its members made even when the result has no per-model tokens. Any other
-// run has nil model rows: today's record. An unreadable result is an error
-// with no skills, and, for a merge, no model rows.
-func Rows(body []byte, run store.Run, merge bool) ([]store.SkillUsage, []store.ModelUsage, error) {
+// (FromResult), for a multi review's judge run when judge is true. An
+// unreadable result is an error with no skills; the run is still marked
+// when it is recorded, so it is not read again.
+func Rows(body []byte, run store.Run, judge bool) (Usage, error) {
 	skills, err := FromResult(body, run)
 	if err != nil {
 		skills = nil
 	}
-	if !merge {
-		return skills, nil, err
+	return Usage{Skills: skills, Judge: judge}, err
+}
+
+// Record writes u for run id. A judge run's tokens are added to the run's
+// rows (RecordJudgeUsage), which hold its reviewers' tokens when it is the
+// run that was split, with one judge row per skill. RecordUsage keeps a row
+// already there, so it would drop the judge's tokens. Any other run is
+// recorded as before, with no model rows.
+func (u Usage) Record(ctx context.Context, st Recorder, id string) error {
+	if u.Judge {
+		return st.RecordJudgeUsage(ctx, id, u.Skills)
 	}
-	models, merr := ModelRows(body, run)
-	if merr != nil || models == nil {
-		models = []store.ModelUsage{}
-	}
-	if err == nil {
-		err = merr
-	}
-	return skills, models, err
+	return st.RecordUsage(ctx, id, u.Skills, nil)
 }

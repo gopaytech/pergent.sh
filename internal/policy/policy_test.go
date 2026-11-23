@@ -2050,40 +2050,42 @@ func TestFallbackLineInert(t *testing.T) {
 	}
 }
 
-// A panel's reason and the fingerprints it merged are redacted like the other
-// finding texts, on a copy: the caller's panel is not changed.
-func TestRedactSkillsRedactsPanel(t *testing.T) {
+// A multi review's judge reason and the fingerprints it merged are redacted
+// like the other finding texts, on a copy: the caller's block is not
+// changed.
+func TestRedactSkillsRedactsMultiReview(t *testing.T) {
 	const key = "sk-secret-123"
 	redact := func(t string) string { return strings.ReplaceAll(t, key, "***") }
-	panel := &render.FindingPanel{FoundBy: "both", Reason: "saw " + key, Also: []string{"fp-" + key, "fp2"}}
-	in := []render.Skill{{Name: "security", Findings: []render.Finding{{Title: "t", Panel: panel}}}}
+	mr := &render.FindingMultiReview{FoundBy: []int{1, 2}, Reason: "saw " + key, Also: []string{"fp-" + key, "fp2"}}
+	in := []render.Skill{{Name: "security", Findings: []render.Finding{{Title: "t", MultiReview: mr}}}}
 	out := redactSkills(in, redact)
-	got := out[0].Findings[0].Panel
-	if got == nil || got.Reason != "saw ***" || len(got.Also) != 2 || got.Also[0] != "fp-***" || got.Also[1] != "fp2" || got.FoundBy != "both" {
-		t.Errorf("panel = %+v, want the key redacted", got)
+	got := out[0].Findings[0].MultiReview
+	if got == nil || got.Reason != "saw ***" || len(got.Also) != 2 || got.Also[0] != "fp-***" || got.Also[1] != "fp2" || len(got.FoundBy) != 2 {
+		t.Errorf("multi review = %+v, want the key redacted", got)
 	}
-	if got == panel {
-		t.Error("the panel was not copied")
+	if got == mr {
+		t.Error("the multi review block was not copied")
 	}
-	if panel.Reason != "saw "+key || panel.Also[0] != "fp-"+key {
-		t.Errorf("the caller's panel changed: %+v", panel)
-	}
-}
-
-// The footer line of a review whose panel could not start.
-func TestPanelOffLine(t *testing.T) {
-	if got := PanelOffLine("the review image does not support it"); got != "panel off: the review image does not support it" {
-		t.Errorf("PanelOffLine = %q", got)
+	if mr.Reason != "saw "+key || mr.Also[0] != "fp-"+key {
+		t.Errorf("the caller's block changed: %+v", mr)
 	}
 }
 
-// An "A only" review says why in its footer, after the footer's text and a
-// backup line, before the commands. Without it the footer is today's.
-func TestPublishPanelOffNote(t *testing.T) {
+// The footer line of a review whose multi review did not start.
+func TestMultiReviewOffLine(t *testing.T) {
+	if got := MultiReviewOffLine("the review image does not support it"); got != "multi review off: the review image does not support it" {
+		t.Errorf("MultiReviewOffLine = %q", got)
+	}
+}
+
+// A review that ran as one review says why in its footer, after the
+// footer's text and a backup line, before the commands. Without it the
+// footer is today's.
+func TestPublishMultiReviewOffNote(t *testing.T) {
 	r := completed(skill("security", "no_blocking_issues", "a.go"))
-	o := Outcome{Result: r, Mention: "bot", PanelOffNote: PanelOffLine("the review image does not support it")}
+	o := Outcome{Result: r, Mention: "bot", MultiReviewOffNote: MultiReviewOffLine("the review image does not support it")}
 	d := Decide(o, config.FailureStatusFailed)
-	want := DefaultFooterNote + " · panel off: the review image does not support it · Run again: `@bot review`"
+	want := DefaultFooterNote + " · multi review off: the review image does not support it · Run again: `@bot review`"
 	if !strings.Contains(d.Comment, want) {
 		t.Errorf("comment lacks the footer %q:\n%s", want, d.Comment)
 	}
@@ -2092,49 +2094,55 @@ func TestPublishPanelOffNote(t *testing.T) {
 	}
 	o.FallbackNote = FallbackLine("backup", "quota")
 	got := renderOptions(o, r, nil).Footer
-	want = DefaultFooterNote + " · " + FallbackLine("backup", "quota") + " · panel off: the review image does not support it · Run again: `@bot review`"
+	want = DefaultFooterNote + " · " + FallbackLine("backup", "quota") + " · multi review off: the review image does not support it · Run again: `@bot review`"
 	if got != want {
 		t.Errorf("Footer = %q\nwant %q", got, want)
 	}
-	o.FallbackNote, o.PanelOffNote = "", ""
+	o.FallbackNote, o.MultiReviewOffNote = "", ""
 	if got := renderOptions(o, r, nil).Footer; got != DefaultFooterNote+" · Run again: `@bot review`" {
 		t.Errorf("Footer with no note = %q", got)
 	}
 	// The note can't mention anyone either.
-	if got := renderOptions(Outcome{PanelOffNote: PanelOffLine("@team")}, r, nil).Footer; strings.Contains(got, " @team") {
+	if got := renderOptions(Outcome{MultiReviewOffNote: MultiReviewOffLine("@team")}, r, nil).Footer; strings.Contains(got, " @team") {
 		t.Errorf("Footer = %q, want the mention broken", got)
 	}
 }
 
-// panelResult is a clean result of one skill with one suggestion whose
-// texts all name text, merged by a panel in which model B disagreed with
-// a reason that names it too.
-func panelResult(text string) *result.Result {
+// multiReviewResult is a clean judge result of one skill with one
+// suggestion whose texts all name text, found by reviewer 1, with a judge
+// that disagreed for a reason that names it too.
+func multiReviewResult(text string) *result.Result {
 	s := skill("security", "no_blocking_issues", "a.go")
 	b, _ := json.Marshal(result.Finding{
 		ID: "abc123", Fingerprint: "abc123def456", File: "a.go", Line: 3, Severity: "suggestion",
 		Title: "Uses " + text, Explanation: "The call to " + text + " is slow.", SuggestedFix: "Drop " + text + ".",
-		Suggestion: "x := " + text,
-		Panel:      &result.FindingPanel{FoundBy: "a", DisagreedBy: "b", Reason: text + " thinks it is fine"},
+		Suggestion:  "x := " + text,
+		MultiReview: &result.FindingMultiReview{FoundBy: []int{1}, JudgeDisagreed: true, Reason: text + " thinks it is fine"},
 	})
 	s.Findings = append(s.Findings, b)
 	s.Summaries = []result.Summary{{Batch: 1, Text: "Reviewed by " + text}}
-	s.Panel = &result.SkillPanel{Mode: "both"}
-	return completed(s)
+	s.MultiReview = &result.SkillMultiReview{Reviewers: []int{1, 2}, Judge: "ok"}
+	r := completed(s)
+	r.MultiReview = &result.MultiReview{Reviewers: []result.MultiReviewer{{Number: 1, Usable: true}, {Number: 2, Usable: true}},
+		Judge: result.MultiJudge{Provider: "p", Model: "m", Judged: true}}
+	return r
 }
 
-// A panel's comment names its models by the names it is given, in the meta
-// line, and a finding's panel line uses them. Hide reaches the model text of
-// the findings and summaries of a panel's comment, so no provider or model
-// of the 3 Jobs reaches it. Without a panel the findings are not hidden, as
-// today.
-func TestDecidePanelNamesAndHide(t *testing.T) {
+// A multi review's comment names its reviewers and judge by the names it is
+// given, in the meta line, and a finding's multi review line uses them.
+// Hide reaches the model text of the findings and summaries of a multi
+// review's comment, so no provider or model of its Jobs reaches it. Without
+// names the findings are not hidden, as today.
+func TestDecideMultiReviewNamesAndHide(t *testing.T) {
 	const name = "zeta-provider-b/omega-model-b"
 	hide := func(s string) string { return HideModels(s, []ModelRef{{"zeta-provider-b", "omega-model-b"}}, nil) }
-	o := Outcome{Result: panelResult(name), Hide: hide, Panel: &render.PanelNames{A: "team-a", B: "team-b"}}
+	names := &render.MultiReviewNames{Reviewers: []string{"team-a", "team-b"}, Judge: "team-j"}
+	o := Outcome{Result: multiReviewResult(name), Hide: hide, MultiReview: names}
 	d := Decide(o, config.FailureStatusFailed)
-	if !strings.Contains(d.Comment, "Panel: team-a (A) + team-b (B)") || !strings.Contains(d.Comment, "team-b disagreed") {
-		t.Errorf("comment lacks the panel names:\n%s", d.Comment)
+	for _, want := range []string{"Multi review: team-a, team-b · judge team-j", "found by team-a", "judge disagreed"} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("comment lacks %q:\n%s", want, d.Comment)
+		}
 	}
 	for _, bad := range []string{"zeta-provider-b", "omega-model-b"} {
 		if strings.Contains(d.Comment, bad) {
@@ -2148,13 +2156,24 @@ func TestDecidePanelNamesAndHide(t *testing.T) {
 		t.Errorf("decision = %+v; want a clean approval", d)
 	}
 
-	o.Panel = nil
+	o.MultiReview = nil
 	d = Decide(o, config.FailureStatusFailed)
-	if strings.Contains(d.Comment, "Panel:") {
-		t.Errorf("comment without a panel names one:\n%s", d.Comment)
+	if strings.Contains(d.Comment, "Multi review:") {
+		t.Errorf("comment without names names a multi review:\n%s", d.Comment)
 	}
 	if !strings.Contains(d.Comment, "The call to "+name+" is slow.") {
-		t.Errorf("comment without a panel hid a finding's text:\n%s", d.Comment)
+		t.Errorf("comment without names hid a finding's text:\n%s", d.Comment)
+	}
+}
+
+// The Skipped names reach render: its skip line is written once, with the
+// fixed words.
+func TestDecideMultiReviewSkippedLine(t *testing.T) {
+	names := &render.MultiReviewNames{Reviewers: []string{"team-a", "team-b", "team-c"}, Judge: "team-j",
+		Skipped: []render.SkippedReviewer{{Name: "team-b", Reason: "the token quota"}}}
+	d := Decide(Outcome{Result: multiReviewResult("plain"), MultiReview: names}, config.FailureStatusFailed)
+	if n := strings.Count(d.Comment, "Multi review: team-b was skipped: the token quota."); n != 1 {
+		t.Errorf("the skip line is in the comment %d times; want once:\n%s", n, d.Comment)
 	}
 }
 
@@ -2180,17 +2199,18 @@ func TestHideModels(t *testing.T) {
 	}
 }
 
-// In a panel's comment a suggestion that hiding would change is not shown:
-// changed code would be wrong code. One that names no model is kept as is.
-func TestDecidePanelDropsChangedSuggestion(t *testing.T) {
+// In a multi review's comment a suggestion that hiding would change is not
+// shown: changed code would be wrong code. One that names no model is kept
+// as is.
+func TestDecideMultiReviewDropsChangedSuggestion(t *testing.T) {
 	const name = "omega-model-b"
 	hide := func(s string) string { return HideModels(s, []ModelRef{{"zeta-provider-b", name}}, nil) }
-	o := Outcome{Result: panelResult(name), Hide: hide, Panel: &render.PanelNames{A: "team-a", B: "team-b"}}
+	o := Outcome{Result: multiReviewResult(name), Hide: hide, MultiReview: &render.MultiReviewNames{Reviewers: []string{"team-a", "team-b"}}}
 	d := Decide(o, config.FailureStatusFailed)
 	if strings.Contains(d.Comment, "x := the model") || strings.Contains(d.Comment, "x := "+name) {
 		t.Errorf("comment shows the changed suggestion:\n%s", d.Comment)
 	}
-	o.Result = panelResult("plain")
+	o.Result = multiReviewResult("plain")
 	if d := Decide(o, config.FailureStatusFailed); !strings.Contains(d.Comment, "x := plain") {
 		t.Errorf("comment lost a suggestion that names no model:\n%s", d.Comment)
 	}

@@ -276,6 +276,38 @@ func TestAPIReviewEndToEnd(t *testing.T) {
 	noGitLab(t, env)
 }
 
+// An API review is never a multi review, even on an image that has it and
+// with a repository that has reviewers (an API review has no repository,
+// and the empty path can't have any): it runs one Job, writes
+// no review_members row, and drops its files once the Job starts.
+func TestE2EAPIReviewNeverMultiReview(t *testing.T) {
+	multiReviewFloor(t, "v0.5.0")
+	a := newAPIE2E(t)
+	env := a.env
+	env.Engine.ScanImage = testScanImage
+	b := globalRef(t, env, "gpt-b", "key-b")
+	saveExtraReviewers(t, env, [][]store.EntryRef{{b}}, []store.EntryRef{b})
+	id := a.ask(t, "route:1", twoFiles())
+
+	dispatch(t, env)
+
+	if n := len(env.Jobs()); n != 1 || env.Job(id) == nil {
+		t.Fatalf("%d Jobs; want the review's one\n%s", n, env.Logs())
+	}
+	if got := string(env.Secret(id).Data["llm-api-key"]); got != testLLMKey {
+		t.Errorf("the Job's key = %q, want chain A's", got)
+	}
+	if r := env.Run(id); r.State != store.Running || r.JobName != kube.JobName(id) {
+		t.Errorf("run = %s job %q; want running with its Job", r.State, r.JobName)
+	}
+	if ms := reviewMembers(t, env, id); len(ms) != 0 {
+		t.Errorf("review members = %+v; want none", ms)
+	}
+	if _, found, err := env.Store.APIReviewInputs(env.ctx, id); err != nil || found {
+		t.Errorf("sealed inputs kept after the Job started (found %v, %v)", found, err)
+	}
+}
+
 // API and merge request reviews share jobs.max_running, first in first out.
 func TestAPIReviewSharesMaxRunning(t *testing.T) {
 	a := newAPIE2E(t)
