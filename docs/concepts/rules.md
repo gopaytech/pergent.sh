@@ -42,7 +42,7 @@ pergent ships built-in rules for 67 file types, adapted from [alibaba/open-code-
 **A repository chooses its built-in rules one by one.** Each rule adds its text to the runs on its files, so a repository picks only the ones it needs, to keep the token cost down. There is no default for every repository: a repository that chose none gets none.
 
 - On a repository the dashboard manages, choose them under **Built-in rules** on its **Settings**: tick a rule to add it, search by name or glob, and press **Select none** to clear the list. The card says how many are chosen, such as `3 of 67 chosen`.
-- A repository in the config file lists them by name: `repositories[].built_in_rules: [go, yaml]`. The names are the ones on the **Built-in** tab of the **Rules** page.
+- A repository in the config file lists them by name: `repositories[].built_in_rules: [go, yaml]`. The names are the ones on the **Built-in** tab of the **Rules** page. The old switch still works, so a config of v0.18.0 starts: `true` is every built-in rule and `false` is none.
 - A name that is not a built-in rule is refused, in the config and in the API. A name that a later pergent.sh no longer has is dropped from the list when it is read.
 - The repository's own `.pergent/rules.yaml` and its rule sets do not depend on this list.
 

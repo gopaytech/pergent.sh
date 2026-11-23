@@ -107,12 +107,42 @@ func TestConfigBuiltInRulesList(t *testing.T) {
 	}
 }
 
+// The switch of v0.18.0 and before still loads, so an old config starts:
+// true is every built-in rule, in builtin.yaml order, and false is none. A
+// bool is what yaml.v3 decodes into a bool, as the old *bool field did, so
+// yes and off count too.
+func TestConfigBuiltInRulesOldSwitch(t *testing.T) {
+	const repo = "repositories:\n  - gitlab: main\n    project: acme/w\n    built_in_rules: "
+	for _, tt := range []struct {
+		value string
+		want  []string
+	}{
+		{"true", BuiltInRuleNames()},
+		{"True", BuiltInRuleNames()},
+		{"yes", BuiltInRuleNames()},
+		{"false", nil},
+		{"off", nil},
+		{"null", nil},
+	} {
+		cfg, err := Load(writeConfig(t, rulesBase+repo+tt.value+"\n"))
+		if err != nil {
+			t.Errorf("built_in_rules: %s: Load = %v, want it to start", tt.value, err)
+			continue
+		}
+		if got := cfg.Repositories[0].BuiltInRules; !slices.Equal(got, tt.want) {
+			t.Errorf("built_in_rules: %s = %v, want %v", tt.value, got, tt.want)
+		}
+	}
+	if n := len(BuiltInRuleNames()); n != 67 {
+		t.Errorf("true gives %d built-in rules, want the 67 of the pinned pergent", n)
+	}
+}
+
 func TestConfigBuiltInRulesBad(t *testing.T) {
 	const repo = "repositories:\n  - gitlab: main\n    project: acme/w\n    built_in_rules: "
 	for _, tt := range []struct{ value, want string }{
-		{"true", "built_in_rules is a list of built-in rule names, such as [go, yaml], not true or false"},
-		{"false", "built_in_rules is a list of built-in rule names, such as [go, yaml], not true or false"},
 		{"go", "built_in_rules must be a list of built-in rule names, such as [go, yaml]"},
+		{`"true"`, "built_in_rules must be a list of built-in rule names, such as [go, yaml]"},
 		{"[go, nope]", `repositories[0] (acme/w): built_in_rules: "nope" is not a built-in rule`},
 		{"[{a: b}]", "built_in_rules must be a list of built-in rule names, such as [go, yaml]"},
 	} {

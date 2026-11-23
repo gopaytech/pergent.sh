@@ -90,14 +90,20 @@ func BuiltInRulesListImage(image string) (ok bool, reason string) {
 }
 
 // builtInRuleList is repositories[].built_in_rules: a list of built-in rule
-// names. Before it was a list it was a switch, so a bool is refused with a
-// message that says what to write instead.
+// names. Up to v0.18.0 it was a switch, read as a *bool, so an old config
+// still starts: a value yaml.v3 decodes into a bool is the switch, true every
+// built-in rule (BuiltInRuleNames) and false none.
 type builtInRuleList []string
 
 func (l *builtInRuleList) UnmarshalYAML(value *yaml.Node) error {
-	if value.Kind == yaml.ScalarNode && value.Tag == "!!bool" {
-		return fmt.Errorf("line %d: built_in_rules is a list of built-in rule names, such as [go, yaml], not true or false: "+
-			"list the ones the repository should get, or leave it out for none", value.Line)
+	var on bool
+	if value.Kind == yaml.ScalarNode && value.Decode(&on) == nil {
+		if on {
+			*l = BuiltInRuleNames()
+		} else {
+			*l = builtInRuleList{}
+		}
+		return nil
 	}
 	if value.Kind != yaml.SequenceNode {
 		return fmt.Errorf("line %d: built_in_rules must be a list of built-in rule names, such as [go, yaml]", value.Line)
