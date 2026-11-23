@@ -774,7 +774,83 @@ describe("AdminSettings models", () => {
     expect(opus).toHaveTextContent("In chains: main/acme/payments");
     // No key is ever in the page, nor an input for one until Replace.
     expect(within(opus).queryByLabelText("New API key")).not.toBeInTheDocument();
-    expect(within(opus).queryByRole("textbox")).not.toBeInTheDocument();
+    // The only text input is the model limit: none for a key.
+    expect(within(opus).getAllByRole("textbox").map((e) => e.getAttribute("aria-label"))).toEqual(["Model limit of Claude Opus"]);
+  });
+
+  it("shows each entry's tokens this month against its model limit, amber from 80% and red when used up", async () => {
+    fakeApi(
+      listed({
+        models: [
+          { ...modelSonnet, used: 1234 },
+          { ...modelOpus, limit: 5000, used: 4200 },
+          { ...modelOpus, id: "m-full", name: "Full", limit: 100, used: 100 },
+        ],
+      }),
+    );
+    renderApp("/admin/settings");
+    const sonnet = await entry("Claude Sonnet");
+    expect(sonnet).toHaveTextContent("Tokens this month: 1,234");
+    expect(within(sonnet).queryByRole("meter")).not.toBeInTheDocument();
+    expect(within(sonnet).getByLabelText("Model limit of Claude Sonnet")).toHaveValue("");
+    const opus = await entry("Claude Opus");
+    expect(opus).toHaveTextContent("Tokens this month: 4,200 of 5,000");
+    expect(within(opus).getByRole("meter", { name: "Tokens of Claude Opus this month" })).toHaveClass("warn");
+    expect(within(opus).getByLabelText("Model limit of Claude Opus")).toHaveValue("5000");
+    expect(within(await entry("Full")).getByRole("meter", { name: "Tokens of Full this month" })).toHaveClass("full");
+  });
+
+  it("sets a model limit with a PUT, stripped of separators, and removes it when emptied", async () => {
+    const fake = fakeApi({
+      ...listed({ models: [modelSonnet, { ...modelOpus, limit: 5000, used: 10 }] }),
+      "PUT /api/admin/models/m-opus/limit": { status: 204 },
+      "DELETE /api/admin/models/m-opus/limit": { status: 204 },
+    });
+    renderApp("/admin/settings");
+    const opus = await entry("Claude Opus");
+    const input = within(opus).getByLabelText("Model limit of Claude Opus");
+    const save = within(opus).getByRole("button", { name: "Save the model limit of Claude Opus" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "1,000,000");
+    await userEvent.click(save);
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/models/m-opus/limit")).toHaveLength(1));
+    const [put] = fake.find("PUT", "/api/admin/models/m-opus/limit");
+    expect(put.body).toEqual({ monthlyTokens: 1000000 });
+    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    // The list is read again, so the bar follows.
+    await vi.waitFor(() => expect(fake.find("GET", "/api/admin/models").length).toBeGreaterThanOrEqual(2));
+    await userEvent.clear(input);
+    await userEvent.click(save);
+    await vi.waitFor(() => expect(fake.find("DELETE", "/api/admin/models/m-opus/limit")).toHaveLength(1));
+  });
+
+  it("refuses a limit that is not a whole number, and shows the server's refusal", async () => {
+    const fake = fakeApi({
+      ...listed(),
+      "PUT /api/admin/models/m-opus/limit": { status: 400, body: { error: "monthlyTokens must be a whole number from 1 to 1000000000000000" } },
+    });
+    renderApp("/admin/settings");
+    const opus = await entry("Claude Opus");
+    const input = within(opus).getByLabelText("Model limit of Claude Opus");
+    await userEvent.type(input, "5M");
+    await userEvent.click(within(opus).getByRole("button", { name: "Save the model limit of Claude Opus" }));
+    expect(await within(opus).findByText("The limit is a whole number from 1 to 1000000000000000, or empty.")).toBeInTheDocument();
+    expect(fake.find("PUT", "/api/admin/models/m-opus/limit")).toHaveLength(0);
+    await userEvent.clear(input);
+    await userEvent.type(input, "7");
+    await userEvent.click(within(opus).getByRole("button", { name: "Save the model limit of Claude Opus" }));
+    expect(await within(opus).findByRole("alert")).toHaveTextContent("monthlyTokens must be a whole number");
+  });
+
+  it("limits the config file's entry too", async () => {
+    const config: ModelAdminView = { ...modelSonnet, id: "config", source: "config", default: true, name: "anthropic/claude-sonnet" };
+    const fake = fakeApi({ ...listed({ canSetDefault: false, models: [config] }), "PUT /api/admin/models/config/limit": { status: 204 } });
+    renderApp("/admin/settings");
+    const row = await entry("anthropic/claude-sonnet");
+    await userEvent.type(within(row).getByLabelText("Model limit of anthropic/claude-sonnet"), "900");
+    await userEvent.click(within(row).getByRole("button", { name: "Save the model limit of anthropic/claude-sonnet" }));
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/models/config/limit")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/admin/models/config/limit")[0].body).toEqual({ monthlyTokens: 900 });
   });
 
   it("shows a name, provider or model as text, never as HTML", async () => {
@@ -1024,13 +1100,14 @@ describe("AdminSettings models", () => {
     expect(await within(row).findByRole("alert")).toHaveTextContent("could not save");
   });
 
-  it("gives the config file's entry no controls, and says where to change it", async () => {
+  it("gives the config file's entry no controls but its limit, and says where to change it", async () => {
     const config: ModelAdminView = { ...modelSonnet, id: "config", source: "config", default: true, name: "anthropic/claude-sonnet" };
     fakeApi(listed({ canSetDefault: false, models: [config, { ...modelOpus, default: false }] }));
     renderApp("/admin/settings");
     const row = await entry("anthropic/claude-sonnet");
     expect(row).toHaveTextContent("from the config file");
-    expect(within(row).queryByRole("button")).not.toBeInTheDocument();
+    // Only its limit can be changed here.
+    expect(within(row).getAllByRole("button").map((e) => e.getAttribute("aria-label"))).toEqual(["Save the model limit of anthropic/claude-sonnet"]);
     expect(within(row).queryByRole("switch")).not.toBeInTheDocument();
     // The config's llm: block is the default, but entries can still be
     // added, changed and removed.

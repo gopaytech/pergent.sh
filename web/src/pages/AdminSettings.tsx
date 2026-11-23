@@ -16,12 +16,14 @@ import {
   type ModelsAdminView,
 } from "../api";
 import ChainEditor from "../ChainEditor";
+import LimitField from "../LimitField";
 import PanelChainCard from "../PanelChainCard";
 import CommentLayoutEditor from "../CommentLayoutEditor";
 import { useWrite } from "../layout/write";
 import RuleSetPicker from "../RuleSetPicker";
 import MarkBanner, { markText } from "../MarkBanner";
 import { AddModelForm, EditModelForm } from "../ModelForms";
+import { QuotaLine } from "../quota";
 import { ErrorBox, Loading, Switch, bytesText, noFill, secretText } from "../ui";
 
 // AdminSettings holds what an admin sets for the whole of pergent.sh: the
@@ -746,6 +748,12 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
     client.invalidateQueries({ queryKey: ["repo"] });
     client.invalidateQueries({ queryKey: ["repo-chain"] });
   };
+  // A limit moves the bars here, the chains' tags and the team pages.
+  const limitsChanged = () => {
+    changed();
+    client.invalidateQueries({ queryKey: ["team-chain"] });
+    client.invalidateQueries({ queryKey: ["team-limits"] });
+  };
   const makeDefault = useMutation({
     mutationFn: () => write<ModelsAdminView>("POST", `/api/admin/models/${encodeURIComponent(m.id)}/default`, {}),
     onSuccess: (list) => {
@@ -794,6 +802,16 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
           {repositoriesText(following)} name no model and follow it.
         </div>
       )}
+      <QuotaLine ariaLabel={`Tokens of ${m.name} this month`} use={{ used: m.used, limit: m.limit }} />
+      <LimitField
+        key={String(m.limit)}
+        label={`Model limit of ${m.name}`}
+        saveLabel={`Save the model limit of ${m.name}`}
+        hint="Tokens per calendar month (UTC), input plus output, on every instance and repository. Empty: no limit."
+        limit={m.limit}
+        path={paths.apiAdminModelLimit(m.id)}
+        onSaved={limitsChanged}
+      />
       {m.mark?.live && (
         <div className="row">
           <span className="grow meta warn-text">Marked: {markText(m.mark)}</span>

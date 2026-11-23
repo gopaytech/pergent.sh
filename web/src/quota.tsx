@@ -1,9 +1,11 @@
 import type { QuotaUseView } from "./api";
 
 // quotaMax is the most a quota can be (the API's own bound).
-const quotaMax = 1_000_000_000_000_000;
+export const quotaMax = 1_000_000_000_000_000;
 
 export const quotaProblem = `The token quota is a whole number from 1 to ${quotaMax}, or empty.`;
+
+export const limitProblem = `The limit is a whole number from 1 to ${quotaMax}, or empty.`;
 
 // parseQuota reads a quota typed in: digits, with commas, underscores and
 // spaces left out. Empty is null (no quota); undefined is not a quota.
