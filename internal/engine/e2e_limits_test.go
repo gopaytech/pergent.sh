@@ -351,6 +351,33 @@ func TestAPIReviewPinnedModelAtLimitFails(t *testing.T) {
 	a.wantFailed(t, id, reviewapi.StepStarting, "all models exhausted: "+configName(t, env)+" (model limit used up)")
 }
 
+// With no stored global chain and a config entry with no usable key, the global
+// chain is empty. A client pinned to a keyed entry that is at its model limit
+// still fails: an empty chain must not skip the limits.
+func TestAPIReviewPinnedModelAtLimitEmptyGlobalChainFails(t *testing.T) {
+	a := newAPIE2E(t)
+	env := a.env
+	env.SetNow(novemberMid)
+	ref := globalRef(t, env, "pinned-model", "sk-pinned-example")
+	t.Setenv("OPENCODE_API_KEY", "") // the config entry has no usable key now
+	seedEntryUsage(t, env, ref, 10)
+	setLimit(t, env, ref, 0, 10)
+	if _, _, err := env.Store.UpdateAPIClient(env.ctx, "gateway", func(c *store.APIClient) { c.ModelID = ref.ID }); err != nil {
+		t.Fatal(err)
+	}
+	id := a.ask(t, "route:1", twoFiles())
+	dispatch(t, env)
+	if env.Job(id) != nil {
+		t.Fatal("a pinned model at its model limit got a Job, with an empty global chain")
+	}
+	publish(t, env)
+	m, ok := env.Engine.Instances.ModelByID(ref.ID)
+	if !ok {
+		t.Fatal("the pinned model is gone")
+	}
+	a.wantFailed(t, id, reviewapi.StepStarting, "all models exhausted: "+m.Name+" (model limit used up)")
+}
+
 // A pinned review's tokens count toward the model limit of its entry, so the
 // run records that entry.
 func TestAPIReviewPinnedModelRecordsEntry(t *testing.T) {

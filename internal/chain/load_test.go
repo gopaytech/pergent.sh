@@ -242,7 +242,6 @@ func limit(t *testing.T, st *store.Store, ref store.EntryRef, team, tokens int64
 // team's limits only. A repository with no owner team gets no team limit.
 func TestLoadReadsLimits(t *testing.T) {
 	e := newPanelEnv(t, &config.Config{})
-	e.save(t, store.ChainA, store.Chain{Scope: store.ScopeGlobal, Entries: []store.EntryRef{e.a, e.b}})
 	spent(t, e.st, 1, e.a, 10)
 	spent(t, e.st, 2, e.b, 10)
 	limit(t, e.st, e.a, 0, 10)      // used up
@@ -261,19 +260,5 @@ func TestLoadReadsLimits(t *testing.T) {
 	}
 	if !in.ModelLimitUsedUp[e.a] || len(in.TeamLimitUsedUp) != 0 {
 		t.Fatalf("no owner: model %v, team %v; want the model limit only", in.ModelLimitUsedUp, in.TeamLimitUsedUp)
-	}
-}
-
-// A chain with no entry reads no limits: nothing could stop it.
-func TestLoadSetEmptyChainReadsNoLimits(t *testing.T) {
-	e := newPanelEnv(t, &config.Config{})
-	spent(t, e.st, 1, e.a, 10)
-	limit(t, e.st, e.a, 0, 10)
-	in, err := LoadSet(ctx, e.st, e.reg, now, store.Run{}, repo, store.ChainB)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(in.Refs) != 0 || len(in.ModelLimitUsedUp) != 0 || len(in.TeamLimitUsedUp) != 0 {
-		t.Fatalf("empty chain B: refs %v, model %v, team %v", in.Refs, in.ModelLimitUsedUp, in.TeamLimitUsedUp)
 	}
 }
