@@ -29,6 +29,10 @@ export function entryStateText(e: ChainEntryView): string {
       return "team no longer owns this repository";
     case "key_unusable":
       return "key can't be read";
+    case "model_limit":
+      return "model limit used up";
+    case "team_limit":
+      return "team limit used up";
   }
   return e.state;
 }
