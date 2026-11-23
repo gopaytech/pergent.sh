@@ -136,7 +136,6 @@ describe("AdminSettings defaults", () => {
       rerunLimitPerRepo: null,
       // Untouched too: the default skills are sent as they are.
       skills: ["code-review"],
-      builtInRules: null,
       ruleSets: [],
     });
     const saved = await screen.findByText("Defaults saved.");
@@ -378,23 +377,22 @@ describe("AdminSettings defaults", () => {
       rerunLimitPerMR: null,
       rerunLimitPerRepo: null,
       skills: ["code-review"],
-      builtInRules: null,
       ruleSets: [],
     });
   });
 
-  it("sets the default rule sets in order and turns the Built-in rules switch on", async () => {
+  it("sets the default rule sets in order, with no Built-in rules default", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
     renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
-    // Built-in rules are opt-in: the switch starts off.
-    const builtIn = within(form).getByRole("switch", { name: "Built-in rules" });
-    expect(builtIn).not.toBeChecked();
-    expect(within(form).getByText(/Off unless turned on here or on a repository\./)).toBeInTheDocument();
-    await userEvent.click(builtIn);
+    // Built-in rules are chosen per repository: there is no default to set.
+    expect(within(form).queryByRole("switch", { name: "Built-in rules" })).not.toBeInTheDocument();
+    expect(within(form).queryByText("Built-in rules")).not.toBeInTheDocument();
     await userEvent.selectOptions(await within(form).findByRole("combobox", { name: "Add a rule set" }), "go-api");
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
-    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ builtInRules: true, ruleSets: ["go-api"] });
+    const body = fake.find("PUT", "/api/admin/defaults")[0].body as Record<string, unknown>;
+    expect(body).toMatchObject({ ruleSets: ["go-api"] });
+    expect(body).not.toHaveProperty("builtInRules");
   });
 
   it("says under each default what the config gives", async () => {

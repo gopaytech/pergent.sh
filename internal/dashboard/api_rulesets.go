@@ -363,7 +363,7 @@ func (d *Dashboard) rulesView(ctx context.Context, src inputs.Source, projectID 
 	if err != nil {
 		return RulesView{}, err
 	}
-	v := RulesView{BuiltIn: repo.BuiltInRules, Entries: []RuleEntryView{}, Problem: problem}
+	v := RulesView{BuiltIn: nonNil(repo.BuiltInRules), Entries: []RuleEntryView{}, Problem: problem}
 	for _, e := range list {
 		v.Entries = append(v.Entries, RuleEntryView{Source: e.Source, Path: e.Path, Off: e.Off, Rule: e.Rule})
 	}

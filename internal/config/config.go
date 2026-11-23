@@ -31,7 +31,7 @@ import (
 
 const (
 	defaultListen      = ":8080"
-	defaultImage       = "ghcr.io/gopaytech/pergent:v0.11.0"
+	defaultImage       = "ghcr.io/gopaytech/pergent:v0.12.0"
 	defaultMaxRunning  = 5
 	defaultWorkSize    = "20Gi"
 	defaultTimeout     = 30 * time.Minute
@@ -267,10 +267,10 @@ type Repository struct {
 	// the detected repository skills to turn on (nil: none).
 	Skills, RepoSkills []string
 	// RuleSets names the rule sets the repository uses, in match order (nil:
-	// the default list). BuiltInRules is the Built-in rules switch (nil: the
-	// default, off).
+	// the default list). BuiltInRules names the built-in rules it gets, in
+	// builtin.yaml order (nil: none).
 	RuleSets      []string
-	BuiltInRules  *bool
+	BuiltInRules  []string
 	FailureStatus FailureStatus
 	// Approve is whether a clean review is approved (default true).
 	Approve *bool
@@ -386,20 +386,20 @@ type fileFallback struct {
 }
 
 type fileRepository struct {
-	GitLab         string        `yaml:"gitlab"`
-	GitHub         string        `yaml:"github"`
-	Project        string        `yaml:"project"`
-	Skills         []string      `yaml:"skills"`
-	RepoSkills     []string      `yaml:"repo_skills"`
-	RuleSets       []string      `yaml:"rule_sets"`
-	BuiltInRules   *bool         `yaml:"built_in_rules"`
-	FailureStatus  FailureStatus `yaml:"failure_status"`
-	Approve        *bool         `yaml:"approve"`
-	ReviewDrafts   *bool         `yaml:"review_drafts"`
-	InlineFindings *bool         `yaml:"inline_findings"`
-	JobTimeout     *duration     `yaml:"job_timeout"`
-	JobMemory      *quantity     `yaml:"job_memory"`
-	MaxTurns       *int          `yaml:"max_turns"`
+	GitLab         string          `yaml:"gitlab"`
+	GitHub         string          `yaml:"github"`
+	Project        string          `yaml:"project"`
+	Skills         []string        `yaml:"skills"`
+	RepoSkills     []string        `yaml:"repo_skills"`
+	RuleSets       []string        `yaml:"rule_sets"`
+	BuiltInRules   builtInRuleList `yaml:"built_in_rules"`
+	FailureStatus  FailureStatus   `yaml:"failure_status"`
+	Approve        *bool           `yaml:"approve"`
+	ReviewDrafts   *bool           `yaml:"review_drafts"`
+	InlineFindings *bool           `yaml:"inline_findings"`
+	JobTimeout     *duration       `yaml:"job_timeout"`
+	JobMemory      *quantity       `yaml:"job_memory"`
+	MaxTurns       *int            `yaml:"max_turns"`
 
 	RerunLimitPerMR   *int `yaml:"rerun_limit_per_mr"`
 	RerunLimitPerRepo *int `yaml:"rerun_limit_per_repo"`
@@ -451,7 +451,7 @@ type fileCIReport struct {
 func (f fileRepository) repository() Repository {
 	r := Repository{
 		GitLab: f.GitLab, GitHub: f.GitHub, Project: f.Project, Skills: f.Skills, RepoSkills: f.RepoSkills,
-		RuleSets: f.RuleSets, BuiltInRules: f.BuiltInRules,
+		RuleSets: f.RuleSets, BuiltInRules: f.BuiltInRules.orderedBuiltIns(),
 		FailureStatus: f.FailureStatus, Approve: f.Approve, ReviewDrafts: f.ReviewDrafts,
 		InlineFindings:  f.InlineFindings,
 		RerunLimitPerMR: f.RerunLimitPerMR, RerunLimitPerRepo: f.RerunLimitPerRepo,
@@ -884,6 +884,10 @@ func (c *Config) Validate() error {
 			if !skillNameRE.MatchString(name) {
 				add("repositories[%d] (%s): rule_sets name %q must match %s", i, repo.Project, name, skillNameRE)
 			}
+		}
+		_, unknown := OrderBuiltInRules(repo.BuiltInRules)
+		for _, name := range unknown {
+			add("repositories[%d] (%s): built_in_rules: %q is not a built-in rule of the pergent this pergent.sh is built with (the Rules page's Built-in tab lists them)", i, repo.Project, name)
 		}
 		if m := repo.TrustedAuthorsOnly; m != nil && *m != TrustOn && *m != TrustOff {
 			add("repositories[%d] (%s): trusted_authors_only must be on or off, got %q", i, repo.Project, *m)

@@ -25,6 +25,15 @@
 - **Rolling deploy.** Pods of the previous release start reviews without the new checks until they are replaced.
 - **Rolling back** needs no config change: there is no config key. The limits stay in the database, unused. A change held by a limit shows in the previous release as waiting for a start, with no reason line, and its **Start review** starts it.
 
+**Built-in rules are a list each repository chooses**, in place of one switch for all 67: [Path rules](concepts/rules.md#built-in-rules). A repository picks only the rules it needs, which keeps the token cost down.
+
+- **Migration `0052_built_in_rule_names.sql`** runs at startup. Back up Postgres first, as for any migration. It adds `dashboard_repos.built_in_rule_names` and `runs.built_in_rules_note`, both NULL, and drops nothing. A repository with **Built-in rules** on gets every built-in rule of pergent v0.11.0; one with it off or unset gets none. The old switches, `dashboard_repos.built_in_rules` and `repo_defaults.built_in_rules`, stay as they were and are no longer read or written, so the previous release keeps working on the migrated database and reads its own switches again after a rollback.
+- **Breaking: the admin default is gone.** The admin **Settings** page has no **Built-in rules** switch, and `PUT /api/admin/defaults` refuses `builtInRules` with 400. A repository that followed a default that was on now gets none: choose its rules on its **Settings**. API reviews get none.
+- **`repositories[].built_in_rules` is a list of names**, such as `[go, yaml]`. The old switch still works, so a config of v0.18.0 starts with no change: `true` is every built-in rule and `false` is none. A name that is not a built-in rule stops startup. **Rolling back:** the previous release refuses the list form, so put `true` or `false` back before you roll back.
+- **Breaking, dashboard API:** the repository setting `builtInRules` is a list of names (`[]` for none), and `RulesView.builtIn` is the list too. `RepositoryDetailView.builtInRulesOff` and `RunDetailView.builtInRulesNote` are new.
+- **The default review image is pergent v0.12.0** (`jobs.image` `ghcr.io/gopaytech/pergent:v0.12.0`, was v0.11.0). It is the first pergent release that reads `PERGENT_BUILT_IN_RULES` and loads only the chosen rules. A config that pins an older `jobs.image` gets no built-in rules, also for a repository that chose some, because an older pergent would load all 67. Those reviews say why on their page.
+- The rules hash takes in the chosen names. A repository with none keeps its hash. **A repository that had the switch on gets one extra full review after the upgrade**, on its next push, because its rules hash changes.
+
 ## Upgrading to 0.18.0
 
 **The default review image is pergent v0.11.0** (`jobs.image` `ghcr.io/gopaytech/pergent:v0.11.0`, was v0.10.0). It is the first pergent release that reads path rules, reports `provider_error` for a model fallback, gives the model CI results and uses the code graph. A config that sets its own `jobs.image` keeps the image it names, and gets none of these until it names v0.11.0 or newer.

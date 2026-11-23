@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"reflect"
@@ -532,35 +533,44 @@ func TestE2EMultiReviewMaxRunning(t *testing.T) {
 	wantMemberKey(t, env, memberOf(t, env, id, 3), "key-team-c")
 }
 
-// A reviewer's Job gets the review's rules and built-in switch, as the
-// review Job does: rules.json in its ConfigMap, PERGENT_RULES and
-// PERGENT_NO_BUILT_IN_RULES in its env.
+// A reviewer's Job gets the review's rules and built-in rules, as the review
+// Job does: rules.json in its ConfigMap, PERGENT_RULES, and the chosen
+// built-in rules in PERGENT_BUILT_IN_RULES only when jobs.image loads only
+// those, else PERGENT_NO_BUILT_IN_RULES (TestDispatchBuiltInRulesChosen).
 func TestE2EMultiReviewRules(t *testing.T) {
-	e := newThreeReviewers(t)
-	env := e.env
-	off := false
-	env.Engine.Config.Repositories[0].RuleSets = []string{"a"}
-	env.Engine.Config.Repositories[0].BuiltInRules = &off
-	addRuleSet(t, env, "a", setAYAML)
-	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
-	id := splitReview(t, env, 1, sha('a'))
+	for _, loads := range []bool{false, true} {
+		t.Run(fmt.Sprintf("image loads the list %v", loads), func(t *testing.T) {
+			e := newThreeReviewers(t)
+			env := e.env
+			if loads {
+				builtInListFloor(t, config.ImageTag(env.Engine.Config.Jobs.Image))
+			}
+			env.Engine.Config.Repositories[0].RuleSets = []string{"a"}
+			env.Engine.Config.Repositories[0].BuiltInRules = []string{"go"}
+			addRuleSet(t, env, "a", setAYAML)
+			env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
+			id := splitReview(t, env, 1, sha('a'))
 
-	dispatch(t, env)
-	for n := 1; n <= 3; n++ {
-		m := memberOf(t, env, id, n)
-		var labels []string
-		for _, r := range jobRules(t, env, m.ID) {
-			labels = append(labels, r.Label())
-		}
-		if want := []string{"repo:*.go", "dashboard:a:*.py"}; !slices.Equal(labels, want) {
-			t.Errorf("reviewer %d's rules = %v, want %v", n, labels, want)
-		}
-		if v, ok := jobVar(t, env, m.ID, "PERGENT_RULES"); !ok || v != "/in/rules.json" {
-			t.Errorf("reviewer %d's PERGENT_RULES = %q, %v", n, v, ok)
-		}
-		if v, ok := jobVar(t, env, m.ID, "PERGENT_NO_BUILT_IN_RULES"); !ok || v != "true" {
-			t.Errorf("reviewer %d's PERGENT_NO_BUILT_IN_RULES = %q, %v", n, v, ok)
-		}
+			dispatch(t, env)
+			for n := 1; n <= 3; n++ {
+				m := memberOf(t, env, id, n)
+				var labels []string
+				for _, r := range jobRules(t, env, m.ID) {
+					labels = append(labels, r.Label())
+				}
+				if want := []string{"repo:*.go", "dashboard:a:*.py"}; !slices.Equal(labels, want) {
+					t.Errorf("reviewer %d's rules = %v, want %v", n, labels, want)
+				}
+				if v, ok := jobVar(t, env, m.ID, "PERGENT_RULES"); !ok || v != "/in/rules.json" {
+					t.Errorf("reviewer %d's PERGENT_RULES = %q, %v", n, v, ok)
+				}
+				list, hasList := jobVar(t, env, m.ID, "PERGENT_BUILT_IN_RULES")
+				no, hasNo := jobVar(t, env, m.ID, "PERGENT_NO_BUILT_IN_RULES")
+				if loads && (!hasList || list != "go" || hasNo) || !loads && (hasList || !hasNo || no != "true") {
+					t.Errorf("reviewer %d's PERGENT_BUILT_IN_RULES = %q (%v), NO = %q (%v); want the list %v", n, list, hasList, no, hasNo, loads)
+				}
+			}
+		})
 	}
 }
 

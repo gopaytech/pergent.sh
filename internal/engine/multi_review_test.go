@@ -44,7 +44,7 @@ func goldenEnv(t *testing.T, setup func(env *testEnv)) (*testEnv, string) {
 	dashboardRepo(t, env, store.DashboardRepo{
 		Instance: testInstance, Project: testProjectPath, CreatedBy: "alice",
 		JobTimeoutSeconds: &timeout, MaxTurns: &turns, JobMemory: &memory,
-		QuietReviews: boolPtr(true), CheckDeleted: boolPtr(true), BuiltInRules: boolPtr(false),
+		QuietReviews: boolPtr(true), CheckDeleted: boolPtr(true),
 		CommentLayout: []string{"checks:open", "findings:collapsed"},
 		RuleSets:      []string{"a"},
 		CIJobs: &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{

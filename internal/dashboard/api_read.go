@@ -20,6 +20,7 @@ import (
 	"github.com/gopaytech/pergent/render"
 
 	"github.com/gopaytech/pergent.sh/internal/actions"
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -650,6 +651,7 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	if run.Approved {
 		view.ApprovalReason = ""
 	}
+	view.BuiltInRulesNote = run.BuiltInRulesNote
 	// The deadline is shown only while the run waits for CI: it is kept after.
 	if run.State == store.Waiting && run.SkipReason == store.WaitCIPending {
 		view.CIDeadline = run.CIDeadline
@@ -1262,7 +1264,16 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	}
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
 		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model, MultiReview: multi,
-		Quota: d.quotaView(ctx, se, repo), Graph: gv}, nil
+		Quota: d.quotaView(ctx, se, repo), Graph: gv, BuiltInRulesOff: builtInRulesOff(d.cfg.Jobs.Image)}, nil
+}
+
+// builtInRulesOff is why a review with jobs.image image leaves chosen
+// built-in rules out, "" when it loads them (config.BuiltInRulesListImage).
+func builtInRulesOff(image string) string {
+	if ok, reason := config.BuiltInRulesListImage(image); !ok {
+		return "Reviews get no built-in rules for now: " + reason + "."
+	}
+	return ""
 }
 
 // graphsOn reports whether the install keeps code graphs.
@@ -1320,7 +1331,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"trustedAuthors":                   {nonNilAuthors(repo.TrustedAuthors), ov[settings.KeyTrustedAuthors]},
 		"monthlyTokenQuota":                {repo.MonthlyTokenQuota, ov[settings.KeyMonthlyTokenQuota]},
 		"ruleSets":                         {repo.RuleSets, ov[settings.KeyRuleSets]},
-		"builtInRules":                     {repo.BuiltInRules, ov[settings.KeyBuiltInRules]},
+		"builtInRules":                     {nonNil(repo.BuiltInRules), ov[settings.KeyBuiltInRules]},
 	}
 }
 

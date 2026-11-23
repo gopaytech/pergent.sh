@@ -5950,8 +5950,9 @@ components:
           items: {type: string}
           description: The library rule sets the repository uses, in match order. Null is the default list; an empty list is 400.
         builtInRules:
-          type: [boolean, 'null']
-          description: Whether pergent's built-in path rules come after the repository's and the sets'. Null follows the default, which is off until an admin turns it on.
+          type: [array, 'null']
+          items: {type: string}
+          description: The built-in path rules of pergent the repository gets, by name (`GET /api/built-in-rules` lists them), after the repository's and the sets'. Stored once each in pergent's order. Null or [] is none, the default. A name that is no built-in rule is 400, and so is true or false.
     StartRequest:
       type: object
       required: [head]
@@ -6040,9 +6041,11 @@ components:
       type: object
       description: |
         The defaults for repositories switched on in the dashboard. Same keys
-        and bounds as `RepositorySettingsRequest`, except `repoSkills`, and
-        `skills` is the default list. Replaces them all: a missing key or null
-        is the built-in default (for `skills`, a missing key keeps the list).
+        and bounds as `RepositorySettingsRequest`, except `repoSkills` and
+        `builtInRules` (chosen per repository, with no default: the key is
+        400), and `skills` is the default list. Replaces them all: a missing
+        key or null is the built-in default (for `skills`, a missing key keeps
+        the list).
       additionalProperties: false
       properties:
         approve:
@@ -6065,9 +6068,6 @@ components:
           type: [array, 'null']
           items: {type: string}
           description: The default rule-set list, in match order. A missing key keeps the list; null or [] is none.
-        builtInRules:
-          type: [boolean, 'null']
-          description: The default Built-in rules switch. Null is off.
         commentLayout:
           type: [array, 'null']
           description: |
@@ -6288,9 +6288,8 @@ components:
     DefaultValues:
       description: DefaultsView's settings without the skill and rule-set lists, with the same keys.
       type: object
-      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, linkedReposEnabled, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, builtInRules]
+      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, linkedReposEnabled, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo]
       properties:
-        builtInRules: {type: boolean}
         approve: {type: boolean}
         reviewDrafts: {type: boolean}
         inlineFindings: {type: boolean}
@@ -6323,13 +6322,12 @@ components:
     DefaultsView:
       description: The settings a repository gets when it sets none.
       type: object
-      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, linkedReposEnabled, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, ruleSets, builtInRules, config, pinned]
+      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, linkedReposEnabled, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, ruleSets, config, pinned]
       properties:
         ruleSets:
           type: array
           items: {type: string}
           description: The default rule-set list, in match order. Empty means none.
-        builtInRules: {type: boolean}
         approve: {type: boolean}
         reviewDrafts: {type: boolean}
         inlineFindings: {type: boolean}
@@ -6432,7 +6430,10 @@ components:
       type: object
       required: [builtIn, entries, problem]
       properties:
-        builtIn: {type: boolean}
+        builtIn:
+          type: array
+          items: {type: string}
+          description: The built-in rules the repository chose, by name, in pergent's order; empty for none.
         entries:
           type: array
           items: {$ref: '#/components/schemas/RuleEntryView'}
@@ -7360,7 +7361,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -7372,7 +7373,7 @@ components:
             effect, follow_visibility, on or off), trustedAuthors (a list of TrustedAuthor)
             and monthlyTokenQuota (the repository's token quota per UTC month, null for
             none; left out for anyone but an admin), ruleSets (the rule sets, null for the
-            default list) and builtInRules. The model is the model chain's
+            default list) and builtInRules (the built-in rules chosen, by name; [] for none). The model is the model chain's
             (`GET .../chain`).
         attention:
           type: array
@@ -7401,6 +7402,9 @@ components:
             - {$ref: '#/components/schemas/QuotaView'}
             - {type: 'null'}
         graph: {$ref: '#/components/schemas/GraphView'}
+        builtInRulesOff:
+          type: string
+          description: Why reviews leave out the built-in rules a repository chooses, because `jobs.image` can't load only those; empty when it loads them.
     MultiReviewView:
       description: A repository's multi review, on its page. Never a model, a base URL or a key.
       type: object
@@ -7646,11 +7650,14 @@ components:
     RunDetailView:
       description: One run. A run without a usable result has no skills or files.
       type: object
-      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, provider, maxTurns, quiet, incrementalNote, ciJobs, ciDeadline, tokens, files, skills, latestDecided, entry, attempts, rulesUsed]
+      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, provider, maxTurns, quiet, incrementalNote, ciJobs, ciDeadline, tokens, files, skills, latestDecided, entry, attempts, rulesUsed, builtInRulesNote]
       properties:
         rulesUsed:
           type: boolean
           description: Whether the image that reviewed uses path rules. False for an older image, whose review page says so.
+        builtInRulesNote:
+          type: string
+          description: Why the built-in rules the repository chose were left out of this review (its image can't load only those); empty when they were not.
         entry:
           description: The chain entry the run ran on; null for a run that recorded none.
           oneOf:

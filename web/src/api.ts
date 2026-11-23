@@ -223,6 +223,9 @@ export type RunDetailView = {
   };
   // rulesUsed: the image that reviewed uses path rules (an older one does not).
   rulesUsed: boolean;
+  // builtInRulesNote: why the chosen built-in rules were left out of this
+  // review; "" when they were not.
+  builtInRulesNote: string;
   skills: SkillView[];
   // latestDecided: this is the run dismiss and restore act on (the change's
   // newest published or decided review), the only one that shows dismissals.
@@ -427,9 +430,10 @@ export type RepoSettings = {
   // use in a UTC month; null is none of its own. Only an admin is sent it.
   monthlyTokenQuota?: SettingView<number | null>;
   // ruleSets is null for the default list, otherwise the library rule sets
-  // in match order. builtInRules is the Built-in rules switch.
+  // in match order. builtInRules names the built-in rules chosen, in
+  // pergent's order; [] is none (the default).
   ruleSets: SettingView<string[] | null>;
-  builtInRules: SettingView<boolean>;
+  builtInRules: SettingView<string[]>;
 };
 
 export type RepositoryDetailView = {
@@ -455,6 +459,9 @@ export type RepositoryDetailView = {
   quota: QuotaView | null;
   // graph is the Code graph switch and the stored graph's status.
   graph: GraphView;
+  // builtInRulesOff is why reviews leave chosen built-in rules out
+  // (jobs.image can't load only those); "" when they load them.
+  builtInRulesOff: string;
 };
 
 // GraphView is a repository's Code graph: the switch, whether the install
@@ -716,7 +723,8 @@ export type SettingsUpdate = Partial<{
   // Admins only, like the two above: tokens per UTC month, or null for none.
   monthlyTokenQuota: number | null;
   ruleSets: string[] | null;
-  builtInRules: boolean | null;
+  // The built-in rules chosen, by name; null or [] is none.
+  builtInRules: string[] | null;
 }>;
 
 // InputSkill is one skill of the set a review would run. source is
@@ -756,7 +764,8 @@ export type RuleEntry = { source: string; path: string; off: boolean; rule: stri
 
 // RulesView is a review's rule list; problem is why a review would fail on
 // its rules (entries is then empty).
-export type RulesView = { builtIn: boolean; entries: RuleEntry[]; problem: string };
+// builtIn names the built-in rules the repository chose; [] for none.
+export type RulesView = { builtIn: string[]; entries: RuleEntry[]; problem: string };
 
 // RuleSet is one rule set of the library; source "config" is the config
 // file's, read-only here (version 0).
@@ -907,9 +916,6 @@ export type DefaultValues = {
   // repository, in a UTC day: 1 to 1000.
   rerunLimitPerMR: number;
   rerunLimitPerRepo: number;
-  // Whether a repository that sets none gets pergent's built-in path rules
-  // (false until an admin turns it on).
-  builtInRules: boolean;
 };
 
 export type DefaultsView = DefaultValues & {

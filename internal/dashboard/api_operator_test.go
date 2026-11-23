@@ -1083,7 +1083,7 @@ func sameDefaults(a, b DefaultsView) bool {
 	a.Config, a.Pinned, b.Config, b.Pinned = DefaultValues{}, nil, DefaultValues{}, nil
 	a.CommentLayout, b.CommentLayout = nil, nil
 	// The rule settings have their own test (TestDefaultsRuleSets).
-	a.RuleSets, b.RuleSets, a.BuiltInRules, b.BuiltInRules = nil, nil, false, false
+	a.RuleSets, b.RuleSets = nil, nil
 	return reflect.DeepEqual(a, b)
 }
 
@@ -1781,8 +1781,8 @@ func TestPutDefaultsCommentLayout(t *testing.T) {
 // A default is pinned when the dashboard stored a value for it, and only then.
 func TestPinnedDefaults(t *testing.T) {
 	none := pinnedDefaults(store.RepoDefaults{})
-	if len(none) != 16 {
-		t.Errorf("pinned = %v; want the sixteen keys", none)
+	if len(none) != 15 {
+		t.Errorf("pinned = %v; want the fifteen keys (built-in rules have no default)", none)
 	}
 	for k, v := range none {
 		if v {

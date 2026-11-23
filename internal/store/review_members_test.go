@@ -1562,7 +1562,7 @@ func TestInheritMultiReviewSplit(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	root := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
-	if _, err := s.pool.Exec(ctx, `UPDATE runs SET quiet_reviews = true, provider = 'openai', rules_hash = 'rh',
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET quiet_reviews = true, provider = 'openai', rules_hash = 'rh', built_in_rules_note = 'left out',
 		model_source = 'team', model_entry_id = 'e1', model_entry_name = 'Team A', model_team_id = 4,
 		chain_position = 1, chain_length = 2, linked_repos = '[{"target":"acme/api","can_block":true}]'::jsonb,
 		title = 'Add login', author = 'alice' WHERE id = $1::uuid`, root); err != nil {
@@ -1599,7 +1599,7 @@ func TestInheritMultiReviewSplit(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := getRun(t, s, next)
-	if a.BaseSHA != "base-sha" || a.StartSHA != "start-sha" || !a.Quiet || a.ModelEntryID != "e1" || a.RulesHash == nil || *a.RulesHash != "rh" ||
+	if a.BaseSHA != "base-sha" || a.StartSHA != "start-sha" || !a.Quiet || a.ModelEntryID != "e1" || a.RulesHash == nil || *a.RulesHash != "rh" || a.BuiltInRulesNote != "left out" ||
 		len(a.LinkedRepos) != 1 || a.SkillSources["security"] != "library" || a.Title != "Add login" {
 		t.Errorf("attempt = %+v; want the split run's fields", a)
 	}

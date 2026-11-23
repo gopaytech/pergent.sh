@@ -929,10 +929,12 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 		var edit func(*store.DashboardRepo)
 		var msg string
 		switch key {
-		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "checkDeleted", "linkedReposEnabled", "builtInRules":
+		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "checkDeleted", "linkedReposEnabled":
 			edit, msg = boolSetting(key, raw, null)
 		case "ruleSets":
 			edit, msg = ruleSetsSetting(raw, null)
+		case "builtInRules":
+			edit, msg = builtInRulesSetting(raw, null)
 		case "commentLayout":
 			edit, msg = commentLayoutSetting(raw, null, msgBadSettings)
 		case "ciJobs":
@@ -991,7 +993,6 @@ var boolSettings = map[string]func(row *store.DashboardRepo, v *bool){
 	"quietReviews":                     func(row *store.DashboardRepo, v *bool) { row.QuietReviews = v },
 	"checkDeleted":                     func(row *store.DashboardRepo, v *bool) { row.CheckDeleted = v },
 	"linkedReposEnabled":               func(row *store.DashboardRepo, v *bool) { row.LinkedReposEnabled = v },
-	"builtInRules":                     func(row *store.DashboardRepo, v *bool) { row.BuiltInRules = v },
 }
 
 // boolSetting reads the setting key, one of boolSettings, as true, false or
@@ -1084,6 +1085,29 @@ func ruleSetsSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo)
 		}
 	}
 	return func(row *store.DashboardRepo) { row.RuleSets = v }, ""
+}
+
+// msgBadBuiltInRules is the 400 for a builtInRules that is not a list of
+// names, such as the switch it was before.
+const msgBadBuiltInRules = "builtInRules must be a list of built-in rule names, such as [\"go\", \"yaml\"], or null for none"
+
+// builtInRulesSetting takes null or [] (none) or a list of built-in rule
+// names, stored once each in builtin.yaml order. A name the pinned pergent
+// has no built-in rule of is refused, by name; so is true or false, which the
+// setting was until the rules were chosen one by one.
+func builtInRulesSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	var v []string
+	if !null {
+		var names []string
+		if json.Unmarshal(raw, &names) != nil {
+			return nil, msgBadBuiltInRules
+		}
+		var unknown []string
+		if v, unknown = config.OrderBuiltInRules(names); len(unknown) > 0 {
+			return nil, fmt.Sprintf("builtInRules: %q is not a built-in rule; the Rules page's Built-in tab lists them", unknown[0])
+		}
+	}
+	return func(row *store.DashboardRepo) { row.BuiltInRules = v }, ""
 }
 
 // ruleSetNames drops repeats from names, keeping the order, and refuses a

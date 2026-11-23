@@ -107,8 +107,9 @@ function BuiltInList() {
     <section className="card" aria-label="Built-in rules">
       <div className="row meta">
         pergent's own rules, after the repository's and the rule sets'. A file gets the first rule with a glob that matches it, in
-        this order. Copy one into a rule set to change it. They are off by default: turn them on with Built-in rules on a
-        repository's Settings, or for every repository on the admin Settings page. A skill with rules: false gets none. This list
+        this order. Copy one into a rule set to change it. A repository gets none until you choose them: tick the ones it needs
+        under Built-in rules on the repository's Settings, or list them in repositories[].built_in_rules. Each one adds its text to
+        the runs on its files, so choose only the ones you need. A skill with rules: false gets none. This list
         comes with the pergent version this pergent.sh is built with. A review uses the rules of the pergent in jobs.image, which
         can be a different version.
       </div>

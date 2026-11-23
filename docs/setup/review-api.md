@@ -12,7 +12,7 @@ A client is one system that calls the API: a script, a bot, another service. An 
 | --- | --- |
 | Name | 1 to 63 characters: `a-z`, `0-9` and `-`. It never changes. |
 | Skills | The library skills its reviews use. |
-| Path rules | None of its own: an API review gets the admin **Default rule sets** and the default **Built-in rules** switch, and reads no repository file ([Path rules](../concepts/rules.md)). A default set that is gone fails the review. |
+| Path rules | None of its own: an API review gets the admin **Default rule sets** and reads no repository file ([Path rules](../concepts/rules.md)). Built-in rules are chosen per repository, so an API review gets none. A default set that is gone fails the review. |
 | Model | A model from the [list of models](../concepts/models.md), or the default. |
 | Callback URL | Where pergent.sh sends each result: [Get the result by callback](#get-the-result-by-callback). Empty means none. Only `http` and `https`, with no user name or password. Use `https`. |
 | Limits | The caps on its requests (below). |

@@ -194,6 +194,7 @@ export const runDetail: RunDetailView = {
     rules: [{ path: "internal/refund/handler.go", rule: "repo:internal/**/*.go" }],
   },
   rulesUsed: true,
+  builtInRulesNote: "",
   skills: [
     {
       name: "security-review",
@@ -347,7 +348,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     // Only an admin is sent the quota.
     ...(role === "admin" ? { monthlyTokenQuota: { value: null, overridden: false } } : {}),
     ruleSets: { value: null, overridden: false },
-    builtInRules: { value: false, overridden: false },
+    builtInRules: { value: [], overridden: false },
   },
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
   waiting: [],
@@ -369,6 +370,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     error: "",
     failedAt: null,
   },
+  builtInRulesOff: "",
 });
 
 // A skill written in the dashboard, on the default list.
@@ -554,7 +556,6 @@ export const defaults: DefaultsView = {
   rerunLimitPerRepo: 50,
   skills: ["code-review"],
   ruleSets: [],
-  builtInRules: false,
   // The config gives what is in effect, and nothing is saved here.
   config: {
     approve: true,
@@ -572,7 +573,6 @@ export const defaults: DefaultsView = {
     jobMemory: "",
     rerunLimitPerMR: 10,
     rerunLimitPerRepo: 50,
-    builtInRules: false,
   },
   pinned: {},
 };

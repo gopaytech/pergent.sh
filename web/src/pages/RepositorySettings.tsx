@@ -6,6 +6,7 @@ import {
   api,
   paths,
   skillBudget,
+  type BuiltInRule,
   type CIJobNamesView,
   type CIJobs,
   type DetectedSkill,
@@ -21,6 +22,7 @@ import {
   type TrustedAuthor,
   type TrustMode,
 } from "../api";
+import BuiltInRulePicker from "../BuiltInRulePicker";
 import CIJobsEditor, { tidyCIJobs } from "../CIJobsEditor";
 import CommentLayoutEditor from "../CommentLayoutEditor";
 import LinkedReposEditor, { tidyLinks, type LinkableState } from "../LinkedReposEditor";
@@ -42,6 +44,8 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
   // The rule library, to choose and order rule sets from; the page doesn't
   // wait for it.
   const ruleLibrary = useQuery({ queryKey: ["rule-sets"], queryFn: () => api.get<RuleSet[]>("/api/rule-sets") });
+  // pergent's built-in rules, to choose from; the page doesn't wait for them.
+  const builtIns = useQuery({ queryKey: ["built-in-rules"], queryFn: () => api.get<BuiltInRule[]>("/api/built-in-rules") });
   // The skills found in the repository's folders, from the default branch:
   // the same read the Skills & instructions tab shows.
   const inputs = useQuery({
@@ -103,6 +107,8 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         settings={view.settings}
         library={library.data}
         ruleLibrary={ruleLibrary.isSuccess ? ruleLibrary.data : null}
+        builtIns={builtIns.isSuccess ? builtIns.data : builtIns.isError ? "error" : "loading"}
+        builtInsOff={view.builtInRulesOff}
         detected={
           inputs.isPending
             ? { status: "loading" }
@@ -331,7 +337,8 @@ type Draft = {
   // mode "default" is a null ruleSets setting: the default list.
   ruleSetsMode: "default" | "choose";
   ruleSets: string[];
-  builtInRules: boolean;
+  // The built-in rules chosen, by name; [] is none.
+  builtInRules: string[];
   jobTimeoutSeconds: string;
   maxTurns: string;
   jobMemory: string;
@@ -379,6 +386,8 @@ function Form({
   settings,
   library: librarySkills,
   ruleLibrary,
+  builtIns,
+  builtInsOff,
   detected,
   attention,
   locked,
@@ -399,6 +408,10 @@ function Form({
   library: LibrarySkill[];
   // ruleLibrary is the rule library; null while it is read (or can't be).
   ruleLibrary: RuleSet[] | null;
+  // builtIns are pergent's built-in rules, or where their read is.
+  // builtInsOff is why reviews would leave chosen ones out.
+  builtIns: BuiltInRule[] | "loading" | "error";
+  builtInsOff: string;
   detected: DetectedState;
   attention: string[];
   locked: boolean;
@@ -444,7 +457,7 @@ function Form({
     repoSkills: settings.repoSkills.value,
     ruleSetsMode: (settings.ruleSets?.value ?? null) === null ? "default" : "choose",
     ruleSets: settings.ruleSets?.value ?? [],
-    builtInRules: settings.builtInRules?.value ?? true,
+    builtInRules: settings.builtInRules?.value ?? [],
     jobTimeoutSeconds: String(settings.jobTimeoutSeconds.value),
     maxTurns: String(settings.maxTurns.value),
     jobMemory: settings.jobMemory.value,
@@ -538,7 +551,8 @@ function Form({
       }
       body.skills = kept;
     }
-    if (d.builtInRules !== initial.builtInRules) body.builtInRules = d.builtInRules;
+    // None is sent as null, which resets the setting.
+    if (!sameSet(d.builtInRules, initial.builtInRules)) body.builtInRules = d.builtInRules.length === 0 ? null : d.builtInRules;
     if (d.ruleSetsMode === "default") {
       // Back to the default list: null resets the setting.
       if (initial.ruleSetsMode === "choose") body.ruleSets = null;
@@ -955,13 +969,26 @@ function Form({
           After the repository's own .pergent/rules.yaml, in this order. The first entry that matches a file gives it its rule;
           a rule never says what is blocking.
         </div>
-        <Setting
-          name="Built-in rules"
-          overridden={settings.builtInRules?.overridden ?? false}
-          help="pergent's own path rules, after the repository's and the rule sets'. Off by default: turn it on to use them."
-        >
-          <Switch label="Built-in rules" checked={d.builtInRules} disabled={disabled} onChange={(v) => set("builtInRules", v)} />
-        </Setting>
+      </section>
+
+      <section className="card" aria-label="Built-in rules">
+        <h2>
+          Built-in rules <Badge overridden={settings.builtInRules?.overridden ?? false} /> {managed}
+        </h2>
+        <div className="pad meta">
+          pergent's own path rules, after the repository's and the rule sets'. Each one adds its text to the runs on its files, so
+          choose only the ones you need. None by default.
+        </div>
+        {builtInsOff !== "" && <div className={d.builtInRules.length > 0 ? "pad problem" : "pad meta"}>{builtInsOff}</div>}
+        {builtIns === "loading" && <Loading />}
+        {builtIns === "error" && (
+          <div className="pad meta">
+            The built-in rules can't be read now{d.builtInRules.length > 0 && `. Chosen: ${d.builtInRules.join(", ")}`}.
+          </div>
+        )}
+        {Array.isArray(builtIns) && (
+          <BuiltInRulePicker rules={builtIns} selected={d.builtInRules} disabled={disabled} onChange={(v) => set("builtInRules", v)} />
+        )}
       </section>
 
       <section className="card" aria-label="Skills in the repository">

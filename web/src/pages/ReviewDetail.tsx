@@ -664,7 +664,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
             </>
           )}
           {tab === "checks" && <Checks skills={view.skills} />}
-          {tab === "files" && <Files files={view.files} rulesUsed={view.rulesUsed} />}
+          {tab === "files" && <Files files={view.files} rulesUsed={view.rulesUsed} builtInNote={view.builtInRulesNote} />}
           {tab === "logs" && <RunLog logPath={paths.apiRunLog(id)} diagnosticsPath={paths.apiRunDiagnostics(id)} />}
         </div>
       </div>
@@ -827,13 +827,15 @@ function Checks({ skills }: { skills: SkillView[] }) {
   );
 }
 
-function Files({ files, rulesUsed }: { files: RunDetailView["files"]; rulesUsed: boolean }) {
+// builtInNote is why the built-in rules the repository chose were left out.
+function Files({ files, rulesUsed, builtInNote }: { files: RunDetailView["files"]; rulesUsed: boolean; builtInNote: string }) {
   // A file's path rule is the same in every skill that had rules on.
   const ruleOf = new Map((files.rules ?? []).map((r) => [r.path, r.rule]));
   return (
     <div className="pad">
       <h3 className="group">Reviewed ({files.reviewed.length})</h3>
       {!rulesUsed && <div className="meta">This image does not use rules.</div>}
+      {builtInNote !== "" && <div className="meta">{builtInNote}</div>}
       <ul className="files">
         {files.reviewed.map((p) => (
           <li key={p}>

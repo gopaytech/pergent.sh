@@ -1024,12 +1024,10 @@ func TestPushDispatch(t *testing.T) {
 		{name: "jobs image pinned to an older pergent", reason: "older pergent", change: func(env *testEnv) {
 			env.Engine.Config.Jobs.Image = "ghcr.io/gopaytech/pergent:v0.4.0"
 		}},
-		// The last review ran with built-in rules on, as a repository that
-		// set nothing did before they became opt-in; now it sets nothing
-		// and gets none, so the rules hash changes.
-		{name: "built-in rules default turned off", reason: "rules changed", prepare: func(env *testEnv) {
-			on := true
-			env.Engine.Config.Repositories[0].BuiltInRules = &on
+		// The last review ran with a built-in rule chosen; now none is,
+		// so the rules hash changes.
+		{name: "built-in rules no longer chosen", reason: "rules changed", prepare: func(env *testEnv) {
+			env.Engine.Config.Repositories[0].BuiltInRules = []string{"go"}
 		}, change: func(env *testEnv) {
 			env.Engine.Config.Repositories[0].BuiltInRules = nil
 		}},

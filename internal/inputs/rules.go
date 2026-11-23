@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/gopaytech/pergent/rule"
@@ -50,12 +51,19 @@ func RuleList(repo []rule.Entry, sets []NamedRuleSet) ([]rule.Entry, error) {
 	return list, nil
 }
 
-// RulesHash is the hash a run records for its rule list, built-in switch and
-// Jobs image: a new hash makes the next push review every skill with rules in
-// full. The image is in it because the built-in texts ship inside the image,
-// so a new image can change them, and an older image reads no rules at all.
-func RulesHash(list []rule.Entry, builtIn bool, image string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("rules %s built-in %t image %q", rule.Hash(list), builtIn, image)))
+// RulesHash is the hash a run records for its rule list, the built-in rules
+// its repository chose and the Jobs image: a new hash makes the next push
+// review every skill with rules in full. The chosen names are sorted, so
+// only which ones counts. None hashes as the built-in switch turned off did
+// before the list, so a repository with none keeps its hash. The image is in
+// it because the built-in texts ship inside the image, so a new image can
+// change them, and an older image reads no rules at all.
+func RulesHash(list []rule.Entry, builtIns []string, image string) string {
+	chosen := "false"
+	if len(builtIns) > 0 {
+		chosen = fmt.Sprintf("%q", slices.Sorted(slices.Values(builtIns)))
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("rules %s built-in %s image %q", rule.Hash(list), chosen, image)))
 	return hex.EncodeToString(sum[:])
 }
 

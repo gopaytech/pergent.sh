@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"slices"
 
 	"github.com/gopaytech/pergent/rule"
 
@@ -68,9 +69,28 @@ type rulesProblem struct{ reason string }
 
 func (p *rulesProblem) Error() string { return p.reason }
 
+// builtInRulesFor is what a Job with jobs.image image is told of the
+// built-in rules chosen: send is the list for PERGENT_BUILT_IN_RULES (nil:
+// none, and the Job gets PERGENT_NO_BUILT_IN_RULES), note why chosen ones
+// were left out ("" when none were chosen or the image loads only those). An
+// image older than config.BuiltInRulesListMinVersion ignores the list and
+// would load every built-in rule, so it gets none: the cost a repository
+// chose to limit is never exceeded.
+func builtInRulesFor(chosen []string, image string) (send []string, note string) {
+	if len(chosen) == 0 {
+		return nil, ""
+	}
+	if ok, reason := config.BuiltInRulesListImage(image); !ok {
+		return nil, "The chosen built-in rules were left out: " + reason + "."
+	}
+	return slices.Clone(chosen), ""
+}
+
 // addRules builds the run's rule list (the repository file at ref only when
-// withRepo, then the repository's rule sets), puts it in the inputs and sets
-// the run's rules hash, which takes in the Jobs image (inputs.RulesHash).
+// withRepo, then the repository's rule sets), puts it in the inputs, decides
+// the built-in rules the Job loads (builtInRulesFor) and sets the run's rules
+// hash, which takes in the chosen built-in rules and the Jobs image
+// (inputs.RulesHash).
 func (d *dispatcher) addRules(ctx context.Context, src inputs.Source, repo settings.Effective, ref string, withRepo bool, in *inputs.Inputs) error {
 	list, problem, err := ruleList(ctx, src, d.run.MR.ProjectID, ref, repo.RuleSets, d.e.Config, d.e.Store.ResolveRuleSets, withRepo)
 	if err != nil {
@@ -81,6 +101,10 @@ func (d *dispatcher) addRules(ctx context.Context, src inputs.Source, repo setti
 	}
 	if in.Rules, err = inputs.EncodeRules(list); err != nil {
 		return err
+	}
+	d.builtInRules, d.builtInNote = builtInRulesFor(repo.BuiltInRules, d.e.Config.Jobs.Image)
+	if d.builtInNote != "" {
+		d.log.Info("built-in rules left out", "reason", d.builtInNote)
 	}
 	d.rulesHash = inputs.RulesHash(list, repo.BuiltInRules, d.e.Config.Jobs.Image)
 	return nil

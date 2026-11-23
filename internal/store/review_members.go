@@ -1274,16 +1274,17 @@ func (s *Store) EnqueueJudgeRetry(ctx context.Context, from Run) (id string, cre
 // the one that was split, or an earlier judge attempt that took it from
 // there, so these are what the split recorded and its dispatch: the base and
 // start SHAs, the model and entry, the skills, the step limit, the rules
-// hash, whether it is quiet or incremental, the layout, the links and the
-// change's details. It is never the review's first run as such: a review can
-// fall back on reviewer 1's chain before it is split, and those attempts
-// carry older values. The judge Job writes none of them itself, and its
+// hash and built-in note, whether it is quiet or incremental, the layout,
+// the links and the change's details. It is never the review's first run as
+// such: a review can fall back on reviewer 1's chain before it is split, and
+// those attempts carry older values. The judge Job writes none of them itself, and its
 // result is checked against them. Any other run is an error.
 func (s *Store) InheritMultiReviewSplit(ctx context.Context, id string) error {
 	return s.mustUpdate(ctx, id, `UPDATE runs a SET base_sha = r.base_sha, start_sha = r.start_sha,
 			provider = r.provider, model = r.model, max_turns = r.max_turns,
 			skill_sources = r.skill_sources, skill_versions = r.skill_versions, skill_hashes = r.skill_hashes,
-			rules_hash = r.rules_hash, quiet_reviews = r.quiet_reviews, comment_layout = r.comment_layout,
+			rules_hash = r.rules_hash, built_in_rules_note = r.built_in_rules_note,
+			quiet_reviews = r.quiet_reviews, comment_layout = r.comment_layout,
 			incremental = r.incremental, base_run_id = r.base_run_id, linked_repos = r.linked_repos,
 			model_source = r.model_source, model_entry_id = r.model_entry_id, model_entry_name = r.model_entry_name,
 			model_team_id = r.model_team_id, chain_position = r.chain_position, chain_length = r.chain_length,

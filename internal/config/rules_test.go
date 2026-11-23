@@ -33,7 +33,7 @@ repositories:
   - gitlab: main
     project: acme/widgets
     rule_sets: [go-api]
-    built_in_rules: false
+    built_in_rules: [go]
 `))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -46,7 +46,7 @@ repositories:
 		t.Errorf("Entries = %+v, want %+v", cfg.RuleSets[0].Entries, want)
 	}
 	repo := cfg.Repositories[0]
-	if !slices.Equal(repo.RuleSets, []string{"go-api"}) || repo.BuiltInRules == nil || *repo.BuiltInRules {
+	if !slices.Equal(repo.RuleSets, []string{"go-api"}) || !slices.Equal(repo.BuiltInRules, []string{"go"}) {
 		t.Errorf("repository rule settings = %v %v", repo.RuleSets, repo.BuiltInRules)
 	}
 	if set, ok := cfg.RuleSet("go-api"); !ok || set.Name != "go-api" {
