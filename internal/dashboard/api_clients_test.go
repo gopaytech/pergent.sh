@@ -51,6 +51,7 @@ func (e *env) addAPIClient(c *http.Cookie, body map[string]any) APIClientCreated
 // A secret comes back in the answer that makes it and nowhere else: not in
 // the client's page, the list or the audit log.
 func TestCreateAPIClientShowsSecretOnce(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 
@@ -110,6 +111,7 @@ func TestCreateAPIClientShowsSecretOnce(t *testing.T) {
 
 // Every route is "not found" for a user, with the body of an unknown path.
 func TestAPIClientRoutesAre404ForUsers(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addAPIClient(e.signInOperator(), goodClient(nil))
 	alice := e.aliceSession()
@@ -143,6 +145,7 @@ func TestAPIClientRoutesAre404ForUsers(t *testing.T) {
 // as a hash; the list shows the prefix and the audit entry names the key and
 // the prefix and never the key.
 func TestCreateAPIKeyShownOnce(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -210,6 +213,7 @@ func TestCreateAPIKeyShownOnce(t *testing.T) {
 
 // A key's expiry must be in the future, and its name 1 to 100 characters.
 func TestCreateAPIKeyRules(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -250,6 +254,7 @@ func mustClientID(t *testing.T, e *env, name string) int64 {
 // A rotation seals a new secret, keeps the old one for 24 hours as the
 // previous, and never puts a secret in the audit log.
 func TestRotateSecretKeepsOld24h(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	created := e.addAPIClient(c, goodClient(nil))
@@ -300,6 +305,7 @@ func TestRotateSecretKeepsOld24h(t *testing.T) {
 
 // A PUT replaces the settings and leaves the keys and the secret alone.
 func TestUpdateAPIClientReplacesSettings(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	created := e.addAPIClient(c, goodClient(nil))
@@ -420,6 +426,7 @@ func callAdminHandler(t *testing.T, h http.HandlerFunc, body map[string]any) *ht
 // reviews are deleted one by one, and a Job that cannot be deleted is logged
 // and does not stop the others.
 func TestDeleteAPIClientAudits(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -439,6 +446,7 @@ func TestDeleteAPIClientAudits(t *testing.T) {
 // Removing a client whose review runs deletes that review's Job, and the Job's
 // result is refused afterwards: the review is gone with its client.
 func TestRemoveClientDeletesLiveJobs(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	var deleted []string
 	e.d.deleteJob = func(_ context.Context, name string) error {

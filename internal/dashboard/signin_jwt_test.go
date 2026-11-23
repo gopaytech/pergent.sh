@@ -605,6 +605,7 @@ func (e *env) jwtSession(f *fakeIssuer, email string) *http.Cookie {
 // account, a session that says jwt with the issuer, the 24 hour cookie and an
 // audit entry.
 func TestJWTStartsASessionOnGET(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -660,6 +661,7 @@ func TestJWTStartsASessionOnGET(t *testing.T) {
 // A page load starts one too (the proxy adds the header to it); a page with no
 // header, or with a bad one, is still served and starts nothing.
 func TestJWTStartsASessionOnAPage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -721,6 +723,7 @@ func TestJWTStartsASessionOnAPage(t *testing.T) {
 // someone else, on a page or on /api/me: no session starts, and the account is
 // still the admin's.
 func TestPasswordSessionWithAValidHeader(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -746,6 +749,7 @@ func TestPasswordSessionWithAValidHeader(t *testing.T) {
 
 // Both forms of the header sign in.
 func TestJWTBearerAndBareTokenStartSessions(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -764,6 +768,7 @@ func TestJWTBearerAndBareTokenStartSessions(t *testing.T) {
 
 // A valid header and no cookie on a write: refused, and nothing changes.
 func TestJWTPostLeavesTheDatabaseAlone(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -794,6 +799,7 @@ func TestJWTPostLeavesTheDatabaseAlone(t *testing.T) {
 
 // With a session, a write needs its CSRF token even when the header is valid.
 func TestJWTWriteNeedsCSRF(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -819,6 +825,7 @@ func TestJWTWriteNeedsCSRF(t *testing.T) {
 
 // A different person's token ends the session, and it can't be used again.
 func TestJWTEmailChangeEndsSession(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -847,6 +854,7 @@ func TestJWTEmailChangeEndsSession(t *testing.T) {
 
 // No header, or an invalid one, ends the session at once.
 func TestJWTMissingHeaderEndsSession(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -874,6 +882,7 @@ func TestJWTMissingHeaderEndsSession(t *testing.T) {
 // An outage of the key set ends nothing: requests get 503, and the session
 // is there when the keys come back.
 func TestJWTKeyOutageKeepsTheSession(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -913,6 +922,7 @@ func TestJWTKeyOutageKeepsTheSession(t *testing.T) {
 // A local admin's session has no token: it skips all of this, whatever the
 // header says, and the password sign-in works with no header.
 func TestPasswordSessionSkipsTheHeader(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -938,6 +948,7 @@ func TestPasswordSessionSkipsTheHeader(t *testing.T) {
 // A token that passes but whose email is not allowed makes no account and no
 // session; an admin-added email passes whatever the lists say.
 func TestJWTRefusedAddsNothing(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -964,6 +975,7 @@ func TestJWTRefusedAddsNothing(t *testing.T) {
 // Changing the mode in the dashboard ends the sessions that jwt started, and
 // leaves a local admin's.
 func TestModeOffEndsJWTSessions(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
@@ -992,6 +1004,7 @@ func TestModeOffEndsJWTSessions(t *testing.T) {
 // change in the config file does, Require refuses a jwt session all the same:
 // it must not live on as a plain cookie.
 func TestRequireRefusesAJWTSessionWhenTheModeChanged(t *testing.T) {
+	t.Parallel()
 	for name, change := range map[string]func(s *store.SignInSettings){
 		"mode off": func(s *store.SignInSettings) { *s = store.SignInSettings{UpdatedAt: s.UpdatedAt} },
 		"mode oidc": func(s *store.SignInSettings) {
@@ -1020,6 +1033,7 @@ func TestRequireRefusesAJWTSessionWhenTheModeChanged(t *testing.T) {
 
 // Signing out ends the session; the header can't start another on /signed-out.
 func TestJWTSignOut(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)

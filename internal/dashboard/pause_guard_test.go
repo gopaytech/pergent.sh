@@ -23,6 +23,7 @@ func withoutConfigWidgets(cfg *config.Config) {
 // Scan now on a paused repository is 409 "the repository is paused", and
 // nothing is asked of the engine. The tab offers no Scan now.
 func TestScanNowPausedRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := e.withReadiness()
 	e.pausedRepo("main", "acme/gadgets", nil)
@@ -49,6 +50,7 @@ func TestScanNowPausedRepo(t *testing.T) {
 // paused": no run is queued, the platform is not asked, the engine is not
 // woken. The review page offers none of them.
 func TestReviewButtonsPausedRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, withoutConfigWidgets)
 	e.pausedRepo("main", buttonProject, nil)
 	e.buttonBlockingReview()

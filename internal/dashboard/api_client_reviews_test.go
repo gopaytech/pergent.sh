@@ -39,6 +39,7 @@ func (e *env) askAPIReview(client, tenant, subject string) string {
 // The list takes a tenant, a subject, a status and a cursor, newest first;
 // another client's reviews are never in it.
 func TestClientReviewsFilter(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -104,6 +105,7 @@ func TestClientReviewsFilter(t *testing.T) {
 
 // A page holds 50 reviews, and the cursor continues after the last one.
 func TestClientReviewsCursor(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -143,6 +145,7 @@ func compact(t *testing.T, raw []byte) any {
 // The page of a published review holds its stored body, and the page of a
 // review that failed at dispatch holds the failure with the admin's detail.
 func TestAPIReviewDetail(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -211,6 +214,7 @@ func TestAPIReviewDetail(t *testing.T) {
 // The log and the diagnostics of an API review come from the readers the
 // merge request pages use; an admin sees the clone log and the pod's state.
 func TestAPIReviewLogAndDiagnostics(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -240,6 +244,7 @@ func TestAPIReviewLogAndDiagnostics(t *testing.T) {
 // A merge request's run is not an API review: none of the routes find it, and
 // the API review routes of its ID answer as for an unknown one.
 func TestAPIReviewDetailRefusesMRRun(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	id := e.addRun(runFix{project: "acme/widgets", number: 1, head: "aaa", result: `{"status":"completed"}`})
@@ -260,6 +265,7 @@ func TestAPIReviewDetailRefusesMRRun(t *testing.T) {
 // The list of clients counts this month's reviews (from the 1st, UTC), the
 // failed ones and their tokens, and leaves last month's out.
 func TestClientListMonthCounts(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil) // the clock is 2026-10-31
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -320,6 +326,7 @@ func (e *env) publishAPIReview(id, subject string) string {
 // the review's history shows it, the review's body is the one stored, and
 // nothing reaches the audit log. A restore takes it back.
 func TestAdminDismissStoresUnderSubject(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -379,6 +386,7 @@ func TestAdminDismissStoresUnderSubject(t *testing.T) {
 // the stored result does not hold, an unknown review, and a session that is
 // not an admin.
 func TestAdminDismissRefusals(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))

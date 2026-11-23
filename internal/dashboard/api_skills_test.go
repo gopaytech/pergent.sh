@@ -31,6 +31,7 @@ func (e *env) installedSkill(name, content string) {
 }
 
 func TestSkillsListFromStore(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("beta", "Beta text.")
 	e.installedSkill("alpha", "Alpha text.")
@@ -87,6 +88,7 @@ func TestSkillsListFromStore(t *testing.T) {
 }
 
 func TestSkillDetailActorOnlyForAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("style", "First text.")
 	if _, err := e.st.UpdateLibrarySkill(ctx, "style", "Second text.", "editor", 1, e.clock.now().Add(time.Minute)); err != nil {
@@ -131,6 +133,7 @@ func TestSkillDetailActorOnlyForAdmins(t *testing.T) {
 
 // A repository's skills over the review's budget are refused with the total.
 func TestRepoSettingsSkillsBudget400(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	big := strings.Repeat("x", 600*1024)
 	e.skill("a", big)
@@ -152,6 +155,7 @@ func TestRepoSettingsSkillsBudget400(t *testing.T) {
 }
 
 func TestRepoSettingsUnknownSkill400(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("a", "x")
 	e.dashboardRepo("main", "acme/gadgets", nil)
@@ -190,6 +194,7 @@ func TestSkillNotFoundMapped(t *testing.T) {
 }
 
 func TestRepoSkillsSettingRoundTrip(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	target := "/api/repositories/main/acme/gadgets/settings"
@@ -261,6 +266,7 @@ func anyStrings(v any) []string {
 }
 
 func TestDefaultsSkillsRoundTrip(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("a", "x")
 	e.skill("b", "y")
@@ -327,6 +333,7 @@ func TestDefaultsSkillsRoundTrip(t *testing.T) {
 }
 
 func TestInputsViewDetectedAndFinal(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) {
 		cfg.Repositories[0].Skills = []string{"a", "gone"}
 		cfg.Repositories[0].RepoSkills = []string{"claude-one", "nope"}
@@ -392,6 +399,7 @@ func boolText(on bool) string {
 // A change of the defaults, or of a repository's skills, shows at once in
 // the view, though the view is kept 5 minutes.
 func TestInputsCacheClearedOnDefaultsChange(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("a", "Text a.")
 	e.skill("b", "Text b.")
@@ -427,6 +435,7 @@ func TestInputsCacheClearedOnDefaultsChange(t *testing.T) {
 // A read that began before a change isn't kept, and a request after the
 // change doesn't share it.
 func TestInputsCacheInvalidateDropsInFlight(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("a", "Text a.")
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
@@ -462,6 +471,7 @@ func TestInputsCacheInvalidateDropsInFlight(t *testing.T) {
 // problem, and the Detected list stays, so a maintainer can still see the
 // switch and turn it off. The engine fails the run on it; so would a review.
 func TestInputsViewTurnedOnMalformedSkill(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) {
 		cfg.Repositories[0].Skills = []string{"a"}
 		cfg.Repositories[0].RepoSkills = []string{"claude-bad", "claude-ok"}
@@ -506,6 +516,7 @@ func TestInputsViewTurnedOnMalformedSkill(t *testing.T) {
 // list that grew over the budget by edits can be cleared, and so can a
 // repository's own list, back to the default list.
 func TestClearingSkillsIgnoresBudget(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("a", "x")
 	e.skill("b", "y")
@@ -590,6 +601,7 @@ func (e *env) defaultSkills() []string {
 }
 
 func TestSkillWritesNeedAdmin(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("style", "Style text.")
 	viewer := e.signInRole(store.RoleViewer)
@@ -626,6 +638,7 @@ func TestSkillWritesNeedAdmin(t *testing.T) {
 // The same authenticated request is refused without the CSRF token and
 // goes through with it.
 func TestSkillWritesNeedCSRF(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("style", "Style text.")
 	e.skill("gone", "Gone text.")
@@ -666,6 +679,7 @@ func TestSkillWritesNeedCSRF(t *testing.T) {
 // The secret check fails closed: when the held secrets can't be read, no
 // create, edit or copy is saved, and the answer says nothing of why.
 func TestHeldSecretsErrorRefusesSave(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("style", "Style text.")
 	admin := e.userOnMain(true, "acme/widgets")
@@ -712,6 +726,7 @@ func TestHeldSecretsErrorRefusesSave(t *testing.T) {
 }
 
 func TestCreateSkill(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("existing", "Existing text.")
 	if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{Skills: []string{"existing"}}); err != nil {
@@ -778,6 +793,7 @@ func TestCreateSkill(t *testing.T) {
 }
 
 func TestCreateChecks(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	for _, tc := range []struct{ what, name, content string }{
@@ -821,6 +837,7 @@ func TestCreateChecks(t *testing.T) {
 // save of the list: the create is refused whole, nothing is written, and the
 // same skill goes in without the box ticked.
 func TestCreateAddToDefaultsBudget(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	big := strings.Repeat("x", inputs.MaxSkillBytes)
 	var names []string
@@ -857,6 +874,7 @@ func TestCreateAddToDefaultsBudget(t *testing.T) {
 }
 
 func TestSaveRefusesHeldSecret(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	op := e.operator()
 	e.addLab(op)
@@ -922,6 +940,7 @@ func TestSaveRefusesHeldSecret(t *testing.T) {
 }
 
 func TestUpdateSkill(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("style", "First.")
 	admin := e.userOnMain(true, "acme/widgets")
@@ -956,6 +975,7 @@ func TestUpdateSkill(t *testing.T) {
 }
 
 func TestUpdateStale409(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("style", "First.")
 	admin := e.userOnMain(true, "acme/widgets")
@@ -977,6 +997,7 @@ func TestUpdateStale409(t *testing.T) {
 }
 
 func TestUpdateInstalled409(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.installedSkill("remote", "Remote text.")
 	admin := e.userOnMain(true, "acme/widgets")
@@ -991,6 +1012,7 @@ func TestUpdateInstalled409(t *testing.T) {
 }
 
 func TestCopySetsFrontmatterName(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("base", "---\nname: base\npaths:\n  - src/**\ncross_batch: true\n---\nBody of base.\n")
 	e.skill("bare", "No frontmatter at all.")
@@ -1061,6 +1083,7 @@ func TestCopySetsFrontmatterName(t *testing.T) {
 }
 
 func TestDeleteSkill(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("style", "Style text.")
 	admin := e.userOnMain(true, "acme/widgets")
@@ -1080,6 +1103,7 @@ func TestDeleteSkill(t *testing.T) {
 // The 409 of a skill in use names every repository that uses it: an admin
 // sees them all.
 func TestDeleteInUse409ListsTheRepositories(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) {
 		cfg.Repositories[0].Skills = []string{"x"} // main acme/widgets
 		cfg.Repositories[1].Skills = []string{"x"} // main acme/payments
@@ -1133,6 +1157,7 @@ func TestDeleteInUse409ListsTheRepositories(t *testing.T) {
 
 // A config repository on GitHub counts as a user of the skill too.
 func TestDeleteInUseByGitHubConfigRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[2].Skills = []string{"x"} })
 	e.skill("x", "Text x.")
 	admin := e.userOnGH(true, "acme/widgets")
@@ -1148,6 +1173,7 @@ func TestDeleteInUseByGitHubConfigRepo(t *testing.T) {
 }
 
 func TestSkillAuditHasNoContent(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	const marker = "DISTINCTIVE-SKILL-TEXT-MARKER"
@@ -1195,6 +1221,7 @@ func TestSkillAuditHasNoContent(t *testing.T) {
 // Every write of the library, and the default list change a create makes,
 // drops the kept inputs views: they list skills and their state.
 func TestSkillWritesInvalidateInputs(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	check := func(what string, do func() *httptest.ResponseRecorder, code int, atLeast uint64) {
@@ -1222,6 +1249,7 @@ func TestSkillWritesInvalidateInputs(t *testing.T) {
 
 // A view kept before a write is not served after it.
 func TestSkillWriteDropsKeptInputsView(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("a", "Text a.")
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {

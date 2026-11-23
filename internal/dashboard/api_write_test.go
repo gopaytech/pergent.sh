@@ -161,6 +161,7 @@ func writes(instance, project string) []struct{ method, target, body string } {
 // session and CSRF token, gets 404 on the switch-on, switch-off and picker
 // (an admin's routes) and 403 on a repository's settings, and nothing changes.
 func TestWritesRequireAdmin(t *testing.T) {
+	t.Parallel()
 	for _, instance := range []string{"main", "gh"} {
 		t.Run(instance, func(t *testing.T) {
 			e := newEnv(t, nil)
@@ -203,6 +204,7 @@ func TestWritesRequireAdmin(t *testing.T) {
 // bot is never asked. An SSO admin, who has no platform account, switches one
 // on; the bot's reach is the only check.
 func TestAddRepositoryNeedsAdmin(t *testing.T) {
+	t.Parallel()
 	for _, role := range []string{store.RoleMaintainer, store.RoleViewer} {
 		t.Run(role, func(t *testing.T) {
 			e := newEnv(t, nil)
@@ -236,6 +238,7 @@ func TestAddRepositoryNeedsAdmin(t *testing.T) {
 // A switch-on and a picker listing name their instance: none is guessed, and an
 // instance that isn't there is 404. Nothing asks the bot first.
 func TestAddRepositoryNeedsInstance(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/tools")
 	c := e.userOnMain(true)
@@ -260,6 +263,7 @@ func TestAddRepositoryNeedsInstance(t *testing.T) {
 // Review Focus 3: a user calling a write endpoint for a repository their
 // teams don't cover gets 404, the same answer as for one that doesn't exist.
 func TestUserCannotWriteUncoveredRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/hidden", func(r *store.DashboardRepo) { r.Approve = ptr(true) })
 	e.dashboardRepo("main", "acme/gadgets", nil)
@@ -307,6 +311,7 @@ func TestUserCannotWriteUncoveredRepo(t *testing.T) {
 // A repository the config lists is read-only here: every write is 409. So
 // is switching on one that is on already.
 func TestConfigManagedIs409(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.cat["main"].set("acme/widgets", "acme/gadgets")
@@ -334,6 +339,7 @@ func TestConfigManagedIs409(t *testing.T) {
 // Settings are validated like config; null resets a field; unknown fields
 // and malformed bodies are refused. A refused change changes nothing.
 func TestSettingsValidation(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) {
 		cfg.Jobs.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
 	})
@@ -504,6 +510,7 @@ func TestSettingsValidation(t *testing.T) {
 
 // Without jobs.resources.requests, the memory limit's floor is 256Mi.
 func TestSettingsMemoryFloor(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true, "acme/gadgets")
@@ -516,6 +523,7 @@ func TestSettingsMemoryFloor(t *testing.T) {
 // null) is 403 and changes nothing, their other settings still work, and
 // their reset leaves the caps as stored. An admin sets and resets them.
 func TestCapsNeedAdmin(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) {
 		mr, repo := 7, 70
@@ -565,6 +573,7 @@ func TestCapsNeedAdmin(t *testing.T) {
 
 // The caps' range error names the setting and the range.
 func TestSettingsCapMessages(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true, "acme/gadgets")
@@ -582,6 +591,7 @@ func TestSettingsCapMessages(t *testing.T) {
 // reconcile, and the admin sees it straight away; switching it off deletes
 // the record and asks again.
 func TestSwitchOnTriggersReconcile(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
 	c := e.userOnMain(true)
@@ -632,6 +642,7 @@ func TestSwitchOnTriggersReconcile(t *testing.T) {
 // The client can't switch on a repository the review bot or App doesn't
 // reach: the server checks again, against the bot, whatever the picker listed.
 func TestSwitchOnOnlyAvailable(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets", "acme/bot-only")
 	c := e.userOnMain(true)
@@ -670,6 +681,7 @@ func TestSwitchOnOnlyAvailable(t *testing.T) {
 // Switching on doesn't depend on the picker's lists: a repository beyond
 // what the list reads can be added.
 func TestSwitchOnBeyondListingCap(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.d.listLimit = 2
 	var all []string
@@ -689,6 +701,7 @@ func TestSwitchOnBeyondListingCap(t *testing.T) {
 // on but out of the bot's reach gets the same 404, after the same check, as
 // one that is off.
 func TestSwitchOnChecksBeforeTellingOnOrOff(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/hidden", nil)
 	e.cat["main"].set("acme/reachable")
@@ -723,6 +736,7 @@ func projectsOf(items []AvailableRepo) []string {
 // The picker lists what the review bot or App of the instance named reaches,
 // minus what is on already, for any admin.
 func TestAvailableListsWhatTheBotReaches(t *testing.T) {
+	t.Parallel()
 	t.Run("gitlab", func(t *testing.T) {
 		e := newEnv(t, nil)
 		e.dashboardRepo("main", "acme/dash", nil)
@@ -834,6 +848,7 @@ func ptr[T any](v T) *T { return &v }
 // A write without the CSRF token is refused before anything else, admin or
 // not.
 func TestWriteNeedsCSRF(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
 	c := e.userOnMain(true)
@@ -850,6 +865,7 @@ func TestWriteNeedsCSRF(t *testing.T) {
 // ?search= finds repositories beyond the first ones listed: the bot's list is
 // searched.
 func TestAvailableSearch(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.d.listLimit = 3
 	var all []string
@@ -868,6 +884,7 @@ func TestAvailableSearch(t *testing.T) {
 // The bot's listing has an overall budget (20 s): when it runs out, what was
 // read is listed, truncated; with nothing read it is 502.
 func TestAvailableListingBudget(t *testing.T) {
+	t.Parallel()
 	if listBudget != 20*time.Second || platformTimeout != 10*time.Second || AvailableBudget != 45*time.Second || listBudget >= AvailableBudget {
 		t.Errorf("listBudget %v, platformTimeout %v, AvailableBudget %v; want 20s, 10s and 45s", listBudget, platformTimeout, AvailableBudget)
 	}
@@ -900,6 +917,7 @@ func TestAvailableListingBudget(t *testing.T) {
 // one the budget cuts: it answers 502 when the budget is gone, and does not
 // wait for the listing, which finishes and is kept for the next request.
 func TestAvailableRequestBudget(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/a", "acme/b", "acme/c", "acme/d", "acme/e")
 	c := e.userOnMain(true)
@@ -1019,6 +1037,7 @@ func TestParseDefaultsMaxTurns(t *testing.T) {
 // Inline findings is stored on its own: true or false, null back to the
 // default (on); a reset clears it; anything else is 400 with its message.
 func TestInlineFindingsSetting(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true, "acme/gadgets")
@@ -1068,6 +1087,7 @@ func TestInlineFindingsSetting(t *testing.T) {
 // The switch for commands is stored on its own: true or false, null back to
 // the default (on); a reset clears it; anything else is 400 with its message.
 func TestCommandsAuthorAndMaintainersOnlySetting(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true, "acme/gadgets")
@@ -1120,6 +1140,7 @@ func TestCommandsAuthorAndMaintainersOnlySetting(t *testing.T) {
 // Incremental reviews is stored on its own: true or false, null back to the
 // default (on); a reset clears it; anything else is 400 with its message.
 func TestIncrementalReviewsSetting(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true, "acme/gadgets")
@@ -1172,6 +1193,7 @@ func TestIncrementalReviewsSetting(t *testing.T) {
 // Learn from dismissals is stored on its own: true or false, null back to the
 // default (on); a reset clears it; anything else is 400 with its message.
 func TestLearnFromDismissalsSetting(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true, "acme/gadgets")
@@ -1226,6 +1248,7 @@ func TestLearnFromDismissalsSetting(t *testing.T) {
 // maintainer may change it, the audit entry names it, and a repository the
 // config manages refuses it.
 func TestQuietReviewsSetting(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true, "acme/gadgets")
@@ -1311,6 +1334,7 @@ func TestQuietReviewsSetting(t *testing.T) {
 // was. A maintainer may change it, the audit entry names it, and a
 // repository the config manages refuses it.
 func TestPutCommentLayout(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true, "acme/gadgets")
@@ -1455,6 +1479,7 @@ func TestBoolSettingUnknownKey(t *testing.T) {
 // message. A maintainer may change it, a viewer may not, the audit entry names
 // it, and a repository the config manages refuses it.
 func TestCheckDeletedSetting(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true, "acme/gadgets")

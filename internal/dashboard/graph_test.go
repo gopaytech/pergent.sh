@@ -36,6 +36,7 @@ func (f *fakeGraphs) DropGraph(_ context.Context, instance, project string) {
 // deletes the graph, each change has its audit entry, the same value again
 // none. The detail view carries the switch and the stored graph's status.
 func TestGraphSwitch(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	g := &fakeGraphs{on: true}
 	e.d.graphs = g
@@ -87,6 +88,7 @@ func TestGraphSwitch(t *testing.T) {
 // Turning it on is 409 when the install keeps no graphs; off still works.
 // A viewer is 403, a config repository 409, a bad body 400.
 func TestGraphSwitchRefusals(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	admin := e.userOnMain(true)

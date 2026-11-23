@@ -47,6 +47,7 @@ func (e *env) usageFixture() {
 }
 
 func TestUsageOverviewForAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageFixture()
 	got := getJSON[UsageOverviewView](e, e.operator(), "/api/admin/usage")
@@ -74,6 +75,7 @@ func TestUsageOverviewForAdmins(t *testing.T) {
 
 // With nothing used, every list is an empty array.
 func TestUsageOverviewIsEmptyWithNoUsage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	rec := e.get(e.operator(), "/api/admin/usage")
 	if rec.Code != http.StatusOK {
@@ -88,6 +90,7 @@ func TestUsageOverviewIsEmptyWithNoUsage(t *testing.T) {
 
 // A repository's switch is read by instance and the path ignoring case.
 func TestUsageOverviewSwitchedOnIgnoresCase(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageRun(runFix{project: "Acme/Widgets", projectID: 77, number: 1, head: head('1')}, usageSkill("security", "no_blocking_issues", 1, 1))
 	got := getJSON[UsageOverviewView](e, e.operator(), "/api/admin/usage")
@@ -98,6 +101,7 @@ func TestUsageOverviewSwitchedOnIgnoresCase(t *testing.T) {
 
 // Usage is for admins: anyone else gets the 404 of a path that is not there.
 func TestUsageIsForAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageFixture()
 	viewer := e.signInRole(store.RoleViewer)
@@ -116,6 +120,7 @@ func TestUsageIsForAdmins(t *testing.T) {
 }
 
 func TestUsageBadDays(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	for _, target := range []string{"/api/admin/usage", "/api/repositories/main/acme/widgets/usage"} {
@@ -133,6 +138,7 @@ func TestUsageBadDays(t *testing.T) {
 
 // A shorter period leaves out what is older.
 func TestUsageOverviewDays(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageFixture()
 	got := getJSON[UsageOverviewView](e, e.operator(), "/api/admin/usage?days=1")
@@ -142,6 +148,7 @@ func TestUsageOverviewDays(t *testing.T) {
 }
 
 func TestUsageOfARepository(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageFixture()
 	now := e.clock.now()
@@ -212,6 +219,7 @@ func TestUsageOfARepository(t *testing.T) {
 // A repository that is not switched on has no page, whatever it used; one
 // with no usage has empty lists.
 func TestUsageOfARepositoryWithNone(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageFixture()
 	c := e.operator()
@@ -251,6 +259,7 @@ func csvRows(t *testing.T, rec *httptest.ResponseRecorder) [][]string {
 }
 
 func TestUsageCSV(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageFixture()
 	// A skill whose pergent reported no cache counts, and a name that a
@@ -317,6 +326,7 @@ func TestUsageCSVAddsColumnsLast(t *testing.T) {
 }
 
 func TestUsageCSVOfARepository(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageFixture()
 	c := e.operator()
@@ -343,6 +353,7 @@ func TestUsageCSVOfARepository(t *testing.T) {
 // A repository switched off loses its project row but keeps its usage, and
 // its export is still its rows.
 func TestUsageCSVOfASwitchedOffRepository(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageFixture()
 	e.exec(`DELETE FROM projects WHERE instance = 'main' AND lower(path) = 'acme/old'`)
@@ -354,6 +365,7 @@ func TestUsageCSVOfASwitchedOffRepository(t *testing.T) {
 }
 
 func TestUsageCSVBadQuery(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	for _, q := range []string{"?days=0", "?days=91", "?days=x", "?instance=main", "?project=acme/widgets", "?instance=&project=acme/widgets"} {
@@ -362,6 +374,7 @@ func TestUsageCSVBadQuery(t *testing.T) {
 }
 
 func TestUsageCSVIsForAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.usageFixture()
 	viewer := e.signInRole(store.RoleViewer)
@@ -388,6 +401,7 @@ func (e *env) usageAPIReview(client, tenant, subject string, skills ...store.Ski
 // The overview lists the API clients with their tenants, and its totals are the
 // repositories plus the clients: the daily chart's.
 func TestUsageOverviewAddsClients(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -436,6 +450,7 @@ func TestUsageOverviewAddsClients(t *testing.T) {
 // With no API usage the clients are an empty array, and a client with more
 // tenants than the page lists says how many are left out.
 func TestUsageOverviewClientsEmptyAndCapped(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	if body := e.get(c, "/api/admin/usage").Body.String(); !strings.Contains(body, `"clients":[]`) {
@@ -457,6 +472,7 @@ func TestUsageOverviewClientsEmptyAndCapped(t *testing.T) {
 // Usage tells apart tokens spent on global keys and on teams' keys, per
 // repository.
 func TestUsageSplitsSource(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	team := e.team("Payments", nil)

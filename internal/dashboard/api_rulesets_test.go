@@ -126,6 +126,7 @@ func TestBuiltInRulesNoneOff(t *testing.T) {
 }
 
 func TestRuleSetCreateChecks(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	for _, tt := range []struct{ name, content, want string }{
@@ -152,6 +153,7 @@ func TestRuleSetCreateChecks(t *testing.T) {
 }
 
 func TestRuleSetSecretRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	const secret = "glpat-very-secret-token"
@@ -181,6 +183,7 @@ func TestRuleSetSecretRefused(t *testing.T) {
 }
 
 func TestRuleSetUpdateStale(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	decode[RuleSetWrittenView](t, e.sendJSON(admin, "POST", "/api/admin/rule-sets", map[string]any{"name": "go", "content": goRuleSet}), "POST", http.StatusCreated)
@@ -192,6 +195,7 @@ func TestRuleSetUpdateStale(t *testing.T) {
 }
 
 func TestRuleSetDeleteInUse409(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(c *config.Config) { c.Repositories[0].RuleSets = []string{"cfg-used"} })
 	admin := e.userOnMain(true, "acme/widgets")
 	for _, n := range []string{"cfg-used", "free"} {
@@ -206,6 +210,7 @@ func TestRuleSetDeleteInUse409(t *testing.T) {
 }
 
 func TestRuleSetConfigReadOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(c *config.Config) {
 		c.RuleSets = []config.ConfigRuleSet{{Name: "team", Content: goRuleSet, Entries: []rule.Entry{{Path: "*.go", Rule: "Check Go.", Source: "dashboard:team"}}}}
 	})
@@ -227,6 +232,7 @@ func TestRuleSetConfigReadOnly(t *testing.T) {
 }
 
 func TestRuleSetLimit400(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	for i := range store.MaxRuleSets {
@@ -242,6 +248,7 @@ func TestRuleSetLimit400(t *testing.T) {
 }
 
 func TestRuleSetAudit(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	e.sendJSON(admin, "POST", "/api/admin/rule-sets", map[string]any{"name": "go", "content": goRuleSet})
@@ -265,6 +272,7 @@ func TestRuleSetAudit(t *testing.T) {
 }
 
 func TestRuleSetReadAccess(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	e.sendJSON(admin, "POST", "/api/admin/rule-sets", map[string]any{"name": "go", "content": goRuleSet})

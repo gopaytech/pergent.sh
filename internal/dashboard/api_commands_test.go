@@ -129,6 +129,7 @@ func statusOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 }
 
 func TestRerunButton(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	c := e.signInRole(store.RoleMaintainer)
@@ -169,6 +170,7 @@ func TestRerunButton(t *testing.T) {
 }
 
 func TestRerunButtonCap(t *testing.T) {
+	t.Parallel()
 	// A config repository takes its cap from the config file.
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[0].RerunLimitPerMR = ptr(1) })
 	e.buttonBlockingReview()
@@ -200,6 +202,7 @@ func TestRerunButtonCap(t *testing.T) {
 }
 
 func TestRerunFailedButton(t *testing.T) {
+	t.Parallel()
 	t.Run("only the failed skills", func(t *testing.T) {
 		e := newEnv(t, nil)
 		prior := e.buttonReview(resultJSON(head('1'), skillJSON("code-review", "no_blocking_issues"), skillJSON("style", "failed")))
@@ -281,6 +284,7 @@ func TestRerunFailedButton(t *testing.T) {
 }
 
 func TestRerunButtonRefusals(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	c := e.signInRole(store.RoleMaintainer)
@@ -303,6 +307,7 @@ func TestRerunButtonRefusals(t *testing.T) {
 }
 
 func TestRerunButtonRefusesADraftWhereDraftsAreNotReviewed(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[0].ReviewDrafts = ptr(false) })
 	e.buttonBlockingReview()
 	e.src["main"].set(func(f *fakeSource) { f.change.Draft = true })
@@ -315,6 +320,7 @@ func TestRerunButtonRefusesADraftWhereDraftsAreNotReviewed(t *testing.T) {
 }
 
 func TestDismissButtonBlockingNeedsMaintainer(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	v := e.signInRole(store.RoleViewer)
@@ -377,6 +383,7 @@ func TestDismissButtonBlockingNeedsMaintainer(t *testing.T) {
 // A reason is cut to nothing but text: images are stripped before it is
 // stored, and it can be 500 characters at most.
 func TestDismissButtonReason(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	c := e.signInRole(store.RoleMaintainer)
@@ -405,6 +412,7 @@ func TestDismissButtonReason(t *testing.T) {
 }
 
 func TestDismissButtonSuggestion(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	c := e.signInRole(store.RoleMaintainer)
@@ -420,6 +428,7 @@ func TestDismissButtonSuggestion(t *testing.T) {
 // platform user ID: the session's, and none for an account that has no
 // platform user here.
 func TestDashboardDismissTeaches(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	c := e.signInRole(store.RoleMaintainer)
@@ -453,6 +462,7 @@ func TestDashboardDismissTeaches(t *testing.T) {
 // theirs too. The change's state still decides, and an unreadable change
 // fails closed.
 func TestMaintainerDismissesOwnBlocker(t *testing.T) {
+	t.Parallel()
 	// alice opened the change.
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
@@ -521,6 +531,7 @@ func TestMaintainerDismissesOwnBlocker(t *testing.T) {
 // email before the "@", on the pull request and in the dashboard; the audit log
 // keeps the full email.
 func TestDismissedByShowsNoAddress(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	runID := e.buttonBlockingReview()
 	c := e.signInRole(store.RoleMaintainer)
@@ -539,6 +550,7 @@ func TestDismissedByShowsNoAddress(t *testing.T) {
 }
 
 func TestRestoreButton(t *testing.T) {
+	t.Parallel()
 	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: 7}
 	// A review approved with its blocking finding dismissed.
 	dismissedReview := func() (*env, string) {
@@ -599,6 +611,7 @@ func TestRestoreButton(t *testing.T) {
 }
 
 func TestButtonsWorkOnConfigRepos(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	c := e.signInRole(store.RoleMaintainer)
@@ -626,6 +639,7 @@ func TestButtonsWorkOnConfigRepos(t *testing.T) {
 }
 
 func TestViewerCannotPressButtons(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	v := e.signInRole(store.RoleViewer)
@@ -654,6 +668,7 @@ func TestViewerCannotPressButtons(t *testing.T) {
 }
 
 func TestReviewViewCarriesRoleAndDismissals(t *testing.T) {
+	t.Parallel()
 	roles := map[string]struct {
 		role string
 		can  CanView
@@ -740,6 +755,7 @@ func TestReviewViewCarriesRoleAndDismissals(t *testing.T) {
 }
 
 func TestButtonsCSRF(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	c := e.signInRole(store.RoleAdmin)
@@ -803,6 +819,7 @@ func (e *env) stateOf(id string) string {
 // A dismissal whose review could not be decided again is decided again when
 // the button is pressed once more, the dismissal being there already.
 func TestDismissRetryRedecides(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	runID := e.buttonBlockingReview()
 	c := e.signInRole(store.RoleMaintainer)
@@ -830,6 +847,7 @@ func TestDismissRetryRedecides(t *testing.T) {
 }
 
 func TestRestoreRetryRedecides(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	runID := e.buttonBlockingReview()
 	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: 7}
@@ -864,6 +882,7 @@ func TestRestoreRetryRedecides(t *testing.T) {
 // A request that ends while the restore is being made (the browser went away)
 // still leaves it audited and the review decided again.
 func TestRestoreSurvivesAnInterruptedRequest(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	runID := e.buttonBlockingReview()
 	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: 7}
@@ -901,6 +920,7 @@ func TestRestoreSurvivesAnInterruptedRequest(t *testing.T) {
 // are already loaded) has that run decided again; the older published review
 // is left as it was.
 func TestRestoreReachesAReviewBeingPublished(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	older := e.buttonBlockingReview()
 	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: 7}
@@ -928,6 +948,7 @@ func TestRestoreReachesAReviewBeingPublished(t *testing.T) {
 // The same with a re-run of the head that was published: no run is decided
 // yet, and the run being published still has to be decided again.
 func TestRestoreReachesASameHeadRerunBeingPublished(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: 7}
@@ -957,6 +978,7 @@ func TestRestoreReachesASameHeadRerunBeingPublished(t *testing.T) {
 // Dismissals are decided again for the newest review only, so an older run
 // shows what was published for it.
 func TestOlderRunsShowWhatWasPublished(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	older := e.buttonBlockingReview()
 	newer := e.addRun(runFix{project: buttonProject, number: 7, head: head('2'), user: "bob", outcome: OutcomeBlocking,
@@ -976,6 +998,7 @@ func TestOlderRunsShowWhatWasPublished(t *testing.T) {
 }
 
 func TestDismissBlockingOnAMergedChange(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	e.src["main"].set(func(f *fakeSource) { f.change.State = forge.StateMerged })
@@ -993,6 +1016,7 @@ func TestDismissBlockingOnAMergedChange(t *testing.T) {
 // A merged or closed change refuses every blocking dismissal, a password
 // admin's included.
 func TestOperatorDismissBlockingOnAMergedChange(t *testing.T) {
+	t.Parallel()
 	for _, state := range []forge.ChangeState{forge.StateMerged, forge.StateClosed} {
 		e := newEnv(t, nil)
 		e.buttonBlockingReview()
@@ -1011,6 +1035,7 @@ func TestOperatorDismissBlockingOnAMergedChange(t *testing.T) {
 // TestRunDetailLatestDecided: latestDecided marks the one run of a change
 // that dismiss and restore act on, whatever its place in the history.
 func TestRunDetailLatestDecided(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	// buttonReview's run is an hour old; the others come after it.
 	ago := func(minutes int) time.Time { return e.clock.now().Add(-time.Duration(minutes) * time.Minute) }
@@ -1050,6 +1075,7 @@ func TestRunDetailLatestDecided(t *testing.T) {
 // The start button refuses a multi review waiting for its members: it is on
 // its way, not waiting for a start. A change held for a start still starts.
 func TestStartButtonRefusesMultiReview(t *testing.T) {
+	t.Parallel()
 	for _, panel := range []bool{true, false} {
 		e := newEnv(t, nil)
 		e.aliceOn("main", store.RoleMaintainer)

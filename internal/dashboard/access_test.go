@@ -34,6 +34,7 @@ func wantWaiting(t *testing.T, rec *httptest.ResponseRecorder, what string) {
 // An admin is an account whose role is admin, with no team: it sees every
 // repository of every instance as admin, and every admin page.
 func TestAdminSeesEverything(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	e.ssoAdmin(aliceEmail)
@@ -72,6 +73,7 @@ func TestAdminSeesEverything(t *testing.T) {
 // A user sees the repositories their teams cover and nothing else: not the
 // reviews, runs, logs or settings of any other, whatever the instance.
 func TestUserSeesOnlyTeamRepos(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	payments := e.addRun(runFix{project: "acme/payments", number: 5, head: head('p'), result: blockingResult(head('p')),
@@ -122,6 +124,7 @@ func TestUserSeesOnlyTeamRepos(t *testing.T) {
 // team. A local admin, an SSO admin, an invitation that never signed in, an old
 // platform account and a user on a team don't count, and nobody else is told.
 func TestMeCountsUsersWaitingForAnAdmin(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	local := e.operator()
 	boss := e.sessionFor(e.ssoAdmin("boss@example.com"))
@@ -173,6 +176,7 @@ func TestMeCountsUsersWaitingForAnAdmin(t *testing.T) {
 // wait, everything else is 403 "waiting", and nothing asks the review bot or
 // the platform about a repository.
 func TestUserOnNoTeamIsWaiting(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	c := e.aliceSession()
@@ -223,6 +227,7 @@ func TestUserOnNoTeamIsWaiting(t *testing.T) {
 // Of the teams covering a repository, the highest role wins: a viewer on one
 // and a maintainer on another is a maintainer there, a viewer elsewhere.
 func TestHighestRoleWins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	alice := e.alice()
 	e.team("everyone", []store.TeamMember{{AccountID: alice, Role: store.RoleViewer}}, store.TeamRepo{Instance: "main"})
@@ -252,6 +257,7 @@ func TestHighestRoleWins(t *testing.T) {
 // A team that covers a whole instance covers a repository switched on later,
 // with no change to the team.
 func TestInstanceWideTeamCoversNewRepository(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.team("main", []store.TeamMember{{AccountID: e.alice(), Role: store.RoleMaintainer}}, store.TeamRepo{Instance: "main"})
 	c := e.aliceSession()
@@ -279,6 +285,7 @@ func TestInstanceWideTeamCoversNewRepository(t *testing.T) {
 // before reconcile has stored its project. It has no ID yet, so no run is
 // visible, but its page opens.
 func TestUnreconciledRepositoryIsVisible(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.team("gadgets", []store.TeamMember{{AccountID: e.alice(), Role: store.RoleViewer}},
@@ -321,6 +328,7 @@ func TestUnreconciledRepositoryIsVisible(t *testing.T) {
 // Review Focus 3: a team removed, or a member taken off it, ends access at
 // the next request, with no wait.
 func TestTeamRemovalEndsAccess(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	alice, bob := e.alice(), e.sso("bob@example.com")
@@ -370,6 +378,7 @@ func overviewRun(e *env) string {
 // column's default) gets nothing: the next request ends it, whatever team the
 // account was on.
 func TestPlatformSessionGetsNothing(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	old, err := e.st.UpsertPlatformAccount(ctx, config.PlatformGitLab, "main", 9, "alice", e.clock.now())
@@ -441,6 +450,7 @@ func TestPlatformSessionGetsNothing(t *testing.T) {
 // A failure to read the account's teams answers 500 with a fixed text, ends
 // nothing and gives no access: it is never read as "waiting" or as access.
 func TestAccessLoadFailureAnswers500(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	e.team("devs", viewerMembers(e.alice()), store.TeamRepo{Instance: "main"})
@@ -468,6 +478,7 @@ func TestAccessLoadFailureAnswers500(t *testing.T) {
 
 // GitHub and GitLab sign-in is gone: the routes are not there.
 func TestPlatformSignInRoutesAreGone(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	for _, target := range []string{
 		"/auth/github/x/login", "/auth/github/gh/login", "/auth/gitlab/main/login",
@@ -491,6 +502,7 @@ func TestPlatformSignInRoutesAreGone(t *testing.T) {
 // A maintainer changes the settings of the repositories their teams cover,
 // and can't switch them off; a viewer changes nothing.
 func TestMaintainerCanEditSettings(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	team := e.team("gadgets", []store.TeamMember{{AccountID: e.alice(), Role: store.RoleMaintainer}},
@@ -531,6 +543,7 @@ func TestMaintainerCanEditSettings(t *testing.T) {
 // An admin may do everything on any repository: switch one off, change the
 // re-run caps.
 func TestAdminMayChangeAnyRepository(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.ssoAdmin(aliceEmail)
@@ -546,6 +559,7 @@ func TestAdminMayChangeAnyRepository(t *testing.T) {
 // reviews, runs and setup problems of every instance, and never asks a
 // platform.
 func TestLocalAdminSeesEverything(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	ghRun := e.addRun(runFix{instance: "gh", project: "acme/widgets", projectID: 900, number: 8, head: head('8'),
@@ -610,6 +624,7 @@ func TestLocalAdminSeesEverything(t *testing.T) {
 // The picker lists what the review bot or App reaches on the instance a
 // request names, for any admin; switching on names the instance too.
 func TestAdminPicksRepositories(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets", "acme/widgets")
 	e.ssoAdmin(aliceEmail)

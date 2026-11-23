@@ -140,6 +140,7 @@ func TestRequestFor(t *testing.T) {
 // since the waiting gate comes first there; for an admin route the answer is
 // 404 all the same.) The walk is over the routes adminRoute recorded.
 func TestEveryAdminRouteIsNotFoundForAUser(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	routes := slices.Clone(e.d.adminRoutes)
 	if len(routes) < 30 {
@@ -178,6 +179,7 @@ func TestEveryAdminRouteIsNotFoundForAUser(t *testing.T) {
 // The chain B routes are gone: each answers 404 for an admin, whatever the
 // state of the repository or the team.
 func TestPanelChainRoutesGone(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	te.gadgetsOwnedByPayments()
 	team := strconv.FormatInt(te.payments, 10)
@@ -206,6 +208,7 @@ func TestPanelChainRoutesGone(t *testing.T) {
 
 // The repository view has no panel key: multi review replaced the panel.
 func TestRepositoryViewHasNoPanel(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	te.gadgetsOwnedByPayments()
 	keys := rawKeys(te.env, te.viewer, "/api/repositories/main/acme/gadgets")
