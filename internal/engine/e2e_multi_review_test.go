@@ -24,6 +24,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -1112,6 +1113,17 @@ func TestE2EMultiReviewSplitAfterFallBack(t *testing.T) {
 	}
 
 	dispatch(t, env)
+	// The sweep leaves a live review alone when the run that waits is a
+	// later attempt and the members belong to the first run.
+	cleanup(t, env)
+	if n := len(env.Jobs()); n != 3 {
+		t.Errorf("%d Jobs after the sweep; want the 3 reviewers'", n)
+	}
+	for _, m := range reviewMembers(t, env, first) {
+		if m.State != store.MemberRunning {
+			t.Errorf("reviewer %d = %s after the sweep; want running", m.Reviewer, m.State)
+		}
+	}
 	for n, key := range []string{"key-team-a2", "key-team-b", "key-team-c"} {
 		m := memberOf(t, env, first, n+1)
 		wantMemberKey(t, env, m, key)
@@ -1157,6 +1169,13 @@ func TestDispatchLegacyAPIPanelMemberFails(t *testing.T) {
 	if after := env.Run(id); !reflect.DeepEqual(before, after) {
 		t.Errorf("the legacy member's dispatch wrote the run:\n before %+v\n after  %+v", before, after)
 	}
+
+	// The settle pass still fails such a review: it never waits for ever,
+	// and it is never a pass.
+	publish(t, env)
+	if r := env.Run(id); r.State != store.Published || !strings.Contains(r.FailureReason, reasonAPINoMultiReview) {
+		t.Errorf("run = %s %q; want published as failed", r.State, r.FailureReason)
+	}
 }
 
 // A merge request's legacy panel member found at dispatch starts no Job:
@@ -1192,4 +1211,779 @@ func TestDispatchLegacyPanelMemberRequeuesReview(t *testing.T) {
 	if n := len(env.Jobs()); n != 0 {
 		t.Errorf("%d Jobs; want none", n)
 	}
+}
+
+// errorResult is a result of head whose review failed with message.
+func errorResult(t *testing.T, head, message string) []byte {
+	t.Helper()
+	b, err := json.Marshal(result.Result{
+		SchemaVersion: result.SchemaVersion, Status: "error", PergentVersion: "0.1.0",
+		Base: sha('b'), Head: head, Error: &result.Error{Code: "review_failed", Message: message},
+		Comment: result.Comment{Markdown: "The review failed."},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// wantNothingPosted checks no request but a read reached the forge.
+func wantNothingPosted(t *testing.T, env *testEnv) {
+	t.Helper()
+	for _, r := range env.GitLab.Requests("", "") {
+		if r.Method != http.MethodGet {
+			t.Errorf("%s %s reached the forge; want nothing posted for a reviewer", r.Method, r.Path)
+		}
+	}
+}
+
+// jobDeadline is the active deadline of member or run id's Job.
+func jobDeadline(t *testing.T, env *testEnv, id string) int64 {
+	t.Helper()
+	job := env.Job(id)
+	if job == nil || job.Spec.ActiveDeadlineSeconds == nil {
+		t.Fatalf("%s has no Job with a deadline", id)
+	}
+	return *job.Spec.ActiveDeadlineSeconds
+}
+
+// marksAudited is the number of model_marked entries in the audit log.
+func marksAudited(t *testing.T, env *testEnv) int {
+	t.Helper()
+	entries, err := env.Store.AuditLog(env.ctx, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		if e.Action == "model_marked" {
+			n++
+		}
+	}
+	return n
+}
+
+// wantReleased checks run id was released for its judge: queued again with
+// no skip reason, due now, and otherwise as it was before (no failure, no
+// Job, no result).
+func wantReleased(t *testing.T, env *testEnv, id string, before store.Run) {
+	t.Helper()
+	after := env.Run(id)
+	if after.State != store.Queued || after.SkipReason != "" || !after.NotBefore.IsZero() || after.FailureReason != "" {
+		t.Fatalf("run = %s/%q %q; want released for its judge\n%s", after.State, after.SkipReason, after.FailureReason, env.Logs())
+	}
+	after.State, after.SkipReason, after.NotBefore = before.State, before.SkipReason, before.NotBefore
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("the release wrote more than the run's state:\n before %+v\n after  %+v", before, after)
+	}
+}
+
+// attemptsOfReviewer is every attempt of reviewer n of run id's review,
+// oldest first.
+func attemptsOfReviewer(t *testing.T, env *testEnv, id string, n int) []store.ReviewMember {
+	t.Helper()
+	var out []store.ReviewMember
+	for _, m := range reviewMembers(t, env, id) {
+		if m.Reviewer == n {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// wantFailedKeepingResult checks reviewer n of run id's review has
+// attempts attempts and its newest one is failed for reason with its
+// result kept.
+func wantFailedKeepingResult(t *testing.T, env *testEnv, id string, n, attempts int, reason string) {
+	t.Helper()
+	as := attemptsOfReviewer(t, env, id, n)
+	if len(as) != attempts {
+		t.Fatalf("reviewer %d has %d attempts; want %d (no next attempt)\n%s", n, len(as), attempts, env.Logs())
+	}
+	got := as[len(as)-1]
+	if got.State != store.MemberFailed || got.FailureReason != reason || got.Result == nil {
+		t.Errorf("reviewer %d = %s %q (result kept: %v); want failed %q with its result kept",
+			n, got.State, got.FailureReason, got.Result != nil, reason)
+	}
+}
+
+// Between the reviewers' results and the judge Job nothing is posted for a
+// reviewer: no comment, note, thread, approval or status. Settling writes
+// nothing to the platform: reviewer 1 is done, reviewer 2 failed (its
+// result is for another commit), reviewer 3 failed (its review failed), and
+// the run is released (queued again, its other fields as the split left
+// them). The judge Job is M3.7's.
+func TestE2EMultiReviewMemberPostsNothing(t *testing.T) {
+	e := newThreeReviewers(t)
+	env := e.env
+	head := sha('a')
+	id, ms := startReviewers(t, e, head)
+	before := env.Run(id)
+	env.GitLab.Reset()
+
+	if code := e.postMember(t, id, ms[0], clean(t, head)); code != http.StatusOK {
+		t.Fatalf("reviewer 1's result: status %d\n%s", code, env.Logs())
+	}
+	if code := e.postMember(t, id, ms[1], clean(t, sha('f'))); code != http.StatusBadRequest {
+		t.Fatalf("reviewer 2's result: status %d; want 400", code)
+	}
+	if code := e.postMember(t, id, ms[2], errorResult(t, head, "the model gave no answer")); code != http.StatusOK {
+		t.Fatalf("reviewer 3's result: status %d", code)
+	}
+	for i := 0; i < 2; i++ {
+		watch(t, env)
+		publish(t, env)
+		cleanup(t, env)
+	}
+	wantNothingPosted(t, env)
+	if got := memberOf(t, env, id, 1); got.State != store.MemberDone || got.Result == nil {
+		t.Errorf("reviewer 1 = %s; want done with its result", got.State)
+	}
+	if got := memberOf(t, env, id, 2); got.State != store.MemberFailed ||
+		!strings.Contains(got.FailureReason, "the result is for a different commit than the one this run reviews") {
+		t.Errorf("reviewer 2 = %s %q; want failed for the commit", got.State, got.FailureReason)
+	}
+	if got := memberOf(t, env, id, 3); got.State != store.MemberFailed || got.FailureReason != "the model gave no answer" || got.Result != nil {
+		t.Errorf("reviewer 3 = %s %q; want failed with the review's message", got.State, got.FailureReason)
+	}
+	wantReleased(t, env, id, before)
+}
+
+// Reviewer 2's entry is out of quota: the entry is marked and audited as a
+// run's is, the member is fell_back, and its next attempt (attempt_of the
+// first) runs on reviewer 2's next frozen entry in a new Job with the full
+// timeout. Reviewers 1 and 3 are untouched, the run still waits, and
+// nothing is posted, not even a status.
+func TestE2EMultiReviewMemberFallsBack(t *testing.T) {
+	e := newMultiReviewE2E(t, []string{"team-a"}, [][]string{{"team-b", "team-b2"}, {"team-c"}}, []string{"team-j"})
+	env := e.env
+	b, b2 := entryNamed(t, env, "team-b"), entryNamed(t, env, "team-b2")
+	head := sha('a')
+	id, ms := startReviewers(t, e, head)
+	two := ms[1]
+	deadline := jobDeadline(t, env, two.ID)
+	before := env.Run(id)
+	env.GitLab.Reset()
+
+	if code := e.postMember(t, id, ms[0], clean(t, head)); code != http.StatusOK {
+		t.Fatalf("reviewer 1's result: status %d", code)
+	}
+	if code := e.postMember(t, id, two, failedOn(t, head, "quota")); code != http.StatusOK {
+		t.Fatalf("reviewer 2's result: status %d\n%s", code, env.Logs())
+	}
+	woken(env)
+	publish(t, env)
+
+	if got := memberOf(t, env, id, 1); got.ID != ms[0].ID || got.State != store.MemberDone {
+		t.Errorf("reviewer 1 = %s %s; want the same member, done", got.ID, got.State)
+	}
+	if got := memberOf(t, env, id, 3); got.ID != ms[2].ID || got.State != store.MemberRunning {
+		t.Errorf("reviewer 3 = %s %s; want the same member, running", got.ID, got.State)
+	}
+	if m, ok := markOf(t, env, b); !ok || m.Class != store.ClassQuota || m.Until == nil || !m.Until.Equal(env.Now().Add(time.Hour)) {
+		t.Errorf("reviewer 2's mark = %+v, %v; want quota until now+1h", m, ok)
+	}
+	if _, ok := markOf(t, env, b2); ok {
+		t.Errorf("reviewer 2's next entry is marked")
+	}
+	entries, err := env.Store.AuditLog(env.ctx, 0, 10)
+	if err != nil || len(entries) == 0 || entries[0].Action != "model_marked" || entries[0].Actor != "pergent" ||
+		entries[0].Detail != "model=team-b class=quota" || entries[0].Project != testProjectPath {
+		t.Errorf("audit = %+v, %v", entries, err)
+	}
+	as := attemptsOfReviewer(t, env, id, 2)
+	if len(as) != 2 || as[0].ID != two.ID || as[0].State != store.MemberFellBack {
+		t.Fatalf("reviewer 2's attempts = %+v; want the first fell_back and a next one", as)
+	}
+	next := as[1]
+	if next.State != store.MemberQueued || next.AttemptOf == nil || *next.AttemptOf != two.ID || !reflect.DeepEqual(next.Chain, two.Chain) {
+		t.Fatalf("reviewer 2's next attempt = %+v; want queued, attempt of the first, with its frozen chain", next)
+	}
+	wantWaiting(t, env, id)
+	if !woken(env) {
+		t.Errorf("the dispatcher was not woken for reviewer 2's next attempt")
+	}
+
+	dispatch(t, env)
+	next = memberOf(t, env, id, 2)
+	wantMemberKey(t, env, next, "key-team-b2")
+	if next.Entry.ID != b2.ID || next.Entry.Position != 2 || next.Entry.Length != 2 {
+		t.Errorf("reviewer 2's next entry = %+v; want the second of 2", next.Entry)
+	}
+	if got := jobDeadline(t, env, next.ID); got != deadline {
+		t.Errorf("reviewer 2's next Job's deadline = %ds; want the full %ds", got, deadline)
+	}
+	if n := len(reviewMembers(t, env, id)); n != 4 {
+		t.Errorf("%d members; want 3 reviewers and reviewer 2's second attempt", n)
+	}
+	wantNothingPosted(t, env)
+	if after := env.Run(id); !reflect.DeepEqual(before, after) {
+		t.Errorf("the fallback wrote the run:\n before %+v\n after  %+v", before, after)
+	}
+}
+
+// Reviewer 2's next frozen entry runs on reviewer 1's model: its next
+// attempt skips it and takes the one after. With no entry after it, no
+// different model is left: reviewer 2 fails with its result kept, and no
+// next attempt is queued.
+func TestE2EMultiReviewFallbackSkipsEarlierModel(t *testing.T) {
+	setup := func(t *testing.T, names ...string) (*e2e, string, store.ReviewMember, store.ReviewMember) {
+		e := newMultiReviewE2E(t, []string{"team-a"}, nil, nil)
+		env := e.env
+		team := ownerTeam(t, env)
+		var refs []store.EntryRef
+		for _, n := range names {
+			model := "gpt-" + n
+			if n == "team-same" {
+				model = "GPT-TEAM-A"
+			}
+			refs = append(refs, addTeamModel(t, env, team, n, model, "key-"+n))
+		}
+		saveExtraReviewers(t, env, [][]store.EntryRef{refs}, refs[:1])
+		id := splitReview(t, env, 1, sha('a'))
+		dispatch(t, env)
+		one, two := memberOf(t, env, id, 1), memberOf(t, env, id, 2)
+		wantMemberKey(t, env, one, "key-team-a")
+		wantMemberKey(t, env, two, "key-"+names[0])
+		return e, id, one, two
+	}
+	head := sha('a')
+	t.Run("the one after", func(t *testing.T) {
+		e, id, one, two := setup(t, "team-b", "team-same", "team-after")
+		env := e.env
+		if code := e.postMember(t, id, two, failedOn(t, head, "billing")); code != http.StatusOK {
+			t.Fatalf("reviewer 2's result: status %d", code)
+		}
+		publish(t, env)
+		dispatch(t, env)
+		next := memberOf(t, env, id, 2)
+		if next.ID == two.ID {
+			t.Fatalf("reviewer 2 did not fall back\n%s", env.Logs())
+		}
+		wantMemberKey(t, env, next, "key-team-after")
+		if next.Entry.Position != 3 {
+			t.Errorf("reviewer 2's next entry = %+v; want the third, past reviewer 1's model", next.Entry)
+		}
+		if env.Job(one.ID) == nil {
+			t.Errorf("reviewer 1 has no Job")
+		}
+	})
+	t.Run("no different model left", func(t *testing.T) {
+		e, id, one, two := setup(t, "team-b", "team-same")
+		env := e.env
+		before := env.Run(id)
+		env.GitLab.Reset()
+		if code := e.postMember(t, id, one, clean(t, head)); code != http.StatusOK {
+			t.Fatalf("reviewer 1's result: status %d", code)
+		}
+		if code := e.postMember(t, id, two, failedOn(t, head, "auth")); code != http.StatusOK {
+			t.Fatalf("reviewer 2's result: status %d", code)
+		}
+		publish(t, env)
+		wantFailedKeepingResult(t, env, id, 2, 1, "key rejected")
+		if m, ok := markOf(t, env, entryNamed(t, env, "team-b")); !ok || m.Class != store.ClassAuth {
+			t.Errorf("reviewer 2's mark = %+v, %v; want auth", m, ok)
+		}
+		if n := marksAudited(t, env); n != 1 {
+			t.Errorf("%d model_marked entries; want 1", n)
+		}
+		wantReleased(t, env, id, before)
+		wantNothingPosted(t, env)
+	})
+}
+
+// An extra reviewer out of tokens. (a) Reviewer 3's 2-entry chain: both
+// entries are refused; after the second refusal reviewer 3 is failed with
+// its result kept, no third attempt is queued, and the run is released.
+// (b) Reviewer 3's 1-entry chain is refused: it never falls back, so
+// nothing is marked and the member is done with its result.
+func TestE2EMultiReviewExtraOutOfTokens(t *testing.T) {
+	head := sha('a')
+	t.Run("2 entries", func(t *testing.T) {
+		e := newMultiReviewE2E(t, []string{"team-a"}, [][]string{{"team-b"}, {"team-c", "team-c2"}}, []string{"team-j"})
+		env := e.env
+		c, c2 := entryNamed(t, env, "team-c"), entryNamed(t, env, "team-c2")
+		id, ms := startReviewers(t, e, head)
+		before := env.Run(id)
+		for _, m := range ms[:2] {
+			if code := e.postMember(t, id, m, clean(t, head)); code != http.StatusOK {
+				t.Fatalf("reviewer %d's result: status %d", m.Reviewer, code)
+			}
+		}
+		if code := e.postMember(t, id, ms[2], failedOn(t, head, "quota")); code != http.StatusOK {
+			t.Fatalf("reviewer 3's result: status %d", code)
+		}
+		publish(t, env)
+		wantWaiting(t, env, id)
+		dispatch(t, env)
+		next := memberOf(t, env, id, 3)
+		wantMemberKey(t, env, next, "key-team-c2")
+		if code := e.postMember(t, id, next, failedOn(t, head, "quota")); code != http.StatusOK {
+			t.Fatalf("reviewer 3's second result: status %d", code)
+		}
+		publish(t, env)
+
+		wantFailedKeepingResult(t, env, id, 3, 2, "out of quota")
+		for _, ref := range []store.EntryRef{c, c2} {
+			if m, ok := markOf(t, env, ref); !ok || m.Class != store.ClassQuota {
+				t.Errorf("mark of %s = %+v, %v; want quota", ref.ID, m, ok)
+			}
+		}
+		if n := marksAudited(t, env); n != 2 {
+			t.Errorf("%d model_marked entries; want 2", n)
+		}
+		wantReleased(t, env, id, before)
+	})
+	t.Run("1 entry", func(t *testing.T) {
+		e := newThreeReviewers(t)
+		env := e.env
+		id, ms := startReviewers(t, e, head)
+		before := env.Run(id)
+		for _, m := range ms[:2] {
+			if code := e.postMember(t, id, m, clean(t, head)); code != http.StatusOK {
+				t.Fatalf("reviewer %d's result: status %d", m.Reviewer, code)
+			}
+		}
+		if code := e.postMember(t, id, ms[2], failedOn(t, head, "quota")); code != http.StatusOK {
+			t.Fatalf("reviewer 3's result: status %d", code)
+		}
+		publish(t, env)
+		as := attemptsOfReviewer(t, env, id, 3)
+		if len(as) != 1 || as[0].State != store.MemberDone || as[0].Result == nil {
+			t.Fatalf("reviewer 3 = %+v; want one attempt, done with its result", as)
+		}
+		if _, ok := markOf(t, env, entryNamed(t, env, "team-c")); ok {
+			t.Errorf("a 1-entry chain's entry is marked")
+		}
+		if n := marksAudited(t, env); n != 0 {
+			t.Errorf("%d model_marked entries; want none", n)
+		}
+		wantReleased(t, env, id, before)
+	})
+}
+
+// Every reviewer fails (reviewer 1's review failed, reviewer 2's result is
+// for another commit, reviewer 3 ran out of tokens on both entries and kept
+// its partial result): the review is published as failed with each
+// reviewer's reason in the same pass. The status is the failure status,
+// nothing is approved, and success is never set.
+func TestE2EMultiReviewEveryReviewerFails(t *testing.T) {
+	e := newMultiReviewE2E(t, []string{"team-a"}, [][]string{{"team-b"}, {"team-c", "team-c2"}}, []string{"team-j"})
+	env := e.env
+	head := sha('a')
+	id, ms := startReviewers(t, e, head)
+	if code := e.postMember(t, id, ms[2], failedOn(t, head, "quota")); code != http.StatusOK {
+		t.Fatalf("reviewer 3's result: status %d", code)
+	}
+	publish(t, env)
+	dispatch(t, env)
+	if code := e.postMember(t, id, memberOf(t, env, id, 3), failedOn(t, head, "quota")); code != http.StatusOK {
+		t.Fatalf("reviewer 3's second result: status %d", code)
+	}
+	if code := e.postMember(t, id, ms[0], errorResult(t, head, "the model gave no answer")); code != http.StatusOK {
+		t.Fatalf("reviewer 1's result: status %d\n%s", code, env.Logs())
+	}
+	if code := e.postMember(t, id, ms[1], clean(t, sha('f'))); code != http.StatusBadRequest {
+		t.Fatalf("reviewer 2's result: status %d; want 400", code)
+	}
+	publish(t, env)
+
+	wantFailedKeepingResult(t, env, id, 3, 2, "out of quota")
+	for n := 1; n <= 3; n++ {
+		if got := memberOf(t, env, id, n); got.State != store.MemberFailed {
+			t.Errorf("reviewer %d = %s; want failed", n, got.State)
+		}
+	}
+	wantPublished(t, env, id)
+	r := env.Run(id)
+	want := "every reviewer failed: reviewer 1 (team-a): the model gave no answer; reviewer 2 (team-b): " + unusable +
+		"the result is for a different commit than the one this run reviews; reviewer 3 (team-c2): out of quota"
+	if r.FailureReason != want || r.Result != nil {
+		t.Errorf("run failure = %q (result %v); want %q and no result", r.FailureReason, r.Result != nil, want)
+	}
+	if body := createdComment(t, env, 1); !strings.Contains(body, "the model gave no answer") ||
+		!strings.Contains(body, "the result is for a different commit") || !strings.Contains(body, "out of quota") {
+		t.Errorf("the comment lacks the reviewers' reasons:\n%s", body)
+	}
+	got := statusesOf(t, env, head)
+	if len(got) == 0 || !strings.HasPrefix(got[len(got)-1], "failed: ") {
+		t.Errorf("statuses = %v; want the failure status last", got)
+	}
+	for _, s := range got {
+		if strings.HasPrefix(s, "success") {
+			t.Errorf("statuses = %v; a failed multi review set success", got)
+		}
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 0 {
+		t.Errorf("%d approvals; want none", n)
+	}
+	// Nothing more on the next pass.
+	env.GitLab.Reset()
+	publish(t, env)
+	wantNothingPosted(t, env)
+}
+
+// Reviewer 1's review fails and the others pass: the review is released for
+// its judge, reviewer 1 failed with its reason. The release fires once: a
+// second settle pass changes nothing and wakes nothing.
+func TestE2EMultiReviewReviewer1FailsOthersDone(t *testing.T) {
+	e := newThreeReviewers(t)
+	env := e.env
+	head := sha('a')
+	id, ms := startReviewers(t, e, head)
+	before := env.Run(id)
+	env.GitLab.Reset()
+
+	if code := e.postMember(t, id, ms[0], errorResult(t, head, "")); code != http.StatusOK {
+		t.Fatalf("reviewer 1's result: status %d", code)
+	}
+	for _, m := range ms[1:] {
+		if code := e.postMember(t, id, m, clean(t, head)); code != http.StatusOK {
+			t.Fatalf("reviewer %d's result: status %d", m.Reviewer, code)
+		}
+	}
+	woken(env)
+	publish(t, env)
+	if got := memberOf(t, env, id, 1); got.ID != ms[0].ID || got.State != store.MemberFailed || got.FailureReason != reasonMemberError || got.Result != nil {
+		t.Errorf("reviewer 1 = %s %q; want failed with the review's failure", got.State, got.FailureReason)
+	}
+	for _, m := range ms[1:] {
+		if got := memberOf(t, env, id, m.Reviewer); got.ID != m.ID || got.State != store.MemberDone || got.Result == nil {
+			t.Errorf("reviewer %d = %s; want done with its result", m.Reviewer, got.State)
+		}
+	}
+	wantReleased(t, env, id, before)
+	if !woken(env) {
+		t.Errorf("the dispatcher was not woken for the judge")
+	}
+
+	released := env.Run(id)
+	members := reviewMembers(t, env, id)
+	publish(t, env)
+	if again := env.Run(id); !reflect.DeepEqual(released, again) {
+		t.Errorf("a second pass changed the run:\n before %+v\n after  %+v", released, again)
+	}
+	if again := reviewMembers(t, env, id); !reflect.DeepEqual(members, again) {
+		t.Errorf("a second pass changed the members")
+	}
+	if woken(env) {
+		t.Errorf("a second pass woke the engine again")
+	}
+	wantNothingPosted(t, env)
+}
+
+// Review Focus 3: a team entry is deleted while a review runs. The live
+// reviewer chains lose it and renumber (reviewer 2's only entry was it, so
+// reviewer 3's chain moves to r2); the running review keeps it in its
+// copies. Reviewer 2 still finishes on it, and reviewer 3's next attempt
+// skips it as removed.
+func TestE2EMultiReviewTeamEntryDeletedMidReview(t *testing.T) {
+	e := newMultiReviewE2E(t, []string{"team-a"}, [][]string{{"team-x"}, {"team-b", "team-x", "team-c"}}, []string{"team-j"})
+	env := e.env
+	b, x, c := entryNamed(t, env, "team-b"), entryNamed(t, env, "team-x"), entryNamed(t, env, "team-c")
+	head := sha('a')
+	id := splitReview(t, env, 1, head)
+	dispatch(t, env)
+	one, two, three := memberOf(t, env, id, 1), memberOf(t, env, id, 2), memberOf(t, env, id, 3)
+	wantMemberKey(t, env, two, "key-team-x")
+	wantMemberKey(t, env, three, "key-team-b")
+
+	if _, _, err := env.Store.DeleteTeamModel(env.ctx, ownerTeam(t, env), x.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
+		t.Fatal(err)
+	}
+	live, err := env.Store.Reviewers(env.ctx, testInstance, testProjectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live.Extra) != 1 || live.Extra[0].Slot != store.SlotOf(2) || !slices.Equal(live.Extra[0].Entries, []store.EntryRef{b, c}) {
+		t.Fatalf("live reviewers = %+v; want reviewer 3's chain at r2 without the entry", live.Extra)
+	}
+	if frozen := memberOf(t, env, id, 3).Chain; len(frozen.Entries) != 3 || frozen.Entries[1].ID != x.ID || frozen.Entries[1].Name != "team-x" {
+		t.Fatalf("reviewer 3's copy = %+v; want it to keep the entry", frozen)
+	}
+
+	for _, m := range []store.ReviewMember{one, two} {
+		if code := e.postMember(t, id, m, clean(t, head)); code != http.StatusOK {
+			t.Fatalf("reviewer %d's result: status %d", m.Reviewer, code)
+		}
+	}
+	if code := e.postMember(t, id, three, failedOn(t, head, "quota")); code != http.StatusOK {
+		t.Fatalf("reviewer 3's result: status %d", code)
+	}
+	publish(t, env)
+	if got := memberOf(t, env, id, 2); got.State != store.MemberDone {
+		t.Errorf("reviewer 2 = %s; want done on the deleted entry", got.State)
+	}
+	dispatch(t, env)
+	next := memberOf(t, env, id, 3)
+	wantMemberKey(t, env, next, "key-team-c")
+	if next.Entry.ID != c.ID || next.Entry.Position != 3 || next.Entry.Length != 3 {
+		t.Errorf("reviewer 3's next entry = %+v; want the third of its 3, past the removed one", next.Entry)
+	}
+	known := map[store.EntryRef]instances.Model{}
+	for _, m := range env.Engine.registry().AllModels() {
+		known[chain.RefOf(m)] = m
+	}
+	if why := chain.EntryReason(chain.FromFrozen(next.Chain, chain.Input{Entries: known}), x); why != chain.ReasonRemoved {
+		t.Errorf("the deleted entry reads as %q in reviewer 3's copy; want %q", why, chain.ReasonRemoved)
+	}
+	wantWaiting(t, env, id)
+}
+
+// A stored result is checked again when its member is settled, since the
+// result handler stores a result before it checks it: one for another
+// commit fails the member with the check's reason and never becomes done;
+// good ones are done, and the review is released.
+func TestE2EMultiReviewSettleChecksResult(t *testing.T) {
+	e := newThreeReviewers(t)
+	env := e.env
+	head := sha('a')
+	id, ms := startReviewers(t, e, head)
+	// Stored as the handler stores them, before its check.
+	for i, body := range [][]byte{clean(t, sha('f')), clean(t, head), clean(t, head)} {
+		m := ms[i]
+		token := string(env.Secret(m.ID).Data["result-token"])
+		if out, err := env.Store.StoreReviewMemberResult(env.ctx, id, m.ID, token, body, env.Now()); err != nil || out != store.ResultStored {
+			t.Fatalf("StoreReviewMemberResult = %v, %v", out, err)
+		}
+	}
+
+	publish(t, env)
+	got := memberOf(t, env, id, 1)
+	if got.State != store.MemberFailed || got.Result != nil || got.FailureStep != "delivery" ||
+		got.FailureReason != unusable+"the result is for a different commit than the one this run reviews" {
+		t.Errorf("reviewer 1 = %s %q at %q; want failed by the check", got.State, got.FailureReason, got.FailureStep)
+	}
+	for _, n := range []int{2, 3} {
+		if got := memberOf(t, env, id, n); got.State != store.MemberDone || got.Result == nil {
+			t.Errorf("reviewer %d = %s; want done", n, got.State)
+		}
+	}
+	if r := env.Run(id); r.State != store.Queued {
+		t.Errorf("run = %s; want released with reviewers 2 and 3", r.State)
+	}
+}
+
+// A reviewer's entry is refused with no entry left, and the settle that
+// fails the member errors after the mark: the next settle marks it again,
+// but the audit entry is written once, by the settle that failed the
+// member.
+func TestE2EMultiReviewMemberMarkAuditedOnce(t *testing.T) {
+	e := newMultiReviewE2E(t, []string{"team-a"}, [][]string{{"team-b", "team-a"}}, []string{"team-b"})
+	env := e.env
+	head := sha('a')
+	id := splitReview(t, env, 1, head)
+	dispatch(t, env)
+	one, two := memberOf(t, env, id, 1), memberOf(t, env, id, 2)
+	if code := e.postMember(t, id, one, clean(t, head)); code != http.StatusOK {
+		t.Fatalf("reviewer 1's result: status %d", code)
+	}
+	if code := e.postMember(t, id, two, failedOn(t, head, "quota")); code != http.StatusOK {
+		t.Fatalf("reviewer 2's result: status %d", code)
+	}
+
+	// The member's failure can't be written: the settle errors after the mark.
+	execSQL(t, env, `CREATE FUNCTION fail_keep() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN IF OLD.state = 'reported' AND NEW.state = 'failed' AND NEW.result IS NOT NULL THEN RAISE EXCEPTION 'fail failed'; END IF; RETURN NEW; END $$;
+		CREATE TRIGGER fail_keep BEFORE UPDATE ON review_members FOR EACH ROW EXECUTE FUNCTION fail_keep()`)
+	publish(t, env)
+	if got := memberOf(t, env, id, 2); got.State != store.MemberReported {
+		t.Fatalf("reviewer 2 = %s; want still reported after the failed settle\n%s", got.State, env.Logs())
+	}
+	if m, ok := markOf(t, env, entryNamed(t, env, "team-b")); !ok || m.Class != store.ClassQuota {
+		t.Errorf("reviewer 2's mark = %+v, %v; want quota", m, ok)
+	}
+	execSQL(t, env, `DROP TRIGGER fail_keep ON review_members; DROP FUNCTION fail_keep()`)
+	publish(t, env)
+
+	wantFailedKeepingResult(t, env, id, 2, 1, "out of quota")
+	if n := marksAudited(t, env); n != 1 {
+		t.Errorf("%d model_marked entries; want 1", n)
+	}
+}
+
+// Ruling L6: the settle's "no entry left" check resolves as the reviewer's
+// next dispatch does, with the new mark in place. Reviewer 2 is refused and
+// its backup is at its model limit: reviewer 2 never goes past a limit, so
+// no entry is left; it is failed with its result kept and no next attempt
+// starts. Reviewer 1 is refused with its backup at the same limit: the live
+// mark of the entry it fell back from fails such a fallback, as a run's
+// (TestFallbackFailsOnMarkAndLimit), so its next dispatch would fail too;
+// it is failed with its result kept, never with its result lost.
+func TestE2EMultiReviewFallbackBackupAtLimit(t *testing.T) {
+	head := sha('a')
+	t.Run("reviewer 2", func(t *testing.T) {
+		e := newMultiReviewE2E(t, []string{"team-a"}, nil, nil)
+		env := e.env
+		env.SetNow(novemberMid)
+		b := globalRef(t, env, "gpt-b", "key-b")
+		b2 := globalRef(t, env, "gpt-b2", "key-b2")
+		saveExtraReviewers(t, env, [][]store.EntryRef{{b, b2}}, []store.EntryRef{b})
+		seedEntryUsage(t, env, b2, 10)
+		id := splitReview(t, env, 1, head)
+		setLimit(t, env, b2, 0, 10)
+		dispatch(t, env)
+		one, two := memberOf(t, env, id, 1), memberOf(t, env, id, 2)
+		wantMemberKey(t, env, two, "key-b")
+		before := env.Run(id)
+		if code := e.postMember(t, id, one, clean(t, head)); code != http.StatusOK {
+			t.Fatalf("reviewer 1's result: status %d", code)
+		}
+		if code := e.postMember(t, id, two, failedOn(t, head, "quota")); code != http.StatusOK {
+			t.Fatalf("reviewer 2's result: status %d", code)
+		}
+		publish(t, env)
+		wantFailedKeepingResult(t, env, id, 2, 1, "out of quota")
+		if m, ok := markOf(t, env, b); !ok || m.Class != store.ClassQuota {
+			t.Errorf("reviewer 2's mark = %+v, %v; want quota", m, ok)
+		}
+		if n := marksAudited(t, env); n != 1 {
+			t.Errorf("%d model_marked entries; want 1", n)
+		}
+		wantReleased(t, env, id, before)
+	})
+	t.Run("reviewer 1", func(t *testing.T) {
+		multiReviewFloor(t, "v0.5.0")
+		e := newE2E(t)
+		env := e.env
+		env.SetNow(novemberMid)
+		env.Engine.ScanImage = testScanImage
+		teamOwning(t, env, "Payments")
+		a2 := globalRef(t, env, "gpt-a2", "key-a2")
+		saveChain(t, env, store.Chain{Scope: store.ScopeGlobal, Entries: []store.EntryRef{configRef(), a2}})
+		saveReviewers(t, env, [][]string{{"team-b"}}, []string{"team-b"})
+		seedEntryUsage(t, env, a2, 10)
+		id := splitReview(t, env, 1, head)
+		setLimit(t, env, a2, 0, 10)
+		dispatch(t, env)
+		one, two := memberOf(t, env, id, 1), memberOf(t, env, id, 2)
+		wantMemberKey(t, env, one, testLLMKey)
+		before := env.Run(id)
+		if code := e.postMember(t, id, two, clean(t, head)); code != http.StatusOK {
+			t.Fatalf("reviewer 2's result: status %d", code)
+		}
+		if code := e.postMember(t, id, one, failedOn(t, head, "quota")); code != http.StatusOK {
+			t.Fatalf("reviewer 1's result: status %d", code)
+		}
+		publish(t, env)
+		wantFailedKeepingResult(t, env, id, 1, 1, "out of quota")
+		if m, ok := markOf(t, env, configRef()); !ok || m.Class != store.ClassQuota {
+			t.Errorf("reviewer 1's mark = %+v, %v; want quota", m, ok)
+		}
+		wantReleased(t, env, id, before)
+	})
+}
+
+// A split whose extra reviewers were all skipped has reviewer 1 alone (M3.4
+// never makes one, the store accepts it). It never waits for ever: with
+// reviewer 1 done it is released for its judge (one result to merge); with
+// reviewer 1 failed the review fails, naming each reviewer.
+func TestE2EMultiReviewOnlyReviewer1Left(t *testing.T) {
+	head := sha('a')
+	setup := func(t *testing.T) (*e2e, string, store.ReviewMember) {
+		e := newMultiReviewE2E(t, []string{"team-a"}, [][]string{{"team-b"}}, []string{"team-b"})
+		env := e.env
+		id := splitReview(t, env, 1, head)
+		two := memberOf(t, env, id, 2)
+		execSQL(t, env, `UPDATE review_members SET state = 'skipped', failure_reason = 'no usable entry' WHERE id = '`+two.ID+`'`)
+		dispatch(t, env)
+		one := memberOf(t, env, id, 1)
+		wantMemberKey(t, env, one, "key-team-a")
+		if env.Job(two.ID) != nil {
+			t.Fatalf("the skipped reviewer has a Job")
+		}
+		return e, id, one
+	}
+	t.Run("done", func(t *testing.T) {
+		e, id, one := setup(t)
+		before := e.env.Run(id)
+		if code := e.postMember(t, id, one, clean(t, head)); code != http.StatusOK {
+			t.Fatalf("reviewer 1's result: status %d", code)
+		}
+		publish(t, e.env)
+		wantReleased(t, e.env, id, before)
+	})
+	t.Run("failed", func(t *testing.T) {
+		e, id, one := setup(t)
+		if code := e.postMember(t, id, one, errorResult(t, head, "the model gave no answer")); code != http.StatusOK {
+			t.Fatalf("reviewer 1's result: status %d", code)
+		}
+		publish(t, e.env)
+		wantPublished(t, e.env, id)
+		want := "every reviewer failed: reviewer 1 (team-a): the model gave no answer; reviewer 2 (team-b): no usable entry"
+		if r := e.env.Run(id); r.FailureReason != want {
+			t.Errorf("run failure = %q; want %q", r.FailureReason, want)
+		}
+	})
+}
+
+// Ruling P44: the chain helpers read the base they are given. A zero base
+// (no entries read) is an error, never a quiet "no entry" or "no model
+// before".
+func TestReviewerDecisionNeedsBase(t *testing.T) {
+	ms := []store.ReviewMember{{ID: "1", Reviewer: 1, State: store.MemberRunning,
+		Chain: store.FrozenChain{Entries: []store.FrozenEntry{{Source: store.SourceGlobal, ID: "a"}}}}}
+	m := store.ReviewMember{ID: "2", Reviewer: 2, State: store.MemberQueued,
+		Chain: store.FrozenChain{Entries: []store.FrozenEntry{{Source: store.SourceGlobal, ID: "b"}}}}
+	if _, err := memberInput(chain.Input{}, ms, m); !errors.Is(err, errNoBase) {
+		t.Errorf("memberInput with no base: %v; want errNoBase", err)
+	}
+	if _, err := modelsBefore(chain.Input{}, ms, 2, false); !errors.Is(err, errNoBase) {
+		t.Errorf("modelsBefore with no base: %v; want errNoBase", err)
+	}
+	if _, _, err := reviewerDecision(chain.Input{}, ms, m, false, false); !errors.Is(err, errNoBase) {
+		t.Errorf("reviewerDecision with no base: %v; want errNoBase", err)
+	}
+	base := chain.Input{Entries: map[store.EntryRef]instances.Model{
+		{Source: store.SourceGlobal, ID: "a"}: {Name: "a", Key: "k", LLM: config.LLM{Provider: "openai", Model: "gpt-a"}},
+		{Source: store.SourceGlobal, ID: "b"}: {Name: "b", Key: "k", LLM: config.LLM{Provider: "openai", Model: "gpt-b"}},
+	}}
+	dec, _, err := reviewerDecision(base, ms, m, false, false)
+	if err != nil || !dec.Runs() || dec.Ref.ID != "b" {
+		t.Errorf("reviewerDecision = %+v, %v; want entry b", dec, err)
+	}
+
+	// One rule for a dispatch and the settle (Rulings L5, L6): at an admin's
+	// model limit reviewer 1 goes past it, and reviewer 2 holds, which does
+	// not run.
+	base.ModelLimitUsedUp = map[store.EntryRef]bool{{Source: store.SourceGlobal, ID: "a"}: true, {Source: store.SourceGlobal, ID: "b"}: true}
+	if dec, _, err := reviewerDecision(base, nil, ms[0], false, false); err != nil || !dec.Runs() || dec.Ref.ID != "a" {
+		t.Errorf("reviewer 1 at an admin limit = %+v, %v; want it past the limit on a", dec, err)
+	}
+	if dec, _, err := reviewerDecision(base, ms, m, false, false); err != nil || dec.Runs() || !dec.Hold {
+		t.Errorf("reviewer 2 at a limit = %+v, %v; want a hold, which does not run", dec, err)
+	}
+	if dec, _, err := reviewerDecision(base, ms, m, true, false); err != nil || dec.Runs() {
+		t.Errorf("reviewer 2 under a used-up repository quota = %+v, %v; want no entry", dec, err)
+	}
+}
+
+// Reviewer 2's Job completes without posting a result: after the grace it
+// is reported with reasonFinishedNoSend at the delivery step; the run still
+// waits and the others run on.
+func TestE2EMultiReviewMemberFinishedNoResult(t *testing.T) {
+	e := newThreeReviewers(t)
+	env := e.env
+	id, ms := startReviewers(t, e, sha('a'))
+	two := ms[1]
+	finished := env.Now()
+	replaceJob(t, env, two.ID, finished.Add(-time.Minute), nil, nil, jobCond(batchv1.JobComplete, "", finished))
+
+	env.SetNow(finished.Add(30 * time.Second))
+	watch(t, env)
+	if got := memberOf(t, env, id, 2); got.State != store.MemberRunning {
+		t.Errorf("reviewer 2 = %s inside the grace; want running", got.State)
+	}
+	env.SetNow(finished.Add(61 * time.Second))
+	watch(t, env)
+	wantMemberFailure(t, env, id, two, reasonFinishedNoSend, kube.StepDelivery)
+	for _, n := range []int{1, 3} {
+		if got := memberOf(t, env, id, n); got.State != store.MemberRunning {
+			t.Errorf("reviewer %d = %s; want running", n, got.State)
+		}
+	}
+	wantWaiting(t, env, id)
 }

@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 
-	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -27,43 +25,34 @@ var errInputsChanged = errors.New(reasonInputsChanged)
 // members' results: pergent.sh's own image is not set.
 const reasonNoPanelImage = "a review panel needs pergent.sh's own image (PERGENT_SH_IMAGE, set by the chart) to merge its members"
 
-// reasonMemberError fails a member whose result says its review failed and
-// gives no message.
-const reasonMemberError = "the review failed"
-
-// reasonMemberRefused, then why (chain.ReasonWords), fails an API review's
-// member whose provider refused its model: it does not fall back.
-const reasonMemberRefused = "the provider refused the model: "
-
-// settleBatch is how many reported members one settle pass takes, as
-// publishBatch is for runs.
-const settleBatch = 20
-
-// settleMembers decides up to settleBatch reported panel members, then releases each
-// review whose members are all final. It runs in PublishOnce before the runs
-// are listed, so a review whose members both failed is published as failed
-// in the same pass. Nothing is posted for a member: no comment, note,
-// thread, approval or status. A member it can't settle now is tried again on
-// the next pass.
-func (e *Engine) settleMembers(ctx context.Context) error {
+// settleLegacyPanels settles the reported members of a review panel a main
+// build left (panel_members), as far as it is safe: a member with no result
+// fails (SettleMember), and a review whose members are all final is decided
+// by ReleasePanel, which fails it when both failed. A member's result is
+// never checked or merged from here: one with a result stays reported, for
+// the recovery at the next start (RecoverLegacyPanels). This keeps a legacy
+// API review whose members failed at dispatch from waiting for ever. M4.2
+// removes it with the panel tables.
+func (e *Engine) settleLegacyPanels(ctx context.Context) error {
 	ms, err := e.Store.MembersToSettle(ctx, settleBatch)
 	if err != nil {
-		return fmt.Errorf("list the reported panel members: %w", err)
+		return fmt.Errorf("list the reported legacy panel members: %w", err)
 	}
 	for _, m := range ms {
-		if err := e.settleMember(ctx, m); err != nil {
+		if m.Result != nil {
+			continue
+		}
+		if _, err := e.Store.SettleMember(ctx, m.ID); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			e.log().Warn("couldn't settle a panel member; trying again on the next pass",
+			e.log().Warn("couldn't settle a legacy panel member; trying again on the next pass",
 				"run", m.RunID, "member", m.ID, "role", m.Role, "error", e.redact(err.Error()))
 		}
 	}
-	// Every waiting review with no live member, not only those settled
-	// above: a pass that stopped after a settle releases on the next one.
 	roots, err := e.Store.PanelsToRelease(ctx)
 	if err != nil {
-		return fmt.Errorf("list the panels to release: %w", err)
+		return fmt.Errorf("list the legacy panels to release: %w", err)
 	}
 	for _, root := range roots {
 		log := e.log().With("run", root)
@@ -73,105 +62,12 @@ func (e *Engine) settleMembers(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			log.Warn("couldn't release the review panel; trying again on the next pass", "error", e.redact(err.Error()))
-		case released:
-			// The dispatcher starts the merge.
-			log.Info("the review panel's members are done; the review is queued for its merge")
-			e.Wake()
-		case failed:
-			// The publisher publishes the failure, as for any run.
-			log.Warn("both review panel members failed; the review fails")
+			log.Warn("couldn't release the legacy review panel; trying again on the next pass", "error", e.redact(err.Error()))
+		case released, failed:
+			log.Info("a legacy review panel's members are final", "released", released, "failed", failed)
 			e.Wake()
 		}
 	}
-	return nil
-}
-
-// settleMember decides the reported member m. Its stored result is checked
-// again as the result handler checks it (callback.CheckStored), since the
-// handler stores a result before it checks it: a result that fails the
-// check, or says its review failed, fails the member. A result whose
-// provider refused the member's entry falls back along the member's chain,
-// as a run does (fallBack), on a merge request's review; on an API review
-// the entry is marked and the member fails (markOnly). Otherwise the
-// member is done with its result, or failed with its failure.
-func (e *Engine) settleMember(ctx context.Context, m store.PanelMember) error {
-	log := e.log().With("run", m.RunID, "member", m.ID, "role", m.Role)
-	run, found, err := e.Store.PanelRun(ctx, m.RunID)
-	if err != nil {
-		return fmt.Errorf("load the panel's run: %w", err)
-	}
-	if !found {
-		// A push or a close took the run: the sweep supersedes the member.
-		return nil
-	}
-	log = log.With("instance", run.MR.Instance, "project", run.ProjectPath, "mr", run.MR.IID, "head", run.HeadSHA)
-	if m.Result != nil {
-		res, f, ok := callback.CheckStored(m.Result, run)
-		if ok && res.Status != "completed" {
-			f, ok = store.Failure{Reason: reasonMemberError}, false
-			if res.Error != nil && res.Error.Message != "" {
-				f.Reason = res.Error.Message
-			}
-		}
-		if !ok {
-			// ErrNotReported: the handler's own check failed it first.
-			if err := e.Store.ReplaceMemberWithFailure(ctx, m.ID, f); err != nil && !errors.Is(err, store.ErrNotReported) {
-				return fmt.Errorf("fail the member's result: %w", err)
-			}
-			log.Warn("the panel member's result can't be used; the member fails", "step", f.Step)
-		} else if mark, refused := e.refusedMark(store.EntryRef{Source: m.Entry.Source, ID: m.Entry.ID}, m.Entry.Length, m.Result); refused {
-			if run.Kind == store.KindMR {
-				return e.fallBackMember(ctx, run, m, mark, log)
-			}
-			// An API review's member does not fall back: its entry is
-			// marked as the review's would be, and it fails, which leaves
-			// Job P the other member. The audit entry is written once, by
-			// the settle that fails the member: a settle tried again after
-			// an error marks the entry again, and audits nothing more.
-			mlog := log.With("model_entry", m.Entry.ID, "class", mark.Class)
-			if err := e.markOnly(ctx, run, m.Entry.Name, mark, false, mlog); err != nil {
-				return err
-			}
-			f := store.Failure{Reason: reasonMemberRefused + chain.ReasonWords(mark.Class)}
-			switch err := e.Store.ReplaceMemberWithFailure(ctx, m.ID, f); {
-			case err == nil:
-				mlog.Warn("the provider refused the review's model entry; it is skipped until the mark ends")
-				e.auditMark(ctx, run, m.Entry.Name, mark.Class, mlog)
-			case !errors.Is(err, store.ErrNotReported):
-				return fmt.Errorf("fail the member's result: %w", err)
-			}
-		}
-	}
-	state, err := e.Store.SettleMember(ctx, m.ID)
-	if err != nil {
-		return fmt.Errorf("settle the member: %w", err)
-	}
-	if state != "" {
-		log.Info("panel member settled", "state", state)
-	}
-	return nil
-}
-
-// fallBackMember moves member m to the next entry of its own chain, as
-// fallBack does for a run, with the same mark and audit entry: m is
-// fell_back and its role's next attempt is queued, in one transaction. The
-// next attempt is a new Job with the full review timeout; B still skips the
-// model A runs on (resolveMember). Nothing is posted, not even a status.
-func (e *Engine) fallBackMember(ctx context.Context, run store.Run, m store.PanelMember, mark store.Mark, log *slog.Logger) error {
-	log = log.With("model_entry", m.Entry.ID, "class", mark.Class)
-	next, created, err := e.Store.EnqueueMemberAttempt(ctx, m, mark)
-	if err != nil {
-		return fmt.Errorf("queue the member's next attempt: %w", err)
-	}
-	if !created {
-		// Superseded by a push meanwhile, or settled already.
-		log.Info("not falling back: the member is no longer waiting to be settled")
-		return nil
-	}
-	log.Warn("the provider refused the panel member's model entry; trying the next entry of its chain", "next_member", next)
-	e.auditMark(ctx, run, m.Entry.Name, mark.Class, log)
-	e.Wake()
 	return nil
 }
 

@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -265,17 +268,9 @@ func (e *Engine) dispatchLegacyMembers(ctx context.Context, limit int, skip []st
 	return errors.Join(errs...)
 }
 
-// resolveMember picks member m's entry from its frozen chain (FromFrozen
-// with the registry now): its reviewer's earlier attempts are tried, and
-// reviewer k > 1 avoids modelsBefore(k). Reviewer 1 avoids none and is
-// never held by a quota (the run passed the hold). Reviewer k > 1 starts no
-// attempt while the repository quota is used up (spec "Quota").
-//
-// The base is read now (chain.Load): the entries, marks and limits of this
-// dispatch. Reviewer 1 resolves as chain A did for its run: the run's
-// earlier attempts are tried too, and a hold goes past the instance quota
-// and the admin limits (pastAdmin); a team's own limit still fails it.
-// Reviewer k > 1 never goes past a limit: a hold does not run.
+// resolveMember picks member m's entry from its frozen chain
+// (reviewerDecision) on the base read now (chain.Load): the entries, marks
+// and limits of this dispatch.
 func (d *dispatcher) resolveMember(ctx context.Context, repo settings.Effective, repoUsedUp, instanceUsedUp bool) (chain.Decision, error) {
 	ms, err := d.e.Store.ReviewMembers(ctx, d.member.RunID)
 	if err != nil {
@@ -285,19 +280,45 @@ func (d *dispatcher) resolveMember(ctx context.Context, repo settings.Effective,
 	if err != nil {
 		return chain.Decision{}, err
 	}
-	d.members, d.base = ms, base
-	k := d.member.Reviewer
-	in := d.memberInput(ms, d.member)
+	dec, in, err := reviewerDecision(base, ms, d.member, repoUsedUp, instanceUsedUp)
+	if err != nil {
+		return chain.Decision{}, err
+	}
 	d.attempt = len(in.Tried) + 1
 	d.scope = in.Scope
+	d.entry = dec
+	return dec, nil
+}
+
+// errNoBase is the error of a chain helper given a base with no entries
+// read: a zero chain.Input, never a chain.Load result.
+var errNoBase = errors.New("the model entries were not read")
+
+// reviewerDecision resolves member m (ms are its review's members) on base,
+// a chain.Load result: its frozen chain with the entries its reviewer's
+// other attempts ran tried (memberInput). in is the input it resolved. One
+// rule for a member's dispatch and for the settle's "no entry left" check
+// (Rulings L5 and L6).
+//
+// Reviewer 1 avoids no model and resolves as chain A did for its run: a
+// hold goes past the instance quota and the admin limits (pastAdmin), and
+// a team's own limit still stops it (Exhausted). Reviewer k > 1 avoids
+// modelsBefore(k), never goes past a quota or a limit (a hold does not
+// run), and has no entry while the repository quota is used up
+// (repoUsedUp; spec "Quota").
+func reviewerDecision(base chain.Input, ms []store.ReviewMember, m store.ReviewMember, repoUsedUp, instanceUsedUp bool) (chain.Decision, chain.Input, error) {
+	in, err := memberInput(base, ms, m)
+	if err != nil {
+		return chain.Decision{}, chain.Input{}, err
+	}
+	k := m.Reviewer
 	if k > 1 && repoUsedUp {
 		// No entry runs: memberCannotRun fails it for the quota.
-		d.entry = chain.Decision{Length: len(in.Refs), Exhausted: true}
-		return d.entry, nil
+		return chain.Decision{Length: len(in.Refs), Exhausted: true}, in, nil
 	}
 	if k > 1 {
-		if in.Avoid, err = d.modelsBefore(ctx, ms, k, instanceUsedUp); err != nil {
-			return chain.Decision{}, err
+		if in.Avoid, err = modelsBefore(base, ms, k, instanceUsedUp); err != nil {
+			return chain.Decision{}, chain.Input{}, err
 		}
 	}
 	in.InstanceQuotaUsedUp = instanceUsedUp
@@ -305,20 +326,22 @@ func (d *dispatcher) resolveMember(ctx context.Context, repo settings.Effective,
 	if k == 1 && dec.Hold {
 		dec = pastAdmin(in)
 	}
-	d.entry = dec
-	return dec, nil
+	return dec, in, nil
 }
 
 // memberInput is the chain input of member m (ms are its review's members):
-// its frozen chain read with d.base, and the entries the other attempts of
+// its frozen chain read with base, and the entries the other attempts of
 // its reviewer ran tried. Reviewer 1's also has the run's earlier attempts
 // tried, as chain A has for the run. Avoid and the instance quota are left
-// to the caller.
-func (d *dispatcher) memberInput(ms []store.ReviewMember, m store.ReviewMember) chain.Input {
-	in := chain.FromFrozen(m.Chain, d.base)
+// to the caller. A base with no entries read is errNoBase.
+func memberInput(base chain.Input, ms []store.ReviewMember, m store.ReviewMember) (chain.Input, error) {
+	if base.Entries == nil {
+		return chain.Input{}, errNoBase
+	}
+	in := chain.FromFrozen(m.Chain, base)
 	var tried map[store.EntryRef]bool
 	if m.Reviewer == 1 {
-		tried = maps.Clone(d.base.Tried)
+		tried = maps.Clone(base.Tried)
 	}
 	for ref := range triedBy(ms, m) {
 		if tried == nil {
@@ -327,20 +350,20 @@ func (d *dispatcher) memberInput(ms []store.ReviewMember, m store.ReviewMember) 
 		tried[ref] = true
 	}
 	in.Tried = tried
-	return in
+	return in, nil
 }
 
 // modelsBefore are the models reviewers 1 to k-1 run on now: sameModels
 // (M3.4) of each one's newest attempt with an entry, else of what its
-// frozen chain resolves to now. A reviewer with no entry yet is resolved
-// only while its newest attempt is live (queued or running): a skipped or
-// failed one runs on nothing. The resolve is the one its own dispatch does
-// (resolveMember) with the repository quota not used up: the members of a
-// review are claimed in reviewer order, so an earlier one usually has its
-// entry already.
-func (d *dispatcher) modelsBefore(ctx context.Context, ms []store.ReviewMember, k int, instanceUsedUp bool) ([]chain.SameModel, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+// frozen chain resolves to on base. A reviewer with no entry yet is
+// resolved only while its newest attempt is live (queued or running): a
+// skipped or failed one runs on nothing. The resolve is the one its own
+// dispatch does (reviewerDecision) with the repository quota not used up:
+// the members of a review are claimed in reviewer order, so an earlier one
+// usually has its entry already. A base with no entries read is errNoBase.
+func modelsBefore(base chain.Input, ms []store.ReviewMember, k int, instanceUsedUp bool) ([]chain.SameModel, error) {
+	if base.Entries == nil {
+		return nil, errNoBase
 	}
 	var out []chain.SameModel
 	for j := 1; j < k; j++ {
@@ -355,7 +378,10 @@ func (d *dispatcher) modelsBefore(ctx context.Context, ms []store.ReviewMember, 
 		if newest.State != store.MemberQueued && newest.State != store.MemberRunning {
 			continue
 		}
-		in := d.memberInput(ms, newest)
+		in, err := memberInput(base, ms, newest)
+		if err != nil {
+			return nil, err
+		}
 		if j > 1 {
 			in.Avoid = out
 		}
@@ -511,4 +537,230 @@ func (d *dispatcher) memberRunningText(ctx context.Context) string {
 		}
 	}
 	return runningDescription
+}
+
+// reasonMemberError fails a member whose result says its review failed and
+// gives no message.
+const reasonMemberError = "the review failed"
+
+// reasonMemberRefused, then why (chain.ReasonWords), fails an API review's
+// member whose provider refused its model: it does not fall back.
+const reasonMemberRefused = "the provider refused the model: "
+
+// settleBatch is how many reported members one settle pass takes, as
+// publishBatch is for runs.
+const settleBatch = 20
+
+// settleMembers decides up to settleBatch reported reviewers, then releases
+// each multi review whose reviewers are all final (ReleaseMultiReview): to
+// its judge when a reviewer is done, else it fails. It runs in PublishOnce
+// before the runs are listed, so a review whose reviewers all failed is
+// published as failed in the same pass. Nothing is posted for a member: no
+// comment, note, thread, approval or status. A member it can't settle now is
+// tried again on the next pass. A legacy panel's members come last
+// (settleLegacyPanels).
+func (e *Engine) settleMembers(ctx context.Context) error {
+	ms, err := e.Store.ReviewMembersToSettle(ctx, settleBatch)
+	if err != nil {
+		return fmt.Errorf("list the reported reviewers: %w", err)
+	}
+	for _, m := range ms {
+		if err := e.settleMember(ctx, m); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			e.log().Warn("couldn't settle a reviewer; trying again on the next pass",
+				"run", m.RunID, "member", m.ID, "reviewer", m.Reviewer, "error", e.redact(err.Error()))
+		}
+	}
+	// Every waiting review with no live member, not only those settled
+	// above: a pass that stopped after a settle releases on the next one.
+	roots, err := e.Store.MultiReviewsToRelease(ctx)
+	if err != nil {
+		return fmt.Errorf("list the multi reviews to release: %w", err)
+	}
+	for _, root := range roots {
+		log := e.log().With("run", root)
+		released, failed, err := e.Store.ReleaseMultiReview(ctx, root, e.now())
+		switch {
+		case err != nil:
+			if ctx.Err() != nil {
+				return nil
+			}
+			log.Warn("couldn't release the multi review; trying again on the next pass", "error", e.redact(err.Error()))
+		case released:
+			// The dispatcher starts the judge.
+			log.Info("the reviewers are final and one is done; the review is queued for its judge")
+			e.Wake()
+		case failed:
+			// The publisher publishes the failure, as for any run.
+			log.Warn("every reviewer failed; the review fails")
+			e.Wake()
+		}
+	}
+	return e.settleLegacyPanels(ctx)
+}
+
+// settleMember decides the reported member m. Its stored result is checked
+// again as the result handler checks it (callback.CheckStored), since the
+// handler stores a result before it checks it: a result that fails the
+// check, or says its review failed, fails the member. A result whose
+// provider refused the member's entry falls back along the member's frozen
+// chain on a merge request's review (fallBackMember); a 1-entry chain never
+// falls back (refusedMark). On an API review the entry is marked and the
+// member fails. Otherwise the member is done with its result, or failed
+// with its failure.
+func (e *Engine) settleMember(ctx context.Context, m store.ReviewMember) error {
+	log := e.log().With("run", m.RunID, "member", m.ID, "reviewer", m.Reviewer)
+	run, found, err := e.Store.MultiReviewRun(ctx, m.RunID)
+	if err != nil {
+		return fmt.Errorf("load the multi review's run: %w", err)
+	}
+	if !found {
+		// A push or a close took the run: the sweep supersedes the member.
+		return nil
+	}
+	log = log.With("instance", run.MR.Instance, "project", run.ProjectPath, "mr", run.MR.IID, "head", run.HeadSHA)
+	if m.Result != nil {
+		res, f, ok := callback.CheckStored(m.Result, run)
+		if ok && res.Status != "completed" {
+			f, ok = store.Failure{Reason: reasonMemberError}, false
+			if res.Error != nil && res.Error.Message != "" {
+				f.Reason = res.Error.Message
+			}
+		}
+		ref := store.EntryRef{Source: m.Entry.Source, ID: m.Entry.ID}
+		if !ok {
+			// ErrNotReported: the handler's own check failed it first.
+			if err := e.Store.ReplaceReviewMemberWithFailure(ctx, m.ID, f); err != nil && !errors.Is(err, store.ErrNotReported) {
+				return fmt.Errorf("fail the member's result: %w", err)
+			}
+			log.Warn("the reviewer's result can't be used; the reviewer fails", "step", f.Step)
+		} else if mark, refused := e.refusedMark(ref, len(m.Chain.Entries), m.Result); refused {
+			if run.Kind == store.KindMR {
+				return e.fallBackMember(ctx, run, m, mark, log)
+			}
+			// An API review's member does not fall back (an API review is
+			// never split, so it is a left-over one): its entry is marked as
+			// the review's would be, and it fails. The audit entry is written
+			// once, by the settle that fails the member.
+			mlog := log.With("model_entry", m.Entry.ID, "class", mark.Class)
+			if err := e.markOnly(ctx, run, m.Entry.Name, mark, false, mlog); err != nil {
+				return err
+			}
+			f := store.Failure{Reason: reasonMemberRefused + chain.ReasonWords(mark.Class)}
+			switch err := e.Store.ReplaceReviewMemberWithFailure(ctx, m.ID, f); {
+			case err == nil:
+				mlog.Warn("the provider refused the reviewer's model entry; it is skipped until the mark ends")
+				e.auditMark(ctx, run, m.Entry.Name, mark.Class, mlog)
+			case !errors.Is(err, store.ErrNotReported):
+				return fmt.Errorf("fail the member's result: %w", err)
+			}
+		}
+	}
+	state, err := e.Store.SettleReviewMember(ctx, m.ID)
+	if err != nil {
+		return fmt.Errorf("settle the member: %w", err)
+	}
+	if state != "" {
+		log.Info("reviewer settled", "state", state)
+	}
+	return nil
+}
+
+// fallBackMember moves member m, whose provider refused its entry, to the
+// next entry of its frozen chain, as fallBack does for a run, with the same
+// mark and audit entry: m is fell_back and its reviewer's next attempt is
+// queued with the same copy, in one transaction. The next attempt is a new
+// Job with the full review timeout; it resolves at its own dispatch. When
+// the copy has no entry left to run (memberEntryLeft), the entry is marked
+// and audited but no attempt is queued: m fails with its result kept
+// (FailReviewMemberKeepingResult), so the judge still gets that result and
+// pergent carries its blocking findings. The audit entry is written once, by
+// the settle that changes the member: a settle tried again after an error
+// marks the entry again, and audits nothing more. Nothing is posted, not
+// even a status.
+func (e *Engine) fallBackMember(ctx context.Context, run store.Run, m store.ReviewMember, mark store.Mark, log *slog.Logger) error {
+	log = log.With("model_entry", m.Entry.ID, "class", mark.Class)
+	left, err := e.memberEntryLeft(ctx, run, m, mark)
+	if err != nil {
+		return err
+	}
+	if !left {
+		if err := e.markOnly(ctx, run, m.Entry.Name, mark, false, log); err != nil {
+			return err
+		}
+		failed, err := e.Store.FailReviewMemberKeepingResult(ctx, m.ID, chain.ReasonWords(mark.Class))
+		if err != nil {
+			return fmt.Errorf("fail the member keeping its result: %w", err)
+		}
+		if !failed {
+			// Superseded by a push meanwhile, or settled already.
+			log.Info("not failing the reviewer: it is no longer waiting to be settled")
+			return nil
+		}
+		log.Warn("the provider refused the reviewer's model entry and its chain has no entry left; the reviewer fails and keeps its result")
+		e.auditMark(ctx, run, m.Entry.Name, mark.Class, log)
+		return nil
+	}
+	next, created, err := e.Store.EnqueueReviewMemberAttempt(ctx, m, mark)
+	if err != nil {
+		return fmt.Errorf("queue the member's next attempt: %w", err)
+	}
+	if !created {
+		// Superseded by a push meanwhile, or settled already.
+		log.Info("not falling back: the reviewer is no longer waiting to be settled")
+		return nil
+	}
+	log.Warn("the provider refused the reviewer's model entry; trying the next entry of its chain", "next_member", next)
+	e.auditMark(ctx, run, m.Entry.Name, mark.Class, log)
+	e.Wake()
+	return nil
+}
+
+// memberEntryLeft reports whether the next attempt of member m's reviewer
+// would run on an entry: m's frozen chain resolved as that attempt's
+// dispatch resolves it (reviewerDecision, Ruling L6), on the entries, marks,
+// limits and token quotas read now, with mark (the one m's refusal sets)
+// already in place, and the entries m and the earlier attempts of its
+// reviewer ran tried. So reviewer 1 goes past the instance quota and the
+// admin limits on a hold, and for reviewer k > 1 a hold (a quota or a
+// limit) is no entry left. The live mark reads before "tried" (as for a
+// run's fallback), so an entry left that a quota or a limit stops is no
+// entry left for reviewer 1 too: its next dispatch would fail it. A
+// repository that is no longer configured has an entry left: the next
+// attempt's dispatch drops the review.
+func (e *Engine) memberEntryLeft(ctx context.Context, run store.Run, m store.ReviewMember, mark store.Mark) (bool, error) {
+	repo, haveRepo, err := e.settings().Get(ctx, run.MR.Instance, run.ProjectPath)
+	if err != nil {
+		return false, fmt.Errorf("load repository settings: %w", err)
+	}
+	if !haveRepo {
+		return true, nil
+	}
+	repoUsedUp, instanceUsedUp, err := quota.Check(ctx, e.Store, e.now(), run.MR.Instance, run.MR.ProjectID, repo)
+	if err != nil {
+		return false, fmt.Errorf("read the token quota: %w", err)
+	}
+	ms, err := e.Store.ReviewMembers(ctx, m.RunID)
+	if err != nil {
+		return false, fmt.Errorf("read the multi review's members: %w", err)
+	}
+	base, err := e.chainFor(ctx, run, repo)
+	if err != nil {
+		return false, fmt.Errorf("read the model chain: %w", err)
+	}
+	base.Marks = maps.Clone(base.Marks)
+	if base.Marks == nil {
+		base.Marks = map[store.EntryRef]store.Mark{}
+	}
+	base.Marks[mark.Ref] = mark
+	// The next attempt: every attempt of the reviewer with an entry, m too,
+	// is another attempt of it (triedBy).
+	next := store.ReviewMember{RunID: m.RunID, Reviewer: m.Reviewer, Chain: m.Chain}
+	dec, _, err := reviewerDecision(base, ms, next, repoUsedUp, instanceUsedUp)
+	if err != nil {
+		return false, err
+	}
+	return dec.Runs(), nil
 }

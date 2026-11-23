@@ -199,15 +199,11 @@ type dispatcher struct {
 	run store.Run
 	log *slog.Logger
 	// stage is what the dispatch starts. In stageMember, member is the
-	// claimed member, members are the review's members (resolveMember reads
-	// them), base is the chain input read at this dispatch (entries, marks
-	// and limits now), and run is the run waiting for them, which is never
+	// claimed member, and run is the run waiting for it, which is never
 	// written. In stageMerge, panelMembers are a legacy panel's members and
 	// merge what Job P runs with (resolveMerge).
 	stage        stage
 	member       store.ReviewMember
-	members      []store.ReviewMember
-	base         chain.Input
 	panelMembers []store.PanelMember
 	merge        mergePlan
 	// secrets are values that must never reach a failure reason or a log.
