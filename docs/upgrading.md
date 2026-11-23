@@ -8,6 +8,7 @@
 
 - **Migration `0051_model_limits.sql`** runs at startup. It adds the table `model_limits`, the NULL columns `run_usage.owner_team_id` and `run_usage_models.owner_team_id`, and one index on `run_usage_models (run_id)`, and drops nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them.
 - **Nothing changes by default.** No limit is set after the upgrade.
+- **Two accepted changes happen with no limit set.** A fallback whose remaining entries are only an ended mark (now read as already tried), with a used-up instance quota, is now held and no longer failed. A pinned Review API review now records its model entry on the run.
 - **The upgrade month.** Team limits count only the reviews that finished after the upgrade, because older usage rows have no owner team. Model limits count the whole month.
 - **Rolling deploy.** Pods of the previous release start reviews without the new checks until they are replaced.
 - **Rolling back** needs no config change: there is no config key. The limits stay in the database, unused. A change held by a limit shows in the previous release as waiting for a start, with no reason line, and its **Start review** starts it.

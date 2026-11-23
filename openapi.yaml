@@ -3083,7 +3083,9 @@ paths:
         reviews may spend on the entry in a UTC calendar month; at it, they
         skip the entry. An entry of another team is 400 (`the model is not one
         of this team's models`); a global entry's limits are the admins'
-        (403 `only admins set a team's limit on a global model`). Audited as
+        (403 `only admins set a team's limit on a global model` for a
+        maintainer; an admin who names a global entry here gets 400 `the model
+        is not one of this team's models`). Audited as
         `model_limit_set`.
       x-pergent-access: session
       security:
