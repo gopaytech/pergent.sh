@@ -18,7 +18,7 @@
 ## Tasks
 
 1. `internal/config`: `BuiltInRuleNames`, `OrderBuiltInRules`, `BuiltInRulesListMinVersion`, `BuiltInRulesListImage` (shares the version check with `PanelImage`); `built_in_rules` reads a list, refuses a bool, refuses unknown names. Tests first.
-2. `internal/store`: migration `0050_built_in_rule_names.sql` (`dashboard_repos.built_in_rule_names text[]`, the backfill, `runs.built_in_rules_note text`); `DashboardRepo.BuiltInRules []string` on the new column; `RepoDefaults` stops reading and writing `built_in_rules`; `SetRunRulesHash` takes the note; `InheritPanelSplit` copies it. Tests: the backfill names equal `rule.Builtin()` names, the mapping on a 0049 database, a 0049-era insert still works, round trips.
+2. `internal/store`: migration `0052_built_in_rule_names.sql` (0050 and 0051 went to multi review and model limits on main) (`dashboard_repos.built_in_rule_names text[]`, the backfill, `runs.built_in_rules_note text`); `DashboardRepo.BuiltInRules []string` on the new column; `RepoDefaults` stops reading and writing `built_in_rules`; `SetRunRulesHash` takes the note; `InheritPanelSplit` copies it. Tests: the backfill names equal `rule.Builtin()` names, the mapping on a 0051 database, a v0.18.0-era insert still works, round trips.
 3. `internal/settings`: `Effective.BuiltInRules []string`, known names only in `builtin.yaml` order, no default level.
 4. `internal/inputs`: `RulesHash(list, builtIns []string, image)`.
 5. `internal/kube`: `JobParams.BuiltInRules` sends `PERGENT_BUILT_IN_RULES`; it wins over `NoBuiltInRules`.
