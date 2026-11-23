@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -620,7 +619,7 @@ type storedFate struct {
 // fateDB runs fn on a connection to the test schema.
 func fateDB(t *testing.T, env *testEnv, fn func(conn *pgx.Conn)) {
 	t.Helper()
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,7 +3,6 @@ package engine
 import (
 	"bytes"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -472,7 +471,7 @@ func dashboardRepo(t *testing.T, env *testEnv, r store.DashboardRepo) {
 // leave.
 func setDashboardSkills(t *testing.T, env *testEnv, instance, project string, skills []string) {
 	t.Helper()
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}

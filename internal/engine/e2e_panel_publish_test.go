@@ -3,7 +3,6 @@ package engine
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -211,7 +210,7 @@ func TestE2EPanelQuotaCountsAll(t *testing.T) {
 	e.runP(t, id, panelMerge(t, head, 30, 40, ""))
 	pollUsage(t, env, id, 370)
 
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}

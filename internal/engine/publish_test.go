@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -1572,7 +1571,7 @@ func TestPublishGiveUpUnreadableSettingsIsFailed(t *testing.T) {
 		t.Fatal("run gave up before its 10th attempt")
 	}
 
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}
