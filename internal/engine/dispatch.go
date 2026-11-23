@@ -788,14 +788,14 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err := e.Store.SetRunEntry(ctx, run.ID, runEntry(d.entry)); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's model entry: %w", err))
 	}
-	// A repository with chain B in effect gets a review panel: the run waits
-	// for its members, whose Jobs start apart. With no chain B this writes
-	// nothing and the review goes on as before.
-	split, err := d.panel(ctx, mr, in, repo, repoUsedUp, instanceUsedUp)
+	// A repository with reviewers 2 to 5 gets a multi review: the run waits
+	// for its members, whose Jobs start apart. With no extra reviewer this
+	// writes nothing and the review goes on as before.
+	done, err := d.split(ctx, mr, in, repo, repoUsedUp, instanceUsedUp)
 	if err != nil {
-		return d.retry(ctx, fmt.Errorf("start the review panel: %w", err))
+		return d.retry(ctx, fmt.Errorf("start the multi review: %w", err))
 	}
-	if split {
+	if done {
 		return nil
 	}
 
