@@ -27,6 +27,7 @@ func newAPIKey(t *testing.T, s *Store, clientID int64, name, prefix string) APIK
 }
 
 func TestCreateAPIClientRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	if c.ID == 0 || c.CreatedAt.IsZero() {
@@ -66,6 +67,7 @@ func TestCreateAPIClientRoundTrip(t *testing.T) {
 }
 
 func TestAPIClientsByName(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newAPIClient(t, s, "zeta")
 	newAPIClient(t, s, "alpha")
@@ -79,6 +81,7 @@ func TestAPIClientsByName(t *testing.T) {
 }
 
 func TestUpdateAPIClientKeepsName(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	got, found, err := s.UpdateAPIClient(ctx, "fastgateway", func(c *APIClient) {
@@ -114,6 +117,7 @@ func TestUpdateAPIClientKeepsName(t *testing.T) {
 }
 
 func TestAPIClientRotationFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newAPIClient(t, s, "fastgateway")
 	until := t0.Add(time.Hour)
@@ -134,6 +138,7 @@ func TestAPIClientRotationFieldsRoundTrip(t *testing.T) {
 }
 
 func TestAPIKeyLookup(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	k := newAPIKey(t, s, c.ID, "CI", "0a1b2c3d")
@@ -167,6 +172,7 @@ func TestAPIKeyLookup(t *testing.T) {
 }
 
 func TestAPIKeysNewestFirst(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	exp := t0.Add(24 * time.Hour)
@@ -188,6 +194,7 @@ func TestAPIKeysNewestFirst(t *testing.T) {
 }
 
 func TestDeleteAPIKeyStopsLookup(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	other := newAPIClient(t, s, "other")
@@ -212,6 +219,7 @@ func TestDeleteAPIKeyStopsLookup(t *testing.T) {
 }
 
 func TestTouchAPIKeyThrottles(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	k := newAPIKey(t, s, c.ID, "CI", "0a1b2c3d")
@@ -248,6 +256,7 @@ func TestTouchAPIKeyThrottles(t *testing.T) {
 }
 
 func TestDeleteAPIClientCascadesKeys(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	newAPIKey(t, s, c.ID, "CI", "0a1b2c3d")

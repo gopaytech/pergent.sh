@@ -31,6 +31,7 @@ func newFetch(t *testing.T, s *Store, f SkillFetch, tokenHash []byte) string {
 // A fetch is completed once, from running only: by the API (no token) or by
 // the Job holding the one-time token.
 func TestCompleteSkillFetchOnce(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := newFetch(t, s, SkillFetch{Kind: SourceKindInstance, Instance: "main", Repo: "acme/skills", Ref: "v1.1",
 		FromRef: "v1.0", Path: "skills", Purpose: "update", RequestedBy: "alice (gitlab main)", RequestedByID: 7,
@@ -113,6 +114,7 @@ func normal(f SkillFetch) SkillFetch {
 }
 
 func TestFailStaleAndPruneSkillFetches(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	old := newFetch(t, s, SkillFetch{CreatedAt: t0, ExpiresAt: t0.Add(time.Hour)}, []byte("h"))
 	fresh := newFetch(t, s, SkillFetch{CreatedAt: t0.Add(5 * time.Minute), ExpiresAt: t0.Add(time.Hour)}, nil)
@@ -150,6 +152,7 @@ func TestFailStaleAndPruneSkillFetches(t *testing.T) {
 // InstalledFrom lists the skills installed from one source at one ref, with
 // their text.
 func TestInstalledFrom(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	add := func(name string, src SkillSource) {
 		t.Helper()

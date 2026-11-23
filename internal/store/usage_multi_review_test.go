@@ -118,6 +118,7 @@ func reviewMemberRecorded(t *testing.T, s *Store, id string) bool {
 // run_usage row of the split run, which has no verdict yet. A second call
 // adds nothing. Unknown, bad and off members are no error and write nothing.
 func TestRecordReviewMemberUsage(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id, ms := multiReviewWithEntries(t, s, mr1, "a1", 2)
 	doneReviewer(t, s, ms[0].ID, `{"status":"completed"}`)
@@ -194,6 +195,7 @@ func TestRecordReviewMemberUsage(t *testing.T) {
 // first attempt only its own. A reviewer filled after the release goes to
 // the split run too.
 func TestRecordReviewMemberUsageOnSplitRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	first := reported(t, s, mr1, "a1", `{}`)
 	if err := s.RecordUsage(ctx, first, []SkillUsage{{Skill: "security", Verdict: "failed", In: 9}}); err != nil {
@@ -239,6 +241,7 @@ func TestRecordReviewMemberUsageOnSplitRun(t *testing.T) {
 // start, once; an off row, a reviewer with no result, a skipped reviewer and
 // a recorded one are not.
 func TestReviewMembersWithoutUsage(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(3, map[int]string{3: "no backup entry left"}))
 	r1, r2 := reviewerOf(t, s, id, 1), reviewerOf(t, s, id, 2)
@@ -268,6 +271,7 @@ func TestReviewMembersWithoutUsage(t *testing.T) {
 // the review_judges entry. A second record of the judge adds nothing, and a
 // reviewer filled after the judge adds its tokens and keeps the verdict.
 func TestRecordJudgeUsageTotal(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id, ms := multiReviewWithEntries(t, s, mr1, "a1", 3)
 	for _, m := range ms {
@@ -339,6 +343,7 @@ func TestRecordJudgeUsageTotal(t *testing.T) {
 // A judge run with --no-judge adds its tokens, verdict and counts to the
 // total and writes no judge row.
 func TestRecordJudgeUsageNoJudgeWritesNoModelRow(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id, ms := multiReviewWithEntries(t, s, mr1, "a1", 2)
 	for _, m := range ms {
@@ -367,6 +372,7 @@ func TestRecordJudgeUsageNoJudgeWritesNoModelRow(t *testing.T) {
 // oldest first, each summed over its skills; any run of the review reads
 // the same list.
 func TestReviewCostsOrder(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id, ms := multiReviewWithEntries(t, s, mr1, "a1", 3)
 	doneReviewer(t, s, ms[0].ID, `{}`)
@@ -449,6 +455,7 @@ func TestReviewCostsOrder(t *testing.T) {
 // A judge run reported with no result (the Job timed out): the review counts
 // once, as a review with no result, and its reviewers' tokens are wasted.
 func TestReviewNoResultIsWasted(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mr := usageMR(7, 1)
 	id, ms := multiReviewWithEntries(t, s, mr, "a1", 2)
@@ -505,6 +512,7 @@ func TestReviewNoResultIsWasted(t *testing.T) {
 // A single review with no result and an off row is not a multi review: its
 // tokens are wasted only by their own failed verdict, as today.
 func TestReviewNoResultOffIsSingle(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mr := usageMR(7, 1)
 	id := enqueue(t, s, mr, "a1")

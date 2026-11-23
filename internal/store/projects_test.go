@@ -5,6 +5,7 @@ import "testing"
 // Migration 0017 adds inline_available: a row stored before it can be posted
 // to, a GitLab project always can, and a GitHub one stores what it is given.
 func TestProjectInlineAvailable(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	inst := "https://gitlab.example.com"
 	if _, err := s.pool.Exec(ctx, `INSERT INTO projects (instance, project_id, path) VALUES ($1, 5, 'acme/old')`, inst); err != nil {
@@ -56,6 +57,7 @@ func TestProjectInlineAvailable(t *testing.T) {
 // readable, a GitLab project always is, and a GitHub one stores what it is
 // given.
 func TestProjectProtectionReadable(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	inst := "https://gitlab.example.com"
 	if _, err := s.pool.Exec(ctx, `INSERT INTO projects (instance, project_id, path) VALUES ($1, 5, 'acme/old')`, inst); err != nil {

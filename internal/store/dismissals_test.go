@@ -8,6 +8,7 @@ import (
 )
 
 func TestDismissSeverityRaise(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	actor := int64(5)
 	first := Dismissal{MR: mr1, Fingerprint: "fp1", Severity: "suggestion", Reason: "fine", Actor: "alice (gitlab main)", ActorID: &actor}
@@ -59,6 +60,7 @@ func TestDismissSeverityRaise(t *testing.T) {
 }
 
 func TestDismissalsAreScopedToTheMR(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	at := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	for _, d := range []Dismissal{
@@ -83,6 +85,7 @@ func TestDismissalsAreScopedToTheMR(t *testing.T) {
 }
 
 func TestRestore(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if ok, err := s.Restore(ctx, mr1, "fp1"); err != nil || ok {
 		t.Fatalf("Restore of nothing = %v, %v; want false", ok, err)
@@ -111,6 +114,7 @@ func TestRestore(t *testing.T) {
 }
 
 func TestDismissStoresDetails(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	in := Dismissal{MR: mr1, Fingerprint: "fp1", Severity: "blocking", Reason: "constant", Actor: "mo (gitlab main)",
 		Skill: "security", File: "db/query.go", Title: "SQL built from user input", Teaches: true, DismisserPlatformID: 50}
@@ -139,6 +143,7 @@ func TestDismissStoresDetails(t *testing.T) {
 // Raising a suggestion to blocking replaces the details too: the person who
 // dismissed it as blocking is the one it teaches by.
 func TestDismissRaiseReplacesDetails(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	first := Dismissal{MR: mr1, Fingerprint: "fp1", Severity: "suggestion", Reason: "fine", Actor: "dev",
 		Skill: "style", File: "a.go", Title: "old", Teaches: false}
@@ -161,6 +166,7 @@ func TestDismissRaiseReplacesDetails(t *testing.T) {
 }
 
 func TestDismissTeachingReplacesNonTeaching(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	author := Dismissal{MR: mr1, Fingerprint: "fp1", Severity: "suggestion", Reason: "not now", Actor: "dev",
 		Skill: "style", File: "a.go", Title: "old", DismisserPlatformID: 7}
@@ -195,6 +201,7 @@ func TestDismissTeachingReplacesNonTeaching(t *testing.T) {
 }
 
 func TestDismissTeachingKeepsBlocking(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	blocking := Dismissal{MR: mr1, Fingerprint: "fp1", Severity: "blocking", Reason: "false positive", Actor: "mo",
 		Skill: "security", File: "a.go", Title: "t", Teaches: true, DismisserPlatformID: 50}
@@ -216,6 +223,7 @@ func TestDismissTeachingKeepsBlocking(t *testing.T) {
 }
 
 func TestTeachingDismissals(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	since := at.Add(-time.Hour)
@@ -269,6 +277,7 @@ func TestTeachingDismissals(t *testing.T) {
 }
 
 func TestStopTeachingEveryChange(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	other := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 3}
 	for _, mr := range []MRKey{mr1, mr2, other} {
@@ -322,6 +331,7 @@ func addRunWithResult(t *testing.T, s *Store, mr MRKey, head string, at time.Tim
 }
 
 func TestBackfillDismissals(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	since := at.Add(-24 * time.Hour)
@@ -384,6 +394,7 @@ func TestBackfillDismissals(t *testing.T) {
 // Stored results are not trusted to have the shape the schema says: a result
 // that does not fit leaves its dismissal as it is, and is no error.
 func TestBackfillDismissalsOddResults(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	if _, err := s.Dismiss(ctx, Dismissal{MR: mr1, Fingerprint: "fp1", Severity: "blocking", Reason: "r", CreatedAt: at}); err != nil {

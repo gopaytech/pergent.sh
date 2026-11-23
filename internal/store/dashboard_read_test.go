@@ -16,6 +16,7 @@ func setRun(t *testing.T, s *Store, id, set string, args ...any) {
 }
 
 func TestMarkPublishedRecordsDecision(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "a1", "tok")
 	if out, err := s.StoreResult(ctx, id, "tok", []byte(`{}`), t0); err != nil || out != ResultStored {
@@ -45,6 +46,7 @@ func TestMarkPublishedRecordsDecision(t *testing.T) {
 }
 
 func TestSetRunInputs(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "a1")
 	if r := getRun(t, s, id); r.Model != nil || r.SkillSources != nil || r.MaxTurns != nil {
@@ -79,6 +81,7 @@ func decided(t *testing.T, s *Store, id, outcome string, approved bool, at time.
 }
 
 func TestReviewDigests(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	// mr1: two runs; the second replaces the first.
@@ -164,6 +167,7 @@ func seen(instance string, id int64, paths ...string) Visibility {
 // A run's outcome follows its state until a decision is recorded; a
 // published run without one is "unknown", never guessed.
 func TestDigestOutcomes(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	cases := []struct {
 		set  string
@@ -194,6 +198,7 @@ func TestDigestOutcomes(t *testing.T) {
 }
 
 func TestRunStats(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for i, tc := range []struct {
@@ -240,6 +245,7 @@ func TestRunStats(t *testing.T) {
 // A merge request's runs are listed only for the paths asked for: a run
 // whose project moved somewhere hidden is left out.
 func TestMRRunDigestsVisibility(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := enqueue(t, s, mr1, "a1")
 	b, _, err := s.EnqueueRun(ctx, mr1, "secret-group/widgets", "a2", "main")
@@ -266,6 +272,7 @@ func TestMRRunDigestsVisibility(t *testing.T) {
 // A path can pass from a project to a later one (deleted, renamed or
 // transferred): only the runs of the project ID that is visible are read.
 func TestReadsNeedVisibleProjectID(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	oldMR := MRKey{Instance: "main", ProjectID: 7, IID: 1}
@@ -296,6 +303,7 @@ func TestReadsNeedVisibleProjectID(t *testing.T) {
 // one visible project together: the same path and ID on another instance,
 // or the ID of a project visible on another instance, show nothing.
 func TestReadsMatchInstancePathAndID(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	mainRun := enqueue(t, s, MRKey{Instance: "main", ProjectID: 7, IID: 1}, "a1")
@@ -324,6 +332,7 @@ func TestReadsMatchInstancePathAndID(t *testing.T) {
 
 // All reads every run, of every instance and project.
 func TestVisibilityAll(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	mainRun := enqueue(t, s, MRKey{Instance: "main", ProjectID: 7, IID: 1}, "a1")
@@ -350,6 +359,7 @@ func TestVisibilityAll(t *testing.T) {
 }
 
 func TestProjectByPath(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.UpsertProject(ctx, Project{Instance: "main", ProjectID: 7, Path: "Acme/Widgets"}); err != nil {
 		t.Fatal(err)
@@ -366,6 +376,7 @@ func TestProjectByPath(t *testing.T) {
 // The dashboard's list queries can use the per-project indexes: they read a
 // bounded range of a repository's runs, never the whole table.
 func TestDashboardQueriesUseIndexes(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	// A year of runs over 200 repositories, so the planner has a table
@@ -439,6 +450,7 @@ func explain(t *testing.T, s *Store, sql string, args ...any) string {
 // review being done: the overview counts it, as running. A run held for a
 // start still isn't counted.
 func TestRunStatsCountMultiReview(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	if r := getRun(t, s, id); r.State != Waiting || r.SkipReason != WaitReviewers {

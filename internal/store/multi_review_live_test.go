@@ -8,6 +8,7 @@ import (
 // A start finds a multi review's waiting run on its way and leaves it as it
 // is; a held run is started as before.
 func TestStartRunLeavesMultiReviewAlone(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	multi := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	held := heldRun(t, s, mr2, "b1", WaitUntrusted)
@@ -36,6 +37,7 @@ func TestStartRunLeavesMultiReviewAlone(t *testing.T) {
 // A re-run while the members run lands on the review's run; a held run is
 // replaced by a new one as before.
 func TestRerunWhileMultiReviewRuns(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	multi := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	held := heldRun(t, s, mr2, "b1", WaitUntrusted)
@@ -72,6 +74,7 @@ func TestRerunWhileMultiReviewRuns(t *testing.T) {
 // The changes waiting for a start leave out a multi review waiting for its
 // members.
 func TestWaitingChangesHidesMultiReview(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	heldRun(t, s, mr2, "b1", WaitUntrusted)
@@ -84,6 +87,7 @@ func TestWaitingChangesHidesMultiReview(t *testing.T) {
 // The dashboard reads a multi review waiting for its members as running, and
 // a held run as waiting. A run held for a model limit still reads as waiting.
 func TestDashboardOutcomeMultiReviewRunning(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	multi := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	held := heldRun(t, s, mr2, "b1", WaitUntrusted)
@@ -116,6 +120,7 @@ func TestDashboardOutcomeMultiReviewRunning(t *testing.T) {
 // keeps its dispatched_at, supersedes its live panel members and returns their
 // Job names. A multi review, and a held run, stay as they are.
 func TestRequeueLegacyPanels(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	legacy := legacyPanelRun(t, s, mr1, "a1")
 	a := legacyMemberOf(t, s, legacy, "a")
@@ -173,6 +178,7 @@ var mrLimit = MRKey{Instance: "https://gitlab.example.com", ProjectID: 7, IID: 9
 
 // LegacyPanel counts a chain B that has entries, and none that has not.
 func TestLegacyPanelCountsChainsWithEntries(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	var id int64
 	if err := s.pool.QueryRow(ctx, `INSERT INTO panel_chains (scope, updated_at) VALUES ('global', now()) RETURNING id`).Scan(&id); err != nil {

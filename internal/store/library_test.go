@@ -19,6 +19,7 @@ func newSkill(t *testing.T, s *Store, name, content string) {
 }
 
 func TestLibrarySkillVersions(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	v, err := s.CreateLibrarySkill(ctx, NewSkill{Name: "style", Content: "one", Actor: "alice", At: t0})
 	if err != nil || v != 1 {
@@ -75,6 +76,7 @@ func TestLibrarySkillVersions(t *testing.T) {
 }
 
 func TestCreateLibrarySkillRefusals(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newSkill(t, s, "style", "x")
 	if _, err := s.CreateLibrarySkill(ctx, NewSkill{Name: "style", Content: "y", At: t0}); !errors.Is(err, ErrSkillExists) {
@@ -91,6 +93,7 @@ func TestCreateLibrarySkillRefusals(t *testing.T) {
 }
 
 func TestVersionsContinueAfterDelete(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newSkill(t, s, "style", "one")
 	if _, err := s.UpdateLibrarySkill(ctx, "style", "two", "bob", 1, t0); err != nil {
@@ -119,6 +122,7 @@ func TestVersionsContinueAfterDelete(t *testing.T) {
 }
 
 func TestUpdateStaleVersion(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newSkill(t, s, "style", "one")
 	if _, err := s.UpdateLibrarySkill(ctx, "style", "two", "bob", 1, t0); err != nil {
@@ -134,6 +138,7 @@ func TestUpdateStaleVersion(t *testing.T) {
 }
 
 func TestUpdateInstalledRefused(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	src := SkillSource{Kind: SourceKindInstance, Instance: "lab", Repo: "acme/skills", Ref: "v1.0", Path: "style.md", Commit: "abc"}
 	v, err := s.CreateLibrarySkill(ctx, NewSkill{Name: "style", Content: "one", Actor: "alice", Source: &src, At: t0})
@@ -176,6 +181,7 @@ func TestUpdateInstalledRefused(t *testing.T) {
 }
 
 func TestCreateFull(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := 0; i < 200; i++ {
 		newSkill(t, s, fmt.Sprintf("skill-%03d", i), "x")
@@ -197,6 +203,7 @@ func TestCreateFull(t *testing.T) {
 }
 
 func TestDeleteInUse(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for _, n := range []string{"a", "b", "c", "d"} {
 		newSkill(t, s, n, "x")
@@ -258,6 +265,7 @@ func race(a, b func() error) (nils int, errs [2]error) {
 }
 
 func TestDeleteRacesRepoSave(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := 0; i < 20; i++ {
 		name := fmt.Sprintf("racy-%d", i)
@@ -284,6 +292,7 @@ func TestDeleteRacesRepoSave(t *testing.T) {
 }
 
 func TestDeleteRacesRepoInsert(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := 0; i < 20; i++ {
 		name := fmt.Sprintf("racy-%d", i)
@@ -307,6 +316,7 @@ func TestDeleteRacesRepoInsert(t *testing.T) {
 }
 
 func TestDeleteRacesRepoUpsert(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := 0; i < 20; i++ {
 		name := fmt.Sprintf("racy-%d", i)
@@ -329,6 +339,7 @@ func TestDeleteRacesRepoUpsert(t *testing.T) {
 }
 
 func TestInsertNamingMissingSkill(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web", Skills: []string{"gone"}})
 	if !errors.Is(err, ErrSkillNotFound) || created {
@@ -345,6 +356,7 @@ func TestInsertNamingMissingSkill(t *testing.T) {
 // A save that names a missing skill names it in the error, the first one
 // missing in name order, and still matches ErrSkillNotFound.
 func TestMissingSkillErrorNamesSkill(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newSkill(t, s, "a", "x")
 	err := s.PutRepoDefaults(ctx, RepoDefaults{Skills: []string{"zed", "a", "gone"}})
@@ -355,6 +367,7 @@ func TestMissingSkillErrorNamesSkill(t *testing.T) {
 }
 
 func TestDeleteRacesDefaultsSave(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := 0; i < 20; i++ {
 		name := fmt.Sprintf("racy-%d", i)
@@ -390,6 +403,7 @@ func skillExists(t *testing.T, s *Store, name string) (LibrarySkill, bool) {
 }
 
 func TestSaveNamingMissingSkill(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newSkill(t, s, "a", "x")
 	if err := s.PutRepoDefaults(ctx, RepoDefaults{Skills: []string{"a", "gone"}}); !errors.Is(err, ErrSkillNotFound) {
@@ -436,6 +450,7 @@ func TestSaveNamingMissingSkill(t *testing.T) {
 }
 
 func TestResolveLibrary(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newSkill(t, s, "a", "alpha")
 	newSkill(t, s, "b", "bravo!")
@@ -469,6 +484,7 @@ func TestResolveLibrary(t *testing.T) {
 }
 
 func TestLibrarySize(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newSkill(t, s, "a", "12345")
 	newSkill(t, s, "b", "héllo") // 6 bytes
@@ -489,6 +505,7 @@ func TestLibrarySize(t *testing.T) {
 }
 
 func TestRunSkillVersionsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "a1")
 	if r := getRun(t, s, id); r.SkillVersions != nil {
@@ -510,6 +527,7 @@ func TestRunSkillVersionsRoundTrip(t *testing.T) {
 }
 
 func TestSkipRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "A")
 	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
@@ -572,6 +590,7 @@ func getRunByHead(t *testing.T, s *Store, mr MRKey, head string) string {
 }
 
 func TestSkillFetchesTable(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	insert := func(purpose, status string) error {
 		_, err := s.pool.Exec(ctx, `INSERT INTO skill_fetches (id, kind, purpose, status, created_at, expires_at)

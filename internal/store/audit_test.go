@@ -6,6 +6,7 @@ import (
 )
 
 func TestAuditLogPaging(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	actor := int64(7)
 	for i, action := range []string{"team.create", "team.update", "account.delete"} {
@@ -36,6 +37,7 @@ func TestAuditLogPaging(t *testing.T) {
 }
 
 func TestAuditLogBigintCursor(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.Audit(ctx, AuditEntry{At: t0, Actor: "admin", Action: "x"}); err != nil {
 		t.Fatal(err)
@@ -47,6 +49,7 @@ func TestAuditLogBigintCursor(t *testing.T) {
 }
 
 func TestAuditEntriesOutliveAccounts(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mustPassword(t, s, "admin")
 	a := mustPlatform(t, s, "main", 1, "alice")
@@ -62,6 +65,7 @@ func TestAuditEntriesOutliveAccounts(t *testing.T) {
 }
 
 func TestPruneAudit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for _, at := range []time.Time{t0, t0.Add(time.Hour), t0.Add(2 * time.Hour)} {
 		if err := s.Audit(ctx, AuditEntry{At: at, Actor: "admin", Action: "x"}); err != nil {

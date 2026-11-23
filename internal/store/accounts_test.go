@@ -46,6 +46,7 @@ func addPlatformMember(t *testing.T, s *Store, teamID, accountID int64) {
 }
 
 func TestPasswordAccountCaseInsensitive(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a, err := s.CreatePasswordAccount(ctx, "Admin", "argon-hash", true, t0)
 	if err != nil {
@@ -76,6 +77,7 @@ func TestPasswordAccountCaseInsensitive(t *testing.T) {
 }
 
 func TestPasswordAccountNeedsHash(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	_, err := s.CreatePasswordAccount(ctx, "admin", "", false, t0)
 	if err == nil || errors.Is(err, ErrExists) {
@@ -87,6 +89,7 @@ func TestPasswordAccountNeedsHash(t *testing.T) {
 }
 
 func TestDeleteLastPasswordAccount(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	first := mustPassword(t, s, "admin")
 	if ok, err := s.DeleteAccount(ctx, first.ID); !errors.Is(err, ErrLastPasswordAccount) || ok {
@@ -113,6 +116,7 @@ func TestDeleteLastPasswordAccount(t *testing.T) {
 }
 
 func TestRecordFailedSignInLocks(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustPassword(t, s, "admin")
 	now := t0.Add(time.Hour)
@@ -153,6 +157,7 @@ func TestRecordFailedSignInLocks(t *testing.T) {
 
 // Failures from before a lock that has ended don't count towards the next.
 func TestRecordFailedSignInRestartsAfterLock(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustPassword(t, s, "admin")
 	for i := 0; i < 5; i++ {
@@ -170,6 +175,7 @@ func TestRecordFailedSignInRestartsAfterLock(t *testing.T) {
 // Of failures that land at once past the limit, exactly one reports that
 // it set the lock, so the lock is recorded once.
 func TestRecordFailedSignInSetsLockOnce(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustPassword(t, s, "admin")
 	for i := 0; i < 4; i++ {
@@ -207,6 +213,7 @@ func TestRecordFailedSignInSetsLockOnce(t *testing.T) {
 }
 
 func TestSetPasswordClearsFailures(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustPassword(t, s, "admin")
 	for i := 0; i < 5; i++ {
@@ -226,6 +233,7 @@ func TestSetPasswordClearsFailures(t *testing.T) {
 }
 
 func TestUpsertPlatformAccount(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a, err := s.UpsertPlatformAccount(ctx, "gitlab", "main", 42, "alice", t0)
 	if err != nil {
@@ -261,6 +269,7 @@ func TestUpsertPlatformAccount(t *testing.T) {
 // Platform accounts are not listed, on a team or not; the rest come by
 // username ignoring case.
 func TestAccountsHidePlatformRows(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	admin := mustPassword(t, s, "admin")
 	member := mustPlatform(t, s, "main", 1, "alice")
@@ -300,6 +309,7 @@ func TestAccountsHidePlatformRows(t *testing.T) {
 // on no team. A local admin, an SSO admin, an invited account that never
 // signed in and an old platform account never wait.
 func TestCountWaitingAccounts(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mustPassword(t, s, "root")
 	if n, err := s.CountWaitingAccounts(ctx); err != nil || n != 0 {
@@ -344,6 +354,7 @@ func TestCountWaitingAccounts(t *testing.T) {
 }
 
 func TestDeleteAccountCascades(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	mustPassword(t, s, "admin")
 	a := mustSSO(t, s, "alice@example.com")
@@ -369,6 +380,7 @@ func TestDeleteAccountCascades(t *testing.T) {
 }
 
 func TestDeleteAccountSessions(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustPlatform(t, s, "main", 1, "alice")
 	b := mustPlatform(t, s, "main", 2, "bob")
@@ -403,6 +415,7 @@ func TestDeleteAccountSessions(t *testing.T) {
 
 // A good password sign-in is recorded only while the account isn't locked.
 func TestRecordSignInUnlessLocked(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustPassword(t, s, "admin")
 	for i := 0; i < 5; i++ {
@@ -431,6 +444,7 @@ func TestRecordSignInUnlessLocked(t *testing.T) {
 // A password change is made only while the account isn't locked, and clears
 // the change asked for.
 func TestChangePasswordUnlessLocked(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a, err := s.CreatePasswordAccount(ctx, "admin", "old-hash", true, t0)
 	if err != nil {
@@ -460,6 +474,7 @@ func TestChangePasswordUnlessLocked(t *testing.T) {
 // ResetPassword sets the password, ends the sessions and records the audit
 // entry together, or does none of it.
 func TestResetPasswordTogether(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustPassword(t, s, "admin")
 	if err := s.CreateSession(ctx, Session{IDHash: []byte("h1"), AccountID: a.ID, Username: "admin", CSRF: "c",
@@ -542,6 +557,7 @@ func TestNormalizeEmail(t *testing.T) {
 
 // An invited email, then its first sign-in, is one row.
 func TestAddThenSignInSSOAccount(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	added, err := s.AddSSOAccount(ctx, "a@example.com", t0)
 	if err != nil {
@@ -594,6 +610,7 @@ func TestAddThenSignInSSOAccount(t *testing.T) {
 }
 
 func TestSignInSSOAccountNotAdded(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a, err := s.SignInSSOAccount(ctx, "new@example.com", t0)
 	if err != nil {
@@ -612,6 +629,7 @@ func TestSignInSSOAccountNotAdded(t *testing.T) {
 // Two addresses that differ beyond ASCII case are two accounts, and the
 // Kelvin sign never takes over the account of a plain "k".
 func TestSSOAccountsStayApart(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	plain := mustSSO(t, s, "k@example.com")
 	kelvin, err := s.SignInSSOAccount(ctx, "K@example.com", t0)
@@ -630,6 +648,7 @@ func TestSSOAccountsStayApart(t *testing.T) {
 }
 
 func TestSetAccountRole(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustSSO(t, s, "a@example.com")
 	if err := s.SetAccountRole(ctx, a.ID, RoleAdmin); err != nil {
@@ -666,6 +685,7 @@ func TestSetAccountRole(t *testing.T) {
 // password account it makes (it knows no role) is still an admin, and an
 // SSO account can't sign in with a password.
 func TestPasswordAccountsAreAdmins(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, err := s.pool.Exec(ctx, `INSERT INTO accounts (kind, username, password_hash, created_at)
 		VALUES ('password', 'old', 'hash', $1)`, t0); err != nil {
@@ -701,6 +721,7 @@ func TestPasswordAccountsAreAdmins(t *testing.T) {
 // succeed and share one row: the loser of the race on lower(email) runs its
 // statement again.
 func TestSSOFirstSignInsRace(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	const n = 8
 	var wg sync.WaitGroup
