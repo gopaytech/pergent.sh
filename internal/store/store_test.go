@@ -13,37 +13,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gopaytech/pergent.sh/internal/store/storetest"
 )
 
 const testURLEnv = "PERGENT_SH_TEST_DATABASE_URL"
 
-// newStore opens a migrated store bound to a fresh random schema and drops
-// the schema when the test ends. It skips when no test database is set.
+// newStore opens a migrated store on a database of its own, which goes back
+// to the pool when the test ends. It skips when no test database is set.
 func newStore(t *testing.T) *Store {
 	t.Helper()
-	url := os.Getenv(testURLEnv)
-	if url == "" {
-		t.Skipf("%s is not set", testURLEnv)
-	}
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	s, err := OpenInSchema(ctx, url, "test_"+hex.EncodeToString(b))
-	if err != nil {
-		t.Fatalf("OpenInSchema: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := s.DropSchema(context.Background()); err != nil {
-			t.Errorf("DropSchema: %v", err)
-		}
-		s.Close()
-	})
-	if err := s.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	return s
+	return storetest.Open(t, OpenInSchema)
 }
 
 var (

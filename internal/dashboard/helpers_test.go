@@ -6,14 +6,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +27,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/store/storetest"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
@@ -43,8 +42,8 @@ const (
 
 var ctx = context.Background()
 
-// newStore opens a migrated store in a fresh schema, dropped when the test
-// ends. It skips when no test database is set.
+// newStore opens a migrated store on a database of its own, which goes back
+// to the pool when the test ends. It skips when no test database is set.
 func newStore(t *testing.T) *store.Store {
 	st, _ := newStoreDB(t)
 	return st
@@ -54,16 +53,8 @@ func newStore(t *testing.T) *store.Store {
 // tests that set columns no store method sets (a run's times).
 func newStoreDB(t *testing.T) (*store.Store, *pgxpool.Pool) {
 	t.Helper()
-	dbURL := os.Getenv(testDBEnv)
-	if dbURL == "" {
-		t.Skipf("%s is not set", testDBEnv)
-	}
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	schema := "test_dashboard_" + hex.EncodeToString(b)
-	st, err := store.OpenInSchema(ctx, dbURL, schema)
+	dbURL := storetest.URL(t, store.OpenInSchema)
+	st, err := store.OpenInSchema(ctx, dbURL, storetest.Schema)
 	if err != nil {
 		t.Fatalf("OpenInSchema: %v", err)
 	}
@@ -71,21 +62,15 @@ func newStoreDB(t *testing.T) (*store.Store, *pgxpool.Pool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pcfg.ConnConfig.RuntimeParams["search_path"] = schema
+	pcfg.ConnConfig.RuntimeParams["search_path"] = storetest.Schema
 	db, err := pgxpool.NewWithConfig(ctx, pcfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		db.Close()
-		if err := st.DropSchema(context.Background()); err != nil {
-			t.Errorf("DropSchema: %v", err)
-		}
 		st.Close()
 	})
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
 	return st, db
 }
 

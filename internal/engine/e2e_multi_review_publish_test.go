@@ -3,7 +3,6 @@ package engine
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -454,7 +453,7 @@ func TestE2EMultiReviewUsage(t *testing.T) {
 	if in, out, found, err := env.Store.RunUsage(env.ctx, id); err != nil || !found || in != 630 || out != 10 {
 		t.Errorf("RunUsage = %d in, %d out, %v, %v; want 630 and 10: every reviewer and the judge", in, out, found, err)
 	}
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}

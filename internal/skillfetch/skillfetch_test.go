@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -15,7 +14,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"path"
 	"sort"
 	"strings"
@@ -29,36 +27,16 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/store/storetest"
 )
 
 var ctx = context.Background()
 
-// newStore opens a migrated store in a fresh schema, dropped when the test
-// ends. It skips when no test database is set.
+// newStore opens a migrated store on a database of its own, which goes back
+// to the pool when the test ends. It skips when no test database is set.
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
-	dbURL := os.Getenv("PERGENT_SH_TEST_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("PERGENT_SH_TEST_DATABASE_URL is not set")
-	}
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	st, err := store.OpenInSchema(ctx, dbURL, "test_skillfetch_"+hex.EncodeToString(b))
-	if err != nil {
-		t.Fatalf("OpenInSchema: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := st.DropSchema(context.Background()); err != nil {
-			t.Errorf("DropSchema: %v", err)
-		}
-		st.Close()
-	})
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	return st
+	return storetest.Open(t, store.OpenInSchema)
 }
 
 var t0 = time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)

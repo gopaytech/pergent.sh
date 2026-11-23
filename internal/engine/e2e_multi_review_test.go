@@ -6,7 +6,6 @@ import (
 	"errors"
 	"maps"
 	"net/http"
-	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -2011,7 +2010,7 @@ func TestE2EMultiReviewMemberFinishedNoResult(t *testing.T) {
 // store.
 func rerunRun(t *testing.T, env *testEnv) string {
 	t.Helper()
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}

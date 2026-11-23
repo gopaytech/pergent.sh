@@ -3,16 +3,13 @@ package engine
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +31,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/store/storetest"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
@@ -246,13 +244,14 @@ func newFakeKube() (*fake.Clientset, *kube.Launcher) {
 // ---------------------------------------------------------------------------
 // Test environment
 
-// testEnv is an Engine wired to a real store in a fresh schema, a fake GitLab
+// testEnv is an Engine wired to a real store in a fresh database, a fake GitLab
 // and a fake clientset, with a clock the test moves.
 type testEnv struct {
 	t      *testing.T
 	ctx    context.Context
 	Store  *store.Store
 	schema string // the store's schema, for raw SQL
+	dbURL  string // the store's database, for raw SQL
 	GitLab *fakeGitLab
 	Kube   *fake.Clientset
 	Box    *secretbox.Box
@@ -260,8 +259,8 @@ type testEnv struct {
 
 	logs lockedWriter
 	// background counts the work the HTTP side starts that outlives its
-	// request (server.Deps.Background). The schema is dropped only once it
-	// is done: a usage write still running then deadlocks with the drop.
+	// request (server.Deps.Background). The database is reset only once it
+	// is done: a usage write still running then fails or blocks the reset.
 	background sync.WaitGroup
 
 	clockMu sync.Mutex
@@ -271,30 +270,14 @@ type testEnv struct {
 // newTestEnv builds the environment. It skips without a test database.
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	dbURL := os.Getenv(testDBEnv)
-	if dbURL == "" {
-		t.Skipf("%s is not set", testDBEnv)
-	}
 	ctx := context.Background()
-
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	schema := "test_engine_" + hex.EncodeToString(b)
+	dbURL := storetest.URL(t, store.OpenInSchema)
+	schema := storetest.Schema
 	st, err := store.OpenInSchema(ctx, dbURL, schema)
 	if err != nil {
 		t.Fatalf("OpenInSchema: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := st.DropSchema(context.Background()); err != nil {
-			t.Errorf("DropSchema: %v", err)
-		}
-		st.Close()
-	})
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
+	t.Cleanup(st.Close)
 
 	box, err := secretbox.New(testBoxKey)
 	if err != nil {
@@ -310,12 +293,12 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 
 	env := &testEnv{
-		t: t, ctx: ctx, Store: st, schema: schema, GitLab: gl, Kube: cs, Box: box,
+		t: t, ctx: ctx, Store: st, schema: schema, dbURL: dbURL, GitLab: gl, Kube: cs, Box: box,
 		// Wall time, so the runs' created_at (set by the database) is "now".
 		now: time.Now().UTC().Truncate(time.Second),
 	}
 	// Cleanups run last first: this one runs after an e2e server closes
-	// (no request can start more work) and before the schema is dropped.
+	// (no request can start more work) and before the database is reset.
 	t.Cleanup(env.background.Wait)
 	env.Engine = &Engine{
 		Store:     st,

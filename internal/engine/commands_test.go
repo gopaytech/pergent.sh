@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -1609,13 +1608,13 @@ func TestDismissByIDUsesTheHighestSeverityOfTheFingerprint(t *testing.T) {
 // the returned function is called.
 func (f *commandFixture) denyRunUpdates(id string) (restore func()) {
 	f.t.Helper()
-	conn, err := pgx.Connect(f.ctx, os.Getenv(testDBEnv))
+	conn, err := pgx.Connect(f.ctx, f.dbURL)
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	f.t.Cleanup(func() { conn.Close(f.ctx) })
 	rows, err := conn.Query(f.ctx, `SELECT table_schema FROM information_schema.tables
-		WHERE table_name = 'runs' AND table_schema LIKE 'test_engine_%'`)
+		WHERE table_name = 'runs' AND table_schema = $1`, f.schema)
 	if err != nil {
 		f.t.Fatal(err)
 	}
