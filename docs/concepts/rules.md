@@ -98,7 +98,7 @@ The Job gets exactly one of 2 environment variables, never both:
 | Some | A pergent that loads only the chosen rules | `PERGENT_BUILT_IN_RULES=<names>`, such as `yaml,go` |
 | Some | An older pergent | `PERGENT_NO_BUILT_IN_RULES=true`, so the review gets no built-in rules |
 
-An older pergent ignores `PERGENT_BUILT_IN_RULES` and would load all 67 rules, which is the cost the list is there to stop. So pergent.sh sends it only to an image at or above the first pergent release that reads it. No pergent release reads it yet, so for now **every review gets no built-in rules**, even with some chosen. The next pergent.sh release that moves to such a pergent turns the list on.
+An older pergent ignores `PERGENT_BUILT_IN_RULES` and would load all 67 rules, which is the cost the list is there to stop. So pergent.sh sends it only to pergent v0.12.0 or newer, the first release that reads it. The default `jobs.image` is v0.12.0. A config that pins an older image gets no built-in rules, even with some chosen.
 
-While the image can't load the list, the repository's **Settings** says so above the picker, and the review page of each run with chosen rules says why, for example `The chosen built-in rules were left out: no review image can load only the chosen built-in rules yet.`
+While the image can't load the list, the repository's **Settings** says so above the picker, and the review page of each run with chosen rules says why, for example `The chosen built-in rules were left out: image tag "v0.11.0" is older than v0.12.0.`
 - The review page shows the rule each reviewed file was checked with, and the comment's **Files** block ends with one line that counts the files per rule.

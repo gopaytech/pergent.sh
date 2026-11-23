@@ -110,13 +110,14 @@ func TestBuiltInRulesOffNotes(t *testing.T) {
 	e := newEnv(t, func(c *config.Config) { c.Jobs.Image = "registry.example.com/pergent:v0.11.0" })
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
+	old := config.BuiltInRulesListMinVersion
+	t.Cleanup(func() { config.BuiltInRulesListMinVersion = old })
+	config.BuiltInRulesListMinVersion = ""
 	v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets")
 	if want := "Reviews get no built-in rules for now: no review image can load only the chosen built-in rules yet."; v.BuiltInRulesOff != want {
-		t.Errorf("builtInRulesOff = %q, want %q", v.BuiltInRulesOff, want)
+		t.Errorf("builtInRulesOff with no floor = %q, want %q", v.BuiltInRulesOff, want)
 	}
-	old := config.BuiltInRulesListMinVersion
 	config.BuiltInRulesListMinVersion = "v0.11.0"
-	t.Cleanup(func() { config.BuiltInRulesListMinVersion = old })
 	if v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets"); v.BuiltInRulesOff != "" {
 		t.Errorf("builtInRulesOff with an image that loads them = %q", v.BuiltInRulesOff)
 	}

@@ -14,10 +14,8 @@ import (
 // BuiltInRulesListMinVersion is the first pergent release that reads
 // PERGENT_BUILT_IN_RULES and loads only the built-in rules it names, as
 // "vX.Y.Z". An older pergent ignores the list and loads every built-in rule,
-// so "" (no release reads it yet) refuses every image: a repository that
-// chose some then gets none. The owner sets it at release time, with
-// defaultImage.
-var BuiltInRulesListMinVersion = ""
+// so an image below it gets none, and "" refuses every image.
+var BuiltInRulesListMinVersion = "v0.12.0"
 
 // builtInNames is BuiltInRuleNames, read once from the pinned pergent.
 var builtInNames = sync.OnceValue(func() []string {
