@@ -65,6 +65,15 @@ jobs:
         run: git diff --exit-code
       - name: Vet
         run: go vet ./...
+      # The database tests run in parallel, 4 packages at once, and each
+      # test has pools of its own: 100 connections (the default) is tight.
+      - name: Raise the database's max_connections
+        run: |
+          pg=${{ job.services.postgres.id }}
+          docker exec "$pg" psql -U postgres -c 'ALTER SYSTEM SET max_connections = 300'
+          docker restart "$pg"
+          for i in $(seq 30); do docker exec "$pg" pg_isready -U postgres && break; sleep 1; done
+          docker exec "$pg" psql -U postgres -tAc 'SHOW max_connections' | grep -qx 300
       # The database tests are slow: internal/engine alone takes about 7.5
       # minutes, too close to go test's default limit of 10 minutes per package.
       - name: Test

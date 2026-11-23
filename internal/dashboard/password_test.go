@@ -205,6 +205,7 @@ func TestBootstrapGenerated(t *testing.T) {
 }
 
 func TestLoginCSRFCookie(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	rec := e.do("GET", "/auth/csrf", nil, nil)
 	c := cookie(rec, loginCSRFCookieName)
@@ -228,6 +229,7 @@ func TestLoginCSRFCookie(t *testing.T) {
 }
 
 func TestPasswordSignIn(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addPasswordAccount("ops", "ops-password-123", false)
 	creds := map[string]string{"username": "ops", "password": "ops-password-123"}
@@ -305,6 +307,7 @@ func TestPasswordSignIn(t *testing.T) {
 }
 
 func TestPasswordGuessing(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addPasswordAccount("ops", "ops-password-123", false)
 	attempts := 0
@@ -430,6 +433,7 @@ func (f *flushHook) Flush() {
 // is recorded (the database writes), so a known username takes no longer to
 // answer than an unknown one. The failure is recorded all the same.
 func TestWrongPasswordAnsweredBeforeRecorded(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	acc := e.addPasswordAccount("ops", "ops-password-123", false)
 	failures := func() int {
@@ -508,6 +512,7 @@ func (e *env) changePassword(c *http.Cookie, current, next string) *httptest.Res
 }
 
 func TestMustChangePassword(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addPasswordAccount("admin", "first-password-123", true)
 	a := e.signInPassword("admin", "first-password-123")
@@ -551,6 +556,7 @@ func TestMustChangePassword(t *testing.T) {
 }
 
 func TestChangePasswordRules(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addPasswordAccount("ops", "ops-password-123", false)
 	c := e.signInPassword("ops", "ops-password-123")
@@ -587,6 +593,7 @@ func TestChangePasswordRules(t *testing.T) {
 }
 
 func TestDeletedAccountEndsSession(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addPasswordAccount("admin", "admin-password-123", false)
 	ops := e.addPasswordAccount("ops", "ops-password-123", false)
@@ -612,6 +619,7 @@ func TestDeletedAccountEndsSession(t *testing.T) {
 }
 
 func TestResetPassword(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addPasswordAccount("ops", "ops-password-123", false)
 	c := e.signInPassword("ops", "ops-password-123")
@@ -658,6 +666,7 @@ func TestBootstrapShortEnvPassword(t *testing.T) {
 // A lock set by failures that land between reading the account and
 // recording the sign-in still refuses the right password, and stays.
 func TestSignInRaceWithLock(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	acc := e.addPasswordAccount("ops", "ops-password-123", false)
 	e.d.Auth.afterVerify = func() {
@@ -684,6 +693,7 @@ func TestSignInRaceWithLock(t *testing.T) {
 // With every argon2id slot taken, a sign-in answers 503 without checking
 // the password, and works again once a slot is free.
 func TestHashSlotsFull(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addPasswordAccount("ops", "ops-password-123", false)
 	c := e.signInPassword("ops", "ops-password-123")
@@ -719,6 +729,7 @@ func TestHashSlotsFull(t *testing.T) {
 // is refused without hashing the new one: it costs no more than a wrong
 // one.
 func TestChangePasswordLockedHashesNothing(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	acc := e.addPasswordAccount("ops", "ops-password-123", false)
 	c := e.signInPassword("ops", "ops-password-123")
@@ -746,6 +757,7 @@ func TestChangePasswordLockedHashesNothing(t *testing.T) {
 
 // Wrong passwords that land at once past the limit record the lock once.
 func TestConcurrentFailuresAuditLockOnce(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addPasswordAccount("ops", "ops-password-123", false)
 	for i := range 4 {
@@ -779,6 +791,7 @@ func TestConcurrentFailuresAuditLockOnce(t *testing.T) {
 // A wrong current password at a change counts towards the lock; while
 // locked, even the right one is refused.
 func TestChangePasswordCountsTowardsLock(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	acc := e.addPasswordAccount("ops", "ops-password-123", false)
 	c := e.signInPassword("ops", "ops-password-123")

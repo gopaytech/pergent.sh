@@ -56,6 +56,7 @@ func serveGitLabApprovals(env *testEnv, required int) {
 // Reconcile records single_approval where it warns, and removes it once two
 // approvals are needed. A read that fails leaves the item as it was.
 func TestAttentionSingleApprovalGitLab(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	key := testInstance + "|" + testProjectPath + "|single_approval"
 
@@ -79,6 +80,7 @@ func TestAttentionSingleApprovalGitLab(t *testing.T) {
 }
 
 func TestAttentionSingleApprovalGitHub(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	serveProject(env, testProjectID, testProjectPath)
@@ -106,6 +108,7 @@ func TestAttentionSingleApprovalGitHub(t *testing.T) {
 
 // An approve App that isn't installed is recorded, and removed once it is.
 func TestAttentionApproverUnreachableApp(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	serveProject(env, testProjectID, testProjectPath)
@@ -126,6 +129,7 @@ func TestAttentionApproverUnreachableApp(t *testing.T) {
 
 // An instance on the approve token says "bot", not "App".
 func TestAttentionApproverUnreachableToken(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	cfg := env.Engine.Config
@@ -190,6 +194,7 @@ func oomRun(t *testing.T, env *testEnv, iid int64) {
 // The watcher records out_of_memory from the second OOMKilled failure in 7
 // days (with the count) and reconcile removes it once the failures age out.
 func TestAttentionOutOfMemory(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	key := testInstance + "|" + testProjectPath + "|out_of_memory"
 
@@ -223,6 +228,7 @@ func TestAttentionOutOfMemory(t *testing.T) {
 
 // Other failures don't count.
 func TestAttentionOutOfMemoryIgnoresOtherFailures(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	for iid := int64(1); iid <= 3; iid++ {
 		id := env.Dispatched(iid, sha(byte('a'+iid)))
@@ -248,6 +254,7 @@ func cloneFailedRun(t *testing.T, env *testEnv, iid int64) {
 // step in 7 days, and reconcile removes it once the failures age out. A
 // failure at another step doesn't count. [CI]
 func TestCloneFailingAttention(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	key := testInstance + "|" + testProjectPath + "|clone_failing"
 
@@ -288,6 +295,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 // The token-expiry recorder stores the instance-wide item with the date, and
 // removes it when the expiry moves beyond 14 days.
 func TestTokenExpiryAttention(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	note := TokenExpiryRecorder(env.Store, ghInstance, nil)
 	key := ghInstance + "||token_expiry"
@@ -392,6 +400,7 @@ func TestTokenExpiryRecorderRetries(t *testing.T) {
 
 // Switching a repository off removes its items, and only its own.
 func TestAttentionClearedWhenRepoSwitchedOff(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	env.SeedProject(func(p *store.Project) {
@@ -418,6 +427,7 @@ func TestAttentionClearedWhenRepoSwitchedOff(t *testing.T) {
 
 // The same for a GitHub repository switched off.
 func TestAttentionClearedWhenGitHubRepoSwitchedOff(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	addGitHub(t, env, true)
 	serveProject(env, testProjectID, testProjectPath)
@@ -437,6 +447,7 @@ func TestAttentionClearedWhenGitHubRepoSwitchedOff(t *testing.T) {
 // With the approve side unable to reach the repository the approval check
 // can't run, so its item goes.
 func TestAttentionUnreachableClearsSingleApproval(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	serveProject(env, testProjectID, testProjectPath)
@@ -455,6 +466,7 @@ func TestAttentionUnreachableClearsSingleApproval(t *testing.T) {
 
 // A store that fails costs a line at info and nothing else.
 func TestAttentionStoreErrorIsBestEffort(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	dead, cancel := context.WithCancel(context.Background())
 	cancel() // every store call under it fails

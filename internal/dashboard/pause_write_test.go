@@ -31,6 +31,7 @@ func enabledBody(on bool) string {
 // The switch pauses a repository and resumes it, its settings kept, each
 // with its own audit entry and a reconcile of that repository.
 func TestPauseAndResume(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.Approve = ptr(false) })
 	c := e.userOnMain(true)
@@ -67,6 +68,7 @@ func TestPauseAndResume(t *testing.T) {
 
 // The path is matched ignoring case; the reconcile names the stored spelling.
 func TestPauseResumeIgnoresCase(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true)
@@ -83,6 +85,7 @@ func TestPauseResumeIgnoresCase(t *testing.T) {
 
 // The same state again changes nothing: no audit entry, no reconcile.
 func TestPauseTwiceIsQuiet(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true)
@@ -101,6 +104,7 @@ func TestPauseTwiceIsQuiet(t *testing.T) {
 // that the user can't see, 404; a resume while the instance is being removed
 // is 409.
 func TestPauseRefusals(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.userOnMain(true)
@@ -134,6 +138,7 @@ func TestPauseRefusals(t *testing.T) {
 // POST /api/repositories on a paused repository resumes it with its
 // settings: 200, not 201. Then it is on, so a second POST is 409.
 func TestSwitchOnResumesPausedRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
 	e.pausedRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.Approve = ptr(false) })
@@ -165,6 +170,7 @@ func TestSwitchOnResumesPausedRepo(t *testing.T) {
 
 // DELETE removes a repository, running or paused, with its team links.
 func TestRemoveRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.pausedRepo("main", "acme/tools", nil)

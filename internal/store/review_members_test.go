@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -142,6 +143,7 @@ func reviewRootOf(t *testing.T, s *Store, id string) string {
 }
 
 func TestStartMultiReviewWaitsAndQueues(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	split := multiSplit(3, map[int]string{3: "no different model left"})
 	id := multiRun(t, s, mr1, "a1", split)
@@ -205,6 +207,7 @@ func TestStartMultiReviewWaitsAndQueues(t *testing.T) {
 // A judge chain with no entries is stored as it is: the review runs with
 // --no-judge.
 func TestStartMultiReviewEmptyJudge(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	split := multiSplit(2, nil)
 	split.Judge = FrozenChain{Scope: "repo"}
@@ -218,6 +221,7 @@ func TestStartMultiReviewEmptyJudge(t *testing.T) {
 // A split must list reviewer 1 first, queued, then the others in number
 // order, at most 5. A bad split writes nothing.
 func TestStartMultiReviewRefusesBadSplit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "a1")
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
@@ -250,6 +254,7 @@ func TestStartMultiReviewRefusesBadSplit(t *testing.T) {
 // A review is split once: a second call, a superseded run, a run with a Job
 // and a run released for the judge (dispatched_at kept) are not split.
 func TestStartMultiReviewOnce(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	if started, err := s.StartMultiReview(ctx, id, multiSplit(3, nil), t0); err != nil || started {
@@ -304,6 +309,7 @@ func TestStartMultiReviewOnce(t *testing.T) {
 // A fallback attempt keeps the reviewer's frozen chain and points at its
 // first attempt.
 func TestReviewMemberChainCopiedOnFallback(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	split := multiSplit(3, nil)
 	id := multiRun(t, s, mr1, "a1", split)
@@ -376,6 +382,7 @@ func TestReviewMemberChainCopiedOnFallback(t *testing.T) {
 }
 
 func TestReleaseMultiReviewOneDone(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(3, nil))
 	failedReviewer(t, s, reviewerOf(t, s, id, 1).ID, "R1 broke")
@@ -405,6 +412,7 @@ func TestReleaseMultiReviewOneDone(t *testing.T) {
 // name, in number order. A failed reviewer that kept a partial result and a
 // skipped reviewer are failed too: never a pass.
 func TestReleaseMultiReviewAllFailed(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(4, map[int]string{3: "no usable entry"}))
 
@@ -464,6 +472,7 @@ func TestReleaseMultiReviewAllFailed(t *testing.T) {
 // Reviewer 1 failed and reviewer 2 was skipped: no reviewer is done, so the
 // review fails.
 func TestReleaseMultiReviewSkippedOnly(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, map[int]string{2: "no different model left"}))
 	failedReviewer(t, s, reviewerOf(t, s, id, 1).ID, "R1 broke")
@@ -478,6 +487,7 @@ func TestReleaseMultiReviewSkippedOnly(t *testing.T) {
 }
 
 func TestReleaseMultiReviewWaitsForLive(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(3, map[int]string{3: "the token quota"}))
 	check := func(when string) {
@@ -517,6 +527,7 @@ func TestReleaseMultiReviewWaitsForLive(t *testing.T) {
 // longer once it is released. Another review with live members, and a held
 // run, are not listed.
 func TestMultiReviewsToRelease(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	other := multiRun(t, s, mr2, "b1", multiSplit(2, nil))
@@ -550,6 +561,7 @@ func TestMultiReviewsToRelease(t *testing.T) {
 }
 
 func TestReviewMembersToSettle(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	a, b := reviewerOf(t, s, id, 1), reviewerOf(t, s, id, 2)
@@ -583,6 +595,7 @@ func TestReviewMembersToSettle(t *testing.T) {
 
 // ReviewMembersToSettle takes at most limit members, the oldest reports first.
 func TestReviewMembersToSettleLimit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	var want []string
 	for i, mr := range []MRKey{mr1, mr2, mr3} {
@@ -606,6 +619,7 @@ func TestReviewMembersToSettleLimit(t *testing.T) {
 // A member is settled, and its result turned into a failure, only while its
 // run still waits for it.
 func TestSettleReviewMemberNeedsWaitingRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(3, nil))
 	for n := 1; n <= 3; n++ {
@@ -631,6 +645,7 @@ func TestSettleReviewMemberNeedsWaitingRun(t *testing.T) {
 }
 
 func TestFailReviewMemberKeepingResult(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	a, b := reviewerOf(t, s, id, 1), reviewerOf(t, s, id, 2)
@@ -660,6 +675,7 @@ func TestFailReviewMemberKeepingResult(t *testing.T) {
 }
 
 func TestCountRunningCountsReviewMembers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	dispatched(t, s, mr2, "b1", "tok")
 	id := multiRun(t, s, mr1, "a1", multiSplit(3, map[int]string{3: "no usable entry"}))
@@ -681,6 +697,7 @@ func TestCountRunningCountsReviewMembers(t *testing.T) {
 // A claim takes at most limit members; a member whose run no longer waits,
 // a skipped one, or one of a skipped instance, is never claimed.
 func TestClaimQueuedReviewMembersSkipsUnconnected(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	other := MRKey{Instance: "https://other.example.com", ProjectID: 1, IID: 1}
 	id := multiRun(t, s, other, "a1", multiSplit(3, map[int]string{3: "no usable entry"}))
@@ -709,6 +726,7 @@ func TestClaimQueuedReviewMembersSkipsUnconnected(t *testing.T) {
 
 // 4 dispatchers never claim the same member, nor one whose run is gone.
 func TestClaimQueuedReviewMembersOnce(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	gone := multiRun(t, s, mr1, "a1", multiSplit(3, nil))
 	enqueue(t, s, mr1, "a2") // supersedes the waiting run
@@ -748,6 +766,7 @@ func TestClaimQueuedReviewMembersOnce(t *testing.T) {
 
 // One review's 3 queued members and limit 1 give one.
 func TestClaimQueuedReviewMembersLimit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(3, nil))
 	if got, err := s.ClaimQueuedReviewMembers(ctx, 1, t0); err != nil || len(got) != 1 {
@@ -768,6 +787,7 @@ func TestClaimQueuedReviewMembersLimit(t *testing.T) {
 }
 
 func TestMarkReviewMemberDispatchedFirst(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(3, nil))
 	a, b, c := reviewerOf(t, s, id, 1), reviewerOf(t, s, id, 2), reviewerOf(t, s, id, 3)
@@ -807,6 +827,7 @@ func TestMarkReviewMemberDispatchedFirst(t *testing.T) {
 }
 
 func TestReviewMemberResultToken(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	a, b := reviewerOf(t, s, id, 1), reviewerOf(t, s, id, 2)
@@ -870,6 +891,7 @@ func TestReviewMemberResultToken(t *testing.T) {
 }
 
 func TestReviewMemberResultDiscardedAfterSupersede(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	a, b := reviewerOf(t, s, id, 1), reviewerOf(t, s, id, 2)
@@ -893,6 +915,7 @@ func TestReviewMemberResultDiscardedAfterSupersede(t *testing.T) {
 }
 
 func TestSupersedeMultiReviewSupersedesMembers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(3, map[int]string{3: "no usable entry"}))
 	a, b := reviewerOf(t, s, id, 1), reviewerOf(t, s, id, 2)
@@ -942,6 +965,7 @@ func TestSupersedeMultiReviewSupersedesMembers(t *testing.T) {
 }
 
 func TestMultiReviewRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	if r, found, err := s.MultiReviewRun(ctx, id); err != nil || !found || r.ID != id || r.State != Waiting {
@@ -975,6 +999,7 @@ func TestMultiReviewRun(t *testing.T) {
 }
 
 func TestSupersedeOrphanReviewMembers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(3, map[int]string{3: "no usable entry"}))
 	keep := multiRun(t, s, mr2, "b1", multiSplit(2, nil))
@@ -1003,9 +1028,22 @@ func TestSupersedeOrphanReviewMembers(t *testing.T) {
 	}
 }
 
+// reviewerResult is ReviewerResultAuth's body and found, the answer the
+// judge Job gets once its token is accepted.
+func reviewerResult(s *Store, runID, token string, n int) ([]byte, bool, error) {
+	return reviewerResultAt(s, runID, token, n, time.Now())
+}
+
+// reviewerResultAt is reviewerResult with the token's expiry checked at now.
+func reviewerResultAt(s *Store, runID, token string, n int, now time.Time) ([]byte, bool, error) {
+	body, _, found, err := s.ReviewerResultAuthAt(ctx, runID, token, n, now)
+	return body, found, err
+}
+
 // ReviewerResult serves reviewer n's newest attempt that is done, or failed
 // with its result kept, to the judge run holding its live token.
 func TestReviewerResult(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(5, map[int]string{5: "no usable entry"}))
 	// 1: failed with no result. 2: done. 3: failed, its result kept.
@@ -1026,7 +1064,7 @@ func TestReviewerResult(t *testing.T) {
 	failedReviewer(t, s, next, "R4b broke")
 
 	// The run waits: no token yet.
-	if body, found, err := s.ReviewerResult(ctx, id, "tok-p", 2); err != nil || found || body != nil {
+	if body, found, err := reviewerResult(s, id, "tok-p", 2); err != nil || found || body != nil {
 		t.Errorf("ReviewerResult before the judge = %s, %v, %v; want nothing", body, found, err)
 	}
 	if _, authed, _, err := s.ReviewerResultAuth(ctx, id, "tok-p", 2); err != nil || authed {
@@ -1043,7 +1081,7 @@ func TestReviewerResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n, want := range map[int]string{2: `{"reviewer": 2}`, 3: `{"reviewer": 3}`} {
-		if body, found, err := s.ReviewerResult(ctx, id, "tok-p", n); err != nil || !found || string(body) != want {
+		if body, found, err := reviewerResult(s, id, "tok-p", n); err != nil || !found || string(body) != want {
 			t.Errorf("ReviewerResult(%d) = %s, %v, %v; want %s", n, body, found, err, want)
 		}
 	}
@@ -1064,11 +1102,11 @@ func TestReviewerResult(t *testing.T) {
 		{"unknown run", "00000000-0000-0000-0000-000000000000", "tok-p", 2},
 		{"bad id", "x", "tok-p", 2},
 	} {
-		if body, found, err := s.ReviewerResult(ctx, c.run, c.token, c.n); err != nil || found || body != nil {
+		if body, found, err := reviewerResult(s, c.run, c.token, c.n); err != nil || found || body != nil {
 			t.Errorf("%s: ReviewerResult = %s, %v, %v; want nothing", c.name, body, found, err)
 		}
 	}
-	if _, found, err := s.ReviewerResultAt(ctx, id, "tok-p", 2, time.Now().Add(2*time.Hour)); err != nil || found {
+	if _, found, err := reviewerResultAt(s, id, "tok-p", 2, time.Now().Add(2*time.Hour)); err != nil || found {
 		t.Errorf("expired token: found %v, %v; want nothing", found, err)
 	}
 	// ReviewerResultAuth tells a refused token (authed false) from a
@@ -1107,15 +1145,16 @@ func TestReviewerResult(t *testing.T) {
 		t.Fatal(retry, created, err)
 	}
 	reportAttemptToRunning(t, s, retry, "tok-p2")
-	if body, found, err := s.ReviewerResult(ctx, retry, "tok-p2", 3); err != nil || !found || string(body) != `{"reviewer": 3}` {
+	if body, found, err := reviewerResult(s, retry, "tok-p2", 3); err != nil || !found || string(body) != `{"reviewer": 3}` {
 		t.Errorf("later attempt: ReviewerResult = %s, %v, %v; want the root's reviewer 3", body, found, err)
 	}
-	if _, found, err := s.ReviewerResult(ctx, id, "tok-p", 2); err != nil || found {
+	if _, found, err := reviewerResult(s, id, "tok-p", 2); err != nil || found {
 		t.Errorf("superseded first attempt: found %v, %v; want nothing", found, err)
 	}
 }
 
 func TestEnqueueJudgeRetry(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	doneReviewer(t, s, reviewerOf(t, s, id, 1).ID, `{}`)
@@ -1162,6 +1201,7 @@ func TestEnqueueJudgeRetry(t *testing.T) {
 }
 
 func TestSetJudgeRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "a1")
 	if _, found, err := s.JudgeOf(ctx, id); err != nil || found {
@@ -1204,6 +1244,7 @@ func TestSetJudgeRoundTrip(t *testing.T) {
 }
 
 func TestPruneRunLogsPrunesReviewMembers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	a, b := reviewerOf(t, s, id, 1), reviewerOf(t, s, id, 2)
@@ -1256,6 +1297,7 @@ func TestPruneRunLogsPrunesReviewMembers(t *testing.T) {
 // ReviewMembersToLog lists the reported, done, failed and fell-back members
 // with a Job and no log, reported since the given time.
 func TestReviewMembersToLog(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	a, b := reviewerOf(t, s, id, 1), reviewerOf(t, s, id, 2)
@@ -1300,6 +1342,7 @@ func TestReviewMembersToLog(t *testing.T) {
 }
 
 func TestRecordMultiReviewOffOnce(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "a1")
 	if _, ok, err := s.MultiReviewOffReason(ctx, id); err != nil || ok {
@@ -1382,6 +1425,7 @@ func TestRecordMultiReviewOffOnce(t *testing.T) {
 // A multi review started on a later attempt is read and released by that
 // attempt's id as well as by the first run's.
 func TestReleaseMultiReviewByLaterAttempt(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	root := reported(t, s, mr1, "a1", `{}`)
 	next, created, err := s.EnqueueAttempt(ctx, getRun(t, s, root), quotaMark("m1"))
@@ -1421,6 +1465,7 @@ func TestReleaseMultiReviewByLaterAttempt(t *testing.T) {
 }
 
 func TestRecoverUnlaunchedReviewMembersRequeues(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	a, b := reviewerOf(t, s, id, 1), reviewerOf(t, s, id, 2)
@@ -1465,6 +1510,7 @@ func TestRecoverUnlaunchedReviewMembersRequeues(t *testing.T) {
 
 // 3 dispatches at once: one is first. 2 posts of a result at once: one is stored.
 func TestReviewMemberDispatchAndResultRaces(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := 0; i < 5; i++ {
 		id := multiRun(t, s, MRKey{Instance: mr1.Instance, ProjectID: 8, IID: int64(i + 1)}, "h", multiSplit(3, nil))
@@ -1513,6 +1559,7 @@ func TestReviewMemberDispatchAndResultRaces(t *testing.T) {
 // A later attempt of the judge takes what the split run recorded; a first
 // run, or an attempt that is not running, is refused.
 func TestInheritMultiReviewSplit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	root := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET quiet_reviews = true, provider = 'openai', rules_hash = 'rh', built_in_rules_note = 'left out',
@@ -1562,6 +1609,7 @@ func TestInheritMultiReviewSplit(t *testing.T) {
 // to wait for its members. A run that is not claimed, or has a Job, is left
 // alone.
 func TestWaitForReviewMembers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := multiRun(t, s, mr1, "a1", multiSplit(2, nil))
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'queued', skip_reason = '', not_before = NULL WHERE id = $1::uuid`, id); err != nil {
@@ -1594,6 +1642,7 @@ func TestWaitForReviewMembers(t *testing.T) {
 // Nothing in the review member code writes panel_members: a legacy panel
 // off row of the review stays as it is through a whole multi review.
 func TestPanelMembersUntouched(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "a1")
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
@@ -1658,5 +1707,38 @@ func reportAttemptToRunning(t *testing.T, s *Store, id, token string) {
 	}
 	if err := s.MarkDispatched(ctx, id, "job-"+token, "base", "start", hash(token), time.Now().Add(time.Hour), t0); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// EntryName names an attempt by the entry at its position in its frozen
+// chain, else by the name its dispatch recorded, else by the chain's first
+// entry: the one rule of the MR comment, the failure text and the run page.
+func TestReviewMemberEntryName(t *testing.T) {
+	chain := FrozenChain{Entries: []FrozenEntry{{Name: "first"}, {Name: ""}, {Name: "third"}}}
+	for _, tc := range []struct {
+		name string
+		m    ReviewMember
+		want string
+	}{
+		{"at its position", ReviewMember{Chain: chain, Entry: RunEntry{Position: 3, Name: "recorded"}}, "third"},
+		{"no frozen name there", ReviewMember{Chain: chain, Entry: RunEntry{Position: 2, Name: "recorded"}}, "recorded"},
+		{"never started", ReviewMember{Chain: chain}, "first"},
+		{"out of range", ReviewMember{Chain: chain, Entry: RunEntry{Position: 9, Name: "recorded"}}, "recorded"},
+		{"no chain", ReviewMember{Entry: RunEntry{Position: 1, Name: "recorded"}}, "recorded"},
+		{"nothing", ReviewMember{}, ""},
+	} {
+		if got := tc.m.EntryName(); got != tc.want {
+			t.Errorf("%s: EntryName = %q; want %q", tc.name, got, tc.want)
+		}
+	}
+	raw, err := json.Marshal(chain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := frozenEntryName(raw, 3, "recorded"); got != "third" {
+		t.Errorf("frozenEntryName = %q; want third", got)
+	}
+	if got := frozenEntryName([]byte("not json"), 1, "recorded"); got != "recorded" {
+		t.Errorf("frozenEntryName of a bad chain = %q; want recorded", got)
 	}
 }

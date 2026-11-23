@@ -89,6 +89,7 @@ func woken(env *testEnv) bool {
 }
 
 func TestWatchReportsOOM(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	now := env.Now()
@@ -105,6 +106,7 @@ func TestWatchReportsOOM(t *testing.T) {
 }
 
 func TestWatchWaitsGraceBeforeReporting(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	finished := env.Now()
@@ -124,6 +126,7 @@ func TestWatchWaitsGraceBeforeReporting(t *testing.T) {
 }
 
 func TestWatchCompleteWithoutResult(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	now := env.Now()
@@ -135,6 +138,7 @@ func TestWatchCompleteWithoutResult(t *testing.T) {
 }
 
 func TestWatchStuckImagePull(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	putJob(t, env, id, env.Now().Add(-6*time.Minute),
@@ -152,6 +156,7 @@ func TestWatchStuckImagePull(t *testing.T) {
 }
 
 func TestWatchStuckDeleteFailsRetriesNextPass(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	putJob(t, env, id, env.Now().Add(-6*time.Minute),
@@ -176,6 +181,7 @@ func TestWatchStuckDeleteFailsRetriesNextPass(t *testing.T) {
 }
 
 func TestWatchJobDisappeared(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a')) // dispatched at env.Now(), no Job in the cluster
 	dispatchedAt := env.Now()
@@ -190,6 +196,7 @@ func TestWatchJobDisappeared(t *testing.T) {
 }
 
 func TestWatchRecordsCloneSeconds(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	start := env.Now().Add(-3 * time.Minute)
@@ -209,6 +216,7 @@ func TestWatchRecordsCloneSeconds(t *testing.T) {
 // its time is not the repository's own, and the next review that clones
 // nothing else must not get a longer deadline for it. [CI]
 func TestWatchDoesNotRecordTheCloneTimeOfALinkedRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	if err := env.Store.SetRunLinks(env.ctx, id, []store.Link{{Target: "acme/api", CanBlock: true}}); err != nil {
@@ -230,6 +238,7 @@ func TestWatchDoesNotRecordTheCloneTimeOfALinkedRun(t *testing.T) {
 // A result that arrives while the watcher looks wins: the run is not reported
 // again and nothing fails.
 func TestWatchResultWonTheRace(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	now := env.Now()
@@ -251,6 +260,7 @@ func TestWatchResultWonTheRace(t *testing.T) {
 
 // One Job the cluster can't be asked about doesn't stop the others.
 func TestWatchInspectErrorSkipsRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	broken := env.Dispatched(1, sha('a'))
 	gone := env.Dispatched(2, sha('a'))
@@ -336,6 +346,7 @@ func storedDiagnostics(t *testing.T, env *testEnv, id string) (store.Diagnostics
 // minutes. The scheduler's message is the admin-only detail, the pod state is
 // kept, and both are taken before the Job is deleted. [CI]
 func TestWatchStoresStepAndDetail(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	const message = "0/3 nodes are available: 3 Insufficient memory."
@@ -371,6 +382,7 @@ func TestWatchStoresStepAndDetail(t *testing.T) {
 // The admin-only detail is redacted like the log; with the Job's Secret
 // unreadable it is left out, never stored raw. [CI]
 func TestWatchRedactsDetail(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	withSecret := env.Dispatched(1, sha('a'))
 	without := env.Dispatched(2, sha('a'))
@@ -396,6 +408,7 @@ func TestWatchRedactsDetail(t *testing.T) {
 // The deadline kills the pod, so the step comes from what earlier passes saw:
 // a checkout seen done means the deadline passed during the review. [CI]
 func TestWatchRefinesDeadlineStep(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	if err := env.Store.AdvanceCheckoutSeen(env.ctx, id, 2); err != nil {
@@ -414,6 +427,7 @@ func TestWatchRefinesDeadlineStep(t *testing.T) {
 // Without anything seen earlier, the deadline's step is unknown; a checkout
 // the deadline killed is the clone, whatever was seen. [CI]
 func TestWatchDeadlineStepWithoutProgress(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	unseen := env.Dispatched(1, sha('a'))
 	putBareJob(t, env, unseen, env.Now().Add(-time.Hour), jobCond(batchv1.JobFailed, "DeadlineExceeded", env.Now().Add(-2*time.Minute)))
@@ -437,6 +451,7 @@ func TestWatchDeadlineStepWithoutProgress(t *testing.T) {
 
 // Each pass records the Job's pod and how far its checkout got. [CI]
 func TestWatchRecordsPodAndProgress(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Dispatched(1, sha('a'))
 	now := env.Now()
@@ -465,6 +480,7 @@ func TestWatchRecordsPodAndProgress(t *testing.T) {
 
 // The watcher's own failures name their step. [CI]
 func TestWatchFailureSteps(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gone := env.Dispatched(1, sha('a'))
 	quiet := env.Dispatched(2, sha('a'))
@@ -484,6 +500,7 @@ func TestWatchFailureSteps(t *testing.T) {
 // A run claimed but never given a Job (pergent.sh stopped in between) goes
 // back to the queue once its claim is five minutes old.
 func TestWatchRecoversUnlaunchedRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	stranded := env.Enqueue(1, sha('a'))
 	if _, err := env.Store.ClaimQueued(env.ctx, 10, env.Now().Add(-6*time.Minute)); err != nil {

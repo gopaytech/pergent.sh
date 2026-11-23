@@ -703,6 +703,7 @@ func workFates(t *testing.T, env *testEnv) {
 const fpFirst = "aaaaaaaaaaaa"
 
 func TestWorkFatesStoresFates(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12), fateFinding("bbbbbbbbbbbb", "suggestion", 40))
 	env.reviewOf(t, 1, sha('c'))
@@ -742,6 +743,7 @@ func TestWorkFatesStoresFates(t *testing.T) {
 
 // The platform, not the webhook, says how the change ended.
 func TestWorkFatesTakesTheEndFromThePlatform(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	serveChange(env, 1, sha('a'), "closed", 55)
@@ -759,6 +761,7 @@ func TestWorkFatesTakesTheEndFromThePlatform(t *testing.T) {
 // A change nobody reviewed has no findings: its job is finished with no
 // platform call.
 func TestWorkFatesNeverReviewedCostsNothing(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	requestFates(t, env, 1, true)
 
@@ -773,6 +776,7 @@ func TestWorkFatesNeverReviewedCostsNothing(t *testing.T) {
 }
 
 func TestWorkFatesReopenedDropsTheJob(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	serveChange(env, 1, sha('a'), "opened", 55)
@@ -789,6 +793,7 @@ func TestWorkFatesReopenedDropsTheJob(t *testing.T) {
 }
 
 func TestWorkFatesTransientErrorRetriesAndStoresNothing(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	env.reviewOf(t, 1, sha('c'))
@@ -826,6 +831,7 @@ func TestWorkFatesTransientErrorRetriesAndStoresNothing(t *testing.T) {
 }
 
 func TestWorkFatesStopsAfterFiveAttempts(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	env.reviewOf(t, 1, sha('c'))
@@ -862,6 +868,7 @@ func TestWorkFatesStopsAfterFiveAttempts(t *testing.T) {
 }
 
 func TestWorkFatesForcePushIsWentAway(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	env.reviewOf(t, 1, sha('c'))
@@ -880,6 +887,7 @@ func TestWorkFatesForcePushIsWentAway(t *testing.T) {
 }
 
 func TestWorkFatesBotAuthor(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		serve func(env *testEnv)
@@ -933,6 +941,7 @@ func TestWorkFatesBotAuthor(t *testing.T) {
 // When GitLab can't be asked whether the author is a bot, the change is not
 // counted as a person's: the job is tried again, and nothing is stored.
 func TestWorkFatesBotRequestFailsIsTriedAgain(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	serveChange(env, 1, sha('a'), "merged", 55)
@@ -986,6 +995,7 @@ func TestWorkFatesBudget(t *testing.T) {
 }
 
 func TestFatesSweepFindsAMissedMerge(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	serveChange(env, 1, sha('a'), "merged", 55)
@@ -1010,6 +1020,7 @@ func TestFatesSweepFindsAMissedMerge(t *testing.T) {
 
 // An open change is only marked as looked at.
 func TestFatesSweepOpenChangeIsLeftAlone(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	serveChange(env, 1, sha('a'), "opened", 55)
@@ -1032,6 +1043,7 @@ func TestFatesSweepOpenChangeIsLeftAlone(t *testing.T) {
 // A repository not switched on (here, no project row) is marked as looked
 // at, with no platform call.
 func TestFatesSweepRepositoryNotSwitchedOn(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	other := store.MRKey{Instance: testInstance, ProjectID: 9, IID: 1}
 	decide(t, env, other, "acme/other", sha('a'), resultFor(t, sha('a'), fateSkill(t, "no_blocking_issues")))
@@ -1055,6 +1067,7 @@ func TestFatesSweepRepositoryNotSwitchedOn(t *testing.T) {
 // One platform call per repository per sweep, however many of its changes
 // have a review and no fates; the next sweep looks at another.
 func TestFatesSweepOneCallPerRepository(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	for iid := int64(1); iid <= 3; iid++ {
 		env.reviewOf(t, iid, sha('a'), fateFinding(fpFirst, "blocking", 12))
@@ -1086,6 +1099,7 @@ func TestFatesSweepOneCallPerRepository(t *testing.T) {
 }
 
 func TestPruneFatesDeletesAYearOld(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	old := env.Now().Add(-fateRetention - time.Hour)
 	if err := env.Store.RequestFates(env.ctx, env.MRKey(1), testProjectPath, true, old); err != nil {
@@ -1180,6 +1194,7 @@ func TestWorkFatesStoresAfterTheBudgetRanOut(t *testing.T) {
 // A webhook that asks again during a pass is not a failure: nothing is
 // stored for the old request and the new one is worked out next.
 func TestWorkFatesRequestedAgainMeanwhile(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	env.reviewOf(t, 1, sha('c'))
@@ -1238,6 +1253,7 @@ func TestWorkFatesStartsNothingWithLittleTimeLeft(t *testing.T) {
 // An instance with no platform right now is no fault of the job: it waits a
 // minute without losing an attempt.
 func TestWorkFatesNoPlatformKeepsTheAttempts(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	requestFates(t, env, 1, true)
@@ -1253,6 +1269,7 @@ func TestWorkFatesNoPlatformKeepsTheAttempts(t *testing.T) {
 
 // One bad change can't take the loop, and the reviews it runs with, down.
 func TestWorkFatesPanicIsAFailedAttempt(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	env.Engine.Platforms.Set(testInstance, Platform{Kind: config.PlatformGitHub, Forge: &fakeChangeForge{panics: true}})
@@ -1269,6 +1286,7 @@ func TestWorkFatesPanicIsAFailedAttempt(t *testing.T) {
 }
 
 func TestFatesSweepFindsAClosedChange(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	serveChange(env, 1, sha('a'), "closed", 55)
@@ -1283,6 +1301,7 @@ func TestFatesSweepFindsAClosedChange(t *testing.T) {
 // The sweep reads the repository's current path from the project, not from the
 // old run: a renamed repository isn't taken for one that is switched off.
 func TestFatesSweepFollowsARenamedRepository(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	decide(t, env, env.MRKey(1), "acme/old-name", sha('a'), resultFor(t, sha('a'), fateSkill(t, "no_blocking_issues")))
 	serveChange(env, 1, sha('a'), "merged", 55)

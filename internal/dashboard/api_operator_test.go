@@ -176,6 +176,7 @@ func errorOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 // its webhook secret, registers and connects it; its webhooks are accepted
 // with the generated secret and nothing else; and no secret comes back.
 func TestAddGitLabInstance(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 
@@ -301,6 +302,7 @@ func (q *hookQueue) Republish(context.Context, store.MRKey, string, string) (boo
 
 // An instance's webhook URL comes from public_url, its platform and its name.
 func TestInstanceViewWebhookURL(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(c *config.Config) { c.PublicURL = "https://pergent.example.com" })
 	view := e.addLab(e.operator())
 	if want := "https://pergent.example.com/webhooks/gitlab/lab"; view.WebhookURL != want {
@@ -311,6 +313,7 @@ func TestInstanceViewWebhookURL(t *testing.T) {
 // A GitHub instance is added with its Apps' keys and the webhook secret the
 // operator entered; the approve App shows as "app".
 func TestAddGitHubInstance(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	view := decode[InstanceAdminView](t, e.sendJSON(c, "POST", "/api/admin/instances", hubBody(nil)), "POST", http.StatusCreated)
@@ -345,6 +348,7 @@ func TestAddGitHubInstance(t *testing.T) {
 // "review_app", the review App's ID as approveAppID, and neither approve
 // secret taken, checked or connected.
 func TestAddGitHubInstanceReviewAppApproves(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	body := hubBody(func(m map[string]any) {
@@ -409,6 +413,7 @@ func TestAddGitHubInstanceReviewAppApproves(t *testing.T) {
 // An instance of the config whose review App approves lists "review_app"
 // and takes no approve secret.
 func TestConfigInstanceReviewAppApprover(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(c *config.Config) {
 		c.GitHub[0].ReviewApp = config.App{AppID: 5, PrivateKeyEnv: "PERGENT_TEST_OWN_KEY"}
 		c.GitHub[0].ApproveWithReviewApp = true
@@ -429,6 +434,7 @@ func TestConfigInstanceReviewAppApprover(t *testing.T) {
 // A GitLab instance added to approve with its review bot takes no approve
 // token, refuses one, and stays that way once stored.
 func TestAddInstanceApproveWithReviewBot(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	body := labBody(func(b map[string]any) {
@@ -458,6 +464,7 @@ func TestAddInstanceApproveWithReviewBot(t *testing.T) {
 
 // Only a GitLab instance has a review bot.
 func TestAddGitHubInstanceRefusesApproveWithReviewBot(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	rec := e.sendJSON(c, "POST", "/api/admin/instances", map[string]any{"name": "hub", "platform": "github",
@@ -471,6 +478,7 @@ func TestAddGitHubInstanceRefusesApproveWithReviewBot(t *testing.T) {
 // A failed check is a 400 with its reason, and nothing is stored, registered
 // or connected; a secret the reason echoes is hidden.
 func TestAddInstanceCheckFails(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.conn.checkErr = func(inst instances.Instance, s instances.Secrets) error {
@@ -503,6 +511,7 @@ func TestAddInstanceCheckFails(t *testing.T) {
 
 // What the operator sends is checked before anything reaches the platform.
 func TestAddInstanceValidation(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	secrets := func(m map[string]string) func(map[string]any) {
@@ -578,6 +587,7 @@ func TestAddInstanceValidation(t *testing.T) {
 // Secrets can change, checked as a whole with the secrets already stored; the
 // address and App IDs can't. There is no OAuth client to change any more.
 func TestUpdateInstance(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	before := e.addLab(c)
@@ -647,6 +657,7 @@ func TestUpdateInstance(t *testing.T) {
 }
 
 func TestUpdateInstanceImmutable(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.addLab(c)
@@ -678,6 +689,7 @@ func TestUpdateInstanceImmutable(t *testing.T) {
 
 // The config's instances can be listed but not changed or removed.
 func TestConfigInstanceReadOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	for _, name := range []string{"main", "gh"} {
@@ -703,6 +715,7 @@ func TestConfigInstanceReadOnly(t *testing.T) {
 // team, a user on no team and nobody signed in get nothing, and every admin
 // (a local one or an SSO one) may.
 func TestOnlyAdminsTouchInstances(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	op := e.operator()
 	e.addLab(op)
@@ -793,6 +806,7 @@ func (e *env) labSession(userID int64, name string) *http.Cookie {
 // finish; it is idempotent, and the instance stays registered, removing,
 // until the engine deletes it.
 func TestRemoveInstance(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.addLab(c)
@@ -897,6 +911,7 @@ func TestRemoveInstance(t *testing.T) {
 // An instance with no repository still gets a pass of the engine, which is
 // what finishes the removal.
 func TestRemoveInstanceWithoutRepositoriesAsksForAPass(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.addLab(c)
@@ -915,6 +930,7 @@ func TestRemoveInstanceWithoutRepositoriesAsksForAPass(t *testing.T) {
 // first time and never sends it back, its provider and model are fixed, and
 // the first entry is the default.
 func TestModelsAddAndChange(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	v := getJSON[ModelsAdminView](e, c, "/api/admin/models")
@@ -1074,6 +1090,7 @@ func sameDefaults(a, b DefaultsView) bool {
 // The view says what the config gives and which defaults were saved here, so
 // the form can show the first and keep the rest following it.
 func TestDefaultsViewConfigAndPinned(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(c *config.Config) { c.Jobs.Timeout = 30 * time.Minute })
 	admin := e.userOnMain(true, "acme/widgets")
 
@@ -1111,6 +1128,7 @@ func TestDefaultsViewConfigAndPinned(t *testing.T) {
 // The default step limit is stored with the other defaults, and null clears
 // it back to the built-in one.
 func TestDefaultsMaxTurns(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 
@@ -1142,6 +1160,7 @@ func TestDefaultsMaxTurns(t *testing.T) {
 // messages of a repository's settings; they apply to the repositories
 // switched on in the dashboard, not to the config's.
 func TestDefaults(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
@@ -1242,6 +1261,7 @@ func TestDefaults(t *testing.T) {
 // reaches that aren't on yet; switching one on needs only that, and a
 // repository of the config is 409.
 func TestOperatorPicksRepositories(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.cat["main"].set("acme/gadgets", "acme/widgets", "acme/tools")
@@ -1303,6 +1323,7 @@ func TestOperatorPicksRepositories(t *testing.T) {
 // No response, log line or audit entry ever holds a secret entered in the
 // panel.
 func TestOperatorAPINeverReturnsSecrets(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.addLab(c)
@@ -1352,6 +1373,7 @@ func TestOperatorAPINeverReturnsSecrets(t *testing.T) {
 // A change that is checking while the instance is removed does not undo the
 // removal: the store refuses it (409) and the registry stays removing.
 func TestUpdateRacingARemovalKeepsItRemoved(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.addLab(c)
@@ -1387,6 +1409,7 @@ func TestUpdateRacingARemovalKeepsItRemoved(t *testing.T) {
 // lost: the answer is the saved entry, and the failure is logged at Error
 // without the key.
 func TestAddModelSavedButNotReloaded(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.d.loadLLM = func(context.Context) error { return errors.New("database went away (" + llmKeyOne + ")") }
@@ -1411,6 +1434,7 @@ func TestAddModelSavedButNotReloaded(t *testing.T) {
 // Only admins change the defaults: a maintainer or viewer gets 404 (the route
 // is not theirs to know) with a valid body, and nothing changes.
 func TestDefaultsRefusedToNonAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	for name, c := range map[string]*http.Cookie{
 		"viewer":     e.userOnGH(false, "acme/widgets"),
@@ -1441,6 +1465,7 @@ func TestDefaultsRefusedToNonAdmins(t *testing.T) {
 // without the secrets; saving it again records it again (the connector
 // clears it when it connects).
 func TestConnectFailureAfterCheckRecordsAttention(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.conn.connectErr = func(_ instances.Instance, s instances.Secrets) error {
@@ -1475,6 +1500,7 @@ func TestConnectFailureAfterCheckRecordsAttention(t *testing.T) {
 // The default for inline findings is stored with the other defaults; left
 // out of a body it is the built-in one (on), and a dashboard repository takes it.
 func TestDefaultsInlineFindings(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 
@@ -1510,6 +1536,7 @@ func TestDefaultsInlineFindings(t *testing.T) {
 // is in the view's config and pinned, left out of a body it is the built-in
 // one (on), and a dashboard repository takes it.
 func TestDefaultsCommandsAuthorAndMaintainersOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 
@@ -1546,6 +1573,7 @@ func TestDefaultsCommandsAuthorAndMaintainersOnly(t *testing.T) {
 // is in the view's config and pinned, left out of a body it is the built-in
 // one (on), and a dashboard repository takes it.
 func TestDefaultsIncrementalReviews(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 
@@ -1582,6 +1610,7 @@ func TestDefaultsIncrementalReviews(t *testing.T) {
 // is in the view's config and pinned, left out of a body it is the built-in
 // one (on), and a dashboard repository takes it.
 func TestDefaultsLearnFromDismissals(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 
@@ -1618,6 +1647,7 @@ func TestDefaultsLearnFromDismissals(t *testing.T) {
 // the view's config and pinned, the save is audited under its name, left out
 // of a body it is the built-in one (off), and a dashboard repository takes it.
 func TestDefaultsQuietReviews(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 
@@ -1675,6 +1705,7 @@ func TestDefaultsQuietReviews(t *testing.T) {
 // replaces every default), and a dashboard repository takes it while a config
 // repository does not.
 func TestPutDefaultsCommentLayout(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	builtIn := []string{"summary:open", "findings:collapsed", "dismissed:collapsed", "checks:open", "files:collapsed"}

@@ -588,9 +588,12 @@ paths:
         a wrong or expired token, a run with no stored token yet, or an
         unknown run) is the same 401, so the answer never shows whether a
         run exists. 404 goes only to the run's own judge Job, for a reviewer
-        with no result or an `n` that is not 1 to 5: the judge reads 404 as
-        "no result", so an auth failure is never a 404. The judge Job fails on
-        every other answer, so a lost reviewer never becomes a pass.
+        with no result or an `n` that is not 1 to 5. Only the "no result"
+        404 carries the header `Pergent-Result: none`, and the judge reads
+        only a 404 with that header as "no result", so an auth failure is
+        never a 404. The judge Job fails on every other answer, a 404 with
+        no mark too (a pergent.sh with no such route, or a proxy), so a lost
+        reviewer never becomes a pass.
       x-pergent-access: none
       security:
         - runResultToken: []
@@ -618,7 +621,11 @@ paths:
             text/plain:
               schema: {type: string}
         '404':
-          description: The run's own judge asked for a reviewer with no result, or for a number that is not 1 to 5.
+          description: The run's own judge asked for a reviewer with no result (with the header `Pergent-Result` set to `none`), or for a number that is not 1 to 5 (with no such header).
+          headers:
+            Pergent-Result:
+              description: '`none` when the reviewer has no result. The judge Job treats only a 404 with this mark as "no result".'
+              schema: {type: string, enum: [none]}
           content:
             text/plain:
               schema: {type: string}

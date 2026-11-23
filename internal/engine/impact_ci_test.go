@@ -142,6 +142,7 @@ func recordedApprovalGH(t *testing.T, env *testEnv, n int64) string {
 // status is not a success and the bot approves nothing. The rest of the review
 // is posted.
 func TestPublishRechecksVisibility(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	ghVisibility(gh, "public", "private")
 	head := sha('a')
@@ -160,6 +161,7 @@ func TestPublishRechecksVisibility(t *testing.T) {
 
 // A read that fails is a failure too, whichever of the two repositories it is.
 func TestPublishVisibilityErrorFailsImpact(t *testing.T) {
+	t.Parallel()
 	for name, fail := range map[string]string{"the link": "/repos/" + linkedTarget, "the repository": ghRepoAPI} {
 		t.Run(name, func(t *testing.T) {
 			env, gh := linkedGitHub(t)
@@ -181,6 +183,7 @@ func TestPublishVisibilityErrorFailsImpact(t *testing.T) {
 // With the rule holding, the check's findings are posted as they were and the
 // result is stored as it came.
 func TestPublishKeepsAllowedImpact(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	ghVisibility(gh, "private", "public")
 	head := sha('a')
@@ -205,6 +208,7 @@ func TestPublishKeepsAllowedImpact(t *testing.T) {
 // A republish reads the rule again: the finding posted while the link was open
 // is left out once the link goes private.
 func TestRepublishChecksVisibilityAgain(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	ghVisibility(gh, "public", "public")
 	head := sha('a')
@@ -234,6 +238,7 @@ func TestRepublishChecksVisibilityAgain(t *testing.T) {
 // An image that doesn't know the feature ignores the links and sends no impact
 // skill: pergent.sh writes a failed one, and the review is not approved.
 func TestMissingImpactIsSynthesisedFailed(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	ghVisibility(gh, "private", "public")
 	head := sha('a')
@@ -262,6 +267,7 @@ func TestMissingImpactIsSynthesisedFailed(t *testing.T) {
 // A run with no recorded links gains no impact skill, and its result is left
 // byte for byte as it came: nothing is read or written for it.
 func TestNoImpactRunIsLeftAlone(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	head := sha('a')
 	res := resultFor(t, head, reviewed("no_blocking_issues", "render/comment.go"))
@@ -288,6 +294,7 @@ func TestNoImpactRunIsLeftAlone(t *testing.T) {
 
 // A clean run says so, in the words pergent wrote, and is approved.
 func TestCleanImpactSaysSoAndApproves(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	ghVisibility(gh, "private", "public")
 	head := sha('a')
@@ -310,6 +317,7 @@ func TestCleanImpactSaysSoAndApproves(t *testing.T) {
 // A person dismisses an impact finding, a blocking one too, as any finding:
 // the review is decided again from the stored result and is approved.
 func TestDismissImpactFinding(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	ghVisibility(gh, "private", "public")
 	head := sha('a')
@@ -374,6 +382,7 @@ func skillsInJob(env *testEnv, id string) int {
 // check in the earlier result does not read as "the skills changed", which
 // would turn the re-run into a full review, and the Job is given no links.
 func TestRerunKeepsImpact(t *testing.T) {
+	t.Parallel()
 	env, _, head, base := impactRerunEnv(t,
 		namedSkill(t, "a", "failed", "", ""), namedSkill(t, "b", "no_blocking_issues", "", ""),
 		impactSkillOf(t, "no_blocking_issues", "", "Impact: checked acme/api, nothing found"))
@@ -403,6 +412,7 @@ func TestRerunKeepsImpact(t *testing.T) {
 // thing to re-run. pergent needs at least one skill, so the first by name runs
 // with it and is merged too; every link is checked.
 func TestReviewFailedRerunsImpactAlone(t *testing.T) {
+	t.Parallel()
 	failed := impactSkillOf(t, "failed", "")
 	failed.Failures = []result.Failure{{Message: result.ImpactNotRunMessage}}
 	env, _, head, base := impactRerunEnv(t,
@@ -439,6 +449,7 @@ func TestReviewFailedRerunsImpactAlone(t *testing.T) {
 // The setting was turned off since the re-run was asked for: the check can't
 // be repeated, so the run becomes a full review, which has no impact check.
 func TestRerunOfImpactWithTheSettingOffBecomesAFullReview(t *testing.T) {
+	t.Parallel()
 	failed := impactSkillOf(t, "failed", "")
 	env, _, head, base := impactRerunEnv(t,
 		namedSkill(t, "a", "no_blocking_issues", "", ""), namedSkill(t, "b", "no_blocking_issues", "", ""), failed)
@@ -469,6 +480,7 @@ func TestRerunOfImpactWithTheSettingOffBecomesAFullReview(t *testing.T) {
 // off since: the incremental review would keep the failed check for good (the
 // merge keeps an open check the new run lacks), so the push is a full review.
 func TestPushWithAStaleOpenImpactIsAFullReview(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	on := true
 	repos := env.Engine.Config.Repositories

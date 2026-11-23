@@ -288,6 +288,7 @@ func teamModelByID(t *testing.T, s *Store, teamID int64, id string) (TeamModel, 
 }
 
 func TestTeamModelCRUD(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	m, err := s.CreateTeamModel(ctx, TeamModel{ID: "ignored", TeamID: team, Name: "Team key", Provider: "anthropic",
@@ -360,6 +361,7 @@ func TestTeamModelCRUD(t *testing.T) {
 
 // A name is unique in its team, ignoring case; 2 teams may use the same one.
 func TestTeamModelNameUniquePerTeam(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a, b := newTeam(t, s, "Payments"), newTeam(t, s, "Growth")
 	newTeamModel(t, s, a, "Main", nil)
@@ -397,6 +399,7 @@ func setMark(t *testing.T, s *Store, source, id, class string) {
 // Editing a key clears that entry's auth mark, and only that: a quota mark
 // stays, and so does the mark of an entry whose key did not change.
 func TestKeyEditClearsAuthMark(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g1 := newModel(t, s, "openai", "gpt-5", "", []byte("k1"))
@@ -475,6 +478,7 @@ func chainEntries(t *testing.T, s *Store, chainID int64) []EntryRef {
 // Removing a team entry takes it out of every chain that names it, the rest
 // moved up, and returns those chains as they are now. Its mark goes too.
 func TestDeleteTeamModelLeavesChains(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	g := newModel(t, s, "openai", "gpt-5", "", nil)
@@ -522,6 +526,7 @@ func TestDeleteTeamModelLeavesChains(t *testing.T) {
 // Deleting a team deletes its entries, its chain and their marks, and takes
 // its entries out of the repository chains that named them.
 func TestDeleteTeamCascades(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team, other := newTeam(t, s, "Payments"), newTeam(t, s, "Growth")
 	g := newModel(t, s, "openai", "gpt-5", "", nil)

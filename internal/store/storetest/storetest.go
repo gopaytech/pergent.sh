@@ -20,6 +20,11 @@
 // binary holds a session advisory lock while it runs, so a later binary can
 // tell a copy that a stopped binary left behind and drop it.
 //
+// A binary also holds a shared lock on its migration hash. Another worktree
+// with other migrations can run its tests on the same server, so a binary
+// retires the template and free copies of another hash only when no running
+// binary holds that hash's lock.
+//
 // The template name holds a hash of the migration files, so a changed or new
 // migration builds a new template, with a pool of its own.
 //
@@ -36,11 +41,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -65,6 +72,18 @@ const recipe = "v1"
 // package. The second key is 0 for the template build, or the id of a
 // running binary.
 const lockClass = 0x70657274 // "pert"
+
+// hashLockClass is the first key of the shared session advisory lock a
+// running binary holds on its migration hash, keyed by hashKey. A binary
+// retires the databases of another hash only when no binary holds it.
+const hashLockClass = 0x70657268 // "perh"
+
+// hashKey is the second key of the hash lock of the migration hash h.
+func hashKey(h string) int32 {
+	f := fnv.New32a()
+	f.Write([]byte(h))
+	return int32(f.Sum32())
+}
 
 // Store is what a template build needs from a store.
 type Store interface {
@@ -97,7 +116,7 @@ var (
 func Open[S Store](t testing.TB, open OpenFunc[S]) S {
 	t.Helper()
 	dbURL := URL(t, open)
-	s, err := open(context.Background(), dbURL, Schema)
+	s, err := open(context.Background(), PoolURL(dbURL), Schema)
 	if err != nil {
 		t.Fatalf("storetest: open: %v", err)
 	}
@@ -184,6 +203,14 @@ func newState[S Store](ctx context.Context, base string, open OpenFunc[S]) (*sta
 	}
 	hash, err := migrationsHash()
 	if err != nil {
+		conn.Release()
+		return nil, err
+	}
+	// The hash lock lives on the same connection. Take it before the
+	// template is looked up, so no other binary retires the template from
+	// then on.
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock_shared($1, $2)`, hashLockClass, hashKey(hash)); err != nil {
+		conn.Release()
 		return nil, err
 	}
 	if st.tmpl, err = loadTemplate(ctx, st, "pergent_tmpl_"+hash, open); err != nil {
@@ -337,6 +364,26 @@ func migrationsDir() (string, error) {
 		if filepath.Dir(d) == d {
 			return "", errors.New("no go.mod above the working directory")
 		}
+	}
+}
+
+// PoolMaxConns is the most connections a test's store pool opens. Tests run
+// in parallel, and several packages at once, so pools stay small to keep the
+// server under its max_connections. It is what pgxpool picks on a 4-CPU CI
+// runner anyway.
+const PoolMaxConns = 4
+
+// PoolURL is dbURL with the pool size set to PoolMaxConns. Only pgxpool reads
+// that setting: give pgx.Connect the URL from URL as it is.
+func PoolURL(dbURL string) string {
+	param := "pool_max_conns=" + strconv.Itoa(PoolMaxConns)
+	switch {
+	case !strings.HasPrefix(dbURL, "postgres://") && !strings.HasPrefix(dbURL, "postgresql://"):
+		return dbURL + " " + param
+	case strings.Contains(dbURL, "?"):
+		return dbURL + "&" + param
+	default:
+		return dbURL + "?" + param
 	}
 }
 

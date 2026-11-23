@@ -56,6 +56,7 @@ func jobVar(t *testing.T, env *testEnv, id, name string) (string, bool) {
 }
 
 func TestDispatchRulesOrder(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].RuleSets = []string{"b", "a"}
 	addRuleSet(t, env, "a", setAYAML)
@@ -80,6 +81,7 @@ func TestDispatchRulesOrder(t *testing.T) {
 // The rules come from the target side, as the repository skills do: a change
 // cannot edit its own rules.
 func TestDispatchRulesFromTargetRef(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
 	id, head := queue(env)
@@ -101,6 +103,7 @@ func TestDispatchRulesFromTargetRef(t *testing.T) {
 }
 
 func TestDispatchBrokenRulesFileFails(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, "rules:\n  - path: api/\n    rule: x\n")
 	id, _ := queue(env)
@@ -120,6 +123,7 @@ func TestDispatchBrokenRulesFileFails(t *testing.T) {
 }
 
 func TestDispatchMissingRuleSetFails(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].RuleSets = []string{"gone"}
 	id, _ := queue(env)
@@ -136,6 +140,7 @@ func TestDispatchMissingRuleSetFails(t *testing.T) {
 }
 
 func TestDispatchConfigSetWins(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.RuleSets = []config.ConfigRuleSet{{Name: "a", Content: setBYAML}}
 	env.Engine.Config.Repositories[0].RuleSets = []string{"a"}
@@ -150,6 +155,7 @@ func TestDispatchConfigSetWins(t *testing.T) {
 }
 
 func TestDispatchNoBuiltInRules(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].BuiltInRules = nil
 	id, _ := queue(env)
@@ -165,11 +171,14 @@ func TestDispatchNoBuiltInRules(t *testing.T) {
 }
 
 // builtInListFloor sets the first pergent that loads only the chosen
-// built-in rules for the test.
+// built-in rules for the test. It writes a package variable that dispatch
+// reads, so a test that calls it must not call t.Parallel: the sequential
+// tests all end before a parallel test starts.
 func builtInListFloor(t *testing.T, v string) {
 	t.Helper()
+	old := config.BuiltInRulesListMinVersion
 	config.BuiltInRulesListMinVersion = v
-	t.Cleanup(func() { config.BuiltInRulesListMinVersion = "" })
+	t.Cleanup(func() { config.BuiltInRulesListMinVersion = old })
 }
 
 // Built-in rules are chosen per repository. None chosen runs with
@@ -245,6 +254,7 @@ func TestBuiltInRulesFor(t *testing.T) {
 }
 
 func TestDispatchRulesHashStored(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
 	id, _ := queue(env)
@@ -261,6 +271,7 @@ func TestDispatchRulesHashStored(t *testing.T) {
 // The built-in texts ship inside the Jobs image: a run on another image gets
 // another hash, so its next push reviews every skill with rules in full.
 func TestDispatchRulesHashHasTheImage(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Jobs.Image = "ghcr.io/gopaytech/pergent:v9.9.9"
 	env.GitLab.Reply(http.MethodGet, filePath(rule.RepoFile), http.StatusOK, repoRulesYAML)
@@ -276,6 +287,7 @@ func TestDispatchRulesHashHasTheImage(t *testing.T) {
 }
 
 func TestDispatchRulesAttentionCleared(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].RuleSets = []string{"later"}
 	queue(env)

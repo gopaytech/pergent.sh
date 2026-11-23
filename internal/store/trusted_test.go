@@ -22,6 +22,7 @@ func mustRun(t *testing.T, s *Store, id string) Run {
 
 // A held run is never handed to the dispatcher.
 func TestHoldRunIsNeverClaimed(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if ok, err := s.HoldRun(ctx, id, WaitUntrusted); err != nil || !ok {
@@ -46,6 +47,7 @@ func TestHoldRunIsNeverClaimed(t *testing.T) {
 
 // Starting a waiting run queues that same run as a start.
 func TestStartRunTurnsWaitingIntoQueuedStart(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if _, err := s.HoldRun(ctx, id, WaitUntrusted); err != nil {
@@ -66,6 +68,7 @@ func TestStartRunTurnsWaitingIntoQueuedStart(t *testing.T) {
 
 // With nothing waiting on the head, a start is a new run.
 func TestStartRunInsertsWhenNothingWaits(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	old := enqueue(t, s, mr1, sha('a'))
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'published' WHERE id = $1::uuid`, old); err != nil {
@@ -90,6 +93,7 @@ func TestStartRunInsertsWhenNothingWaits(t *testing.T) {
 
 // A waiting run goes away like a queued one: on a new head, and on a close.
 func TestPushSupersedesWaitingRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := enqueue(t, s, mr1, sha('a'))
 	if _, err := s.HoldRun(ctx, a, WaitUntrusted); err != nil {
@@ -112,6 +116,7 @@ func TestPushSupersedesWaitingRun(t *testing.T) {
 
 // A start counts against the change's cap only.
 func TestStartDoesNotCountAgainstRepoCap(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for _, h := range []byte{'a', 'b'} {
 		if _, _, err := s.StartRun(ctx, mr1, "acme/widgets", sha(h), "main"); err != nil {
@@ -128,6 +133,7 @@ func TestStartDoesNotCountAgainstRepoCap(t *testing.T) {
 
 // The note of an untrusted change is claimed once.
 func TestClaimUntrustedNoteOnce(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i, want := range []bool{true, false} {
 		if got, err := s.ClaimUntrustedNote(ctx, mr1, t0); err != nil || got != want {
@@ -154,6 +160,7 @@ func TestClaimUntrustedNoteOnce(t *testing.T) {
 
 // The repository's mode and list, and the instance's mode, are stored.
 func TestTrustedAuthorsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "admin"}); err != nil {
 		t.Fatal(err)
@@ -200,6 +207,7 @@ func TestTrustedAuthorsRoundTrip(t *testing.T) {
 
 // A waiting run is listed among the change's runs.
 func TestWaitingRunDigest(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if _, err := s.HoldRun(ctx, id, WaitUntrusted); err != nil {
@@ -246,6 +254,7 @@ func TestMigrationKeepsPreviousReleaseTrusted(t *testing.T) {
 // claimed and still being checked) makes that run a start, and the hold
 // that follows doesn't take it back.
 func TestStartBeforeHold(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	got, started, err := s.StartRun(ctx, mr1, "acme/widgets", sha('a'), "main")
@@ -278,6 +287,7 @@ func TestStartBeforeHold(t *testing.T) {
 // A head is seen by a moment when a run of it (onto that target) was queued
 // at or before it.
 func TestHeadSeenBy(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	created := mustRun(t, s, id).CreatedAt
@@ -301,6 +311,7 @@ func TestHeadSeenBy(t *testing.T) {
 // A change waiting for a start isn't a review: the overview's counts leave
 // it out.
 func TestRunStatsLeaveOutWaiting(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if _, err := s.HoldRun(ctx, id, WaitUntrusted); err != nil {
@@ -321,6 +332,7 @@ func TestRunStatsLeaveOutWaiting(t *testing.T) {
 // didn't know waiting runs) isn't listed: only a change whose newest run
 // waits is.
 func TestWaitingChangesNewestOnly(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
 	if _, err := s.HoldRun(ctx, id, WaitUntrusted); err != nil {

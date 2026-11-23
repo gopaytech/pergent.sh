@@ -72,13 +72,22 @@ func TestReviewersHandler(t *testing.T) {
 		"zero": "/runs/r1/reviewers/0", "six": "/runs/r1/reviewers/6", "letter": "/runs/r1/reviewers/x",
 		"signed": "/runs/r1/reviewers/+1", "padded": "/runs/r1/reviewers/01",
 	} {
-		if rec := do(mux, http.MethodGet, path, "tok", nil); rec.Code != http.StatusNotFound {
-			t.Errorf("%s = %d; want 404", name, rec.Code)
+		if rec := do(mux, http.MethodGet, path, "tok", nil); rec.Code != http.StatusNotFound || rec.Header().Get(NoResultHeader) != "" {
+			t.Errorf("%s = %d %v; want 404 with no mark", name, rec.Code, rec.Header())
 		}
 	}
 	delete(f.results, "r1/2")
-	if rec := do(mux, http.MethodGet, "/runs/r1/reviewers/2", "tok", nil); rec.Code != http.StatusNotFound {
-		t.Errorf("no result = %d; want 404", rec.Code)
+	// Only the route's own "no result" carries the mark.
+	if rec := do(mux, http.MethodGet, "/runs/r1/reviewers/2", "tok", nil); rec.Code != http.StatusNotFound ||
+		rec.Header().Get("Pergent-Result") != "none" {
+		t.Errorf("no result = %d %v; want 404 with Pergent-Result: none", rec.Code, rec.Header())
+	}
+	// The mark never goes with a 200 or a 401.
+	if rec := do(mux, http.MethodGet, "/runs/r1/reviewers/1", "tok", nil); rec.Header().Get(NoResultHeader) != "" {
+		t.Errorf("200 has the mark: %v", rec.Header())
+	}
+	if rec := do(mux, http.MethodGet, "/runs/r1/reviewers/2", "other", nil); rec.Header().Get(NoResultHeader) != "" {
+		t.Errorf("401 has the mark: %v", rec.Header())
 	}
 	if rec := do(mux, http.MethodPost, "/runs/r1/reviewers/1", "tok", nil); rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST = %d", rec.Code)

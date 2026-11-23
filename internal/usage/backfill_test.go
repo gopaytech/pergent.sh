@@ -150,6 +150,7 @@ func tokenHash(token string) []byte {
 // single RecordUsage the reviewers' row would be kept and the judge's
 // tokens lost.
 func TestBackfillJudgeRun(t *testing.T) {
+	t.Parallel()
 	st := newDBStore(t)
 	ctx := context.Background()
 	t0 := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)

@@ -33,6 +33,7 @@ func reportAttempt(t *testing.T, s *Store, id, token string) {
 // An attempt closes the run it falls back from and queues the next one with
 // what the first attempt was asked for, pointing at the first run.
 func TestEnqueueAttemptCopiesAndCloses(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	base := reported(t, s, mr2, "b1", `{}`)
 	from := dispatched(t, s, mr1, "a1", "tok-a1")
@@ -90,6 +91,7 @@ func TestEnqueueAttemptCopiesAndCloses(t *testing.T) {
 
 // A result that arrives twice makes one attempt and one mark.
 func TestFallbackIsOnce(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	from := reported(t, s, mr1, "a1", `{}`)
 	run := getRun(t, s, from)
@@ -114,6 +116,7 @@ func TestFallbackIsOnce(t *testing.T) {
 
 // A push that superseded the run first wins: no attempt and no mark.
 func TestEnqueueAttemptAfterPush(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	from := reported(t, s, mr1, "a1", `{}`)
 	run := getRun(t, s, from)
@@ -131,6 +134,7 @@ func TestEnqueueAttemptAfterPush(t *testing.T) {
 }
 
 func TestAttemptsOrder(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	first := reported(t, s, mr1, "a1", `{}`)
 	second, _, err := s.EnqueueAttempt(ctx, getRun(t, s, first), quotaMark("m1"))
@@ -155,6 +159,7 @@ func TestAttemptsOrder(t *testing.T) {
 // Attempts are not re-runs anyone asked for, so they don't count against the
 // caps.
 func TestCountRerunsSkipsAttempts(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "a1", "main", TriggerRerun, nil, nil, false, false); err != nil {
 		t.Fatal(err)
@@ -185,6 +190,7 @@ func getRunOfHead(t *testing.T, s *Store, head string) string {
 // One review is one row in the lists, however many attempts it took; the
 // dropped attempt reads as fell_back.
 func TestListsOneRowPerReview(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	from := reported(t, s, mr1, "a1", `{}`)
 	next, _, err := s.EnqueueAttempt(ctx, getRun(t, s, from), quotaMark("m1"))
@@ -212,6 +218,7 @@ func TestListsOneRowPerReview(t *testing.T) {
 
 // The usage of a run on a team's key says so, with the team.
 func TestRecordUsageSource(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	onTeam := dispatched(t, s, mr1, "a1", "tok-a1")
@@ -247,6 +254,7 @@ func TestRecordUsageSource(t *testing.T) {
 // The instance quota counts only what global keys spent; TokensSince, which
 // the repository quota reads, counts every token.
 func TestInstanceQuotaCountsGlobalOnly(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	at := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
@@ -272,6 +280,7 @@ func TestInstanceQuotaCountsGlobalOnly(t *testing.T) {
 // no result or a skill run; its tokens still count. The exhausted gauge has
 // the live marks, by name.
 func TestMetricsLeaveOutFellBack(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	main, err := s.CreateLLMModel(ctx, LLMModel{Name: "Main", Provider: "openai", Model: "gpt-5"}, t0)
 	if err != nil {
@@ -348,6 +357,7 @@ func sameFallbacks(got, want []FallbackTotal) bool {
 // A dropped attempt is left out of the review list, but RunDigest reads it on
 // its own, as fell_back, for the run page the attempts link to.
 func TestRunDigestOfDroppedAttempt(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	from := reported(t, s, mr1, "a1", `{}`)
 	if _, created, err := s.EnqueueAttempt(ctx, getRun(t, s, from), quotaMark("m1")); err != nil || !created {
@@ -371,6 +381,7 @@ func TestRunDigestOfDroppedAttempt(t *testing.T) {
 // dropped attempt read on its own all say 2, and a review that never fell
 // back says 1.
 func TestDigestsCountAttempts(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	from := reported(t, s, mr1, "a1", `{}`)
 	next, _, err := s.EnqueueAttempt(ctx, getRun(t, s, from), quotaMark("m1"))
@@ -401,6 +412,7 @@ func TestDigestsCountAttempts(t *testing.T) {
 // UsageBySource splits one repository's tokens (input plus output) by whose
 // key paid, in the period only.
 func TestUsageBySource(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	at := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
@@ -424,6 +436,7 @@ func TestUsageBySource(t *testing.T) {
 
 // Each usage row says whose key paid for it.
 func TestUsageRowsSource(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
 	at := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
@@ -448,6 +461,7 @@ func TestUsageRowsSource(t *testing.T) {
 // same way, one retried and one fallen back, give next attempts that are
 // equal on every column but those of the row itself.
 func TestJudgeRetryCopiesAsAttempt(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	base := reported(t, s, mr3, "c1", `{}`)
 	// Both sources first: a later dispatch would claim a queued attempt.

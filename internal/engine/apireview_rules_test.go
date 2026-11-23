@@ -16,6 +16,7 @@ import (
 // An API review has no repository: it gets the admin default rule sets and
 // no built-in rules, reads no rules file and records its hash.
 func TestAPIReviewRules(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	if err := env.Store.CreateRuleSet(env.ctx, "a", setAYAML, env.Now()); err != nil {
@@ -44,6 +45,7 @@ func TestAPIReviewRules(t *testing.T) {
 
 // Built-in rules are chosen per repository and have no default, so an API
 // review gets none, even with an image that loads a chosen list.
+// It sets the floor, a package variable, so it does not run in parallel.
 func TestAPIReviewBuiltInRulesOffByDefault(t *testing.T) {
 	a := newAPIE2E(t)
 	env := a.env
@@ -65,6 +67,7 @@ func TestAPIReviewBuiltInRulesOffByDefault(t *testing.T) {
 }
 
 func TestAPIReviewMissingDefaultSet(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	if err := env.Store.CreateRuleSet(env.ctx, "gone", setAYAML, env.Now()); err != nil {

@@ -28,6 +28,7 @@ func newSession(t *testing.T, s *Store, hashByte byte, created time.Time) Sessio
 }
 
 func TestSessionsCRUD(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	in := newSession(t, s, 1, t0)
 	if err := s.CreateSession(ctx, in); err != nil {
@@ -109,6 +110,7 @@ func TestSessionsCRUD(t *testing.T) {
 }
 
 func TestPruneSessions(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := t0.Add(30 * 24 * time.Hour)
 	old := newSession(t, s, 1, now.Add(-8*24*time.Hour)) // created 8 days ago, seen just now
@@ -132,6 +134,7 @@ func TestPruneSessions(t *testing.T) {
 // An SSO session is pruned 24 hours after it began, a password one after 7
 // days, both used just now.
 func TestPruneSessionsSSOMaximum(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := t0.Add(30 * 24 * time.Hour)
 	admin := mustPassword(t, s, "admin")
@@ -169,6 +172,7 @@ func TestPruneSessionsSSOMaximum(t *testing.T) {
 // AddSessionProject adds one repository to a session's visible ones, once
 // whatever its case, on the session's instance.
 func TestAddSessionProject(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	in := newSession(t, s, 1, t0)
 	if err := s.CreateSession(ctx, in); err != nil {
@@ -281,6 +285,7 @@ func TestMigrationDropsSessionAdmin(t *testing.T) {
 
 // A password session has no platform, instance, user or OAuth token.
 func TestPasswordSession(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := mustPassword(t, s, "admin")
 	in := Session{IDHash: bytes.Repeat([]byte{4}, 32), AccountID: a.ID, Username: "admin", CSRF: "csrf",

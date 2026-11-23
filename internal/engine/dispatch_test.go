@@ -34,6 +34,7 @@ func dispatch(t *testing.T, env *testEnv) {
 func hasArg(args []string, want string) bool { return slices.Contains(args, want) }
 
 func TestDispatchLaunchesJob(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -142,6 +143,7 @@ func TestDispatchLaunchesJob(t *testing.T) {
 // The merge request's title, web address, source branch and author are
 // stored on the run for the dashboard, also when the run can't start.
 func TestDispatchStoresChangeDetails(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -161,6 +163,7 @@ func TestDispatchStoresChangeDetails(t *testing.T) {
 }
 
 func TestDispatchUsesPreviousResult(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	prev := []byte(`{"schema_version":1,"status":"completed","skills":[{"name":"security","verdict":"has_blocking_issues","findings":[{"id":"f1","title":"x"}],"files":{"reviewed":["a.go"]}}]}`)
 	env.Publish(3, sha('1'), prev)
@@ -192,6 +195,7 @@ func TestDispatchUsesPreviousResult(t *testing.T) {
 }
 
 func TestDispatchRespectsMaxRunning(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Jobs.MaxRunning = 2
 	var ids []string
@@ -220,6 +224,7 @@ func TestDispatchRespectsMaxRunning(t *testing.T) {
 }
 
 func TestDispatchSupersedesMovedHead(t *testing.T) {
+	t.Parallel()
 	t.Run("closed", func(t *testing.T) {
 		env := newTestEnv(t)
 		head := sha('a')
@@ -283,6 +288,7 @@ func TestDispatchSupersedesMovedHead(t *testing.T) {
 // A merge request retargeted after the run was queued (its webhook not seen
 // yet) is reviewed against its current target, as a run of its own.
 func TestDispatchSupersedesRetargetedRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -308,6 +314,7 @@ func TestDispatchSupersedesRetargetedRun(t *testing.T) {
 }
 
 func TestDispatchRequeuesWithoutBaseSHA(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -344,6 +351,7 @@ func TestDispatchRequeuesWithoutBaseSHA(t *testing.T) {
 }
 
 func TestDispatchDiffNotReadyGivesUpAfterTenMinutes(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -374,6 +382,7 @@ func TestDispatchDiffNotReadyGivesUpAfterTenMinutes(t *testing.T) {
 }
 
 func TestDispatchDiffWaitsKeepRetryBudget(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -409,6 +418,7 @@ func TestDispatchDiffWaitsKeepRetryBudget(t *testing.T) {
 }
 
 func TestDispatchCancelledPostponesWithoutAttempt(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -435,6 +445,7 @@ func TestDispatchCancelledPostponesWithoutAttempt(t *testing.T) {
 }
 
 func TestDispatchRepoSkillErrorFailsRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -459,6 +470,7 @@ func TestDispatchRepoSkillErrorFailsRun(t *testing.T) {
 }
 
 func TestDispatchTooLargeFailsRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.AddSkill("huge", string(bytes.Repeat([]byte("x"), inputs.ConfigMapLimit+1)))
 	env.SetDefaultSkills("huge")
@@ -481,6 +493,7 @@ func TestDispatchTooLargeFailsRun(t *testing.T) {
 }
 
 func TestDispatchMissingDeployTokenFailsRun(t *testing.T) {
+	t.Parallel()
 	for name, edit := range map[string]func(p *store.Project){
 		"no token":   func(p *store.Project) { p.DeployTokenSealed = nil },
 		"no project": nil,
@@ -510,6 +523,7 @@ func TestDispatchMissingDeployTokenFailsRun(t *testing.T) {
 }
 
 func TestDispatchGitLabErrorRequeuesThenFails(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -544,6 +558,7 @@ func TestDispatchGitLabErrorRequeuesThenFails(t *testing.T) {
 }
 
 func TestDispatchKubernetesErrorRequeues(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Kube.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("apiserver unavailable")
@@ -567,6 +582,7 @@ func TestDispatchKubernetesErrorRequeues(t *testing.T) {
 }
 
 func TestDispatchSupersededDuringLaunchDeletesJob(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -593,6 +609,7 @@ func TestDispatchSupersededDuringLaunchDeletesJob(t *testing.T) {
 }
 
 func TestDispatchStatusErrorKeepsRunDispatched(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -611,6 +628,7 @@ func TestDispatchStatusErrorKeepsRunDispatched(t *testing.T) {
 }
 
 func TestDispatchOneFailureDoesNotStopOthers(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	bad := env.Enqueue(3, sha('a'))
 	good := env.Enqueue(4, sha('c'))
@@ -645,6 +663,7 @@ func TestWakeDoesNotBlock(t *testing.T) {
 }
 
 func TestDispatchInputsGitLabErrorRequeues(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -663,6 +682,7 @@ func TestDispatchInputsGitLabErrorRequeues(t *testing.T) {
 }
 
 func TestDispatchUnconfiguredRepositoryIsSuperseded(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories = nil
 	id := env.Enqueue(3, sha('a'))
@@ -681,6 +701,7 @@ func TestDispatchUnconfiguredRepositoryIsSuperseded(t *testing.T) {
 // webhook raced a setting change or a conversion to draft), is superseded:
 // no Job, no status, no comment, and no run is queued for a newer head.
 func TestDispatchDraftIsSupersededWhenDraftsAreOff(t *testing.T) {
+	t.Parallel()
 	off := false
 	for _, tc := range []struct {
 		name  string
@@ -736,6 +757,7 @@ func TestDispatchDraftIsSupersededWhenDraftsAreOff(t *testing.T) {
 
 // With drafts on (the default) a draft is reviewed like any other merge request.
 func TestDispatchDraftIsReviewedWhenDraftsAreOn(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -754,6 +776,7 @@ func TestDispatchDraftIsReviewedWhenDraftsAreOn(t *testing.T) {
 // The Job's timeout, step limit and memory limit come from the repository's
 // effective settings; only the memory limit of the resources changes.
 func TestDispatchUsesEffectiveTimeoutTurnsAndMemory(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		setup func(env *testEnv)
@@ -933,6 +956,7 @@ func assertFull(t *testing.T, env *testEnv, id string) {
 // A push after a published review of the change reviews only what changed
 // since, or all of it, and says why when it does.
 func TestPushDispatch(t *testing.T) {
+	t.Parallel()
 	headA, headB := sha('1'), sha('2')
 	statusOK := func(env *testEnv, head string) {
 		env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
@@ -1102,6 +1126,7 @@ func TestPushDispatch(t *testing.T) {
 // The last review is the newest published one, not a run that was superseded
 // after it: the comparison goes from A even though B was queued in between.
 func TestIncrementalComparesFromLastPublished(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	headA, headB, headC := sha('1'), sha('2'), sha('3')
 	a := publishedReview(t, env, headA, "0.5.0", nil)
@@ -1160,6 +1185,7 @@ func checkDeletedEnv(job *batchv1.Job) (string, bool) {
 // The repository's deleted-files setting reaches the Job as an environment
 // variable when it is on, and is absent when it is off or unset.
 func TestDispatchPassesCheckDeleted(t *testing.T) {
+	t.Parallel()
 	on, off := true, false
 	for _, tc := range []struct {
 		name    string
@@ -1205,6 +1231,7 @@ func authoredBy(mr gitlab.MergeRequest, id int64) gitlab.MergeRequest {
 // A review is told what people rejected earlier, for its skills: not by the
 // change's author, not for a skill it doesn't run, and not who rejected it.
 func TestDispatchPassesDismissals(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)
@@ -1235,6 +1262,7 @@ func TestDispatchPassesDismissals(t *testing.T) {
 }
 
 func TestDispatchSettingOffPassesNone(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	off := false
 	env.Engine.Config.Repositories[0].LearnFromDismissals = &off
@@ -1261,6 +1289,7 @@ func TestDispatchSettingOffPassesNone(t *testing.T) {
 // A list that doesn't fit is dropped before the previous result is: the push
 // stays incremental.
 func TestDispatchTooManyDismissalsStaysIncremental(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	// The skill leaves room for the previous result and the carried files,
 	// but not for 20 long reasons.
@@ -1307,6 +1336,7 @@ func TestDispatchTooManyDismissalsStaysIncremental(t *testing.T) {
 
 // A re-run of some skills is given the entries of those skills only.
 func TestDispatchRerunPassesDismissalsOfItsSkills(t *testing.T) {
+	t.Parallel()
 	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
 	teach(t, env, 2, "a", "aaaaaa111111", "suggestion", "Fine for a.", 99)
 	teach(t, env, 2, "b", "bbbbbb111111", "suggestion", "Fine for b.", 99)
@@ -1330,6 +1360,7 @@ func quietOn(env *testEnv, on bool) { env.Engine.Config.Repositories[0].QuietRev
 // A quiet repository with no instructions of its own gets a file holding only
 // the quiet section, and the run records that it is quiet.
 func TestDispatchQuietAddsTheLine(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	quietOn(env, true)
 	head := sha('a')
@@ -1357,6 +1388,7 @@ func TestDispatchQuietAddsTheLine(t *testing.T) {
 // Off changes nothing: no file, no flag, and the team's instructions are
 // exactly what the repository holds.
 func TestDispatchQuietOffChangesNothing(t *testing.T) {
+	t.Parallel()
 	t.Run("no instructions", func(t *testing.T) {
 		env := newTestEnv(t)
 		quietOn(env, false)
@@ -1430,6 +1462,7 @@ func TestDispatchQuietOffChangesNothing(t *testing.T) {
 // The line counts toward the 900 KiB: skills that fit without it do not fit
 // with it.
 func TestDispatchQuietOverBudgetFails(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	quietOn(env, true)
 	env.AddSkill("huge", string(bytes.Repeat([]byte("x"), inputs.ConfigMapLimit-len(securitySkill)-10)))
@@ -1456,6 +1489,7 @@ func TestDispatchQuietOverBudgetFails(t *testing.T) {
 // nothing behind, and the next dispatch, with it off, has no line and an
 // unquiet run.
 func TestDispatchQuietIsReadAtEachDispatch(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	quietOn(env, true)
 	fail := true
@@ -1513,6 +1547,7 @@ func layoutOn(env *testEnv, layout ...string) {
 // The run holds the repository's layout before the Job starts, and a
 // repository without one leaves the column NULL.
 func TestDispatchRecordsTheLayout(t *testing.T) {
+	t.Parallel()
 	t.Run("a layout", func(t *testing.T) {
 		env := newTestEnv(t)
 		layoutOn(env, "checks:open", "findings:collapsed")
@@ -1588,6 +1623,7 @@ func TestDispatchRecordsTheLayout(t *testing.T) {
 
 // The Job gets the title and description the platform has when it starts.
 func TestDispatchPassesChangeDescription(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Enqueue(3, head)

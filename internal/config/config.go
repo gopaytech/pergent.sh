@@ -1427,23 +1427,24 @@ func ImageTag(image string) string {
 	return image[i+1:]
 }
 
-// PanelImage says whether image runs a pergent with --panel: its tag is a
-// version (result.VersionAtLeast rules) at or above PanelMinVersion. reason is
-// the refusal's text, "" when it passes.
+// PanelImage says whether image runs a pergent with --multi-review: its tag
+// is a version (result.VersionAtLeast rules) at or above PanelMinVersion. The
+// name stays for PanelMinVersion. reason is the refusal's text, "" when it
+// passes.
 func PanelImage(image string) (ok bool, reason string) {
 	if PanelMinVersion == "" {
-		return false, "no review image supports a review panel yet"
+		return false, "no review image supports multi review yet"
 	}
 	tag := ImageTag(image)
 	if tag == "" {
-		return false, fmt.Sprintf("image %q has no tag, so its pergent version is not known; a review panel needs %s or later", image, PanelMinVersion)
+		return false, fmt.Sprintf("image %q has no tag, so its pergent version is not known; multi review needs %s or later", image, PanelMinVersion)
 	}
 	atLeast, known := result.VersionAtLeast(tag, PanelMinVersion)
 	if !known {
-		return false, fmt.Sprintf("image tag %q is not a version (vX.Y.Z); a review panel needs %s or later", tag, PanelMinVersion)
+		return false, fmt.Sprintf("image tag %q is not a version (vX.Y.Z); multi review needs %s or later", tag, PanelMinVersion)
 	}
 	if !atLeast {
-		return false, fmt.Sprintf("image tag %q is older than %s, the first pergent with a review panel", tag, PanelMinVersion)
+		return false, fmt.Sprintf("image tag %q is older than %s, the first pergent with multi review", tag, PanelMinVersion)
 	}
 	return true, ""
 }

@@ -135,6 +135,20 @@ func TestWithDatabase(t *testing.T) {
 	}
 }
 
+// A test's store pool is capped, in both URL forms, so parallel tests stay
+// under the server's max_connections.
+func TestPoolURL(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"postgres://h/db", "postgres://h/db?pool_max_conns=4"},
+		{"postgres://h/db?sslmode=disable", "postgres://h/db?sslmode=disable&pool_max_conns=4"},
+		{"host=h dbname=db", "host=h dbname=db pool_max_conns=4"},
+	} {
+		if got := PoolURL(c.in); got != c.want {
+			t.Errorf("PoolURL(%q) = %q; want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // A new template retires what an older migration hash left: its template,
 // build and free copies, and the copies of binaries that stopped. A copy
 // whose owner still runs stays.
@@ -203,6 +217,67 @@ func TestTemplateRetiresOldHash(t *testing.T) {
 				t.Fatalf("%s was never dropped", d)
 			}
 			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
+// A template, build or free copy of another migration hash stays while a
+// running binary uses that hash: another worktree with other migrations can
+// run its tests on the same server. It goes once no binary uses the hash.
+func TestTemplateKeepsLiveHash(t *testing.T) {
+	open(t) // sets shared up
+	st := shared
+	other := "fedcba9876543210"
+	if other == st.tmpl.hash() {
+		t.Fatal("the other hash is the current hash")
+	}
+	lock, err := pgx.Connect(ctx, st.base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close(ctx)
+	if _, err := lock.Exec(ctx, `SELECT pg_advisory_lock_shared($1, $2)`, hashLockClass, hashKey(other)); err != nil {
+		t.Fatal(err)
+	}
+	kept := []string{
+		"pergent_tmpl_" + other,
+		"pergent_build_" + other,
+		prefixFree + other + "_a",
+	}
+	for _, name := range kept {
+		st.drop(ctx, name)
+		if _, err := st.admin.Exec(ctx, "CREATE DATABASE "+ident(name)); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.drop(context.Background(), name) })
+	}
+	if _, err := st.admin.Exec(ctx, "ALTER DATABASE "+ident(kept[0])+" WITH IS_TEMPLATE true"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loadTemplate(ctx, st, st.tmpl.name, store.OpenInSchema); err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	all := databases(t, "pergent_")
+	for _, name := range kept {
+		if !slices.Contains(all, name) {
+			t.Errorf("%s was retired while a binary uses its hash", name)
+		}
+	}
+	if !slices.Contains(all, st.tmpl.name) {
+		t.Errorf("the current template %s is gone", st.tmpl.name)
+	}
+
+	if _, err := lock.Exec(ctx, `SELECT pg_advisory_unlock_shared($1, $2)`, hashLockClass, hashKey(other)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadTemplate(ctx, st, st.tmpl.name, store.OpenInSchema); err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	all = databases(t, "pergent_")
+	for _, name := range kept {
+		if slices.Contains(all, name) {
+			t.Errorf("%s is still there after no binary uses its hash", name)
 		}
 	}
 }

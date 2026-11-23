@@ -64,6 +64,7 @@ func notes(env *testEnv, iid int64) []string {
 // A Reporter's change waits: no Job, one note, a pending status; a second
 // push waits too, with no second note.
 func TestUntrustedRunWaits(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env := trustEnv(t, 3, head, 20)
 	id := env.Enqueue(3, head)
@@ -108,6 +109,7 @@ func TestUntrustedRunWaits(t *testing.T) {
 
 // A Developer's change is reviewed as before.
 func TestTrustedRunGoesAhead(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env := trustEnv(t, 3, head, 30)
 	id := env.Enqueue(3, head)
@@ -123,6 +125,7 @@ func TestTrustedRunGoesAhead(t *testing.T) {
 // An access check that keeps failing is tried again until trustPatience,
 // then the run waits with no note; one that recovers lets the run go ahead.
 func TestTrustCheckRetriesThenGivesUp(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env := trustEnv(t, 3, head, 0)
 	env.GitLab.Reply(http.MethodGet, "/projects/7/members/all/42", http.StatusForbidden, `{"message":"403 Forbidden"}`)
@@ -148,6 +151,7 @@ func TestTrustCheckRetriesThenGivesUp(t *testing.T) {
 }
 
 func TestTrustCheckRecovers(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env := trustEnv(t, 3, head, 0)
 	env.GitLab.Reply(http.MethodGet, "/projects/7/members/all/42", http.StatusForbidden, `{"message":"403 Forbidden"}`)
@@ -163,6 +167,7 @@ func TestTrustCheckRecovers(t *testing.T) {
 
 // A draft the repository doesn't review is a draft, whoever wrote it.
 func TestUntrustedDraftIsADraft(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env := trustEnv(t, 3, head, 20)
 	no := false
@@ -183,6 +188,7 @@ func TestUntrustedDraftIsADraft(t *testing.T) {
 
 // A started run is not checked again.
 func TestStartRunSkipsCheck(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env := trustEnv(t, 3, head, 20)
 	id := env.Enqueue(3, head)
@@ -203,6 +209,7 @@ func TestStartRunSkipsCheck(t *testing.T) {
 // The retry window starts at the first failed check, not when the run was
 // queued: a run that waited in a backlog still gets its retries.
 func TestTrustCheckPatienceAfterBacklog(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env := trustEnv(t, 3, head, 0)
 	env.GitLab.Reply(http.MethodGet, "/projects/7/members/all/42", http.StatusForbidden, `{"message":"403 Forbidden"}`)

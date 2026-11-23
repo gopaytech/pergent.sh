@@ -38,6 +38,7 @@ func runningScan(t *testing.T, s *Store, project string, at time.Time, token str
 // Ten requests for one repository at once: exactly one queues, the others
 // get the scan that did.
 func TestQueueScanRace(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	const n = 10
 	type res struct {
@@ -87,6 +88,7 @@ func TestQueueScanRace(t *testing.T) {
 }
 
 func TestQueueScanGap(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	first := queueScan(t, s, "acme/web", t0)
 	if first.State != ScanQueued || first.StartedBy != StartedBySwitchOn || !first.QueuedAt.Equal(t0) ||
@@ -130,6 +132,7 @@ func TestQueueScanGap(t *testing.T) {
 }
 
 func TestQueueScanGapZeroNeverRefuses(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	first := queueScan(t, s, "acme/web", t0)
 	if _, ok, err := s.ClaimReadinessScan(ctx, 2, t0, t0.Add(time.Hour)); err != nil || !ok {
@@ -154,6 +157,7 @@ func TestQueueScanGapZeroNeverRefuses(t *testing.T) {
 }
 
 func TestQueueScanCaseInsensitive(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	first := queueScan(t, s, "Acme/Web", t0)
 	got, out, err := s.QueueReadinessScan(ctx, scanInst, "acme/web", "alice", t0, 0)
@@ -174,6 +178,7 @@ func TestQueueScanCaseInsensitive(t *testing.T) {
 }
 
 func TestClaimRespectsLimit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := queueScan(t, s, "acme/a", t0)
 	b := queueScan(t, s, "acme/b", t0.Add(time.Minute))
@@ -212,6 +217,7 @@ func TestClaimRespectsLimit(t *testing.T) {
 
 // Claimers at once never run more than the limit.
 func TestClaimConcurrentNeverExceedsLimit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := range 8 {
 		queueScan(t, s, "acme/r"+string(rune('a'+i)), t0.Add(time.Duration(i)*time.Second))
@@ -238,6 +244,7 @@ func TestClaimConcurrentNeverExceedsLimit(t *testing.T) {
 }
 
 func TestFinishSpendsToken(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	sc := runningScan(t, s, "acme/web", t0, "right")
 
@@ -287,6 +294,7 @@ func TestFinishSpendsToken(t *testing.T) {
 }
 
 func TestFinishFailedAndPodSide(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	sc := runningScan(t, s, "acme/web", t0, "tok")
 	// A pod-side end (no hash) fails a running scan whatever its token, and
@@ -310,6 +318,7 @@ func TestFinishFailedAndPodSide(t *testing.T) {
 }
 
 func TestFinishPrunesOlder(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	// Two finished scans of the repository (spelled in 2 cases), one of
 	// another repository, which must stay.
@@ -359,6 +368,7 @@ func jsonEqual(a, b []byte) bool {
 // what DoneReadinessScan returns, while ReadinessScans still names the
 // failed one latest.
 func TestFinishFailedKeepsLastDone(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if sc, err := s.DoneReadinessScan(ctx, scanInst, "acme/web"); err != nil || sc != nil {
 		t.Fatalf("DoneReadinessScan with no scan = %+v, %v; want nil", sc, err)
@@ -437,6 +447,7 @@ func TestFinishFailedKeepsLastDone(t *testing.T) {
 // An active scan of the repository survives another's finish: only older
 // finished scans are pruned.
 func TestFinishKeepsActive(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	first := runningScan(t, s, "acme/web", t0, "tok")
 	if ok, err := s.FinishReadinessScan(ctx, first.ID, hash("tok"), nil, "", t0); err != nil || !ok {
@@ -450,6 +461,7 @@ func TestFinishKeepsActive(t *testing.T) {
 }
 
 func TestSetReadinessPodAndJob(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	queueScan(t, s, "acme/web", t0)
 	sc, ok, err := s.ClaimReadinessScan(ctx, 2, t0, t0.Add(time.Hour))
@@ -493,6 +505,7 @@ func TestSetReadinessPodAndJob(t *testing.T) {
 }
 
 func TestReadinessScanNotFound(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for _, id := range []string{"not-a-uuid", "6f1c2a3e-0000-4000-8000-000000000000"} {
 		if _, err := s.ReadinessScan(ctx, id); !errors.Is(err, ErrReadinessScanNotFound) {
@@ -508,6 +521,7 @@ func TestReadinessScanNotFound(t *testing.T) {
 }
 
 func TestRunningReadinessScans(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	queueScan(t, s, "acme/a", t0)
 	queueScan(t, s, "acme/b", t0.Add(time.Minute))
@@ -523,6 +537,7 @@ func TestRunningReadinessScans(t *testing.T) {
 }
 
 func TestReadinessScansLatestAndActive(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	latest, active, err := s.ReadinessScans(ctx, scanInst, "acme/web")
 	if err != nil || latest != nil || active != nil {
@@ -566,6 +581,7 @@ func TestReadinessScansLatestAndActive(t *testing.T) {
 }
 
 func TestDeleteReadinessScans(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	web := runningScan(t, s, "Acme/Web", t0, "tok")
 	if ok, err := s.FinishReadinessScan(ctx, web.ID, hash("tok"), nil, "", t0); err != nil || !ok {
@@ -601,6 +617,7 @@ func TestDeleteReadinessScans(t *testing.T) {
 // config-file repositories first (by instance, then project id), then the
 // dashboard repositories by when they were switched on.
 func TestUnscannedProjects(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	addProject := func(inst string, id int64, path string) {
 		t.Helper()
@@ -676,6 +693,7 @@ func TestUnscannedProjects(t *testing.T) {
 }
 
 func TestReadinessScanBytesRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	sc := runningScan(t, s, "acme/web", t0, "tok")
 	got, err := s.ReadinessScan(ctx, sc.ID)

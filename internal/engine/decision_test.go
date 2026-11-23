@@ -14,6 +14,7 @@ import (
 
 // The publisher records what it decided on the run, for the dashboard.
 func TestPublishRecordsDecision(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	clean := func(t *testing.T) []byte { return resultFor(t, head, reviewed("no_blocking_issues", "a.go")) }
 	for name, tc := range map[string]struct {
@@ -106,6 +107,7 @@ func TestErrorResultReasonNamesStep(t *testing.T) {
 
 // A draft marked ready is decided again: the run is then approved.
 func TestPublishRecordsDecisionAgainWhenReady(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
@@ -132,6 +134,7 @@ func TestPublishRecordsDecisionAgainWhenReady(t *testing.T) {
 // The model and where each skill came from are recorded at dispatch: a
 // repository skill replacing a library one of the same name is "repo".
 func TestDispatchRecordsModelAndSkillSources(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')

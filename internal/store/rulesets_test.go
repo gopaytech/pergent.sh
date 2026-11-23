@@ -19,6 +19,7 @@ func newRuleSet(t *testing.T, s *Store, name, content string) {
 const ruleYAML = "rules:\n  - path: \"*.go\"\n    rule: check\n"
 
 func TestRuleSetCRUD(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newRuleSet(t, s, "go", ruleYAML)
 	newRuleSet(t, s, "api", "rules: []\n")
@@ -51,6 +52,7 @@ func TestRuleSetCRUD(t *testing.T) {
 }
 
 func TestRuleSetCreateTaken(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newRuleSet(t, s, "go", ruleYAML)
 	if err := s.CreateRuleSet(ctx, "go", ruleYAML, t0); !errors.Is(err, ErrRuleSetExists) {
@@ -59,6 +61,7 @@ func TestRuleSetCreateTaken(t *testing.T) {
 }
 
 func TestRuleSetLimit(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := range MaxRuleSets {
 		newRuleSet(t, s, fmt.Sprintf("set-%03d", i), ruleYAML)
@@ -75,6 +78,7 @@ func TestRuleSetLimit(t *testing.T) {
 }
 
 func TestRuleSetDeleteInUse(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for _, n := range []string{"a", "b", "c", "d"} {
 		newRuleSet(t, s, n, ruleYAML)
@@ -108,6 +112,7 @@ func TestRuleSetDeleteInUse(t *testing.T) {
 }
 
 func TestResolveRuleSets(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newRuleSet(t, s, "a", ruleYAML)
 	newRuleSet(t, s, "b", "rules: []\n")
@@ -134,6 +139,7 @@ func TestResolveRuleSets(t *testing.T) {
 // A save of a list that names a set and a delete of the set can't both
 // succeed.
 func TestRuleSetDeleteRacesSave(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for i := range 20 {
 		name := fmt.Sprintf("s%d", i)
@@ -154,6 +160,7 @@ func TestRuleSetDeleteRacesSave(t *testing.T) {
 }
 
 func TestDashboardRepoRuleSetsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newRuleSet(t, s, "a", ruleYAML)
 	newRuleSet(t, s, "b", ruleYAML)
@@ -194,6 +201,7 @@ func TestDashboardRepoRuleSetsRoundTrip(t *testing.T) {
 }
 
 func TestRepoDefaultsRuleSets(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	newRuleSet(t, s, "a", ruleYAML)
 	if err := s.PutRepoDefaults(ctx, RepoDefaults{RuleSets: []string{"a"}}); err != nil {
@@ -228,6 +236,7 @@ func TestRepoDefaultsLeaveOldBuiltInSwitch(t *testing.T) {
 }
 
 func TestSaveRuleSetsMissing(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web", RuleSets: []string{"gone"}})
 	var missing *MissingRuleSetError
@@ -243,6 +252,7 @@ func TestSaveRuleSetsMissing(t *testing.T) {
 }
 
 func TestSetRunRulesHash(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "aaa")
 	if r := getRun(t, s, id); r.RulesHash != nil {

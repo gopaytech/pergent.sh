@@ -51,6 +51,7 @@ func wantHeld(t *testing.T, env *testEnv, id string) {
 
 // A repository with no quota is reviewed as before.
 func TestNoQuotaReviewsAsToday(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 0, 0)
 	head := sha('a')
 	servePush(env, head)
@@ -67,6 +68,7 @@ func TestNoQuotaReviewsAsToday(t *testing.T) {
 // A push on a used-up quota waits: no Job, a pending status and one note. A
 // second push waits too, with its own status and no second note.
 func TestUsedUpRepoQuotaHoldsPush(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 100, 100)
 	head := sha('a')
 	servePush(env, head)
@@ -99,6 +101,7 @@ func TestUsedUpRepoQuotaHoldsPush(t *testing.T) {
 
 // The instance's quota holds a change whose repository has room.
 func TestUsedUpInstanceQuotaHolds(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 1000, 0)
 	instQuota := int64(500)
 	env.Engine.Config.GitLab[0].MonthlyTokenQuota = &instQuota
@@ -112,6 +115,7 @@ func TestUsedUpInstanceQuotaHolds(t *testing.T) {
 
 // One token under the quota is reviewed.
 func TestRoomLeftReviews(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 100, 99)
 	head := sha('a')
 	servePush(env, head)
@@ -125,6 +129,7 @@ func TestRoomLeftReviews(t *testing.T) {
 // pergent.sh's own full re-run (queued with quotaChecked false, as publish
 // does) is an automatic run: held.
 func TestOwnFullRerunHeld(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 100, 100)
 	head := sha('a')
 	servePush(env, head)
@@ -139,6 +144,7 @@ func TestOwnFullRerunHeld(t *testing.T) {
 // A run asked for by hand was checked when it was asked for: it goes ahead
 // even though the quota is used up now (an overshoot by design).
 func TestCheckedRunNotHeld(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 100, 100)
 	head := sha('a')
 	servePush(env, head)
@@ -158,6 +164,7 @@ func TestCheckedRunNotHeld(t *testing.T) {
 // An untrusted author's push waits for trust first: the trust note only, and
 // the reason is the trust one.
 func TestUntrustedWaitsForTrustNotQuota(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env := trustEnv(t, 3, head, 20)
 	env.SetNow(novemberMid)
@@ -183,6 +190,7 @@ func TestUntrustedWaitsForTrustNotQuota(t *testing.T) {
 // A quota that can't be read is a failed attempt, not a pass and not a hold:
 // no Job, and the run goes back to the queue.
 func TestQuotaReadErrorRetries(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 100, 0)
 	execSQL(t, env, "DROP TABLE run_usage")
 
@@ -209,6 +217,7 @@ func TestQuotaReadErrorRetries(t *testing.T) {
 // The note is posted once a month: a change held in November gets it again in
 // December.
 func TestNoteAgainNextMonth(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 100, 100)
 	nov := time.Date(2026, time.November, 20, 9, 0, 0, 0, time.UTC)
 	env.SetNow(nov)
@@ -240,6 +249,7 @@ func TestNoteAgainNextMonth(t *testing.T) {
 
 // GitHub holds the same way, with a queued check run in place of a status.
 func TestGitHubUsedUpQuotaHolds(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env, gh := ghTrustEnv(t, head, "dev", 51, "write")
 	env.SetNow(novemberMid)
@@ -267,6 +277,7 @@ func TestGitHubUsedUpQuotaHolds(t *testing.T) {
 // A note that can't be posted is tried again on the next held push, and the
 // run waits all the same.
 func TestQuotaNoteRetriedAfterFailedReply(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 100, 100)
 	env.GitLab.Reply(http.MethodPost, notesPath(3), http.StatusInternalServerError, `{"message":"boom"}`)
 	head := sha('a')
@@ -294,6 +305,7 @@ func TestQuotaNoteRetriedAfterFailedReply(t *testing.T) {
 // request: it goes ahead on a used-up quota, with no hold and no note, instead
 // of being checked again and again.
 func TestUnflaggedStartDispatchesOnUsedUpQuota(t *testing.T) {
+	t.Parallel()
 	env := quotaPushEnv(t, 100, 100)
 	head := sha('a')
 	servePush(env, head)

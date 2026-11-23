@@ -13,6 +13,7 @@ import (
 )
 
 func TestRepoRuleSetsSetting(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
@@ -46,6 +47,7 @@ func TestRepoRuleSetsSetting(t *testing.T) {
 // shows an empty list, a PUT stores the names once each in builtin.yaml
 // order, [] and null and a reset go back to none.
 func TestRepoBuiltInRulesSetting(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
@@ -155,6 +157,7 @@ func TestDefaultsHaveNoBuiltInRules(t *testing.T) {
 }
 
 func TestDefaultsRuleSets(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 	if err := e.st.CreateRuleSet(ctx, "a", goRuleSet, e.d.now()); err != nil {
@@ -177,6 +180,7 @@ func TestDefaultsRuleSets(t *testing.T) {
 }
 
 func TestInputsViewRules(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) {
 		cfg.Repositories[0].RuleSets = []string{"a"}
 		cfg.Repositories[0].Skills = []string{"style"}
@@ -211,6 +215,7 @@ func TestInputsViewRules(t *testing.T) {
 }
 
 func TestRunViewFileRules(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	res := map[string]any{
 		"schema_version": 1, "status": "completed", "base": baseSHA, "head": head('a'),

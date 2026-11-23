@@ -58,6 +58,7 @@ func (te *teamsEnv) addTeamModel(c *http.Cookie, team int64, name, key string) T
 // A second owner at the same level is 409 with the exact text, for a
 // repository and for a whole instance; ticks set and cleared are audited.
 func TestOwnerTickTaken(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	a, b := e.team("Payments", nil), e.team("Platform", nil)
@@ -91,6 +92,7 @@ func TestOwnerTickTaken(t *testing.T) {
 // A member sees their own teams, with their role there; an admin sees every
 // team.
 func TestMyTeams(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	got := decode[[]MyTeamView](t, te.get(te.viewer, "/api/me/teams"), "viewer", http.StatusOK)
 	if len(got) != 1 || got[0].ID != te.payments || got[0].Role != "viewer" || got[0].Name != "Payments" {
@@ -109,6 +111,7 @@ func TestMyTeams(t *testing.T) {
 // reads and gets 403 on a write; a maintainer of another team gets 403 on a
 // write and 404 on a read; a maintainer and an admin write.
 func TestTeamModelsAccess(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	models := teamURL(te.payments, "/models")
 	for name, c := range map[string]*http.Cookie{"viewer": te.viewer, "maintainer": te.maintainer, "admin": te.admin} {
@@ -146,6 +149,7 @@ func TestTeamModelsAccess(t *testing.T) {
 // A team key is write-only: no response, log or audit entry holds it; the
 // view says whether one is set. A new key reaches the registry.
 func TestTeamModelKeyWriteOnly(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	m := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
 	if !m.Key.Set || m.Provider != "openai" {
@@ -172,6 +176,7 @@ func TestTeamModelKeyWriteOnly(t *testing.T) {
 // A team chain holds the team's own entries and the global entries teams may
 // use; another team's entry, or a global one teams may not use, is 400.
 func TestTeamChainOnlyOwnAndAllowed(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
 	foreign := te.addTeamModel(te.otherMaintainer, te.widgets, "theirs", teamKeyTwo)
@@ -225,6 +230,7 @@ func TestTeamChainOnlyOwnAndAllowed(t *testing.T) {
 // name a Payments entry in Widgets' chain (400). The chain of a repository
 // Payments owns is TestRepoChainOtherTeam403's.
 func TestTeamChainForeignEntry(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
 	wantCode(t, te.sendJSON(te.otherMaintainer, "PUT", teamURL(te.payments, "/chain"), entryBody("team/"+own.ID)), "PUT Payments chain", http.StatusForbidden)
@@ -243,6 +249,7 @@ func TestTeamChainForeignEntry(t *testing.T) {
 // A team's maintainer clears the mark of the team's own entry; a global
 // entry's mark is the admins' (its route answers anyone else 404).
 func TestTeamMaintainerClearsOwnMarkOnly(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	own := te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
 	g := te.addModel("openai", "gpt-global", "", llmKeyOne)
@@ -268,6 +275,7 @@ func TestTeamMaintainerClearsOwnMarkOnly(t *testing.T) {
 
 // Deleting a team deletes its entries, and says so in the audit log.
 func TestDeleteTeamAudits(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
 	te.addTeamModel(te.maintainer, te.payments, "second", teamKeyTwo)
@@ -283,6 +291,7 @@ func TestDeleteTeamAudits(t *testing.T) {
 // [P10] Removing a team entry names the reviewer chains it left, after
 // chain A's, once per repository; with none naming it the line is as before.
 func TestDeleteTeamModelAuditNamesReviewerChains(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	one := te.addTeamModel(te.maintainer, te.payments, "one", teamKeyOne)
 	two := te.addTeamModel(te.maintainer, te.payments, "two", teamKeyTwo)
@@ -327,6 +336,7 @@ func TestDeleteTeamModelAuditNamesReviewerChains(t *testing.T) {
 // A name is unique within a team, ignoring case, and follows the name rule;
 // another team may use it.
 func TestTeamModelNameTaken(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	te.addTeamModel(te.maintainer, te.payments, "own", teamKeyOne)
 	rec := te.sendJSON(te.maintainer, "POST", teamURL(te.payments, "/models"),

@@ -42,6 +42,7 @@ func apiState(t *testing.T, s *Store, id string) RunState {
 }
 
 func TestEnqueueAPIReviewShape(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	id := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -97,6 +98,7 @@ func TestEnqueueAPIReviewShape(t *testing.T) {
 }
 
 func TestEnqueueAPIReviewSupersedesSubject(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newAPIClient(t, s, "client-a")
 	b := newAPIClient(t, s, "client-b")
@@ -131,6 +133,7 @@ func TestEnqueueAPIReviewSupersedesSubject(t *testing.T) {
 }
 
 func TestEnqueueAPIReviewKeepsReported(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	first := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -146,6 +149,7 @@ func TestEnqueueAPIReviewKeepsReported(t *testing.T) {
 }
 
 func TestEnqueueAPIReviewSameContentTwoSubjects(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	n1, n2 := apiRequest(c.ID, "acme", "route:1"), apiRequest(c.ID, "acme", "route:2")
@@ -164,6 +168,7 @@ func TestEnqueueAPIReviewSameContentTwoSubjects(t *testing.T) {
 }
 
 func TestEnqueueAPIReviewIdempotent(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newAPIClient(t, s, "client-a")
 	b := newAPIClient(t, s, "client-b")
@@ -215,6 +220,7 @@ func TestEnqueueAPIReviewIdempotent(t *testing.T) {
 }
 
 func TestAPIReviewByKey(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newAPIClient(t, s, "client-a")
 	b := newAPIClient(t, s, "client-b")
@@ -239,6 +245,7 @@ func TestAPIReviewByKey(t *testing.T) {
 }
 
 func TestAPIReviewOtherClientNotFound(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newAPIClient(t, s, "client-a")
 	b := newAPIClient(t, s, "client-b")
@@ -265,6 +272,7 @@ func TestAPIReviewOtherClientNotFound(t *testing.T) {
 }
 
 func TestDropAPIInputs(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	id := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -316,6 +324,7 @@ func TestDropAPIInputs(t *testing.T) {
 }
 
 func TestFinishAPIReview(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	id := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -366,6 +375,7 @@ func TestFinishAPIReview(t *testing.T) {
 }
 
 func TestAPIReviewsFilter(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newAPIClient(t, s, "client-a")
 	b := newAPIClient(t, s, "client-b")
@@ -435,6 +445,7 @@ func TestAPIReviewsFilter(t *testing.T) {
 }
 
 func TestAPIReviewsPages(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	oldest := enqueueAPI(t, s, apiRequest(c.ID, "acme", "s1"))
@@ -510,6 +521,7 @@ func seedTenantUsage(t *testing.T, s *Store, clientID int64, tenant, subject str
 }
 
 func TestReviewDigestsLeaveOutAPIReviews(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	mr := dispatched(t, s, mr1, "aaa", "tok-aaa")
@@ -529,6 +541,7 @@ func TestReviewDigestsLeaveOutAPIReviews(t *testing.T) {
 }
 
 func TestUsageByRepositoryLeavesOutAPIReviews(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	seedUsage(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "m", skillRow("security", "no_blocking_issues", 100, 10))
@@ -557,6 +570,7 @@ func TestUsageByRepositoryLeavesOutAPIReviews(t *testing.T) {
 
 // The admin overview counts API reviews too, under the empty repository.
 func TestRunStatsCountAPIReviews(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -576,6 +590,7 @@ func TestRunStatsCountAPIReviews(t *testing.T) {
 }
 
 func TestMetricsTotalsLeaveOutAPIReviews(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	seedUsage(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "m", skillRow("security", "no_blocking_issues", 100, 10))
@@ -635,6 +650,7 @@ func TestMetricsTotalsLeaveOutAPIReviews(t *testing.T) {
 }
 
 func TestDeleteAPIClientReturnsLiveJobs(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	other := newAPIClient(t, s, "other")
@@ -691,6 +707,7 @@ func TestDeleteAPIClientReturnsLiveJobs(t *testing.T) {
 // The merge and close sweep looks changes up on a forge, which an API review
 // has none on, even once it is published with an outcome.
 func TestChangesWithoutFatesLeaveOutAPIReviews(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "fastgateway")
 	id := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
@@ -708,6 +725,7 @@ func TestChangesWithoutFatesLeaveOutAPIReviews(t *testing.T) {
 }
 
 func TestAPIClientStats(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newAPIClient(t, s, "client-a")
 	b := newAPIClient(t, s, "client-b")
@@ -757,6 +775,7 @@ func TestAPIClientStats(t *testing.T) {
 // The budget counts a month as the dashboard does: by when each review was
 // asked for, the tokens of the client's reviews and no other's.
 func TestAPITokensSince(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newAPIClient(t, s, "client-a")
 	b := newAPIClient(t, s, "client-b")
@@ -796,6 +815,7 @@ func TestAPITokensSince(t *testing.T) {
 }
 
 func TestLastAPIReview(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "gateway")
 	other := newAPIClient(t, s, "other")
@@ -849,6 +869,7 @@ func setMaxInFlight(t *testing.T, s *Store, name string, n int) {
 // A claim takes no more of a client's API reviews than fit beside those
 // already running, oldest first, and another client is not held up.
 func TestClaimQueuedCapsAPIClient(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newAPIClient(t, s, "client-a")
 	b := newAPIClient(t, s, "client-b")
@@ -899,6 +920,7 @@ func TestClaimQueuedCapsAPIClient(t *testing.T) {
 // Merge request runs are claimed as before, first in, first out with API
 // reviews, and an API review the cap holds takes no slot from them.
 func TestClaimQueuedIgnoresCapForMR(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	c := newAPIClient(t, s, "gateway")
 	setMaxInFlight(t, s, "gateway", 1)
@@ -950,6 +972,7 @@ func TestClaimQueuedIgnoresCapForMR(t *testing.T) {
 // client with no usage in the period, and a merge request's usage, are not in
 // it.
 func TestUsageByAPIClient(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newAPIClient(t, s, "client-a")
 	b := newAPIClient(t, s, "client-b")
@@ -1026,6 +1049,7 @@ func TestUsageByAPIClient(t *testing.T) {
 // The metrics count each API client's reviews by result, tokens and
 // callbacks, by client name and never by tenant.
 func TestMetricsTotalsAPIClients(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := newCallbackClient(t, s, "client-a")
 	b := newAPIClient(t, s, "client-b")

@@ -172,6 +172,7 @@ func checkDispatchGolden(t *testing.T, env *testEnv, id string) {
 // before review panels existed: its Job, ConfigMap and Secret, its run's row
 // and what it posts.
 func TestDispatchJobUnchanged(t *testing.T) {
+	t.Parallel()
 	env, id := goldenEnv(t, nil)
 	dispatch(t, env)
 	checkDispatchGolden(t, env, id)

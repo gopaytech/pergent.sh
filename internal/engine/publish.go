@@ -461,6 +461,10 @@ type reviewComment struct {
 	// judged is true for a judge run (it has a review_judges row): its
 	// result must say how it merged the reviewers.
 	judged bool
+	// members and reviewers are a judge run's reviewer attempts (oldest
+	// first) and its review_judges.reviewers, for droppedReviewer.
+	members   []store.ReviewMember
+	reviewers []int
 }
 
 // reviewComment reads run's multi review. A judge run (a review_judges
@@ -506,7 +510,7 @@ func (e *Engine) reviewComment(ctx context.Context, run store.Run) (reviewCommen
 		}
 		return rc, nil
 	}
-	rc.judged = true
+	rc.judged, rc.members, rc.reviewers = true, ms, j.Reviewers
 	names := &render.MultiReviewNames{Reviewers: []string{}}
 	for _, n := range j.Reviewers {
 		var first, newest, served *store.ReviewMember
@@ -526,7 +530,7 @@ func (e *Engine) reviewComment(ctx context.Context, run store.Run) (reviewCommen
 		name := ""
 		switch {
 		case served != nil:
-			name = attemptEntryName(*served)
+			name = served.EntryName()
 		case first != nil && len(first.Chain.Entries) > 0:
 			name = first.Chain.Entries[0].Name
 		}
@@ -551,30 +555,56 @@ func (e *Engine) reviewComment(ctx context.Context, run store.Run) (reviewCommen
 }
 
 // checked is o, the outcome of a run, with a judge run's completed result
-// that has no multi_review block turned into a failure: such a result is
+// turned into a failure when it has no multi_review block, or when it did
+// not use a reviewer that has a result (droppedReviewer): such a result is
 // never a pass.
 func (rc reviewComment) checked(o policy.Outcome, log *slog.Logger) policy.Outcome {
-	if !rc.judged || o.Result == nil || o.Result.Status != "completed" || o.Result.MultiReview != nil {
+	if !rc.judged || o.Result == nil || o.Result.Status != "completed" {
 		return o
 	}
-	log.Warn("the judge's result can't be used: it has no multi_review block")
-	return policy.Outcome{FailureReason: reasonUnusableResult + reasonNoMultiReview, CI: o.CI}
+	if o.Result.MultiReview == nil {
+		log.Warn("the judge's result can't be used: it has no multi_review block")
+		return policy.Outcome{FailureReason: reasonUnusableResult + reasonNoMultiReview, CI: o.CI}
+	}
+	if n, dropped := droppedReviewer(rc.members, rc.reviewers, o.Result.MultiReview); dropped {
+		log.Warn("the judge's result can't be used: it did not use a reviewer that has a result", "reviewer", n)
+		return policy.Outcome{FailureReason: reasonUnusableResult + droppedReviewerReason(n), CI: o.CI}
+	}
+	return o
 }
 
-// attemptEntryName is the name, in its frozen chain, of the entry reviewer
-// attempt m ran on (its position, 1-based); the name its dispatch recorded
-// when the frozen chain has none.
-func attemptEntryName(m store.ReviewMember) string {
-	if p := m.Entry.Position; p >= 1 && p <= len(m.Chain.Entries) && m.Chain.Entries[p-1].Name != "" {
-		return m.Chain.Entries[p-1].Name
+// droppedReviewerReason fails a judge run that did not use reviewer n,
+// although n has a result.
+func droppedReviewerReason(n int) string {
+	return fmt.Sprintf("the judge did not use reviewer %d, which has a result", n)
+}
+
+// droppedReviewer is the first reviewer of reviewers whose newest attempt
+// in ms (oldest first) is done with a stored result, while the judge's
+// result mr marks it as not usable or leaves it out. The judge Job then ran
+// on part of the results (for example, a fetch reached a pergent.sh with no
+// reviewers route), so the result could miss that reviewer's blocking
+// findings. dropped is false when the judge used every such reviewer.
+func droppedReviewer(ms []store.ReviewMember, reviewers []int, mr *result.MultiReview) (n int, dropped bool) {
+	usable := map[int]bool{}
+	seen := map[int]bool{}
+	for _, r := range mr.Reviewers {
+		// A number listed twice is usable only when every entry says so.
+		usable[r.Number] = r.Usable && (!seen[r.Number] || usable[r.Number])
+		seen[r.Number] = true
 	}
-	if m.Entry.Name != "" {
-		return m.Entry.Name
+	for _, k := range reviewers {
+		var newest *store.ReviewMember
+		for i := range ms {
+			if ms[i].Reviewer == k && ms[i].State != store.MemberOff {
+				newest = &ms[i]
+			}
+		}
+		if newest != nil && newest.State == store.MemberDone && newest.Result != nil && !usable[k] {
+			return k, true
+		}
 	}
-	if len(m.Chain.Entries) > 0 {
-		return m.Chain.Entries[0].Name
-	}
-	return ""
+	return 0, false
 }
 
 // skippedWords is why a reviewer gave no result, from its newest attempt's
@@ -582,7 +612,6 @@ func attemptEntryName(m store.ReviewMember) string {
 // provider refused its model, as they are; anything else (a reason that can
 // hold model text) is skipReviewFailed.
 func skippedWords(reason string) string {
-	reason = strings.TrimPrefix(reason, reasonMemberRefused)
 	switch reason {
 	case skipSame, skipQuota, skipNone,
 		chain.ReasonWords(store.ClassQuota), chain.ReasonWords(store.ClassBilling), chain.ReasonWords(store.ClassAuth):

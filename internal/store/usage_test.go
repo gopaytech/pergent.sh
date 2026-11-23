@@ -9,6 +9,7 @@ import (
 )
 
 func TestRecordUsage(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "head1", `{"schema_version":1,"status":"completed","skills":[]}`)
 	rows := []SkillUsage{{Skill: "security", Verdict: "failed", In: 10, Out: 2, Findings: 1, Blocking: 1}}
@@ -33,6 +34,7 @@ func TestRecordUsage(t *testing.T) {
 // The provider a run launched on is copied to its usage rows, "" when the run
 // has none.
 func TestRecordUsageCopiesProvider(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	on := seedUsageOn(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "anthropic", "sonnet", skillRow("security", "no_blocking_issues", 1, 0))
 	none := seedUsage(t, s, usageMR(7, 2), usageAt(5, 11, 0), TriggerPush, false, "old", skillRow("security", "no_blocking_issues", 1, 0))
@@ -52,6 +54,7 @@ func TestRecordUsageCopiesProvider(t *testing.T) {
 // provider is not another provider's of the same name, and a run with no
 // model lists none.
 func TestUsageByMRListsEachModel(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	two := func(skill string) []SkillUsage {
 		return []SkillUsage{skillRow(skill, "no_blocking_issues", 10, 0), skillRow(skill+"2", "no_blocking_issues", 10, 0)}
@@ -88,6 +91,7 @@ func TestUsageByMRListsEachModel(t *testing.T) {
 
 // A model is told apart by its provider.
 func TestUsageByModelSplitsByProvider(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	seedUsageOn(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "anthropic", "sonnet", skillRow("a", "no_blocking_issues", 100, 0))
 	seedUsageOn(t, s, usageMR(7, 2), usageAt(5, 11, 0), TriggerPush, false, "gateway", "sonnet", skillRow("a", "no_blocking_issues", 50, 0))
@@ -108,6 +112,7 @@ func TestUsageByModelSplitsByProvider(t *testing.T) {
 
 // A run's usage is the sum of its skills, and found only once it is recorded.
 func TestRunUsage(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "head1", `{"schema_version":1,"status":"completed","skills":[]}`)
 	if in, out, found, err := s.RunUsage(ctx, id); err != nil || found || in != 0 || out != 0 {
@@ -124,6 +129,7 @@ func TestRunUsage(t *testing.T) {
 // Counts the Job didn't report are stored as NULL, and the row takes the
 // run's own repository, merge request and trigger.
 func TestRecordUsageKeepsUnknownCountsNull(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "head1", `{"schema_version":1,"status":"completed","skills":[]}`)
 	zero := int64(0)
@@ -155,6 +161,7 @@ func TestRecordUsageKeepsUnknownCountsNull(t *testing.T) {
 // A run with no skills is still marked, so the background fill doesn't read
 // it again on every start.
 func TestRecordUsageNoSkillsMarksTheRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "head1", `{"schema_version":1,"status":"completed","skills":[]}`)
 	if err := s.RecordUsage(ctx, id, nil); err != nil {
@@ -171,6 +178,7 @@ func TestRecordUsageNoSkillsMarksTheRun(t *testing.T) {
 }
 
 func TestRunsWithoutUsage(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := reported(t, s, mr1, "head1", `{"schema_version":1,"status":"completed","skills":[]}`)
 	b := reported(t, s, mr2, "head2", `{"schema_version":1,"status":"completed","skills":[]}`)
@@ -243,6 +251,7 @@ func wantTokens(t *testing.T, what string, got, want TokenSum) {
 }
 
 func TestUsageByRepository(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	// Project 7: two reviews, three skill rows, 185 tokens.
 	seedUsage(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "m",
@@ -271,6 +280,7 @@ func TestUsageByRepository(t *testing.T) {
 }
 
 func TestUsageDaily(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	seedUsage(t, s, usageMR(7, 1), usageAt(5, 23, 30), TriggerPush, false, "m", skillRow("security", "no_blocking_issues", 10, 1))
 	seedUsage(t, s, usageMR(7, 2), usageAt(6, 0, 30), TriggerPush, false, "m", skillRow("security", "no_blocking_issues", 20, 2))
@@ -306,6 +316,7 @@ func TestUsageDaily(t *testing.T) {
 }
 
 func TestUsageRepositoryBySkillMRModel(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	// MR 3 is reviewed twice; the later run has the newer title.
 	old := seedUsage(t, s, usageMR(7, 3), usageAt(5, 10, 0), TriggerPush, false, "small",
@@ -362,6 +373,7 @@ func TestUsageRepositoryBySkillMRModel(t *testing.T) {
 }
 
 func TestUsageWasted(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	// A failed skill counts, a passing skill of the same run doesn't.
 	seedUsage(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "m",
@@ -410,6 +422,7 @@ func TestUsageWasted(t *testing.T) {
 }
 
 func TestUsageMediansAndOutliers(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	full := func(iid int64, rows ...SkillUsage) string {
 		return seedUsage(t, s, usageMR(7, iid), usageAt(5, 10, int(iid)), TriggerPush, false, "m", rows...)
@@ -459,6 +472,7 @@ func TestUsageMediansAndOutliers(t *testing.T) {
 // A count the Job didn't report is not zero: the row adds to Unknown and to
 // no sum of that count.
 func TestUsageCacheUnknown(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	three, four := int64(3), int64(4)
 	known := int64(5)
@@ -476,6 +490,7 @@ func TestUsageCacheUnknown(t *testing.T) {
 // The rows come oldest first, with a count the Job didn't report as nil, for
 // one repository or all, and no more than the limit.
 func TestUsageRows(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	seedUsage(t, s, usageMR(7, 2), usageAt(6, 10, 0), TriggerPush, true, "m2", skillRow("style", "has_blocking_issues", 20, 2))
 	seedUsageOn(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "anthropic", "m1",
@@ -531,6 +546,7 @@ func TestUsageRows(t *testing.T) {
 }
 
 func TestUsageProjectID(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	// A repository's project row is gone once it is switched off, its usage
 	// is not: the usage names the project too.
@@ -551,6 +567,7 @@ func TestUsageProjectID(t *testing.T) {
 // failure before any Job. A stopped run and a run that kept its result are
 // not counted.
 func TestMetricsTotalsNoResultByStep(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	fail := func(mr MRKey, head, step string) {
 		t.Helper()
@@ -585,6 +602,7 @@ func TestMetricsTotalsNoResultByStep(t *testing.T) {
 }
 
 func TestMetricsTotals(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	security := skillRow("security", "no_blocking_issues", 100, 10)
 	security.Findings, security.Blocking = 3, 1

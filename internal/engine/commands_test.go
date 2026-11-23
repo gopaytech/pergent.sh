@@ -239,6 +239,7 @@ const (
 var help = "Commands: `@" + botMention + " review` (full review) · `@" + botMention + " review failed` · `@" + botMention + " dismiss <id> <reason>`"
 
 func TestRerunCommand(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	old := f.review(reviewed("no_blocking_issues", "a.go"))
 	at := time.Now()
@@ -262,6 +263,7 @@ func TestRerunCommand(t *testing.T) {
 }
 
 func TestRerunCommandNeedsWriteAccess(t *testing.T) {
+	t.Parallel()
 	for _, user := range []string{"rep", "eve"} {
 		t.Run(user, func(t *testing.T) {
 			f := newCommandFixture(t)
@@ -282,6 +284,7 @@ func TestRerunCommandNeedsWriteAccess(t *testing.T) {
 // A head already queued is not queued twice, and the request is still
 // acknowledged as done.
 func TestRerunCommandForQueuedHeadIsAcknowledged(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(reviewed("no_blocking_issues", "a.go"))
 	at := time.Now()
@@ -305,6 +308,7 @@ func skillOf(t *testing.T, name, verdict string) result.Skill {
 }
 
 func TestRerunFailedCommand(t *testing.T) {
+	t.Parallel()
 	t.Run("only the failed skills", func(t *testing.T) {
 		f := newCommandFixture(t)
 		base := f.review(skillOf(t, "security", "no_blocking_issues"), skillOf(t, "style", "failed"))
@@ -388,6 +392,7 @@ func TestRerunFailedCommand(t *testing.T) {
 }
 
 func TestDismissCommand(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	id := f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 
@@ -426,6 +431,7 @@ func TestDismissCommand(t *testing.T) {
 // The ID may also be the start of the finding's fingerprint, when it is
 // unambiguous.
 func TestDismissByFingerprintPrefix(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 
@@ -441,6 +447,7 @@ func TestDismissByFingerprintPrefix(t *testing.T) {
 // Images are stripped from a reason before it is stored, so the review
 // comment can't pull one in; a reason of nothing else is no reason.
 func TestDismissReasonHasNoImages(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	at := time.Now()
@@ -461,6 +468,7 @@ func TestDismissReasonHasNoImages(t *testing.T) {
 }
 
 func TestDismissAlreadyDismissed(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	at := time.Now()
@@ -485,6 +493,7 @@ func TestDismissAlreadyDismissed(t *testing.T) {
 // A dismissal this very command stored on an earlier attempt, which then
 // failed to re-decide the review, is carried on, not answered as a repeat.
 func TestDismissRetryAfterPartialAttempt(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	id := f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	at := time.Now()
@@ -510,6 +519,7 @@ func TestDismissRetryAfterPartialAttempt(t *testing.T) {
 }
 
 func TestAuthorCannotDismissBlocking(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 
@@ -528,6 +538,7 @@ func TestAuthorCannotDismissBlocking(t *testing.T) {
 
 // The author may dismiss a suggestion of their own change.
 func TestAuthorDismissesSuggestion(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
 
@@ -541,6 +552,7 @@ func TestAuthorDismissesSuggestion(t *testing.T) {
 }
 
 func TestDismissNeedsReason(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 
@@ -555,6 +567,7 @@ func TestDismissNeedsReason(t *testing.T) {
 }
 
 func TestDeveloperDismissesSuggestionOnly(t *testing.T) {
+	t.Parallel()
 	t.Run("blocking", func(t *testing.T) {
 		f := newCommandFixture(t)
 		f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
@@ -600,6 +613,7 @@ func TestDeveloperDismissesSuggestionOnly(t *testing.T) {
 // keeps what it needs to: the finding's skill, file and title and the
 // platform ID of who dismissed it.
 func TestDismissTeachesWithWriteAccess(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		user     string
 		id       int64
@@ -632,6 +646,7 @@ func TestDismissTeachesWithWriteAccess(t *testing.T) {
 // The author of a change with read access only (a fork contributor, say) may
 // dismiss a suggestion of their own change, but it teaches nothing.
 func TestDismissReadOnlyAuthorDoesNotTeach(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.authorID = userReporter
 	f.serveMR(1, false)
@@ -651,6 +666,7 @@ func TestDismissReadOnlyAuthorDoesNotTeach(t *testing.T) {
 }
 
 func TestUnknownIDAndHelp(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	at := time.Now()
@@ -673,6 +689,7 @@ func TestUnknownIDAndHelp(t *testing.T) {
 // With the gate off, help reads no access: a platform that can't say who is a
 // member doesn't keep it from being answered.
 func TestHelpNeedsNoAccessWithTheGateOff(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	f.GitLab.Handle(http.MethodGet, membersPath(userDeveloper), func(w http.ResponseWriter, _ *http.Request) {
@@ -688,6 +705,7 @@ func TestHelpNeedsNoAccessWithTheGateOff(t *testing.T) {
 
 // An ambiguous fingerprint prefix is no finding.
 func TestDismissAmbiguousPrefix(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	a := namedSkill(t, "security", "has_blocking_issues", "blocking", "abc123000001")
 	b := namedSkill(t, "style", "has_blocking_issues", "blocking", "abc123000002")
@@ -707,6 +725,7 @@ func TestReplyIDKeepsNothingButHex(t *testing.T) {
 }
 
 func TestDraftRerun(t *testing.T) {
+	t.Parallel()
 	for _, cmd := range []string{"review", "review_failed"} {
 		t.Run(cmd, func(t *testing.T) {
 			f := newCommandFixture(t)
@@ -728,6 +747,7 @@ func TestDraftRerun(t *testing.T) {
 }
 
 func TestDuplicateWithin30s(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	at := time.Now()
@@ -752,6 +772,7 @@ func TestDuplicateWithin30s(t *testing.T) {
 // whatever its username looks like: GitLab says so (the user's bot flag), and
 // the bot gets a 👎 and no reply, nor does the command run.
 func TestCommandOfABotIsDropped(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	f.GitLab.Reply(http.MethodGet, userPath(userDeveloper), http.StatusOK, map[string]any{"id": userDeveloper, "bot": true})
@@ -774,6 +795,7 @@ func TestCommandOfABotIsDropped(t *testing.T) {
 // command is dropped as a bot's is: a 👎, no reply, no run and no access
 // lookup. It is not tried again.
 func TestCommandWhenBotStatusIsUnknownIsDropped(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		userID int64
@@ -815,6 +837,7 @@ func TestCommandWhenBotStatusIsUnknownIsDropped(t *testing.T) {
 // When GitLab can't say whether the author is a bot, nothing is done and the
 // command is tried again, then given up on (never run).
 func TestCommandWhenTheAuthorCannotBeReadIsRetried(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	f.GitLab.Reply(http.MethodGet, userPath(userDeveloper), http.StatusInternalServerError, `{"message":"boom"}`)
@@ -841,6 +864,7 @@ func TestCommandWhenTheAuthorCannotBeReadIsRetried(t *testing.T) {
 // next command on a change is left alone for two minutes after one of theirs
 // was answered: no reaction, no reply, no platform call.
 func TestCommandsAreThrottledPerAuthorAndChange(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	at := time.Now()
@@ -913,6 +937,7 @@ func twoFindings(t *testing.T) result.Skill {
 // carried out does not start the window, so a maintainer working through a
 // review's findings is not ignored.
 func TestCarriedOutCommandsDoNotThrottle(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(twoFindings(t))
 	at := time.Now()
@@ -931,6 +956,7 @@ func TestCarriedOutCommandsDoNotThrottle(t *testing.T) {
 // A maintainer asks for a re-run and, when it is out, dismisses one of its
 // findings: both within two minutes, both carried out.
 func TestReviewThenDismissAreBothCarriedOut(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	at := time.Now()
@@ -957,6 +983,7 @@ func TestReviewThenDismissAreBothCarriedOut(t *testing.T) {
 // reason: help, a refusal, a command with nothing to do. The next command,
 // a valid one too, is left alone until the window has passed.
 func TestCommandsThatDidNothingThrottle(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(f *commandFixture, at time.Time) (first int64){
 		"help":    func(f *commandFixture, at time.Time) int64 { return f.say(1, "mo", "help", "", "", at) },
 		"unknown": func(f *commandFixture, at time.Time) int64 { return f.say(1, "mo", "unknown", "", "", at) },
@@ -1005,6 +1032,7 @@ func TestCommandsThatDidNothingThrottle(t *testing.T) {
 }
 
 func TestCommandOnSwitchedOffRepo(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	c := f.say(1, "dev", "review", "", "", time.Now())
@@ -1020,6 +1048,7 @@ func TestCommandOnSwitchedOffRepo(t *testing.T) {
 }
 
 func TestCommandOnClosedChange(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	mr := openMR(1, f.head)
@@ -1039,6 +1068,7 @@ func ptr[T any](v T) *T { return &v }
 // reviews only some files, which a request for the same head otherwise would
 // leave to finish.
 func TestReviewCommandReplacesAnIncrementalRun(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	base := f.Publish(1, sha('c'), resultFor(t, sha('c'), reviewed("no_blocking_issues", "a.go")))
 	id := f.Dispatched(1, f.head)
@@ -1062,6 +1092,7 @@ func TestReviewCommandReplacesAnIncrementalRun(t *testing.T) {
 // The caps count the re-runs of commands and of buttons alike, per change and
 // per repository, over the UTC day.
 func TestRerunCapsAcrossCommandsAndButtons(t *testing.T) {
+	t.Parallel()
 	// A button's re-run, as the dashboard queues it.
 	button := func(f *commandFixture, iid int64) {
 		t.Helper()
@@ -1169,6 +1200,7 @@ func TestRerunCapsAcrossCommandsAndButtons(t *testing.T) {
 }
 
 func TestCommandPlatformChurnIsRetriedThenGivenUp(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	f.GitLab.Reply(http.MethodGet, mrPath(1), http.StatusBadRequest, `{"message":"boom"}`)
@@ -1202,6 +1234,7 @@ func TestCommandPlatformChurnIsRetriedThenGivenUp(t *testing.T) {
 }
 
 func TestCommandRetrySucceedsWhenPlatformRecovers(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	f.GitLab.Reply(http.MethodGet, mrPath(1), http.StatusBadRequest, `{"message":"boom"}`)
@@ -1223,6 +1256,7 @@ func TestCommandRetrySucceedsWhenPlatformRecovers(t *testing.T) {
 // A refusal whose reply can't be posted is tried again, so the commenter is
 // never left without an answer.
 func TestRefusalWithoutReplyIsRetried(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	f.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusBadRequest, `{"message":"boom"}`)
@@ -1238,6 +1272,7 @@ func TestRefusalWithoutReplyIsRetried(t *testing.T) {
 }
 
 func TestCommandsAudited(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(namedSkill(t, "security", "has_blocking_issues", "blocking", sqlFingerprint), skillOf(t, "style", "failed"))
 	at := time.Now()
@@ -1274,6 +1309,7 @@ func TestCommandsAudited(t *testing.T) {
 }
 
 func TestCommandsAuditFullRerun(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	f.say(1, "dev", "review", "", "", time.Now())
@@ -1296,6 +1332,7 @@ func TestCommandsAuditFullRerun(t *testing.T) {
 // Two dismissals in one pass: the first re-decides the run, which is then
 // waiting to be published; the second still finds the review.
 func TestTwoDismissalsInOnePass(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	a := namedSkill(t, "security", "has_blocking_issues", "blocking", "aaaaaaaaaaaa")
 	b := namedSkill(t, "style", "has_blocking_issues", "blocking", "bbbbbbbbbbbb")
@@ -1398,6 +1435,7 @@ func TestCommandCutShortByThePassIsNotCounted(t *testing.T) {
 }
 
 func TestCommandsWaitForUnconnectedInstance(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	c := f.say(1, "dev", "review", "", "", time.Now())
@@ -1455,6 +1493,7 @@ func countAction(es []store.AuditEntry, action string) int {
 // The author is told by user ID, never by username: a namesake on another
 // account isn't the author, and the author under another login still is.
 func TestAuthorComparedByID(t *testing.T) {
+	t.Parallel()
 	t.Run("same login, another account", func(t *testing.T) {
 		f := newCommandFixture(t)
 		f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
@@ -1485,6 +1524,7 @@ func TestAuthorComparedByID(t *testing.T) {
 // A change whose author the platform didn't report can't be told from the
 // commenter: a blocking finding is not dismissed (a suggestion is).
 func TestUnknownAuthorCannotBeTold(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.authorID = 0
 	f.serveMR(1, false)
@@ -1573,6 +1613,7 @@ func findingRaw(t *testing.T, id, fingerprint, severity string) json.RawMessage 
 // One fingerprint reported at two severities (by two skills) is dismissed at
 // the higher one, whichever ID names it.
 func TestDismissByIDUsesTheHighestSeverityOfTheFingerprint(t *testing.T) {
+	t.Parallel()
 	seed := func(f *commandFixture) {
 		a := skillOf(f.t, "security", "no_blocking_issues")
 		a.Findings = []json.RawMessage{findingRaw(f.t, "abc123", "ffffffffffff", "suggestion")}
@@ -1656,6 +1697,7 @@ func (f *commandFixture) denyRunUpdates(id string) (restore func()) {
 // A dismissal that is stored is audited when it is, so a re-decision that
 // then fails and is retried leaves one entry, not none and not two.
 func TestDismissAuditedEvenWhenRedecidingFails(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	id := f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	restore := f.denyRunUpdates(id)
@@ -1690,6 +1732,7 @@ func TestDismissAuditedEvenWhenRedecidingFails(t *testing.T) {
 // change that moved on since (nothing to re-decide) doesn't hold the
 // command up.
 func TestDismissOnReviewOfAnEarlierHead(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	old := f.head
 	id := f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
@@ -1716,6 +1759,7 @@ func TestDismissOnReviewOfAnEarlierHead(t *testing.T) {
 
 // What a reason says, a secret included, never reaches the audit log.
 func TestAuditReasonIsRedacted(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 
@@ -1903,6 +1947,7 @@ func (f *commandFixture) wantThreadReplies(discussion string, want ...string) {
 }
 
 func TestThreadDismissSuggestion(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	id := f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
 	f.findingThread(sqlFingerprint)
@@ -1926,6 +1971,7 @@ func TestThreadDismissSuggestion(t *testing.T) {
 }
 
 func TestThreadDismissBlockingWithAReason(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	f.findingThread(sqlFingerprint)
@@ -1940,6 +1986,7 @@ func TestThreadDismissBlockingWithAReason(t *testing.T) {
 }
 
 func TestThreadDismissBlockingNeedsAReason(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	f.findingThread(sqlFingerprint)
@@ -1956,6 +2003,7 @@ func TestThreadDismissBlockingNeedsAReason(t *testing.T) {
 }
 
 func TestThreadDismissBlockingByAuthorRefused(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	f.findingThread(sqlFingerprint)
@@ -1972,6 +2020,7 @@ func TestThreadDismissBlockingByAuthorRefused(t *testing.T) {
 }
 
 func TestThreadDismissWithoutWriteAccessRefused(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
 	f.findingThread(sqlFingerprint)
@@ -1987,6 +2036,7 @@ func TestThreadDismissWithoutWriteAccessRefused(t *testing.T) {
 }
 
 func TestThreadDismissUnknownThread(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
 	f.findingThread(sqlFingerprint)
@@ -2006,6 +2056,7 @@ func TestThreadDismissUnknownThread(t *testing.T) {
 // A thread whose finding is not in the latest review any more has nothing to
 // dismiss.
 func TestThreadDismissFindingGone(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(reviewed("no_blocking_issues", "db/query.go"))
 	f.findingThread(sqlFingerprint)
@@ -2023,6 +2074,7 @@ func TestThreadDismissFindingGone(t *testing.T) {
 // A first word that looks like an ID but is not the finding's is the start of
 // the reason.
 func TestThreadDismissArgNotIDIsReason(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	f.findingThread(sqlFingerprint)
@@ -2039,6 +2091,7 @@ func TestThreadDismissArgNotIDIsReason(t *testing.T) {
 // The first word of a reason that looks like an ID keeps the case it was
 // written in.
 func TestThreadDismissReasonKeepsTheCaseOfItsFirstWord(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 	f.findingThread(sqlFingerprint)
@@ -2055,6 +2108,7 @@ func TestThreadDismissReasonKeepsTheCaseOfItsFirstWord(t *testing.T) {
 // "dismiss <id> <reason>" in a thread that isn't pergent's is the plain
 // command: the ID says which finding.
 func TestThreadDismissByIDInSomeOtherThread(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 
@@ -2068,6 +2122,7 @@ func TestThreadDismissByIDInSomeOtherThread(t *testing.T) {
 }
 
 func TestThreadDismissByUnknownIDInSomeOtherThread(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
 
@@ -2085,6 +2140,7 @@ func TestThreadDismissByUnknownIDInSomeOtherThread(t *testing.T) {
 // with the same hex-looking word, are two commands: no repeat check applies
 // to a dismissal in a thread.
 func TestThreadDismissalsWithTheSameFirstWordAreNotRepeats(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(twoFindings(t))
 	f.findingThread(sqlFingerprint)
@@ -2110,6 +2166,7 @@ func TestThreadDismissalsWithTheSameFirstWordAreNotRepeats(t *testing.T) {
 }
 
 func TestThreadDismissAlreadyDismissedReplyIsInTheThread(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
 	f.findingThread(sqlFingerprint)
@@ -2129,6 +2186,7 @@ func TestThreadDismissAlreadyDismissedReplyIsInTheThread(t *testing.T) {
 // Dismissals in two threads within the 30 seconds are two commands, not a
 // repeat: neither names an ID.
 func TestThreadDismissalsInTwoThreadsAreNotRepeats(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(twoFindings(t))
 	f.findingThread(sqlFingerprint)
@@ -2155,6 +2213,7 @@ func TestThreadDismissalsInTwoThreadsAreNotRepeats(t *testing.T) {
 // Other commands written in a thread work as in a comment; their reply goes
 // in the thread when it is one of pergent's, and their reaction on the reply.
 func TestHelpInAFindingThread(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
 	f.findingThread(sqlFingerprint)
@@ -2168,6 +2227,7 @@ func TestHelpInAFindingThread(t *testing.T) {
 }
 
 func TestHelpInSomeOtherThreadIsAPlainComment(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
 
@@ -2270,6 +2330,7 @@ func (f *commandFixture) wantRefusal(e store.AuditEntry, actor string, iid int64
 }
 
 func TestCommandGateRefusesDeveloper(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.gate(true)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
@@ -2294,6 +2355,7 @@ func TestCommandGateRefusesDeveloper(t *testing.T) {
 
 // The author may always use commands, whatever their access: a Reporter here.
 func TestCommandGateAllowsAuthorWithReadAccess(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.gate(true)
 	f.authorID = userReporter
@@ -2314,6 +2376,7 @@ func TestCommandGateAllowsAuthorWithReadAccess(t *testing.T) {
 }
 
 func TestCommandGateAllowsMaintainer(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.gate(true)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
@@ -2334,6 +2397,7 @@ func TestCommandGateAllowsMaintainer(t *testing.T) {
 // When the platform doesn't report who opened the change, nobody is the
 // author: a Developer is refused.
 func TestCommandGateUnknownAuthorIsNotAuthor(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.gate(true)
 	f.authorID = 0
@@ -2355,6 +2419,7 @@ func TestCommandGateUnknownAuthorIsNotAuthor(t *testing.T) {
 
 // help and commands the bot doesn't know are refused too.
 func TestCommandGateRefusesHelp(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"help", "unknown"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newCommandFixture(t)
@@ -2376,6 +2441,7 @@ func TestCommandGateRefusesHelp(t *testing.T) {
 
 // A person is told once per change; every refusal is still audited.
 func TestRefusalRepliedOncePerPersonPerChange(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.gate(true)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
@@ -2412,6 +2478,7 @@ func TestRefusalRepliedOncePerPersonPerChange(t *testing.T) {
 // A refusal whose reply failed is tried again; it is audited when it has been
 // answered, once.
 func TestRefusalAuditedOnceAcrossRetry(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.gate(true)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
@@ -2441,6 +2508,7 @@ func TestRefusalAuditedOnceAcrossRetry(t *testing.T) {
 // With the switch off, the author is still allowed whatever their access,
 // and a Reporter who is not the author is refused as before, and audited.
 func TestAuthorAllowedWhenSwitchOff(t *testing.T) {
+	t.Parallel()
 	t.Run("the author re-runs", func(t *testing.T) {
 		f := newCommandFixture(t)
 		f.gate(false)
@@ -2505,6 +2573,7 @@ func TestAuthorAllowedWhenSwitchOff(t *testing.T) {
 // The author, a maintainer, still can't dismiss a blocking finding of their
 // own change, and the refusal is audited.
 func TestAuthorBlockingDismissStillRefusedAndAudited(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.gate(true)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
@@ -2527,6 +2596,7 @@ func TestAuthorBlockingDismissStillRefusedAndAudited(t *testing.T) {
 // A blocking dismissal by someone without maintainer access is refused as
 // "no permission" and audited, with the switch off.
 func TestBlockingDismissWithoutMaintainAccessAudited(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.gate(false)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
@@ -2545,6 +2615,7 @@ func TestBlockingDismissWithoutMaintainAccessAudited(t *testing.T) {
 
 // Ordinary mistakes are not audited.
 func TestOrdinaryRefusalsAreNotAudited(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.gate(true)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
@@ -2561,6 +2632,7 @@ func TestOrdinaryRefusalsAreNotAudited(t *testing.T) {
 // A dismissal written in a finding's thread is gated too, and the refusal is
 // answered in the thread.
 func TestThreadCommandGate(t *testing.T) {
+	t.Parallel()
 	f := newCommandFixture(t)
 	f.gate(true)
 	f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
@@ -2585,6 +2657,7 @@ func TestThreadCommandGate(t *testing.T) {
 // The author with only read access dismisses a suggestion in its finding's
 // thread, whether the gate is on or off.
 func TestThreadDismissByAuthorWithReadAccess(t *testing.T) {
+	t.Parallel()
 	for _, on := range []bool{false, true} {
 		t.Run(fmt.Sprintf("gate %v", on), func(t *testing.T) {
 			f := newCommandFixture(t)
@@ -2615,6 +2688,7 @@ func TestThreadDismissByAuthorWithReadAccess(t *testing.T) {
 // names a maintainer, on a comment that says something else or is someone
 // else's, is never carried out.
 func TestForgedCommandIsDropped(t *testing.T) {
+	t.Parallel()
 	for name, fake := range map[string]func(f *commandFixture, c int64){
 		"another author": func(f *commandFixture, c int64) {
 			f.serveNote(1, c, "rep", commandUsers["rep"], commandText("dismiss", "abc123", "constant"))

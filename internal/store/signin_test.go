@@ -9,6 +9,7 @@ import (
 )
 
 func TestSignInSettingsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	got, err := s.SignInSettings(ctx)
 	if err != nil {
@@ -104,6 +105,7 @@ func TestSignInSettingsRoundTrip(t *testing.T) {
 // saves ran in: the store decides it in the upsert. A secret given in the
 // same save as the issuer is the one for that issuer, and stays.
 func TestKeptSecretNeverSurvivesAnIssuerChange(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	a := SignInSettings{Mode: SignInModeOIDC, Issuer: "https://a.example.com", ClientID: "c",
 		ClientSecretSealed: []byte("for-a"), UpdatedAt: t0}
@@ -146,6 +148,7 @@ func TestKeptSecretNeverSurvivesAnIssuerChange(t *testing.T) {
 // A session records how it began; with no sign-in set, DeleteStaleSSOSessions
 // ends the OIDC and JWT ones and keeps the password ones.
 func TestDeleteStaleSSOSessionsKeepsPassword(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	admin := mustPassword(t, s, "admin")
 	user := mustSSO(t, s, "alice@example.com")
@@ -201,6 +204,7 @@ func TestDeleteStaleSSOSessionsKeepsPassword(t *testing.T) {
 // settings in force: a different issuer, or the other mode, ends it. A
 // password session stays whatever the settings say.
 func TestDeleteStaleSSOSessions(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	admin := mustPassword(t, s, "admin")
 	user := mustSSO(t, s, "alice@example.com")
@@ -417,6 +421,7 @@ func TestMigrationKeepsPreviousRelease(t *testing.T) {
 // ChangeSignInSettings with endSSOSessions saves the settings and ends the
 // OIDC and JWT sessions together; without it, no session ends.
 func TestChangeSignInSettingsEndsSSOSessions(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	admin := mustPassword(t, s, "admin")
 	user := mustSSO(t, s, "alice@example.com")

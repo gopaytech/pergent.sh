@@ -868,22 +868,6 @@ func judgeRuns(attempts []store.Run, split time.Time) int {
 	return len(attempts) - first
 }
 
-// frozenName is the name, in its frozen chain, of the entry reviewer attempt
-// m ran on (its position, 1-based); the name its dispatch recorded when the
-// frozen chain has none; the chain's first entry when it never started.
-func frozenName(m store.ReviewMember) string {
-	if p := m.Entry.Position; p >= 1 && p <= len(m.Chain.Entries) && m.Chain.Entries[p-1].Name != "" {
-		return m.Chain.Entries[p-1].Name
-	}
-	if m.Entry.Name != "" {
-		return m.Entry.Name
-	}
-	if len(m.Chain.Entries) > 0 {
-		return m.Chain.Entries[0].Name
-	}
-	return ""
-}
-
 // findingsIn counts the findings of every skill of a reviewer's result; 0
 // for one that does not decode.
 func findingsIn(raw []byte) int {
@@ -937,7 +921,7 @@ func (d *Dashboard) multiReviewOf(ctx context.Context, run store.Run) (*RunMulti
 			mv.Reviewers = append(mv.Reviewers, ReviewerView{Number: m.Reviewer, Attempts: []MemberAttemptView{}})
 		}
 		rv := &mv.Reviewers[i]
-		name := frozenName(m)
+		name := m.EntryName()
 		rv.Attempts = append(rv.Attempts, MemberAttemptView{ID: m.ID, Entry: name, Position: m.Entry.Position,
 			Provider: m.Provider, Model: m.Model, State: string(m.State), Failure: m.FailureReason, Step: m.FailureStep})
 		rv.Entry, rv.Provider, rv.Model, rv.State = name, m.Provider, m.Model, string(m.State)

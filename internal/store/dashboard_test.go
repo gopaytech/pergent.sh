@@ -11,6 +11,7 @@ import (
 func ptrTo[T any](v T) *T { return &v }
 
 func TestDashboardReposCRUD(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 
 	if rows, err := s.DashboardRepos(ctx); err != nil || len(rows) != 0 {
@@ -113,6 +114,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 }
 
 func TestDashboardMigrationTables(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "aaaa")
 	var title, webURL string
@@ -150,6 +152,7 @@ func TestDashboardMigrationTables(t *testing.T) {
 }
 
 func TestRunLogRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "aaaa")
 
@@ -180,6 +183,7 @@ func TestRunLogRoundTrip(t *testing.T) {
 // Postgres text takes neither NUL nor invalid UTF-8: such a log is stored
 // with them made safe instead of failing (it is never tried again).
 func TestRunLogNULAndInvalidUTF8(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "aaaa")
 	if err := s.PutRunLog(ctx, id, "a\x00b \xff\xfe c\n"); err != nil {
@@ -191,6 +195,7 @@ func TestRunLogNULAndInvalidUTF8(t *testing.T) {
 }
 
 func TestPruneRunLogs(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	oldID := enqueue(t, s, mr1, "aaaa")
 	newID := enqueue(t, s, MRKey{Instance: mr1.Instance, ProjectID: 7, IID: 4}, "bbbb")
@@ -219,6 +224,7 @@ func TestPruneRunLogs(t *testing.T) {
 }
 
 func TestRunsToLog(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	mk := func(iid int64, head string, finish func(id string)) string {
@@ -278,6 +284,7 @@ func TestRunsToLog(t *testing.T) {
 }
 
 func TestAttentionSetClearList(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 
 	if rows, err := s.Attention(ctx); err != nil || len(rows) != 0 {
@@ -336,6 +343,7 @@ func TestAttentionSetClearList(t *testing.T) {
 }
 
 func TestCountFailedRuns(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	t0 := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	fail := func(iid int64, project, reason string, at time.Time) {
@@ -366,6 +374,7 @@ func TestCountFailedRuns(t *testing.T) {
 }
 
 func TestDeleteAttentionForProject(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	for _, a := range []Attention{
 		{Instance: "main", Project: "Acme/Widgets", Kind: "single_approval"},
@@ -399,6 +408,7 @@ func TestDeleteAttentionForProject(t *testing.T) {
 }
 
 func TestSetRunChange(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "a1")
 	if err := s.SetRunChange(ctx, id, ChangeDetails{Title: "Add login", WebURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/3",
@@ -418,6 +428,7 @@ func TestSetRunChange(t *testing.T) {
 // InsertDashboardRepo creates a row only when the repository (ignoring
 // case) has none: a second admin switching it on doesn't reset its settings.
 func TestInsertDashboardRepo(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice"})
 	if err != nil || !created {
@@ -439,6 +450,7 @@ func TestInsertDashboardRepo(t *testing.T) {
 // UpdateDashboardRepo changes an existing row's settings and never creates
 // one: a repository switched off meanwhile stays off.
 func TestUpdateDashboardRepo(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	found, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.Approve = ptrTo(true) })
 	if err != nil || found {
@@ -566,6 +578,7 @@ func TestUpdateDashboardRepo(t *testing.T) {
 }
 
 func TestCapsColumnsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 
 	// Unset is NULL, "use the default", for a repository and the defaults.
@@ -640,6 +653,7 @@ func TestCapsColumnsRoundTrip(t *testing.T) {
 // quiet_reviews is NULL (the default, off), true or false, through insert,
 // update and upsert.
 func TestDashboardRepoQuietReviews(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	read := func() *bool {
 		t.Helper()
@@ -703,6 +717,7 @@ func TestDashboardRepoQuietReviews(t *testing.T) {
 // check_deleted is NULL (the default, off), true or false, through insert,
 // update and upsert.
 func TestDashboardRepoCheckDeleted(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	read := func() *bool {
 		t.Helper()
@@ -754,6 +769,7 @@ func TestDashboardRepoCheckDeleted(t *testing.T) {
 // comment_layout is NULL (the default layout) or a list whose order is kept,
 // through insert, update and upsert. An empty list is stored as NULL.
 func TestDashboardRepoCommentLayout(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	read := func() []string {
 		t.Helper()
@@ -823,6 +839,7 @@ func TestDashboardRepoCommentLayout(t *testing.T) {
 // kept, through insert, update and upsert. An empty list is stored as NULL,
 // and a link with no watched paths reads back with none.
 func TestDashboardRepoLinks(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	read := func() DashboardRepo {
 		t.Helper()

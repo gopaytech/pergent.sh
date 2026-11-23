@@ -103,6 +103,7 @@ var jobSecrets = kube.Secrets{GitToken: "git-token-1", LLMKey: "llm-key-1", Resu
 // A Job that completed keeps no diagnostics, unless a linked repository's
 // clone failed: then its clone log is kept, and no pod state. [CI]
 func TestDiagnosticsOnlyForFailures(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	const cloneLog = "cloned linked-2\ncould not clone linked-1\n"
@@ -141,6 +142,7 @@ func TestDiagnosticsOnlyForFailures(t *testing.T) {
 // repository's URL stays. Both are redacted of the Job's token first, so a
 // URL that carried it is still known as the main repository's. [CI]
 func TestDiagnosticsMasked(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	const token = "glpat-clone-token-123"
@@ -182,6 +184,7 @@ func TestDiagnosticsMasked(t *testing.T) {
 // When the Job can't say which repositories it clones, the masked clone log
 // is left empty rather than unmasked. [CI]
 func TestDiagnosticsMaskFailsClosed(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	serveContainerLogs(env, map[string]string{"pergent": "x\n", "checkout": "https://gitlab.example.com/acme/api.git: denied\ncould not clone linked-1\n"})
@@ -208,6 +211,7 @@ func TestDiagnosticsMaskFailsClosed(t *testing.T) {
 // A run reported by its callback whose Job then failed keeps its diagnostics
 // once: the next pass doesn't ask the cluster again. [CI]
 func TestDiagnosticsOnceFromReportedRun(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	logs := serveContainerLogs(env, map[string]string{"pergent": "untrusted instructions\n", "checkout": "checked out\n"})
@@ -239,6 +243,7 @@ func TestDiagnosticsOnceFromReportedRun(t *testing.T) {
 // one warning per run, however often the watcher looks; the review fails as
 // it would have. [CI]
 func TestEventsForbiddenWarnsOnce(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	serveContainerLogs(env, map[string]string{})
@@ -294,6 +299,7 @@ func TestLinkedCloneFailed(t *testing.T) {
 
 // Without the Job's Secret nothing says what to hide: no diagnostics. [CI]
 func TestDiagnosticsNotStoredWithoutSecret(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	serveContainerLogs(env, map[string]string{"pergent": "x\n", "checkout": "cloning with a-secret\n"})
@@ -318,6 +324,7 @@ func storedLog(t *testing.T, env *testEnv, id string) (string, bool) {
 }
 
 func TestWatchStoresLogOnce(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	reads := serveLog(env, "review started\nreview done\n")
@@ -354,6 +361,7 @@ func TestWatchStoresLogOnce(t *testing.T) {
 }
 
 func TestWatchLogFailureIsHarmless(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	var reads atomic.Int32
@@ -383,6 +391,7 @@ func TestWatchLogFailureIsHarmless(t *testing.T) {
 
 // A Job already deleted can't give its log, and is not asked again.
 func TestWatchNoLogWithoutJob(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	reads := serveLog(env, "x")
 	id := env.Report(1, sha('1'), []byte(`{"status":"completed"}`))
@@ -424,6 +433,7 @@ func TestRunLogRedacted(t *testing.T) {
 // A secret across the point where the kept tail starts is hidden whole: no
 // end of it is kept. The tail starts at a whole line.
 func TestRunLogSecretAcrossCut(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	const clone = "glpat-clone-token-START-0123456789-ENDSUFFIX"
@@ -453,6 +463,7 @@ func TestRunLogSecretAcrossCut(t *testing.T) {
 // its kept tail starts is hidden whole, in both the full and the masked clone
 // log. [CI]
 func TestCloneLogSecretAcrossCut(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	const clone = "glpat-clone-token-START-0123456789-ENDSUFFIX"
@@ -489,6 +500,7 @@ func TestCloneLogSecretAcrossCut(t *testing.T) {
 // the many secrets after it leaves less than is kept: the read starts within
 // a line, and that partial line is never stored.
 func TestRunLogSecretAcrossReadStart(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	key := "sk-model-key-" + strings.Repeat("k", 80) + "-KEYSUFFIX"
@@ -535,6 +547,7 @@ func TestRunLogCutWithoutLineBreak(t *testing.T) {
 // Without the Job's Secret nothing says which tokens to hide, so the log is
 // not stored.
 func TestRunLogNotStoredWithoutSecret(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := env.Now()
 	serveLog(env, "cloning with a-secret\n")
@@ -548,6 +561,7 @@ func TestRunLogNotStoredWithoutSecret(t *testing.T) {
 }
 
 func TestPruneRunLogsOnce(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	id := env.Report(1, sha('1'), []byte(`{}`))
 	if err := env.Store.PutRunLog(env.ctx, id, "log"); err != nil {

@@ -411,6 +411,7 @@ func overviewFixture(e *env) {
 }
 
 func TestOverview(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	c := e.userOnMain(false, "acme/widgets")
@@ -455,6 +456,7 @@ func TestOverview(t *testing.T) {
 }
 
 func TestOverviewInstanceItemsOnlyForAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	c := e.userOnMain(true, "acme/widgets")
@@ -473,6 +475,7 @@ func TestOverviewInstanceItemsOnlyForAdmins(t *testing.T) {
 // An API client's failing callbacks are shown to admins only, as the
 // client's, never as a repository's.
 func TestCallbackFailingOnlyForAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	const msg = "Callbacks to this client failed for 3 reviews in the last 24 hours."
@@ -508,6 +511,7 @@ func TestCallbackFailingOnlyForAdmins(t *testing.T) {
 // Setup problems are shown only for repositories switched on, even when a
 // team still names one.
 func TestAttentionOnlyForActiveRepos(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	if err := e.st.UpsertDashboardRepo(ctx, store.DashboardRepo{Instance: "main", Project: "acme/tools"}); err != nil {
 		t.Fatal(err)
@@ -532,6 +536,7 @@ func TestAttentionOnlyForActiveRepos(t *testing.T) {
 }
 
 func TestReviewsList(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	// Older than the default 90 days.
@@ -568,6 +573,7 @@ func TestReviewsList(t *testing.T) {
 }
 
 func TestReviewsListPages(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	for i := 1; i <= 110; i++ {
@@ -617,6 +623,7 @@ func TestReviewsListPages(t *testing.T) {
 }
 
 func TestReviewDetail(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	first := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: blockingResult(head('a')),
@@ -670,6 +677,7 @@ func TestReviewDetail(t *testing.T) {
 // approval withdrawn since (the change merged) change nothing. Runs not
 // published show their state; nothing is guessed.
 func TestReviewOutcomes(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) {
 		off := false
 		cfg.Repositories[0].Approve = &off // turned off after the reviews below
@@ -734,6 +742,7 @@ func TestReviewOutcomes(t *testing.T) {
 }
 
 func TestRunDetail(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	res := map[string]any{
 		"schema_version": 1, "status": "completed", "pergent_version": "0.1.0", "base": baseSHA, "head": head('a'),
@@ -842,6 +851,7 @@ func TestRunDetail(t *testing.T) {
 // used itself, from the usage table, and the sum of the result only until
 // that is filled in.
 func TestRunDetailTokensComeFromUsage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	kept := skillJSON("kept", "no_blocking_issues")
 	own := skillJSON("own", "no_blocking_issues")
@@ -862,6 +872,7 @@ func TestRunDetailTokensComeFromUsage(t *testing.T) {
 }
 
 func TestRunLog(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a'))})
 	none := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
@@ -923,6 +934,7 @@ func belowAdmin(e *env) map[string]*http.Cookie {
 }
 
 func TestRunKubernetesAdminOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) { cfg.Jobs.Namespace = "pergent-jobs" })
 	failed := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), outcome: OutcomeFailed,
 		failure: "The review Job's pod could not be scheduled."})
@@ -977,6 +989,7 @@ func TestRunKubernetesAdminOnly(t *testing.T) {
 }
 
 func TestRunDiagnosticsMaskedForViewer(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), outcome: OutcomeFailed, failure: "clone failed"})
 	if err := e.st.PutRunDiagnostics(ctx, id, store.Diagnostics{
@@ -1022,6 +1035,7 @@ func TestRunDiagnosticsMaskedForViewer(t *testing.T) {
 }
 
 func TestRunDiagnosticsNotFound(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	none := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
 	hidden := e.addRun(runFix{project: "acme/payments", projectID: 8, number: 9, head: head('9'), result: cleanResult(head('9'))})
@@ -1040,6 +1054,7 @@ func TestRunDiagnosticsNotFound(t *testing.T) {
 }
 
 func TestRepositories(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	if err := e.st.UpsertDashboardRepo(ctx, store.DashboardRepo{Instance: "main", Project: "acme/tools"}); err != nil {
@@ -1064,6 +1079,7 @@ func TestRepositories(t *testing.T) {
 }
 
 func TestRepositoryDetail(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) {
 		off := false
 		cfg.Repositories[0].Approve = &off
@@ -1102,6 +1118,7 @@ func TestRepositoryDetail(t *testing.T) {
 }
 
 func TestRepositoryInputs(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[0].Skills = []string{"code-review"} })
 	e.skill("code-review", "---\nname: code-review\n---\nReview the code.\n")
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
@@ -1160,6 +1177,7 @@ func TestRepositoryInputs(t *testing.T) {
 // its problem, as a review fails on it: never dropped, and never replaced by
 // the other library skills.
 func TestRepositoryInputsSkillRemovedFromLibrary(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.skill("code-review", "Review the code.")
 	e.skill("gone", "x")
@@ -1192,6 +1210,7 @@ func TestRepositoryInputsSkillRemovedFromLibrary(t *testing.T) {
 }
 
 func TestRepositoryInputsHidden(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/payments"), Path: "acme/payments"}); err != nil {
 		t.Fatal(err)
@@ -1214,6 +1233,7 @@ func TestRepositoryInputsHidden(t *testing.T) {
 // Requests for the same repository while its inputs are being read share
 // that one read.
 func TestRepositoryInputsReadOnce(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
 		t.Fatal(err)
@@ -1287,6 +1307,7 @@ func TestAdminEndpointsNotFoundForDevelopers(t *testing.T) {
 }
 
 func TestReadAPIRequiresSignIn(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	for _, target := range readEndpoints("00000000-0000-0000-0000-000000000000") {
 		e.wantStatus(nil, target, http.StatusUnauthorized)
@@ -1307,6 +1328,7 @@ func readEndpoints(id string) []string {
 // A repository the user's teams don't cover never shows in a list, and its
 // own URLs are 404.
 func TestReadAPIHidesInvisibleRepos(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
 	hidden := e.addRun(runFix{project: "acme/payments", projectID: 8, number: 9, head: head('9'),
@@ -1422,6 +1444,7 @@ func TestNoSecretInTheReadAPI(t *testing.T) {
 // renamed, transferred): a user who can see only the project at the path
 // now never sees the earlier one's runs, findings or logs.
 func TestReusedPathHidesEarlierProject(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	oldRun := e.addRun(runFix{project: "acme/widgets", projectID: 7, number: 1, head: head('1'),
 		result: blockingResult(head('1')), outcome: OutcomeBlocking, title: "Old project's change"})
@@ -1505,6 +1528,7 @@ func TestSetupChecklist(t *testing.T) {
 }
 
 func TestSetupChecklistOnlyForAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil) // no LLM, no skill: not set up
 	viewer := e.userOnMain(false, "acme/widgets")
 	if ov := getJSON[OverviewView](e, viewer, "/api/overview"); ov.Setup != nil {
@@ -1520,6 +1544,7 @@ func TestSetupChecklistOnlyForAdmins(t *testing.T) {
 // A usage table that can't be read leaves the page as it was: the sum of the
 // result, and a warning in the log.
 func TestRunDetailKeepsThePageWhenUsageCannotBeRead(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	own := skillJSON("own", "no_blocking_issues")
 	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: resultJSON(head('a'), own),
@@ -1542,6 +1567,7 @@ func TestRunDetailKeepsThePageWhenUsageCannotBeRead(t *testing.T) {
 }
 
 func TestRunDetailSkillVersionAndFolder(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	res := resultJSON(head('a'),
 		skillJSON("code-review", "no_blocking_issues"),
@@ -1584,6 +1610,7 @@ func TestRunDetailSkillVersionAndFolder(t *testing.T) {
 // An incremental run's view says what it covered; a full run's note is empty
 // (and still present, as "").
 func TestRunDetailIncrementalNote(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	var res map[string]any
 	if err := json.Unmarshal([]byte(cleanResult(head('a'))), &res); err != nil {
@@ -1625,6 +1652,7 @@ func TestRunDetailIncrementalNote(t *testing.T) {
 // A run's view says whether it was started quiet: true for a run that
 // recorded it, false for one whose column is NULL (and present as false).
 func TestRunDetailQuiet(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	quiet := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true, quiet: true})
 	plain := e.addRun(runFix{project: "acme/widgets", number: 2, head: head('b'), result: cleanResult(head('b')), outcome: OutcomeApproved, approved: true})
@@ -1644,6 +1672,7 @@ func TestRunDetailQuiet(t *testing.T) {
 // A run skipped for lack of skills is not a failure and not counted as a
 // review; its reason says so.
 func TestSkippedRunOutcome(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	skipped := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('1'), state: store.Skipped, undispatched: true,
@@ -1689,6 +1718,7 @@ func TestSkippedRunOutcome(t *testing.T) {
 func skillFile(name string) string { return "---\nname: " + name + "\n---\nText of " + name + ".\n" }
 
 func TestRepoSkillURLGitLab(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[0].RepoSkills = []string{"agent-rules"} })
 	e.skill("code-review", "Review the code.")
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
@@ -1716,6 +1746,7 @@ func TestRepoSkillURLGitLab(t *testing.T) {
 }
 
 func TestRepoSkillURLGitHub(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[2].RepoSkills = []string{"claude-rules"} })
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "gh", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
 		t.Fatal(err)
@@ -1765,6 +1796,7 @@ func TestRepoSkillURLEscapesPath(t *testing.T) {
 // An item with no instance is about the library as a whole: every admin
 // sees it; a viewer never does.
 func TestGlobalAttentionForAdmins(t *testing.T) {
+	t.Parallel()
 	kinds := func(e *env, c *http.Cookie) string {
 		var out []string
 		for _, a := range getJSON[OverviewView](e, c, "/api/overview").Attention {
@@ -1907,6 +1939,7 @@ func TestSettingViewsInlineFindings(t *testing.T) {
 
 // An API review has no repository: its run is not found, even for an admin.
 func TestRunRoutesHideAPIReviews(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
@@ -2079,6 +2112,7 @@ func TestRunPageMultiReview(t *testing.T) {
 // attempt's page shows its own judge row, the review's judge runs and the
 // review's whole cost; each run's own tokens stay its own.
 func TestRunPageMultiReviewJudgeRetry(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	split := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), state: store.Superseded, outcome: OutcomeFellBack,
@@ -2120,6 +2154,7 @@ func TestRunPageMultiReviewJudgeRetry(t *testing.T) {
 // reason is its review_members off row), with no rows, no judge and no
 // tokens. An off row an earlier claim left is not this run's.
 func TestRunPageMultiReviewOff(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a')),
@@ -2146,6 +2181,7 @@ func TestRunPageMultiReviewOff(t *testing.T) {
 // A run that is no multi review has no multiReview key at all, and so has
 // an attempt of a review that fell back before it was split.
 func TestRunPageNoMultiReview(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	plain := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a'))})
@@ -2177,6 +2213,7 @@ func TestRunPageNoMultiReview(t *testing.T) {
 // review, the off row, an unknown one and one with nothing kept; the clone
 // log is masked below admin.
 func TestReviewMemberLogGated(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a'))})

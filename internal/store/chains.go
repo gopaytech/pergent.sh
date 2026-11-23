@@ -199,10 +199,6 @@ const (
 // ErrChainTooLong is returned when a chain has more than MaxChain entries.
 var ErrChainTooLong = errors.New("store: the chain has more than 5 entries")
 
-// errUnknownChainSet is returned for a ChainSet that ResetRepoChainOf does
-// not reset: only ChainA.
-var errUnknownChainSet = errors.New("store: unknown chain set")
-
 // chainWhere matches the chain of one scope target, the project ignoring
 // case.
 const chainWhere = `WHERE c.scope = $1 AND COALESCE(c.team_id, 0) = $2 AND c.instance = $3 AND lower(c.project) = lower($4)`
@@ -311,27 +307,16 @@ func (s *Store) SaveChainOf(ctx context.Context, set ChainSet, c Chain, at time.
 	return tx.Commit(ctx)
 }
 
-// ResetRepoChain is ResetRepoChainOf for ChainA.
+// ResetRepoChain drops a repository's own chain A: it inherits again. Its
+// model_id is NULL (the default, for the previous release). The reviewer
+// chains have their own save (SaveReviewers).
 func (s *Store) ResetRepoChain(ctx context.Context, instance, project string) error {
-	return s.ResetRepoChainOf(ctx, ChainA, instance, project)
-}
-
-// ResetRepoChainOf drops a repository's own chain of set: it inherits
-// again. For ChainA its model_id is NULL (the default, for the previous
-// release).
-func (s *Store) ResetRepoChainOf(ctx context.Context, set ChainSet, instance, project string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	switch set {
-	case ChainA:
-		err = setRepoModelChain(ctx, tx, instance, project, nil)
-	default:
-		return errUnknownChainSet
-	}
-	if err != nil {
+	if err := setRepoModelChain(ctx, tx, instance, project, nil); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

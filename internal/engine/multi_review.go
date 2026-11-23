@@ -189,10 +189,6 @@ func sameModels(ds []chain.Decision) []chain.SameModel {
 	return out
 }
 
-// reasonAPINoMultiReview fails a member of an API review: an API review is
-// never split, so such a member is left over (a bug).
-const reasonAPINoMultiReview = "an API review never runs multi review"
-
 // reasonInputsChanged fails a member whose dispatch would change what its run
 // was dispatched with: a member never writes its run.
 const reasonInputsChanged = "the review's inputs changed while the multi review ran"
@@ -210,8 +206,8 @@ func (d *dispatcher) isMember() bool { return d.stage == stageMember }
 // dispatchMember starts the Job of the claimed reviewer m, with the same
 // dispatch as a review, in stageMember: its run is the one waiting for m's
 // review. A member whose run no longer waits goes back to the queue, where
-// nothing claims it, and the sweep supersedes it. A member of an API review
-// fails: an API review never runs multi review.
+// nothing claims it, and the sweep supersedes it. An API review is never
+// split (split), so it has no members.
 func (e *Engine) dispatchMember(ctx context.Context, m store.ReviewMember) error {
 	d := &dispatcher{e: e, stage: stageMember, member: m, run: store.Run{ID: m.RunID},
 		log: e.log().With("run", m.RunID, "member", m.ID, "reviewer", m.Reviewer)}
@@ -226,9 +222,6 @@ func (e *Engine) dispatchMember(ctx context.Context, m store.ReviewMember) error
 	d.run = run
 	d.log = e.log().With("run", run.ID, "member", m.ID, "reviewer", m.Reviewer, "instance", run.MR.Instance,
 		"project", run.ProjectPath, "mr", run.MR.IID, "head", run.HeadSHA)
-	if run.Kind == store.KindAPI {
-		return d.fail(ctx, reasonAPINoMultiReview)
-	}
 	return d.dispatch(ctx)
 }
 
@@ -507,10 +500,6 @@ func (d *dispatcher) memberRunningText(ctx context.Context) string {
 // gives no message.
 const reasonMemberError = "the review failed"
 
-// reasonMemberRefused, then why (chain.ReasonWords), fails an API review's
-// member whose provider refused its model: it does not fall back.
-const reasonMemberRefused = "the provider refused the model: "
-
 // settleBatch is how many reported members one settle pass takes, as
 // publishBatch is for runs.
 const settleBatch = 20
@@ -570,9 +559,9 @@ func (e *Engine) settleMembers(ctx context.Context) error {
 // check, or says its review failed, fails the member. A result whose
 // provider refused the member's entry falls back along the member's frozen
 // chain on a merge request's review (fallBackMember); a 1-entry chain never
-// falls back (refusedMark). On an API review the entry is marked and the
-// member fails. Otherwise the member is done with its result, or failed
-// with its failure.
+// falls back (refusedMark). An API review is never split, so it has no
+// members. Otherwise the member is done with its result, or failed with its
+// failure.
 func (e *Engine) settleMember(ctx context.Context, m store.ReviewMember) error {
 	log := e.log().With("run", m.RunID, "member", m.ID, "reviewer", m.Reviewer)
 	run, found, err := e.Store.MultiReviewRun(ctx, m.RunID)
@@ -600,25 +589,7 @@ func (e *Engine) settleMember(ctx context.Context, m store.ReviewMember) error {
 			}
 			log.Warn("the reviewer's result can't be used; the reviewer fails", "step", f.Step)
 		} else if mark, refused := e.refusedMark(ref, len(m.Chain.Entries), m.Result); refused {
-			if run.Kind == store.KindMR {
-				return e.fallBackMember(ctx, run, m, mark, log)
-			}
-			// An API review's member does not fall back (an API review is
-			// never split, so it is a left-over one): its entry is marked as
-			// the review's would be, and it fails. The audit entry is written
-			// once, by the settle that fails the member.
-			mlog := log.With("model_entry", m.Entry.ID, "class", mark.Class)
-			if err := e.markOnly(ctx, run, m.Entry.Name, mark, false, mlog); err != nil {
-				return err
-			}
-			f := store.Failure{Reason: reasonMemberRefused + chain.ReasonWords(mark.Class)}
-			switch err := e.Store.ReplaceReviewMemberWithFailure(ctx, m.ID, f); {
-			case err == nil:
-				mlog.Warn("the provider refused the reviewer's model entry; it is skipped until the mark ends")
-				e.auditMark(ctx, run, m.Entry.Name, mark.Class, mlog)
-			case !errors.Is(err, store.ErrNotReported):
-				return fmt.Errorf("fail the member's result: %w", err)
-			}
+			return e.fallBackMember(ctx, run, m, mark, log)
 		}
 	}
 	state, err := e.Store.SettleReviewMember(ctx, m.ID)

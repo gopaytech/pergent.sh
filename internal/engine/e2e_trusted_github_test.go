@@ -57,6 +57,7 @@ func ghCheckRuns(t *testing.T, gh *fakeGitHub) []string {
 
 // A stranger's pull request waits: a queued check run and one note.
 func TestGitHubUntrustedWaits(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env, gh := ghTrustEnv(t, head, "stranger", 4242, "")
 	id := ghEnqueue(t, env, 3, head)
@@ -74,6 +75,7 @@ func TestGitHubUntrustedWaits(t *testing.T) {
 
 // A collaborator with write is trusted.
 func TestGitHubWriterReviewed(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env, _ := ghTrustEnv(t, head, "dev", 51, "write")
 	id := ghEnqueue(t, env, 3, head)
@@ -85,6 +87,7 @@ func TestGitHubWriterReviewed(t *testing.T) {
 
 // A bot without write access waits, unless it is on the allowlist.
 func TestGitHubBotNeedsTheAllowlist(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env, _ := ghTrustEnv(t, head, "dependabot[bot]", 49699333, "")
 	id := ghEnqueue(t, env, 3, head)

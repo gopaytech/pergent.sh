@@ -65,6 +65,7 @@ func ciFile(env *testEnv, id string) string { return env.ConfigMap(id).Data["ci-
 // the deadline. The sweep releases it once the job ended, and the review gets
 // the job's result and log.
 func TestCIWaitHoldsThenReleasesWhenDone(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	servePush(env, head)
@@ -113,6 +114,7 @@ func TestCIWaitHoldsThenReleasesWhenDone(t *testing.T) {
 // The deadline releases a run whose job never ends, and the review sees the
 // job as running.
 func TestCIDeadlineReleases(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	servePush(env, head)
@@ -143,6 +145,7 @@ func TestCIDeadlineReleases(t *testing.T) {
 // pergent.sh down past a run's deadline: the sweep at start releases it, and
 // the first pass reviews it.
 func TestCIDeadlinePassedWhileDownReleasesAtStart(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	servePush(env, head)
@@ -173,6 +176,7 @@ func TestCIDeadlinePassedWhileDownReleasesAtStart(t *testing.T) {
 // Emptying the repository's ci_jobs releases the runs that wait, and they
 // review as without CI jobs.
 func TestCIJobsEmptiedReleases(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	servePush(env, head)
@@ -201,6 +205,7 @@ func TestCIJobsEmptiedReleases(t *testing.T) {
 
 // Start review skips the rest of the wait and uses the results there are.
 func TestStartReviewSkipsCIWait(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	servePush(env, head)
@@ -227,6 +232,7 @@ func TestStartReviewSkipsCIWait(t *testing.T) {
 
 // A new push supersedes a run waiting for CI, and the sweep never revives it.
 func TestPushSupersedesCIPending(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	servePush(env, head)
@@ -255,6 +261,7 @@ func TestPushSupersedesCIPending(t *testing.T) {
 // its jobs (not through postpone, again and again), and once released it is
 // reviewed without another wait.
 func TestStartedUntrustedRunChecksCIOnce(t *testing.T) {
+	t.Parallel()
 	head := sha('a')
 	env := trustEnv(t, 3, head, 20)
 	env.Engine.Config.Repositories[0].CIJobs = &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{{Name: "test", Read: "status"}}}
@@ -297,6 +304,7 @@ func TestStartedUntrustedRunChecksCIOnce(t *testing.T) {
 // With no jobs chosen a run is reviewed as before: no CI read, no CI file,
 // no CI snapshot, the running status only.
 func TestNoCIJobsUnchanged(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	head := sha('a')
 	servePush(env, head)
@@ -332,6 +340,7 @@ func TestNoCIJobsUnchanged(t *testing.T) {
 // When the inputs are too large for the CI results, the review goes on
 // without them, with a warning; the snapshot is still recorded for the gate.
 func TestCIResultsDroppedByFitWarns(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	// The skill leaves less room than the CI file needs.
 	env.AddSkill("huge", string(bytes.Repeat([]byte("x"), inputs.ConfigMapLimit-40)))
@@ -358,6 +367,7 @@ func TestCIResultsDroppedByFitWarns(t *testing.T) {
 // A published review whose blocking job failed is decided again when the job
 // passes later: the run goes back to be published, with the new snapshot.
 func TestCISweepRedecidesPublished(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	env.GitLab.SetMR(openMR(3, head))
@@ -383,6 +393,7 @@ func TestCISweepRedecidesPublished(t *testing.T) {
 // is not checked again by the sweep: a status-only read can't say the report
 // could be read now.
 func TestCISweepSkipsTextFailedOnly(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	env.GitLab.SetMR(openMR(3, head))
@@ -404,6 +415,7 @@ func TestCISweepSkipsTextFailedOnly(t *testing.T) {
 // sweep, and the job turns passed once it passes: a passed job's log is never
 // read, so the review lacked nothing.
 func TestCISweepFlipsTextFailedLog(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	env.GitLab.SetMR(openMR(3, head))
@@ -427,6 +439,7 @@ func TestCISweepFlipsTextFailedLog(t *testing.T) {
 
 // A CI event releases a waiting run at once, with no sweep.
 func TestCIEventReleasesWaitingRun(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	servePush(env, head)
@@ -446,6 +459,7 @@ func TestCIEventReleasesWaitingRun(t *testing.T) {
 // An all-passed published review is decided again by an event after a retried
 // job fails: the sweep skips such a review, an event does not.
 func TestCIEventRedecidesAllPassedPublished(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	env.GitLab.SetMR(openMR(3, head))
@@ -467,6 +481,7 @@ func TestCIEventRedecidesAllPassedPublished(t *testing.T) {
 
 // A merged-results event names the merge request, whose head the run has.
 func TestCIEventByMergeRequest(t *testing.T) {
+	t.Parallel()
 	env := ciEnv(t)
 	head := sha('a')
 	env.GitLab.SetMR(openMR(3, head))

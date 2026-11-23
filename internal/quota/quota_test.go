@@ -59,6 +59,7 @@ func TestUsedUp(t *testing.T) {
 
 // With no limit, Check asks the database nothing; Read always does.
 func TestCheckSkipsQueriesWithoutLimits(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	st.Close() // any query on it fails now
 	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
@@ -118,6 +119,7 @@ func seedUsageOn(t *testing.T, st *store.Store, instance string, projectID, iid 
 }
 
 func TestCheckCountsThisMonth(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	at := func(m time.Month, d, h int) time.Time { return time.Date(2026, m, d, h, 0, 0, 0, time.UTC) }
 	seedUsage(t, st, "main", 1, 1, at(11, 1, 0), 100, 50)
@@ -157,6 +159,7 @@ func TestCheckCountsThisMonth(t *testing.T) {
 // The repository quota counts every token; the instance quota only those
 // spent on global keys, so a team's own key never uses it up.
 func TestCheckSplitsRepositoryAndInstance(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	at := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
 	now := at.Add(13 * 24 * time.Hour)
