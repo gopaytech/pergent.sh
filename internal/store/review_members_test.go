@@ -1029,6 +1029,9 @@ func TestReviewerResult(t *testing.T) {
 	if body, found, err := s.ReviewerResult(ctx, id, "tok-p", 2); err != nil || found || body != nil {
 		t.Errorf("ReviewerResult before the judge = %s, %v, %v; want nothing", body, found, err)
 	}
+	if _, authed, _, err := s.ReviewerResultAuth(ctx, id, "tok-p", 2); err != nil || authed {
+		t.Errorf("before the judge: authed %v, %v; want false (no stored token)", authed, err)
+	}
 	if released, _, err := s.ReleaseMultiReview(ctx, id, t0); err != nil || !released {
 		t.Fatal(released, err)
 	}
@@ -1067,6 +1070,31 @@ func TestReviewerResult(t *testing.T) {
 	}
 	if _, found, err := s.ReviewerResultAt(ctx, id, "tok-p", 2, time.Now().Add(2*time.Hour)); err != nil || found {
 		t.Errorf("expired token: found %v, %v; want nothing", found, err)
+	}
+	// ReviewerResultAuth tells a refused token (authed false) from a
+	// reviewer with no result (authed true, found false).
+	for _, c := range []struct {
+		name, run, token string
+		n                int
+		authed, found    bool
+	}{
+		{"good, a result", id, "tok-p", 2, true, true},
+		{"good, no result", id, "tok-p", 1, true, false},
+		{"good, skipped", id, "tok-p", 5, true, false},
+		{"good, reviewer 6", id, "tok-p", 6, true, false},
+		{"wrong token", id, "tok-a", 2, false, false},
+		{"no token", id, "", 2, false, false},
+		{"other run's token", id, "tok-o", 2, false, false},
+		{"unknown run", "00000000-0000-0000-0000-000000000000", "tok-p", 2, false, false},
+		{"bad id", "x", "tok-p", 2, false, false},
+	} {
+		body, authed, found, err := s.ReviewerResultAuth(ctx, c.run, c.token, c.n)
+		if err != nil || authed != c.authed || found != c.found || (found && body == nil) {
+			t.Errorf("%s: ReviewerResultAuth = %s, %v, %v, %v; want authed %v, found %v", c.name, body, authed, found, err, c.authed, c.found)
+		}
+	}
+	if _, authed, _, err := s.ReviewerResultAuthAt(ctx, id, "tok-p", 2, time.Now().Add(2*time.Hour)); err != nil || authed {
+		t.Errorf("expired token: authed %v, %v; want false", authed, err)
 	}
 
 	// A later judge attempt reads its root's members; the first one's token

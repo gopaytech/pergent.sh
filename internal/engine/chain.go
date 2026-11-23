@@ -120,12 +120,3 @@ func (d *dispatcher) runningText() string {
 	}
 	return runningDescription
 }
-
-// resolveB picks member B's entry from chain B (in, from chain.LoadSet): never
-// the model A runs on. The instance quota stops B's global entries even for
-// a run somebody asked for: they let the review start, not a second model.
-func (d *dispatcher) resolveB(in chain.Input, instanceUsedUp bool) chain.Decision {
-	in.InstanceQuotaUsedUp = instanceUsedUp
-	in.Avoid = []chain.SameModel{{Provider: d.provider, Model: d.model}}
-	return chain.Resolve(in)
-}

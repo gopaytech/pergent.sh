@@ -131,9 +131,9 @@ func runInline(ctx context.Context, d inlineDeps, run store.Run, o policy.Outcom
 	}
 
 	text := d.redact
-	if o.Panel != nil && o.Hide != nil {
-		// A panel's threads name none of its models either; a suggestion
-		// the hiding would change is not offered as one.
+	if o.MultiReview != nil && o.Hide != nil {
+		// A multi review's threads name none of its models either; a
+		// suggestion the hiding would change is not offered as one.
 		text = func(s string) string { return o.Hide(d.redact(s)) }
 	}
 	fs := buildFindings(o.Result, o.Dismissals, text)

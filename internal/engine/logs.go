@@ -52,8 +52,9 @@ func (e *Engine) captureLogWithin(ctx context.Context, run store.Run, obs kube.O
 	e.captureJobLog(ctx, e.runJob(run), obs, log, timeout)
 }
 
-// jobLog is a Job whose log and diagnostics are kept: a run's, or a panel
-// member's. Each goes to its own tables, redacted the same way.
+// jobLog is a Job whose log and diagnostics are kept: a run's, or a
+// reviewer's of a multi review. Each goes to its own tables, redacted the
+// same way.
 type jobLog struct {
 	// key is the Job's key in logTried; its diagnostics use diagKey(key).
 	key     string
@@ -73,15 +74,15 @@ func (e *Engine) runJob(run store.Run) jobLog {
 	}
 }
 
-// memberJob is the jobLog of member m's Job: panel_member_logs and
-// panel_member_diagnostics, never the run's. linked is whether its run has
+// memberJob is the jobLog of member m's Job: review_member_logs and
+// review_member_diagnostics, never the run's. linked is whether its run has
 // linked repositories.
-func (e *Engine) memberJob(m store.PanelMember, linked bool) jobLog {
+func (e *Engine) memberJob(m store.ReviewMember, linked bool) jobLog {
 	return jobLog{
 		key: memberLogKey(m.ID), jobName: m.JobName, linked: linked,
-		putLog: func(ctx context.Context, text string) error { return e.Store.PutMemberLog(ctx, m.ID, text) },
+		putLog: func(ctx context.Context, text string) error { return e.Store.PutReviewMemberLog(ctx, m.ID, text) },
 		putDiag: func(ctx context.Context, d store.Diagnostics) error {
-			return e.Store.PutMemberDiagnostics(ctx, m.ID, d)
+			return e.Store.PutReviewMemberDiagnostics(ctx, m.ID, d)
 		},
 	}
 }
@@ -306,10 +307,11 @@ func (e *Engine) captureReportedLogs(ctx context.Context, now time.Time) error {
 	return e.captureReportedMemberLogs(ctx, now)
 }
 
-// captureReportedMemberLogs is captureReportedLogs for panel members: a
-// member's Job usually finishes after its result made it reported.
+// captureReportedMemberLogs is captureReportedLogs for a multi review's
+// reviewers: a member's Job usually finishes after its result made it
+// reported.
 func (e *Engine) captureReportedMemberLogs(ctx context.Context, now time.Time) error {
-	ms, err := e.Store.MembersToLog(ctx, now.Add(-logWindow))
+	ms, err := e.Store.ReviewMembersToLog(ctx, now.Add(-logWindow))
 	if err != nil {
 		return err
 	}
@@ -322,7 +324,7 @@ func (e *Engine) captureReportedMemberLogs(ctx context.Context, now time.Time) e
 		if e.logTriedAlready(key) {
 			continue
 		}
-		log := e.log().With("run", m.RunID, "member", m.ID, "role", m.Role, "job", m.JobName)
+		log := e.log().With("run", m.RunID, "member", m.ID, "reviewer", m.Reviewer, "job", m.JobName)
 		obs, err := e.Launcher.Inspect(ctx, m.JobName, now)
 		if err != nil {
 			log.Info("couldn't inspect the member's job for its log", "error", e.redact(err.Error()))
@@ -348,7 +350,7 @@ func (e *Engine) captureReportedMemberLogs(ctx context.Context, now time.Time) e
 // that can't be read counts as having none: only a completed Job's
 // diagnostics depend on it.
 func (e *Engine) reviewLinked(ctx context.Context, root string) bool {
-	run, found, err := e.Store.PanelRun(ctx, root)
+	run, found, err := e.Store.MultiReviewRun(ctx, root)
 	if err == nil && !found {
 		run, found, err = e.Store.Run(ctx, root)
 	}

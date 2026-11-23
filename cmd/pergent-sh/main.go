@@ -8,6 +8,7 @@
 //	pergent-sh post-graph --work <dir> --out <dir> --result-url <url>
 //	pergent-sh get-graph --url <url> --out <file>
 //	pergent-sh get-panel --a-url <url> --b-url <url> --dir <dir>
+//	pergent-sh get-reviewers --base-url <url> --reviewers <n,n,...> --dir <dir>
 //
 // serve needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus
 // the LLM key, the GitLab tokens, the GitHub App private keys (or approve
@@ -30,7 +31,8 @@
 // needs only PERGENT_SH_GRAPH_TOKEN. get-graph runs in a review Job and
 // downloads the run's code graph; it needs only PERGENT_RESULT_TOKEN.
 // get-panel runs in a review panel's merge Job and downloads the members'
-// results; it needs only PERGENT_RESULT_TOKEN too.
+// results; it needs only PERGENT_RESULT_TOKEN too. get-reviewers does the
+// same in a multi review's judge Job, for the reviewers' results.
 package main
 
 import (
@@ -95,7 +97,8 @@ const (
 		"       pergent-sh scan-repo --dir <clone> --commit-file <file> --error-file <file> --input-file <file> --result-url <url>\n" +
 		"       pergent-sh post-graph --work <dir> --out <dir> --result-url <url>\n" +
 		"       pergent-sh get-graph --url <url> --out <file>\n" +
-		"       pergent-sh get-panel --a-url <url> --b-url <url> --dir <dir>"
+		"       pergent-sh get-panel --a-url <url> --b-url <url> --dir <dir>\n" +
+		"       pergent-sh get-reviewers --base-url <url> --reviewers <n,n,...> --dir <dir>"
 )
 
 func main() {
@@ -124,6 +127,8 @@ func main() {
 		os.Exit(runGetGraph(ctx, cmd.getGraph, os.Stderr))
 	case "get-panel":
 		os.Exit(runGetPanel(ctx, cmd.getPanel, os.Stderr))
+	case "get-reviewers":
+		os.Exit(runGetReviewers(ctx, *cmd.getReviewers, os.Stderr))
 	}
 	if err := serve(ctx, cmd.configPath, log); err != nil {
 		log.Error("pergent-sh stopped", "error", err.Error())
@@ -143,6 +148,9 @@ type command struct {
 	postGraph  postGraphOptions
 	getGraph   getGraphOptions
 	getPanel   getPanelOptions
+
+	// getReviewers is a pointer: its slice would make command not comparable.
+	getReviewers *getReviewersOptions
 }
 
 // parseArgs reads "serve [--config <path>]", "admin reset-password
@@ -198,6 +206,12 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 			return command{}, err
 		}
 		return command{name: "get-panel", getPanel: o}, nil
+	case "get-reviewers":
+		o, err := parseGetReviewersArgs(args[1:], stderr)
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: "get-reviewers", getReviewers: &o}, nil
 	}
 	return command{}, errors.New(usage)
 }
@@ -388,7 +402,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
-		Store: st, Panel: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, CI: eng, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
+		Store: st, Panel: st, Reviewers: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, CI: eng, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
 		SkillFetches: fetchResults, ReadinessScans: scanResults, Graphs: graphs, ReviewAPI: api, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
@@ -421,11 +435,14 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	// Results stored before usage was recorded are read here, after the
 	// server listens: parsing each (up to 10 MB) must never hold up startup.
 	loops = append(loops, func(ctx context.Context) {
+		// A review panel a main build left in flight is queued again as a
+		// single review first, so the fill below never reads its members.
+		eng.RecoverLegacyPanels(ctx)
 		if n := tokenusage.Backfill(ctx, st, log); n > 0 {
 			log.Info("recorded the usage of earlier reviews", "runs", n)
 		}
-		if n := tokenusage.BackfillMembers(ctx, st, log); n > 0 {
-			log.Info("recorded the usage of earlier review panel members", "members", n)
+		if n := tokenusage.BackfillReviewMembers(ctx, st, log); n > 0 {
+			log.Info("recorded the usage of earlier multi review reviewers", "members", n)
 		}
 	})
 	if eng.Scans {

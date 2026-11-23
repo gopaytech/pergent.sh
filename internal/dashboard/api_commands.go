@@ -172,8 +172,8 @@ func (d *Dashboard) reviewAction(w http.ResponseWriter, r *http.Request) {
 	case "rerun":
 		d.rerun(w, r, b, rerun.Failed)
 	case "start":
-		// A panel waiting for its members is on its way, not waiting for a start.
-		if last := runs[len(runs)-1]; last.State != store.Waiting || last.SkipReason == store.WaitPanel {
+		// A multi review waiting for its members is on its way, not waiting for a start.
+		if last := runs[len(runs)-1]; last.State != store.Waiting || last.SkipReason == store.WaitReviewers {
 			writeError(w, http.StatusConflict, msgNotWaiting)
 			return
 		}
