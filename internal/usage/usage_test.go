@@ -1,6 +1,8 @@
 package usage
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -123,82 +125,54 @@ func sameCount(a, b *int64) bool {
 	return *a == *b
 }
 
-func TestModelRows(t *testing.T) {
-	body := []byte(`{"merged":true,"skills":[
-	 {"name":"security","tokens_by_model":[
-	  {"role":"a","provider":"p1","model":"m1","tokens":{"input":10,"output":2,"reasoning":1,"cache_read":4,"cache_write":3}},
-	  {"role":"b","provider":"p2","model":"m2","tokens":{"input":7,"output":1}}]},
-	 {"name":"style","tokens_by_model":[
-	  {"role":"a","provider":"p1","model":"m1","tokens":{"input":5,"output":5}},
-	  {"role":"b","provider":"p2","model":"m2","tokens":{"input":6,"output":6}}]}]}`)
-	got, err := ModelRows(body, store.Run{Trigger: store.TriggerPush})
-	if err != nil {
+// Rows reads what each skill used (FromResult) and says whether the run is
+// a judge run. A judge result's own tokens are the judge's (D8): a legacy
+// tokens_by_model list is not read. An unreadable result is an error with
+// no skills, judge or not.
+func TestRowsJudge(t *testing.T) {
+	body := []byte(`{"skills":[{"name":"security","tokens":{"input":10,"output":2},
+	  "tokens_by_model":[{"role":"a","provider":"p1","model":"m1","tokens":{"input":9,"output":9}}]}]}`)
+	for _, judge := range []bool{true, false} {
+		u, err := Rows(body, store.Run{Trigger: store.TriggerPush}, judge)
+		if err != nil || u.Judge != judge || len(u.Skills) != 1 || u.Skills[0].In != 10 || u.Skills[0].Out != 2 {
+			t.Errorf("judge %v: Rows = %+v, %v; want the skill's own tokens", judge, u, err)
+		}
+		bad, err := Rows([]byte(`not json`), store.Run{}, judge)
+		if err == nil || bad.Skills != nil || bad.Judge != judge {
+			t.Errorf("judge %v: Rows of an odd body = %+v, %v; want an error with no skills", judge, bad, err)
+		}
+	}
+}
+
+// recorder records which store call Usage.Record made.
+type recorder struct {
+	single, judge []string
+}
+
+func (r *recorder) RecordUsage(_ context.Context, id string, _ []store.SkillUsage, models []store.ModelUsage) error {
+	if models != nil {
+		return errors.New("model rows passed")
+	}
+	r.single = append(r.single, id)
+	return nil
+}
+
+func (r *recorder) RecordJudgeUsage(_ context.Context, id string, _ []store.SkillUsage) error {
+	r.judge = append(r.judge, id)
+	return nil
+}
+
+// A judge run is recorded with RecordJudgeUsage, which adds to the rows its
+// reviewers made; any other run with RecordUsage and no model rows.
+func TestUsageRecord(t *testing.T) {
+	r := &recorder{}
+	if err := (Usage{Judge: true}).Record(context.Background(), r, "j"); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 4 || got[0].Skill != "security" || got[0].Role != "a" || got[1].Role != "b" || got[2].Skill != "style" {
-		t.Fatalf("rows = %+v", got)
+	if err := (Usage{}).Record(context.Background(), r, "s"); err != nil {
+		t.Fatal(err)
 	}
-	a, b := got[0], got[1]
-	if a.Provider != "p1" || a.Model != "m1" || a.In != 10 || a.Out != 2 ||
-		!sameCount(a.Reasoning, i64(1)) || !sameCount(a.CacheRead, i64(4)) || !sameCount(a.CacheWrite, i64(3)) {
-		t.Errorf("a = %+v", a)
-	}
-	if b.Reasoning != nil || b.CacheRead != nil || b.CacheWrite != nil {
-		t.Errorf("b = %+v, want unknown counts", b)
-	}
-	sub, _ := ModelRows(body, store.Run{Trigger: store.TriggerRerunFailed, SkillSubset: []string{"style"}})
-	if len(sub) != 2 || sub[0].Skill != "style" {
-		t.Errorf("subset rows = %+v", sub)
-	}
-}
-
-func TestModelRowsNone(t *testing.T) {
-	got, err := ModelRows([]byte(`{"skills":[{"name":"a","tokens":{"input":1,"output":1}}]}`), store.Run{})
-	if err != nil || got != nil {
-		t.Errorf("got %+v, %v; want nil", got, err)
-	}
-}
-
-// A negative count drops the whole skill, as FromResult does: the other
-// skills still count.
-func TestModelRowsNegativeDropped(t *testing.T) {
-	body := []byte(`{"skills":[{"name":"a","tokens_by_model":[
-	 {"role":"a","model":"m","tokens":{"input":1,"output":0}},
-	 {"role":"b","model":"m","tokens":{"input":1,"output":0,"cache_read":-5}}]},
-	 {"name":"c","tokens_by_model":[
-	 {"role":"a","model":"n","tokens":{"input":2,"output":0}}]}]}`)
-	got, err := ModelRows(body, store.Run{})
-	if err != nil || len(got) != 1 || got[0].Skill != "c" || got[0].Model != "n" {
-		t.Errorf("got %+v, %v; want only skill c", got, err)
-	}
-}
-
-// Only roles a and b count, and only the first row of each role in a skill.
-func TestModelRowsOddRoles(t *testing.T) {
-	body := []byte(`{"skills":[{"name":"a","tokens_by_model":[
-	 {"role":"c","model":"x","tokens":{"input":9,"output":9}},
-	 {"role":"","model":"x","tokens":{"input":9,"output":9}},
-	 {"role":"b","model":"b1","tokens":{"input":2,"output":0}},
-	 {"role":"a","model":"a1","tokens":{"input":1,"output":0}},
-	 {"role":"a","model":"a2","tokens":{"input":3,"output":0}}]}]}`)
-	got, err := ModelRows(body, store.Run{})
-	if err != nil || len(got) != 2 || got[0].Model != "a1" || got[1].Model != "b1" {
-		t.Errorf("got %+v, %v; want a1 then b1", got, err)
-	}
-}
-
-// A merged incremental result skips the impact skill it carried from the
-// base run, as FromResult does; a re-run that named impact keeps it.
-func TestModelRowsMergedIncrementalSkipsImpact(t *testing.T) {
-	body := []byte(`{"merged":true,"incremental":{"reviewed":[],"carried":[],"from":"abc"},"skills":[
-	 {"name":"impact","tokens_by_model":[{"role":"a","model":"m","tokens":{"input":9,"output":9}}]},
-	 {"name":"security","tokens_by_model":[{"role":"a","model":"m","tokens":{"input":1,"output":1}}]}]}`)
-	got, err := ModelRows(body, store.Run{Trigger: store.TriggerPush, Incremental: true})
-	if err != nil || len(got) != 1 || got[0].Skill != "security" {
-		t.Errorf("got %+v, %v; want only security", got, err)
-	}
-	rerun, _ := ModelRows(body, store.Run{Trigger: store.TriggerRerunFailed, SkillSubset: []string{"impact"}})
-	if len(rerun) != 1 || rerun[0].Skill != "impact" {
-		t.Errorf("re-run rows = %+v, want impact", rerun)
+	if len(r.judge) != 1 || r.judge[0] != "j" || len(r.single) != 1 || r.single[0] != "s" {
+		t.Errorf("judge %v, single %v; want j by RecordJudgeUsage, s by RecordUsage", r.judge, r.single)
 	}
 }

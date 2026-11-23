@@ -8,7 +8,7 @@ import (
 
 // reasonInputsChanged fails a member whose dispatch would change what its run
 // was dispatched with: a member never writes its run.
-const reasonInputsChanged = "the review's inputs changed while the panel ran"
+const reasonInputsChanged = "the review's inputs changed while the multi review ran"
 
 // errInputsChanged is how subset says it would write to a member's run.
 var errInputsChanged = errors.New(reasonInputsChanged)

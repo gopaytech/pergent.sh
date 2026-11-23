@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -381,5 +382,68 @@ func TestEntryTokensSincePanel(t *testing.T) {
 	}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("EntryTokensSince = %+v; want %+v", got, want)
+	}
+}
+
+// A multi review counts each Job on its own entry (Ruling L8): each
+// reviewer on its review_members entry, the judge on its review_judges
+// entry, each with the owner team of the run_usage row it was added to.
+// The run's run_usage rows, the total of every Job, are not counted again
+// on the run's entry (reviewer 1's). A --no-judge run's own tokens count on
+// no entry.
+func TestEntryTokensSinceMultiReview(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	ownRepo(t, s, team, mr1.Instance, "acme/widgets")
+	id, ms := multiReviewWithEntries(t, s, mr1, "a1", 3)
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET model_source = 'global', model_entry_id = 'e1' WHERE id = $1::uuid`, id); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		doneReviewer(t, s, m.ID, `{"status":"completed"}`)
+	}
+	for i, skills := range [][]SkillUsage{
+		{{Skill: "security", In: 100, Out: 10}, {Skill: "style", In: 7, Out: 1}},
+		{{Skill: "security", In: 50, Out: 5}},
+		{{Skill: "security", In: 30, Out: 3}},
+	} {
+		if err := s.RecordReviewMemberUsage(ctx, ms[i].ID, skills); err != nil {
+			t.Fatal(err)
+		}
+	}
+	judgeRun(t, s, id, JudgeRow{Reviewers: []int{1, 2, 3}, Provider: "anthropic", Model: "judge-m", Entry: judgeEntry})
+	if err := s.RecordJudgeUsage(ctx, id, []SkillUsage{{Skill: "security", In: 20, Out: 2}, {Skill: "style", In: 4}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second review, on mr2, whose judge ran --no-judge: its own tokens
+	// count on no entry.
+	other, oms := multiReviewWithEntries(t, s, mr2, "b1", 2)
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET model_source = 'global', model_entry_id = 'e1' WHERE id = $1::uuid`, other); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range oms {
+		doneReviewer(t, s, m.ID, `{"status":"completed"}`)
+		if err := s.RecordReviewMemberUsage(ctx, m.ID, []SkillUsage{{Skill: "security", In: 1000, Out: 0}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	judgeRun(t, s, other, JudgeRow{Reviewers: []int{1, 2}, NoJudge: true, NoJudgeReason: "no judge"})
+	if err := s.RecordJudgeUsage(ctx, other, []SkillUsage{{Skill: "security", In: 9, Out: 0}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.EntryTokensSince(ctx, t0.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []EntryTokens{
+		{Ref: EntryRef{Source: SourceGlobal, ID: "e1"}, OwnerTeam: team, Tokens: 110 + 8 + 1000}, // reviewer 1 of both reviews
+		{Ref: EntryRef{Source: SourceGlobal, ID: "e3"}, OwnerTeam: team, Tokens: 33},
+		{Ref: EntryRef{Source: SourceTeam, ID: "e2"}, OwnerTeam: team, Tokens: 55 + 1000},
+		{Ref: EntryRef{Source: SourceTeam, ID: "j1"}, OwnerTeam: team, Tokens: 22 + 4}, // the judge, not the --no-judge run
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("EntryTokensSince = %+v\nwant %+v", got, want)
 	}
 }

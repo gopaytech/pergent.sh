@@ -2232,7 +2232,7 @@ func TestE2ERerunIsMultiReview(t *testing.T) {
 			if j := judgeOf(t, env, first); !reflect.DeepEqual(j, oldJudge) {
 				t.Errorf("earlier judge row changed: %+v -> %+v", oldJudge, j)
 			}
-			if !jsonEqual(t, string(env.Run(first).Result), clean(t, head)) {
+			if !jsonEqual(t, string(env.Run(first).Result), withMultiReview(t, clean(t, head), 3)) {
 				t.Errorf("earlier result changed: %s", env.Run(first).Result)
 			}
 		})

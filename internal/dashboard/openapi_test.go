@@ -1024,14 +1024,15 @@ var openAPISchemas = map[string]schemaType{
 	"result.Error":            inputSchema(result.Error{}),
 	"result.ProviderError":    inputSchema(result.ProviderError{}),
 	"result.Comment":          inputSchema(result.Comment{}),
-	"result.Panel":            inputSchema(result.Panel{}),
-	"result.PanelMember":      inputSchema(result.PanelMember{}),
-	"result.SkillPanel":       inputSchema(result.SkillPanel{}),
-	"result.PanelJudge":       inputSchema(result.PanelJudge{}),
 	"result.Cause":            inputSchema(result.Cause{}),
-	"result.FindingPanel":     inputSchema(result.FindingPanel{}),
-	"result.ModelTokens":      inputSchema(result.ModelTokens{}),
 	"result.Tokens":           inputSchema(result.Tokens{}),
+
+	// A multi review's judge result.
+	"result.MultiReview":        inputSchema(result.MultiReview{}),
+	"result.MultiReviewer":      inputSchema(result.MultiReviewer{}),
+	"result.MultiJudge":         inputSchema(result.MultiJudge{}),
+	"result.SkillMultiReview":   inputSchema(result.SkillMultiReview{}),
+	"result.FindingMultiReview": inputSchema(result.FindingMultiReview{}),
 }
 
 // Schemas with no Go type to compare with: the error body, and the request

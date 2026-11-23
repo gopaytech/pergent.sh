@@ -2,17 +2,18 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gopaytech/pergent/render"
 
 	"github.com/gopaytech/pergent.sh/internal/actions"
+	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/ci"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
@@ -148,19 +149,19 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if run, err = e.holdImpact(ctx, run, log); err != nil {
 		return err
 	}
-	o := e.outcome(run, chosenCI(run, repo, ok), log)
+	rc, err := e.reviewComment(ctx, run)
+	if err != nil {
+		return err
+	}
+	o := rc.checked(e.outcome(run, chosenCI(run, repo, ok), log), log)
 	// A repository switched off since the run was queued approves nothing
 	// more: its review is posted as with approval turned off.
 	o.ApprovalOff = !ok || !repo.Approve
 	if o.Dismissals, err = e.dismissals(ctx, run.MR); err != nil {
 		return err
 	}
-	pc, err := e.panelComment(ctx, run)
-	if err != nil {
-		return err
-	}
-	// Before the threads: a panel's threads hide its models too.
-	o.Panel, o.PanelOffNote, o.Hide = pc.names, pc.off, e.hideModel(run, pc.models...)
+	// Before the threads: a multi review's threads hide its models too.
+	o.MultiReview, o.MultiReviewOffNote, o.Hide = rc.names, rc.off, e.hideModel(run, rc.models...)
 	// Findings on the diff are posted as threads before the comment is
 	// decided: the comment lists the others.
 	view := e.syncInline(ctx, plat, run, repo, ok, o, log)
@@ -385,11 +386,11 @@ func (e *Engine) replaceStepAdvice(ctx context.Context, run store.Run, advice st
 // neither is left alone, and so is one whose entry is gone and which has no
 // URL to hide.
 //
-// panel is the other models of a review panel's merge (its members' and its
-// judges'): their providers, models and base URLs are hidden too
-// (policy.HideModels), so none of the 3 Jobs' entries reaches the comment.
+// others is the other models of a multi review's judge run (every
+// reviewer's attempts and the judge): their providers, models and base URLs
+// are hidden too (policy.HideModels), so no Job's entry reaches the comment.
 // Without them it is the run's own model alone, as before.
-func (e *Engine) hideModel(run store.Run, panel ...store.ModelUsed) func(string) string {
+func (e *Engine) hideModel(run store.Run, others ...store.ModelUsed) func(string) string {
 	var provider, model string
 	if run.Provider != nil {
 		provider = *run.Provider
@@ -397,8 +398,8 @@ func (e *Engine) hideModel(run store.Run, panel ...store.ModelUsed) func(string)
 	if run.Model != nil {
 		model = *run.Model
 	}
-	if len(panel) > 0 {
-		return e.hidePanelModels(append([]store.ModelUsed{{Provider: provider, Model: model}}, panel...))
+	if len(others) > 0 {
+		return e.hideModels(append([]store.ModelUsed{{Provider: provider, Model: model}}, others...))
 	}
 	if provider == "" && model == "" {
 		return nil
@@ -412,12 +413,12 @@ func (e *Engine) hideModel(run store.Run, panel ...store.ModelUsed) func(string)
 	return func(text string) string { return policy.HideModel(text, provider, model, urls...) }
 }
 
-// hidePanelModels is hideModel for every model of a review panel. A model
-// with no provider and no name hides nothing; with none left, nil.
-func (e *Engine) hidePanelModels(models []store.ModelUsed) func(string) string {
+// hideModels is hideModel for every model of a multi review. A model with
+// no provider and no name hides nothing; with none left, nil.
+func (e *Engine) hideModels(models []store.ModelUsed) func(string) string {
 	var refs []policy.ModelRef
 	for _, m := range models {
-		if m.Provider != "" || m.Model != "" {
+		if (m.Provider != "" || m.Model != "") && !slices.Contains(refs, policy.ModelRef{Provider: m.Provider, Model: m.Model}) {
 			refs = append(refs, policy.ModelRef{Provider: m.Provider, Model: m.Model})
 		}
 	}
@@ -436,92 +437,153 @@ func (e *Engine) hidePanelModels(models []store.ModelUsed) func(string) string {
 	return func(text string) string { return policy.HideModels(text, refs, urls) }
 }
 
-// panelComment is what a run's comment needs from its review panel.
-type panelComment struct {
-	// names are the entry names of a merge's 2 models; nil for a run that
-	// is not a panel's merge.
-	names *render.PanelNames
-	// models are the providers and models of a merge's members (every
-	// attempt) and judges, to hide.
+// reasonNoMultiReview fails a judge run whose completed result has no
+// multi_review block: the result does not say how the reviewers were
+// merged, so it is never published as a pass.
+const reasonNoMultiReview = "the multi review's result has no multi_review block"
+
+// Why a reviewer with no result was left out (render's Skipped): fixed
+// words only, never model text. The full reason is on the run page.
+const skipReviewFailed = "its review failed"
+
+// reviewComment is what a run's comment needs from its multi review.
+type reviewComment struct {
+	// names are the entry names of a judge run's reviewers, in --reviewer
+	// order, its judge and the reviewers that gave no result; nil for any
+	// other run.
+	names *render.MultiReviewNames
+	// models are the providers and models of every reviewer attempt and of
+	// the judge, to hide.
 	models []store.ModelUsed
-	// off is the panel off line of a review that ran as one review because
-	// its panel could not start; "" otherwise.
+	// off is the multi review off line of a review that ran as one review
+	// because its multi review did not start; "" otherwise.
 	off string
+	// judged is true for a judge run (it has a review_judges row): its
+	// result must say how it merged the reviewers.
+	judged bool
 }
 
-// panelComment reads run's review panel. A run whose review has a member
-// other than off, and whose result is a panel's merge (its panel field), is
-// Job P: each role is named by its judge entry (panel_judges), else by its
-// last member's entry. A legacy panel's run that RecoverLegacyPanels queued
-// again ran as one review: its result has no panel field, and its comment is
-// today's. A review with only an off row ran "A only" when that row is the
-// run's own (PanelOffReason): a row an earlier, failed launch left is not. A
-// review with neither has nothing, and its comment is today's.
-func (e *Engine) panelComment(ctx context.Context, run store.Run) (panelComment, error) {
-	var pc panelComment
-	ms, err := e.Store.PanelMembers(ctx, run.ID)
+// reviewComment reads run's multi review. A judge run (a review_judges
+// row) is named by render.MultiReviewNames: every reviewer of
+// review_judges.reviewers, in that (--reviewer) order, by the frozen entry
+// of its newest attempt with a result (done, or failed with its result
+// kept: what the judge was served), else by its chain's first entry; the
+// judge by its entry ("" with no judge); and one Skipped per reviewer with
+// no result, in fixed words. Every reviewer attempt's model and the judge's
+// are hidden. A run with no judge row whose review has an off row that its
+// own claim recorded ran as one review: the off line (Ruling P42). A run
+// with neither has nothing, and its comment is today's.
+func (e *Engine) reviewComment(ctx context.Context, run store.Run) (reviewComment, error) {
+	var rc reviewComment
+	if run.Kind != store.KindMR {
+		return rc, nil
+	}
+	j, judged, err := e.Store.JudgeOf(ctx, run.ID)
 	if err != nil {
-		return pc, fmt.Errorf("read the review's panel members: %w", err)
+		return rc, fmt.Errorf("read the multi review's judge: %w", err)
 	}
-	if len(ms) > 0 && !panelMergeResult(run.Result) {
-		ms = slices.DeleteFunc(ms, func(m store.PanelMember) bool { return m.State != store.MemberOff })
-	}
-	last := map[string]store.PanelMember{}
-	off := false
-	for _, m := range ms { // oldest first
-		if m.State == store.MemberOff {
-			off = true
-			continue
-		}
-		last[m.Role] = m
-		pc.models = append(pc.models, store.ModelUsed{Provider: m.Provider, Model: m.Model})
-	}
-	if len(last) == 0 {
-		if !off {
-			return pc, nil
-		}
-		reason, found, err := e.Store.PanelOffReason(ctx, run.ID)
+	if !judged {
+		reason, found, err := e.Store.MultiReviewOffReason(ctx, run.ID)
 		if err != nil {
-			return pc, fmt.Errorf("read why the review has no panel: %w", err)
+			return rc, fmt.Errorf("read why the review is not a multi review: %w", err)
 		}
 		if found {
-			pc.off = policy.PanelOffLine(reason)
+			rc.off = policy.MultiReviewOffLine(reason)
 		}
-		return pc, nil
+		return rc, nil
 	}
-	judges, err := e.Store.PanelJudges(ctx, run.ID)
+	ms, err := e.Store.ReviewMembers(ctx, run.ID)
 	if err != nil {
-		return pc, fmt.Errorf("read the panel's judges: %w", err)
+		return rc, fmt.Errorf("read the multi review's reviewers: %w", err)
 	}
-	jm, err := e.Store.PanelJudgeModels(ctx, run.ID)
-	if err != nil {
-		return pc, fmt.Errorf("read the panel's judge models: %w", err)
-	}
-	for _, role := range []string{"a", "b"} {
-		if m, ok := jm[role]; ok {
-			pc.models = append(pc.models, m)
+	rc.judged = true
+	names := &render.MultiReviewNames{Reviewers: []string{}}
+	for _, n := range j.Reviewers {
+		var first, newest, served *store.ReviewMember
+		for i := range ms { // oldest first
+			m := &ms[i]
+			if m.Reviewer != n || m.State == store.MemberOff {
+				continue
+			}
+			if first == nil {
+				first = m
+			}
+			newest = m
+			if m.Result != nil && (m.State == store.MemberDone || m.State == store.MemberFailed) {
+				served = m
+			}
+		}
+		name := ""
+		switch {
+		case served != nil:
+			name = attemptEntryName(*served)
+		case first != nil && len(first.Chain.Entries) > 0:
+			name = first.Chain.Entries[0].Name
+		}
+		names.Reviewers = append(names.Reviewers, name)
+		if served == nil {
+			skipped := render.SkippedReviewer{Name: name, Reason: skipReviewFailed}
+			if newest != nil {
+				skipped.Reason = skippedWords(newest.FailureReason)
+			}
+			if skipped.Name == "" {
+				skipped.Name = "reviewer " + strconv.Itoa(len(names.Reviewers))
+			}
+			names.Skipped = append(names.Skipped, skipped)
 		}
 	}
-	name := func(role, none string) string {
-		if n := judges[role].Name; n != "" {
-			return n
+	for _, m := range ms {
+		if m.State != store.MemberOff && (m.Provider != "" || m.Model != "") {
+			rc.models = append(rc.models, store.ModelUsed{Provider: m.Provider, Model: m.Model})
 		}
-		if n := last[role].Entry.Name; n != "" {
-			return n
-		}
-		return none
 	}
-	pc.names = &render.PanelNames{A: name("a", "model A"), B: name("b", "model B")}
-	return pc, nil
+	if !j.NoJudge {
+		names.Judge = j.Entry.Name
+		rc.models = append(rc.models, store.ModelUsed{Provider: j.Provider, Model: j.Model})
+	}
+	rc.names = names
+	return rc, nil
 }
 
-// panelMergeResult reports whether the stored result is a review panel's
-// merge: pergent sets its panel field only with --panel.
-func panelMergeResult(stored []byte) bool {
-	var r struct {
-		Panel json.RawMessage `json:"panel"`
+// checked is o, the outcome of a run, with a judge run's completed result
+// that has no multi_review block turned into a failure: such a result is
+// never a pass.
+func (rc reviewComment) checked(o policy.Outcome, log *slog.Logger) policy.Outcome {
+	if !rc.judged || o.Result == nil || o.Result.Status != "completed" || o.Result.MultiReview != nil {
+		return o
 	}
-	return json.Unmarshal(stored, &r) == nil && len(r.Panel) > 0 && string(r.Panel) != "null"
+	log.Warn("the judge's result can't be used: it has no multi_review block")
+	return policy.Outcome{FailureReason: reasonUnusableResult + reasonNoMultiReview, CI: o.CI}
+}
+
+// attemptEntryName is the name, in its frozen chain, of the entry reviewer
+// attempt m ran on (its position, 1-based); the name its dispatch recorded
+// when the frozen chain has none.
+func attemptEntryName(m store.ReviewMember) string {
+	if p := m.Entry.Position; p >= 1 && p <= len(m.Chain.Entries) && m.Chain.Entries[p-1].Name != "" {
+		return m.Chain.Entries[p-1].Name
+	}
+	if m.Entry.Name != "" {
+		return m.Entry.Name
+	}
+	if len(m.Chain.Entries) > 0 {
+		return m.Chain.Entries[0].Name
+	}
+	return ""
+}
+
+// skippedWords is why a reviewer gave no result, from its newest attempt's
+// failure reason: a skip reason of the split or of its dispatch, or why a
+// provider refused its model, as they are; anything else (a reason that can
+// hold model text) is skipReviewFailed.
+func skippedWords(reason string) string {
+	reason = strings.TrimPrefix(reason, reasonMemberRefused)
+	switch reason {
+	case skipSame, skipQuota, skipNone,
+		chain.ReasonWords(store.ClassQuota), chain.ReasonWords(store.ClassBilling), chain.ReasonWords(store.ClassAuth):
+		return reason
+	}
+	return skipReviewFailed
 }
 
 // dismissals are the dismissals of the merge request in the renderer's form.
@@ -988,8 +1050,14 @@ func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logg
 		}
 	}
 	// Blocking findings and a blocking CI job that isn't passed are never
-	// softened to neutral, which GitLab reads as success.
-	o := e.outcome(stored, chosenCI(stored, repo, ok), log)
+	// softened to neutral, which GitLab reads as success. A judge result
+	// with no multi review fields is a failure here too.
+	rc, err := e.reviewComment(ctx, stored)
+	if err != nil {
+		log.Warn("couldn't read the multi review; the final status is failed", "error", e.redact(err.Error()))
+		return forge.StatusFailed
+	}
+	o := rc.checked(e.outcome(stored, chosenCI(stored, repo, ok), log), log)
 	if policy.Decide(o, config.FailureStatusNeutral).Kind == policy.KindBlocking || len(ci.Blocking(o.CI)) > 0 {
 		return forge.StatusFailed
 	}

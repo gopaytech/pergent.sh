@@ -121,9 +121,14 @@ func (e *e2e) nextJudge(t *testing.T, known ...string) string {
 	return e.newJob(t, append(known, "")...)
 }
 
-// postJudge posts body as run id's judge result with its Job's token.
+// postJudge posts body as run id's judge result with its Job's token. A
+// completed body with no multi_review block gets one for the judge row's
+// reviewers (withMultiReview), as the CLI writes it.
 func (e *e2e) postJudge(t *testing.T, id string, body []byte) {
 	t.Helper()
+	if j, found, err := e.env.Store.JudgeOf(e.env.ctx, id); err == nil && found {
+		body = withMultiReview(t, body, len(j.Reviewers))
+	}
 	if code := e.postResult(t, id, string(e.env.Secret(id).Data["result-token"]), body); code != http.StatusOK {
 		t.Fatalf("the judge's result: status %d\n%s", code, e.env.Logs())
 	}

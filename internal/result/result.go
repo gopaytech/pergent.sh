@@ -45,8 +45,9 @@ type Result struct {
 	// image, whose review page says it does not use rules.
 	Rules *RulesInfo `json:"rules,omitempty"`
 
-	// Panel names the review panel's two models; absent without a panel.
-	Panel *Panel `json:"panel,omitempty"`
+	// MultiReview names the reviewers and the judge of a multi review's
+	// judge result; absent from any other result.
+	MultiReview *MultiReview `json:"multi_review,omitempty"`
 
 	// Merged is set by Merge on a result that carries kept skills of an
 	// earlier run: its comment covers only the skills that were re-run, so
@@ -95,9 +96,9 @@ type Skill struct {
 	Confidence       int    `json:"confidence,omitempty"`
 	ConfidenceReason string `json:"confidence_reason,omitempty"`
 
-	// Panel and TokensByModel are set only for a review panel's skill.
-	Panel         *SkillPanel   `json:"panel,omitempty"`
-	TokensByModel []ModelTokens `json:"tokens_by_model,omitempty"`
+	// MultiReview is how a multi review's judge merged the skill; absent
+	// from any other result.
+	MultiReview *SkillMultiReview `json:"multi_review,omitempty"`
 }
 
 // Finding is one finding of a skill, as the result stores it.
@@ -113,8 +114,8 @@ type Finding struct {
 	SuggestedFix string `json:"suggested_fix,omitempty"`
 	Suggestion   string `json:"suggestion,omitempty"`
 
-	// Panel is what a review panel's merge says about the finding.
-	Panel *FindingPanel `json:"panel,omitempty"`
+	// MultiReview is what a multi review's merge says about the finding.
+	MultiReview *FindingMultiReview `json:"multi_review,omitempty"`
 
 	// Linked is the caller, in a linked repository, that a finding of the
 	// impact skill says the change breaks. It is nil on every other finding.
@@ -233,39 +234,45 @@ type ProviderError struct {
 	Status   int    `json:"status,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
-	// Role is the panel model ("a" or "b") of a judge run's error; empty
-	// for every other provider error.
+	// Role is "judge" on the error of a multi review's judge (or of its
+	// one-reviewer check); empty for every other provider error.
 	Role string `json:"role,omitempty"`
 }
 
-// Panel is what a review panel's merge says about its members: Mode is
-// "both", "a_only" or "b_only"; Judged is false when no judge run was allowed.
-type Panel struct {
-	A      PanelMember `json:"a"`
-	B      PanelMember `json:"b"`
-	Mode   string      `json:"mode"`
-	Judged bool        `json:"judged"`
+// MultiReview is what a multi review's judge result says about its run:
+// each reviewer, by its --reviewer number, and the judge.
+type MultiReview struct {
+	Reviewers []MultiReviewer `json:"reviewers"`
+	Judge     MultiJudge      `json:"judge"`
 }
 
-// PanelMember names a member's model.
-type PanelMember struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+// MultiReviewer is one reviewer. Number starts at 1. Usable is false when
+// the CLI could not use the reviewer's result at all; a usable reviewer can
+// still have failed for one skill (SkillMultiReview.Failed).
+type MultiReviewer struct {
+	Number int  `json:"number"`
+	Usable bool `json:"usable"`
 }
 
-// SkillPanel is how a skill was merged.
-type SkillPanel struct {
-	Mode       string       `json:"mode"`
-	Judges     []PanelJudge `json:"judges,omitempty"`
-	ExactMerge bool         `json:"exact_merge,omitempty"`
+// MultiJudge names the judge's model. Judged is false when no judge run was
+// allowed (--no-judge); then Provider and Model are empty.
+type MultiJudge struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Judged   bool   `json:"judged"`
 }
 
-// PanelJudge is one judge run: Role is the model that judged. Status is
-// "ok", "failed" or "skipped" (pergent's text, kept as it came).
-type PanelJudge struct {
-	Role   string `json:"role"`
-	Status string `json:"status"`
-	Cause  *Cause `json:"cause,omitempty"`
+// SkillMultiReview is how a multi review merged one skill: Reviewers are the
+// reviewers whose answers were used, Failed the others. Judge is the judge
+// run's status ("ok", "failed", "skipped" or "not_run", pergent's text kept
+// as it came), and JudgeCause why it failed. ExactMerge is true when the
+// merge is exact, not judged.
+type SkillMultiReview struct {
+	Reviewers  []int  `json:"reviewers"`
+	Failed     []int  `json:"failed,omitempty"`
+	Judge      string `json:"judge"`
+	JudgeCause *Cause `json:"judge_cause,omitempty"`
+	ExactMerge bool   `json:"exact_merge,omitempty"`
 }
 
 // Cause is why a judge run failed.
@@ -275,22 +282,17 @@ type Cause struct {
 	ProviderError *ProviderError `json:"provider_error,omitempty"`
 }
 
-// FindingPanel is what the merge says about a finding.
-type FindingPanel struct {
-	FoundBy           string   `json:"found_by"`
+// FindingMultiReview is what a multi review's merge says about a finding:
+// the reviewers (1-based numbers) that found it, the fingerprints of the
+// same finding from other reviewers (a dismissal of any of them dismisses
+// this one), and what the judge said. Reason is model text.
+type FindingMultiReview struct {
+	FoundBy           []int    `json:"found_by"`
 	Also              []string `json:"also,omitempty"`
-	DisagreedBy       string   `json:"disagreed_by,omitempty"`
+	JudgeDisagreed    bool     `json:"judge_disagreed,omitempty"`
 	Reason            string   `json:"reason,omitempty"`
-	RatedSuggestionBy string   `json:"rated_suggestion_by,omitempty"`
-	UnjudgedBy        string   `json:"unjudged_by,omitempty"`
-}
-
-// ModelTokens is the tokens of a skill's runs on one model.
-type ModelTokens struct {
-	Role     string `json:"role"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	Tokens   Tokens `json:"tokens"`
+	RatedSuggestionBy []int    `json:"rated_suggestion_by,omitempty"`
+	Unjudged          bool     `json:"unjudged,omitempty"`
 }
 
 // Tokens is the model usage of runs.
@@ -369,7 +371,7 @@ func ToRender(r *Result) []render.Skill {
 			Confidence: s.Confidence, ConfidenceReason: s.ConfidenceReason,
 			Findings: []render.Finding{},
 		}
-		rs.Panel = renderSkillPanel(s.Panel)
+		rs.MultiReview = renderSkillMultiReview(s.MultiReview)
 		for _, f := range findings[i] {
 			id := f.ID
 			if id == "" {
@@ -379,7 +381,7 @@ func ToRender(r *Result) []render.Skill {
 				ID: id, Fingerprint: f.Fingerprint, File: f.File, Line: f.Line, EndLine: f.EndLine,
 				Severity: render.Severity(f.Severity), Title: f.Title,
 				Explanation: f.Explanation, SuggestedFix: f.SuggestedFix, Suggestion: f.Suggestion,
-				Panel: renderFindingPanel(f.Panel),
+				MultiReview: renderFindingMultiReview(f.MultiReview),
 			})
 		}
 		for _, f := range s.Failures {
@@ -410,29 +412,26 @@ func ToRender(r *Result) []render.Skill {
 	return out
 }
 
-// renderSkillPanel is the skill's panel for render: JudgeFailed lists the
-// judges that failed, and the skipped ones unless the merge was exact (an
-// exact merge has its own note). It is pergent's own rule.
-func renderSkillPanel(p *SkillPanel) *render.SkillPanel {
-	if p == nil {
+// renderSkillMultiReview is the skill's multi review for render:
+// exact_merge is render's Exact. The judge's status and cause stay here, for
+// the run page.
+func renderSkillMultiReview(m *SkillMultiReview) *render.SkillMultiReview {
+	if m == nil {
 		return nil
 	}
-	rp := &render.SkillPanel{Mode: p.Mode, Exact: p.ExactMerge}
-	for _, j := range p.Judges {
-		if j.Status == "failed" || (j.Status == "skipped" && !p.ExactMerge) {
-			rp.JudgeFailed = append(rp.JudgeFailed, j.Role)
-		}
-	}
-	return rp
+	return &render.SkillMultiReview{Reviewers: m.Reviewers, Failed: m.Failed, Exact: m.ExactMerge}
 }
 
-func renderFindingPanel(p *FindingPanel) *render.FindingPanel {
-	if p == nil {
+// renderFindingMultiReview is the finding's multi review for render, field
+// for field: Also reaches render, so a dismissal of a merged fingerprint
+// dismisses the finding.
+func renderFindingMultiReview(m *FindingMultiReview) *render.FindingMultiReview {
+	if m == nil {
 		return nil
 	}
-	return &render.FindingPanel{
-		FoundBy: p.FoundBy, Also: p.Also, DisagreedBy: p.DisagreedBy, Reason: p.Reason,
-		RatedSuggestionBy: p.RatedSuggestionBy, UnjudgedBy: p.UnjudgedBy,
+	return &render.FindingMultiReview{
+		FoundBy: m.FoundBy, Also: m.Also, JudgeDisagreed: m.JudgeDisagreed, Reason: m.Reason,
+		RatedSuggestionBy: m.RatedSuggestionBy, Unjudged: m.Unjudged,
 	}
 }
 

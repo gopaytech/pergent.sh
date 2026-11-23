@@ -146,7 +146,7 @@ func (h *MemberHandler) stored(w http.ResponseWriter, ctx context.Context, log *
 // the request, never changing the member. A result that settles as a
 // failure (an error result, a provider's error) still records the tokens it
 // reported. A write lost to a restart is picked up by the fill at the next
-// start (usage.BackfillMembers).
+// start (usage.BackfillReviewMembers).
 func (h *MemberHandler) recordUsageLater(ctx context.Context, log *slog.Logger, id string, body []byte, run store.Run) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), usageTimeout)
 	work := backgroundOr(h.Background, &h.usageWork)
