@@ -1,6 +1,6 @@
 # Multi review (experimental)
 
-**Status: experimental, off by default.** It stays experimental until it is measured on real merge requests. A repository with 1 reviewer reviews as before, byte for byte. Multi review is off for every image until a pergent release with `agent --multi-review` is the minimum (see [The image check](#the-image-check)).
+**Status: experimental, off by default.** It stays experimental until it is measured on real merge requests. A repository with 1 reviewer reviews as before, byte for byte. It needs pergent v0.12.0 or newer in `jobs.image`, which is the default (see [The image check](#the-image-check)).
 
 A multi review runs each review on 1 to 5 reviewers at the same time. Each reviewer is a [model chain](models.md). One judge checks their findings and writes the one result that pergent.sh publishes.
 
@@ -106,7 +106,7 @@ All the Jobs spend tokens. Tokens are counted per model: [Usage](usage.md#multi-
 
 ## The image check
 
-`PanelMinVersion` in the code is the first pergent release with `agent --multi-review`. It is empty until that release exists, so every image is refused. Adding a reviewer fails with `no review image supports multi review yet`. Removing a reviewer needs no check. If reviewers are already stored and the image is too old, the review runs with reviewer 1 alone, and the footer says `multi review off: the review image does not support it`.
+Multi review needs pergent v0.12.0 or newer in `jobs.image`, the first release with `agent --multi-review` (`PanelMinVersion` in the code). The default image is v0.12.0. With an older image, adding a reviewer fails with `a second reviewer needs a review image with pergent v0.12.0 or later; jobs.image is <tag>`. Removing a reviewer needs no check. If reviewers are already stored and the image is too old, the review runs with reviewer 1 alone, and the footer says `multi review off: the review image does not support it`.
 
 ## A known limit
 

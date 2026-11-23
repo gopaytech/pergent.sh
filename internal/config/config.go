@@ -1410,10 +1410,10 @@ func validInstanceTrust(m string) bool {
 	return m == "" || m == TrustFollowVisibility || m == TrustOn || m == TrustOff
 }
 
-// PanelMinVersion is the first pergent release with agent --multi-review. ""
-// until that release exists: every image is refused. The owner sets it with
-// defaultImage.
-var PanelMinVersion = ""
+// PanelMinVersion is the first pergent release with agent --multi-review, as
+// "vX.Y.Z". An image below it runs no multi review, and "" refuses every
+// image.
+var PanelMinVersion = "v0.12.0"
 
 // ImageTag is the tag of an image reference, or "" when it has none. A digest
 // after the tag is ignored; a colon before the last slash is a registry port,
