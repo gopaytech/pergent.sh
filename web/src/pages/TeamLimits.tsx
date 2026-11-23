@@ -28,9 +28,8 @@ export default function TeamLimits({ team, role, canEdit }: { team: number; role
   const changed = () => {
     client.invalidateQueries({ queryKey: key });
     client.invalidateQueries({ queryKey: ["team-chain", team] });
-    client.invalidateQueries({ queryKey: ["team-panel-chain", team] });
     client.invalidateQueries({ queryKey: ["repo-chain"] });
-    client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
+    client.invalidateQueries({ queryKey: ["repo-reviewers"] });
     client.invalidateQueries({ queryKey: ["admin-models"] });
   };
   return (

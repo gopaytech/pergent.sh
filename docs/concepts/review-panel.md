@@ -86,5 +86,3 @@ On the repository page, one line shows the panel (the mode **Off** is set on the
 | --- | --- |
 | `Panel: on (A: <entry>, B: <entry>)` | A chain B is in effect. |
 | `Panel: off` | No panel. |
-
-The API is in the [OpenAPI](../../openapi.yaml) file: `/panel-chain`, `/panel-chain/reset` and `/panel-chain/off` on a repository, `/api/teams/{id}/panel-chain` and `/api/admin/panel-chain`.

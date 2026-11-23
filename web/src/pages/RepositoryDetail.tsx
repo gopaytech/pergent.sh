@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { api, isStatus, paths, safeHref, type InputsView, type PanelView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
+import { api, isStatus, paths, safeHref, type InputsView, type MultiReviewView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
 import { useWrite } from "../layout/write";
 import { QuotaLine } from "../quota";
 import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, platformName, skillOrigin } from "../ui";
@@ -54,7 +54,7 @@ export default function RepositoryDetail() {
         {platformName(repo.platform)} · {repo.instance} ·{" "}
         {repo.source === "config" ? "managed by config" : repo.paused ? "paused in the dashboard" : "switched on in the dashboard"}
       </div>
-      <div className="sub spaced">{panelText(view.panel)}</div>
+      <div className="sub spaced">{multiReviewText(view.multiReview)}</div>
       {repo.paused && (
         <div className="alert" role="note" aria-label="Paused">
           <span className="prose">
@@ -109,8 +109,10 @@ export default function RepositoryDetail() {
   );
 }
 
-// panelText is the panel line: on with the first entry of each chain, or off.
-const panelText = (p: PanelView) => (p.on ? `Panel: on (A: ${p.a ?? "none"}, B: ${p.b ?? "none"})` : "Panel: off");
+// multiReviewText is the multi review line: on with the count of reviewers
+// and the judge's name, or off.
+const multiReviewText = (m: MultiReviewView) =>
+  m.on ? `Multi review: on (${m.reviewers} reviewers, ${m.judge ? `judge ${m.judge}` : "no judge"})` : "Multi review: off";
 
 // heldForTokens says a change waits because the tokens ran out: a quota, or
 // a model or team limit with it. Only an admin starts one.

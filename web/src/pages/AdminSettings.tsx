@@ -19,7 +19,6 @@ import {
 } from "../api";
 import ChainEditor from "../ChainEditor";
 import LimitField from "../LimitField";
-import PanelChainCard from "../PanelChainCard";
 import CommentLayoutEditor from "../CommentLayoutEditor";
 import { useWrite } from "../layout/write";
 import RuleSetPicker from "../RuleSetPicker";
@@ -681,7 +680,6 @@ function SkillPicker({
 
 const modelsKey = ["admin-models"];
 const chainKey = ["admin-chain"];
-const panelKey = ["admin-panel-chain"];
 
 const repositoriesText = (n: number) => `${n} ${n === 1 ? "repository" : "repositories"}`;
 
@@ -711,14 +709,6 @@ function Models({ v }: { v: ModelsAdminView }) {
         ))}
       </section>
       <GlobalChain />
-      <PanelChainCard
-        title="Global chain B (review panel)"
-        intro="With a chain B, each review also runs on its first entry, and the two results are put together. A repository with no chain B of its own, and an owner team with none, uses this one. Save it with no entries for none."
-        path="/api/admin/panel-chain"
-        queryKey={panelKey}
-        clearPath={(e) => paths.apiAdminModelMark(e.id)}
-        also={[["repo-panel-chain"], ["team-panel-chain"], ["repo"], chainKey, ["repo-chain"]]}
-      />
       <AddModelForm<ModelAdminView>
         path="/api/admin/models"
         teamsMayUse
@@ -726,9 +716,7 @@ function Models({ v }: { v: ModelsAdminView }) {
           // The first entry is the default: the list says which.
           client.invalidateQueries({ queryKey: modelsKey });
           client.invalidateQueries({ queryKey: chainKey });
-          client.invalidateQueries({ queryKey: panelKey });
-          client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
-          client.invalidateQueries({ queryKey: ["team-panel-chain"] });
+          client.invalidateQueries({ queryKey: ["repo-reviewers"] });
           client.invalidateQueries({ queryKey: ["repo"] });
         }}
       />
@@ -744,9 +732,7 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
   const changed = () => {
     client.invalidateQueries({ queryKey: modelsKey });
     client.invalidateQueries({ queryKey: chainKey });
-    client.invalidateQueries({ queryKey: panelKey });
-    client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
-    client.invalidateQueries({ queryKey: ["team-panel-chain"] });
+    client.invalidateQueries({ queryKey: ["repo-reviewers"] });
     client.invalidateQueries({ queryKey: ["repo"] });
     client.invalidateQueries({ queryKey: ["repo-chain"] });
   };
@@ -761,9 +747,7 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
     onSuccess: (list) => {
       client.setQueryData(modelsKey, list);
       client.invalidateQueries({ queryKey: chainKey });
-      client.invalidateQueries({ queryKey: panelKey });
-      client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
-      client.invalidateQueries({ queryKey: ["team-panel-chain"] });
+      client.invalidateQueries({ queryKey: ["repo-reviewers"] });
       client.invalidateQueries({ queryKey: ["repo"] });
     },
   });
@@ -1016,9 +1000,7 @@ function GlobalChain() {
     mutationFn: (e: ChainEntryView) => write<void>("DELETE", paths.apiAdminModelMark(e.id)),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: chainKey });
-      client.invalidateQueries({ queryKey: panelKey });
-      client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
-      client.invalidateQueries({ queryKey: ["team-panel-chain"] });
+      client.invalidateQueries({ queryKey: ["repo-reviewers"] });
       changed();
     },
   });

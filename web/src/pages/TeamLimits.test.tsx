@@ -14,7 +14,6 @@ const routes = (me = maintainer, models: TeamModelsView = teamModelsPayments, li
   "GET /api/me/teams": { body: myTeams },
   "GET /api/teams/2/models": { body: models },
   "GET /api/teams/2/chain": { body: chainTeam },
-  "GET /api/teams/2/panel-chain": { body: { ...chainTeam, source: "global", team: "", entries: [] } },
   "GET /api/teams/2/limits": { body: limits },
 });
 

@@ -63,7 +63,7 @@ export default function ChainEditor({
   // allowEmpty lets an empty chain be saved (a team's: no chain of its own).
   allowEmpty?: boolean;
   busy?: boolean;
-  // label names the list; chain B's editor says so.
+  // label names the list: each chain of the Reviewers card has its own.
   label?: string;
   onSave: (entries: ChainRef[]) => void;
   onClear: (entry: ChainEntryView) => void;
