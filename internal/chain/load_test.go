@@ -89,6 +89,7 @@ func (e *loadEnv) save(t *testing.T, c store.Chain) {
 
 // The owner team's chain is in effect when the repository has none.
 func TestLoadTeamChain(t *testing.T) {
+	t.Parallel()
 	e := newLoadEnv(t, &config.Config{})
 	e.save(t, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.a}})
 	in, err := Load(ctx, e.st, e.reg, now, store.Run{}, repo)
@@ -136,6 +137,7 @@ func limit(t *testing.T, st *store.Store, ref store.EntryRef, team, tokens int64
 // Load reads the limits of this month: the model limits, and the owner
 // team's limits only. A repository with no owner team gets no team limit.
 func TestLoadReadsLimits(t *testing.T) {
+	t.Parallel()
 	e := newLoadEnv(t, &config.Config{})
 	spent(t, e.st, 1, e.a, 10)
 	spent(t, e.st, 2, e.b, 10)

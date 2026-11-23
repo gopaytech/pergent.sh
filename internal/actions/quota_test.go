@@ -100,6 +100,7 @@ func reruns(t *testing.T, st *store.Store) int {
 }
 
 func TestRerunRefusedOnUsedUpQuota(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
 
@@ -116,6 +117,7 @@ func TestRerunRefusedOnUsedUpQuota(t *testing.T) {
 }
 
 func TestRerunPastQuota(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
 
@@ -129,6 +131,7 @@ func TestRerunPastQuota(t *testing.T) {
 }
 
 func TestRerunWithRoomQueuesChecked(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 9)
 
@@ -158,6 +161,7 @@ func assertQueuedChecked(t *testing.T, st *store.Store) {
 // A repository with a quota but room under it, and an instance quota used up
 // instead, are both read.
 func TestRerunRefusedOnUsedUpInstanceQuota(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
 
@@ -169,6 +173,7 @@ func TestRerunRefusedOnUsedUpInstanceQuota(t *testing.T) {
 }
 
 func TestStartRefusedOnUsedUpQuota(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
 	id, _, err := st.EnqueueRun(ctx, quotaMR, "acme/web", "head1", "main")
@@ -193,6 +198,7 @@ func TestStartRefusedOnUsedUpQuota(t *testing.T) {
 }
 
 func TestStartPastQuota(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
 	id, _, err := st.EnqueueRun(ctx, quotaMR, "acme/web", "head1", "main")
@@ -238,6 +244,7 @@ func activeRun(t *testing.T, st *store.Store) string {
 // A review of the head that is running when the quota runs out isn't refused:
 // the request is answered as already queued, and nothing is counted.
 func TestRerunWhileReviewRunsIsNotRefused(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
 	id := activeRun(t, st)
@@ -255,6 +262,7 @@ func TestRerunWhileReviewRunsIsNotRefused(t *testing.T) {
 }
 
 func TestStartWhileReviewRunsIsNotRefused(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
 	activeRun(t, st)
@@ -268,6 +276,7 @@ func TestStartWhileReviewRunsIsNotRefused(t *testing.T) {
 // A push's run that isn't dispatched yet is not "on its way": a full review
 // replaces it, so the quota refuses it.
 func TestRerunOfUndispatchedPushRunIsRefused(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
 	if _, _, err := st.EnqueueRun(ctx, quotaMR, "acme/web", "head1", "main"); err != nil {
@@ -285,6 +294,7 @@ func TestRerunOfUndispatchedPushRunIsRefused(t *testing.T) {
 // re-run) is a run the dispatcher holds, so it isn't "on its way": the
 // request is refused for the quota.
 func TestRerunOfUnflaggedAutoRerunIsRefused(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
 	id, created, err := st.EnqueueRerun(ctx, quotaMR, "acme/web", "head1", "main", store.TriggerRerun, nil, nil, true, false)
