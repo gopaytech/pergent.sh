@@ -295,8 +295,14 @@ export type RunEntryView = { name: string; position: number; length: number; sou
 
 // AttemptView is one attempt of a review. outcome is "fell_back" for one
 // dropped for the next entry ("" while it runs); reason is then the class it
-// was dropped on.
-export type AttemptView = { runId: string; name: string; position: number; outcome: Outcome | ""; reason: MarkClass | "" };
+// was dropped on, or "judge_failed" for a judge run that crashed.
+export type AttemptView = {
+  runId: string;
+  name: string;
+  position: number;
+  outcome: Outcome | "";
+  reason: MarkClass | "judge_failed" | "";
+};
 
 export type LogView = { text: string };
 

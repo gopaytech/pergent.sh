@@ -1,7 +1,10 @@
 package store
 
 import (
+	"encoding/json"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -438,5 +441,63 @@ func TestUsageRowsSource(t *testing.T) {
 	}
 	if !slices.Equal(got, []string{SourceGlobal, SourceTeam}) {
 		t.Errorf("sources = %v; want global, then team", got)
+	}
+}
+
+// A judge retry and an attempt copy the same columns: 2 runs set up the
+// same way, one retried and one fallen back, give next attempts that are
+// equal on every column but those of the row itself.
+func TestJudgeRetryCopiesAsAttempt(t *testing.T) {
+	s := newStore(t)
+	base := reported(t, s, mr3, "c1", `{}`)
+	// Both sources first: a later dispatch would claim a queued attempt.
+	froms := map[MRKey]string{}
+	for _, mr := range []MRKey{mr1, mr2} {
+		tok := "tok-" + strconv.FormatInt(mr.IID, 10)
+		from := dispatched(t, s, mr, "a1", tok)
+		setRun(t, s, from, `trigger = 'rerun', skill_subset = ARRAY['security'], base_run_id = $2::uuid, quota_checked = true,
+			ci_checked = true, project_path = 'acme/copied', status_ref = 42`, base)
+		if out, err := s.StoreResult(ctx, from, tok, []byte(`{}`), t0); err != nil || out != ResultStored {
+			t.Fatalf("StoreResult = %v, %v", out, err)
+		}
+		froms[mr] = from
+	}
+	attemptID, created, err := s.EnqueueAttempt(ctx, getRun(t, s, froms[mr1]), quotaMark("m1"))
+	if err != nil || !created {
+		t.Fatalf("EnqueueAttempt = %v, %v", created, err)
+	}
+	retryID, created, err := s.EnqueueJudgeRetry(ctx, getRun(t, s, froms[mr2]))
+	if err != nil || !created {
+		t.Fatalf("EnqueueJudgeRetry = %v, %v", created, err)
+	}
+	for _, from := range froms {
+		if r := getRun(t, s, from); r.State != Superseded || r.Outcome != OutcomeFellBack {
+			t.Errorf("run %s = %s %q; want superseded, fell_back", from, r.State, r.Outcome)
+		}
+	}
+	// Every column but the row's own: its id, merge request, times and first run.
+	row := func(id string) map[string]any {
+		t.Helper()
+		var b []byte
+		if err := s.pool.QueryRow(ctx, `SELECT (to_jsonb(r) - 'id' - 'mr_iid' - 'created_at' - 'updated_at' - 'attempt_of')::text
+			FROM runs r WHERE id = $1::uuid`, id).Scan(&b); err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	attempt, retry := row(attemptID), row(retryID)
+	if !reflect.DeepEqual(attempt, retry) {
+		for k, v := range attempt {
+			if !reflect.DeepEqual(v, retry[k]) {
+				t.Errorf("column %s: attempt %v, judge retry %v", k, v, retry[k])
+			}
+		}
+	}
+	if attempt["project_path"] != "acme/copied" || attempt["status_ref"] != float64(42) || attempt["trigger"] != "rerun" {
+		t.Errorf("attempt = %v; want the copied columns", attempt)
 	}
 }

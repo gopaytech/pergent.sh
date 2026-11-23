@@ -95,18 +95,18 @@ func (s *Store) UpdateTeamModel(ctx context.Context, teamID int64, id string, na
 }
 
 // DeleteTeamModel removes an entry of teamID, takes it out of every chain
-// that names it (chain A and chain B) and drops its mark, in one
+// that names it (chain A and the reviewer chains) and drops its mark, in one
 // transaction, and returns the chains it changed as they are now: chain A's
-// in removedFrom, chain B's in removedFromB. A team with no such entry is
-// ErrModelNotFound.
-func (s *Store) DeleteTeamModel(ctx context.Context, teamID int64, id string) (removedFrom, removedFromB []Chain, err error) {
+// in removedFrom, the reviewer chains in removedFromReviewers. A team with
+// no such entry is ErrModelNotFound.
+func (s *Store) DeleteTeamModel(ctx context.Context, teamID int64, id string) (removedFrom, removedFromReviewers []Chain, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
-	// One removal at a time per team: the chain A and chain B passes lock
+	// One removal at a time per team: the chain A and reviewer passes lock
 	// repository rows in 2 orders, so 2 removals at once could deadlock.
 	// NO KEY UPDATE, not UPDATE: a team chain save takes KEY SHARE on the
 	// row (its foreign key) and must not wait. DeleteTeam and UpdateTeam
@@ -126,14 +126,14 @@ func (s *Store) DeleteTeamModel(ctx context.Context, teamID int64, id string) (r
 	if err != nil {
 		return nil, nil, err
 	}
-	chainsB, err := removeFromChains(ctx, tx, ChainB, SourceTeam, []string{id}, at)
+	reviewers, err := removeFromChains(ctx, tx, ChainReviewers, SourceTeam, []string{id}, at)
 	if err != nil {
 		return nil, nil, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM model_entry_marks WHERE source = $1 AND model_id = $2`, SourceTeam, id); err != nil {
 		return nil, nil, err
 	}
-	return chains, chainsB, tx.Commit(ctx)
+	return chains, reviewers, tx.Commit(ctx)
 }
 
 // clearAuthMark drops an entry's auth mark, leaving a quota or billing mark.

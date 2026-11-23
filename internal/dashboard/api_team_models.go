@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/chain"
@@ -387,7 +388,7 @@ func (d *Dashboard) deleteTeamModel(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	changed, changedB, err := d.Store.DeleteTeamModel(ctx, t.ID, id)
+	changed, changedR, err := d.Store.DeleteTeamModel(ctx, t.ID, id)
 	if errors.Is(err, store.ErrModelNotFound) {
 		notFound(w)
 		return
@@ -399,30 +400,34 @@ func (d *Dashboard) deleteTeamModel(w http.ResponseWriter, r *http.Request) {
 	}
 	d.reloadModels(ctx, "")
 	detail := t.Name + ": " + modelDetail(before.Name, before.Provider, before.Model)
-	if len(changed) > 0 || len(changedB) > 0 {
+	if len(changed) > 0 || len(changedR) > 0 {
 		teams, err := d.teamNames(ctx)
 		if err != nil {
 			d.Log.Error("dashboard: listing teams failed", "error", err.Error())
 		}
+		// A repository's reviewer chains share its label: each label once.
 		labels := func(chains []store.Chain) string {
 			out := make([]string, 0, len(chains))
 			for _, c := range chains {
-				out = append(out, chainLabel(c, teams))
+				if l := chainLabel(c, teams); !slices.Contains(out, l) {
+					out = append(out, l)
+				}
 			}
 			return strings.Join(out, ", ")
 		}
 		if len(changed) > 0 {
 			detail += ", removed from " + labels(changed)
 		}
-		// Only when a chain B named it, so the line is as before otherwise.
-		if len(changedB) > 0 {
-			detail += ", removed from chain B: " + labels(changedB)
+		// Only when a reviewer chain named it, so the line is as before
+		// otherwise.
+		if len(changedR) > 0 {
+			detail += ", removed from reviewer chains: " + labels(changedR)
 		}
 	}
 	args := []any{"team", t.ID, "model_id", id, "chains", len(changed)}
-	// Only when a chain B changed, so the line is as before otherwise.
-	if len(changedB) > 0 {
-		args = append(args, "panel_chains", len(changedB))
+	// Only when a reviewer chain changed, so the line is as before otherwise.
+	if len(changedR) > 0 {
+		args = append(args, "reviewer_chains", len(changedR))
 	}
 	d.Log.Info("dashboard: team model removed", append(args, "by", se.Username)...)
 	d.audit(ctx, se, "team_model_removed", "", "", detail)

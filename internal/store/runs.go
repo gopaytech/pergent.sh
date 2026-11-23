@@ -663,11 +663,12 @@ func (s *Store) supersede(ctx context.Context, id, reason string) error {
 	return err
 }
 
-// CountRunning returns the number of runs and panel members in state
-// running: each holds a jobs.max_running slot.
+// CountRunning returns the number of runs, review members and panel
+// members in state running: each holds a jobs.max_running slot.
 func (s *Store) CountRunning(ctx context.Context) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM runs WHERE state = 'running')
+		+ (SELECT count(*) FROM review_members WHERE state = 'running')
 		+ (SELECT count(*) FROM panel_members WHERE state = 'running')`).Scan(&n)
 	return n, err
 }

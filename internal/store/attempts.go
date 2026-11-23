@@ -45,6 +45,16 @@ func (s *Store) SetRunStatusRef(ctx context.Context, id string, ref int64) error
 // still reported: a newer push, or a result posted twice, finds it otherwise,
 // and then created is false and nothing changes.
 func (s *Store) EnqueueAttempt(ctx context.Context, from Run, m Mark) (id string, created bool, err error) {
+	return s.enqueueNextAttempt(ctx, from, m.Class, &m)
+}
+
+// enqueueNextAttempt is EnqueueAttempt and EnqueueJudgeRetry: under the merge
+// request's lock, in one transaction, while from is reported, it stores the
+// mark m (none when m is nil), closes from as superseded with
+// OutcomeFellBack and reason, and queues the review's next attempt with
+// what from was asked for. Both callers copy the same columns because they
+// share this one INSERT.
+func (s *Store) enqueueNextAttempt(ctx context.Context, from Run, reason string, m *Mark) (id string, created bool, err error) {
 	if !validUUID(from.ID) {
 		return "", false, fmt.Errorf("store: run %q not found", from.ID)
 	}
@@ -68,12 +78,14 @@ func (s *Store) EnqueueAttempt(ctx context.Context, from Run, m Mark) (id string
 	if RunState(state) != Reported {
 		return "", false, nil
 	}
-	if err := upsertMark(ctx, tx, m); err != nil {
-		return "", false, err
+	if m != nil {
+		if err := upsertMark(ctx, tx, *m); err != nil {
+			return "", false, err
+		}
 	}
 	// Superseded first: one live run per head and target.
 	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded', outcome = $2, outcome_reason = $3 WHERE id = $1::uuid`,
-		from.ID, OutcomeFellBack, m.Class); err != nil {
+		from.ID, OutcomeFellBack, reason); err != nil {
 		return "", false, err
 	}
 	if err := tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch,
