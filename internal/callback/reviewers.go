@@ -17,6 +17,13 @@ type ReviewerResults interface {
 	ReviewerResultAuth(ctx context.Context, runID, token string, n int) (body []byte, authed, found bool, err error)
 }
 
+// NoResultHeader and NoResultValue mark the reviewers route's own "this
+// reviewer has no result" 404. get-reviewers trusts only a 404 with this mark.
+const (
+	NoResultHeader = "Pergent-Result"
+	NoResultValue  = "none"
+)
+
 // ReviewersHandler serves GET /runs/{id}/reviewers/{n}: the judge Job of a
 // multi review reads reviewer n's result with its own result token. The
 // store checks that the token is the live token of run id, and it reads only
@@ -24,13 +31,16 @@ type ReviewerResults interface {
 //   - 401: no token, a wrong or expired token, a run with no stored token
 //     yet, or an unknown run. All look the same, so the answer never shows
 //     whether a run exists;
-//   - 404: only to the run's own judge Job, for a reviewer that has no
-//     result (or n that is not 1 to 5, as the other routes answer a bad
-//     path value);
+//   - 404 with the header NoResultHeader: NoResultValue: only to the run's
+//     own judge Job, for a reviewer that has no result;
+//   - 404 with no mark: n is not 1 to 5, as the other routes answer a bad
+//     path value;
 //   - 200: the result.
 //
-// The judge Job fetches 404 as "no result", so an auth failure must never
-// be a 404. The token is not spent. The body and the token are never logged.
+// The judge Job reads only a marked 404 as "no result". Any other 404 (a
+// pergent.sh with no such route, a proxy's default answer) fails the judge
+// Job, so a lost reviewer never becomes a pass. An auth failure must never be
+// a 404. The token is not spent. The body and the token are never logged.
 type ReviewersHandler struct {
 	Reviewers ReviewerResults
 	Log       *slog.Logger
@@ -61,7 +71,12 @@ func (h *ReviewersHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if !valid || !found {
+	if !valid {
+		http.NotFound(w, r)
+		return
+	}
+	if !found {
+		w.Header().Set(NoResultHeader, NoResultValue)
 		http.NotFound(w, r)
 		return
 	}
