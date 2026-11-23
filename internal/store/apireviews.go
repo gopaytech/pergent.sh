@@ -91,8 +91,7 @@ func lockAPI(ctx context.Context, tx pgx.Tx, key string) error {
 // EnqueueAPIReview queues an API review: a run of kind KindAPI with no merge
 // request and its api_reviews row, in one transaction. A subject is its
 // client, tenant and subject together. The subject's queued and running API
-// reviews, and one whose panel members run, are superseded, as a push
-// supersedes a merge request's (the cleanup takes the members), and each
+// reviews are superseded, as a push supersedes a merge request's, and each
 // gets its callback (when the client has a callback URL); a reported one is
 // not: it finishes, and its callback goes out then.
 //

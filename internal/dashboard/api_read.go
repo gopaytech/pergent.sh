@@ -71,7 +71,7 @@ func (d *Dashboard) readRoutes(mux *http.ServeMux) {
 	get("/api/runs/{id}", d.run)
 	get("/api/runs/{id}/log", d.runLog)
 	get("/api/runs/{id}/diagnostics", d.runDiagnostics)
-	// A panel member's: the same handlers, so the same gates.
+	// A multi review reviewer attempt's: the same handlers, so the same gates.
 	get("/api/runs/{id}/members/{member}/log", d.runLog)
 	get("/api/runs/{id}/members/{member}/diagnostics", d.runDiagnostics)
 	get("/api/repositories", d.repositories)
@@ -666,8 +666,8 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "loading a review's attempts", err)
 		return
 	}
-	if view.Panel, err = d.panelOf(ctx, run); err != nil {
-		d.failed(w, r, "loading a review's panel", err)
+	if view.MultiReview, err = d.multiReviewOf(ctx, run); err != nil {
+		d.failed(w, r, "loading a multi review", err)
 		return
 	}
 	// The change's dismissals are applied to its newest decided review only,
@@ -822,100 +822,180 @@ func findingView(f render.Finding) FindingView {
 		Line: int64(f.Line), Explanation: f.Explanation, SuggestedFix: f.SuggestedFix}
 }
 
-// panelMembers returns the members of run's review, its off row left out,
-// oldest first, when run is a panel review's: the run that was split or a
-// later attempt of its Job P. An attempt that fell back before the split
-// (a later attempt was made before the first member) has none.
-func (d *Dashboard) panelMembers(ctx context.Context, run store.Run) ([]store.PanelMember, error) {
-	all, err := d.Store.PanelMembers(ctx, run.ID)
+// reviewMembers returns the reviewer attempts of run's review, its off row
+// left out, oldest first, and the review's runs, oldest first, when run is a
+// multi review's: the run that was split or a later attempt of its judge. An
+// attempt that fell back before the split (a later attempt was made before
+// the first member) has none.
+func (d *Dashboard) reviewMembers(ctx context.Context, run store.Run) ([]store.ReviewMember, []store.Run, error) {
+	all, err := d.Store.ReviewMembers(ctx, run.ID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	members := slices.DeleteFunc(all, func(m store.PanelMember) bool { return m.State == store.MemberOff })
+	members := slices.DeleteFunc(all, func(m store.ReviewMember) bool { return m.State == store.MemberOff })
 	if len(members) == 0 {
-		return nil, nil
+		return nil, nil, nil
+	}
+	root := run.ID
+	if run.AttemptOf != nil {
+		root = *run.AttemptOf
+	}
+	attempts, err := d.Store.Attempts(ctx, root)
+	if err != nil {
+		return nil, nil, err
 	}
 	split := members[0].CreatedAt
 	if run.CreatedAt.Before(split) {
-		root := run.ID
-		if run.AttemptOf != nil {
-			root = *run.AttemptOf
-		}
-		attempts, err := d.Store.Attempts(ctx, root)
-		if err != nil {
-			return nil, err
-		}
 		for _, a := range attempts {
 			if a.CreatedAt.After(run.CreatedAt) && a.CreatedAt.Before(split) {
-				return nil, nil
+				return nil, nil, nil
 			}
 		}
 	}
-	return members, nil
+	return members, attempts, nil
 }
 
-// panelOf is the panel of run's page: its members, the judges of this run
-// and the tokens of each model in the whole review (every member attempt
-// and every Job P attempt, the same on each attempt's page; each run's own
-// tokens stay in its Tokens); or why its panel did not start; nil for a run
-// that is no panel review. Model names are shown as the run's own model is,
-// never a key. The tokens never break the page: when they can't be read,
-// the page shows none.
-func (d *Dashboard) panelOf(ctx context.Context, run store.Run) (*RunPanelView, error) {
-	members, err := d.panelMembers(ctx, run)
+// judgeRuns is how many of attempts (a review's runs, oldest first) are its
+// judge runs: the run that was split (the newest made before split, the
+// time of the first member) and every later one.
+func judgeRuns(attempts []store.Run, split time.Time) int {
+	first := 0
+	for i, a := range attempts {
+		if a.CreatedAt.Before(split) {
+			first = i
+		}
+	}
+	return len(attempts) - first
+}
+
+// frozenName is the name, in its frozen chain, of the entry reviewer attempt
+// m ran on (its position, 1-based); the name its dispatch recorded when the
+// frozen chain has none; the chain's first entry when it never started.
+func frozenName(m store.ReviewMember) string {
+	if p := m.Entry.Position; p >= 1 && p <= len(m.Chain.Entries) && m.Chain.Entries[p-1].Name != "" {
+		return m.Chain.Entries[p-1].Name
+	}
+	if m.Entry.Name != "" {
+		return m.Entry.Name
+	}
+	if len(m.Chain.Entries) > 0 {
+		return m.Chain.Entries[0].Name
+	}
+	return ""
+}
+
+// findingsIn counts the findings of every skill of a reviewer's result; 0
+// for one that does not decode.
+func findingsIn(raw []byte) int {
+	var r struct {
+		Skills []struct {
+			Findings []json.RawMessage `json:"findings"`
+		} `json:"skills"`
+	}
+	if json.Unmarshal(raw, &r) != nil {
+		return 0
+	}
+	n := 0
+	for _, s := range r.Skills {
+		n += len(s.Findings)
+	}
+	return n
+}
+
+// multiReviewOf is the multi review of run's page: one row per reviewer (its
+// final attempt, why it has no result, its findings, tokens and attempts),
+// the judge this run judged with, and the tokens of the whole review (every
+// reviewer attempt and every judge run, the same on each attempt's page;
+// each run's own tokens stay in its Tokens); or why its multi review did not
+// start (its review_members off row); nil for a run that is no multi review.
+// Model names are shown as the run's own model is, never a key or a base
+// URL. The tokens never break the page: when they can't be read, the page
+// shows none.
+func (d *Dashboard) multiReviewOf(ctx context.Context, run store.Run) (*RunMultiReviewView, error) {
+	members, attempts, err := d.reviewMembers(ctx, run)
 	if err != nil {
 		return nil, err
 	}
-	p := &RunPanelView{Members: []PanelMemberView{}, Judges: []PanelJudgeView{}, Cost: []ModelCostView{}}
+	mv := &RunMultiReviewView{Reviewers: []ReviewerView{}}
 	if len(members) == 0 {
-		reason, found, err := d.Store.PanelOffReason(ctx, run.ID)
+		reason, found, err := d.Store.MultiReviewOffReason(ctx, run.ID)
 		if err != nil || !found {
 			return nil, err
 		}
-		p.Off = reason
-		return p, nil
+		mv.Off = reason
+		return mv, nil
 	}
-	for _, role := range []string{"a", "b"} {
-		mv := PanelMemberView{Role: role, Attempts: []MemberAttemptView{}}
-		for _, m := range members {
-			if m.Role == role {
-				mv.Attempts = append(mv.Attempts, MemberAttemptView{ID: m.ID, Entry: m.Entry.Name, Position: m.Entry.Position,
-					Provider: m.Provider, Model: m.Model, State: string(m.State), Failure: m.FailureReason, Step: m.FailureStep})
+	// Members are oldest first, so each reviewer's last is its final
+	// attempt, and its result is its newest done or failed attempt's.
+	rows := map[int]int{}
+	served := map[int]bool{}
+	for _, m := range members {
+		i, ok := rows[m.Reviewer]
+		if !ok {
+			i = len(mv.Reviewers)
+			rows[m.Reviewer] = i
+			mv.Reviewers = append(mv.Reviewers, ReviewerView{Number: m.Reviewer, Attempts: []MemberAttemptView{}})
+		}
+		rv := &mv.Reviewers[i]
+		name := frozenName(m)
+		rv.Attempts = append(rv.Attempts, MemberAttemptView{ID: m.ID, Entry: name, Position: m.Entry.Position,
+			Provider: m.Provider, Model: m.Model, State: string(m.State), Failure: m.FailureReason, Step: m.FailureStep})
+		rv.Entry, rv.Provider, rv.Model, rv.State = name, m.Provider, m.Model, string(m.State)
+		if m.Result != nil && (m.State == store.MemberDone || m.State == store.MemberFailed) {
+			served[m.Reviewer] = true
+			rv.Findings = findingsIn(m.Result)
+		}
+	}
+	for i := range mv.Reviewers {
+		rv := &mv.Reviewers[i]
+		switch store.MemberState(rv.State) {
+		case store.MemberQueued, store.MemberRunning, store.MemberReported:
+			continue // no answer yet
+		}
+		if !served[rv.Number] {
+			rv.Skipped = rv.Attempts[len(rv.Attempts)-1].Failure
+			if rv.Skipped == "" {
+				rv.Skipped = "the reviewer gave no result"
 			}
 		}
-		if len(mv.Attempts) > 0 {
-			p.Members = append(p.Members, mv)
-		}
 	}
-	entries, err := d.Store.PanelJudges(ctx, run.ID)
+	slices.SortStableFunc(mv.Reviewers, func(a, b ReviewerView) int { return a.Number - b.Number })
+	j, judged, err := d.Store.JudgeOf(ctx, run.ID)
 	if err != nil {
 		return nil, err
 	}
-	models, err := d.Store.PanelJudgeModels(ctx, run.ID)
-	if err != nil {
-		return nil, err
+	if judged {
+		mv.Judge = &JudgeView{Entry: j.Entry.Name, Provider: j.Provider, Model: j.Model, NoJudge: j.NoJudge,
+			Reason: j.NoJudgeReason, Attempts: judgeRuns(attempts, members[0].CreatedAt)}
 	}
-	for _, role := range []string{"a", "b"} {
-		if e, ok := entries[role]; ok {
-			p.Judges = append(p.Judges, PanelJudgeView{Role: role, Entry: e.Name, Provider: models[role].Provider, Model: models[role].Model})
-		}
-	}
-	costs, err := d.Store.ReviewModelCosts(ctx, run.ID)
+	costs, err := d.Store.ReviewCosts(ctx, run.ID)
 	if err != nil {
-		d.Log.Warn("dashboard: reading a panel's tokens per model failed", "run", run.ID, "error", err.Error())
-		return p, nil
+		d.Log.Warn("dashboard: reading a multi review's tokens per model failed", "run", run.ID, "error", err.Error())
+		return mv, nil
+	}
+	sorted := map[int]int{}
+	for i, rv := range mv.Reviewers {
+		sorted[rv.Number] = i
 	}
 	for _, c := range costs {
-		p.Cost = append(p.Cost, ModelCostView{Part: c.Part, Role: c.Role, Run: c.RunID, Member: c.MemberID, Entry: c.Entry,
-			Provider: c.Provider, Model: c.Model, In: c.In, Out: c.Out})
+		mv.Total.In += c.In
+		mv.Total.Out += c.Out
+		switch i, ok := sorted[c.Reviewer]; {
+		case c.Part == "judge" && mv.Judge != nil:
+			mv.Judge.In += c.In
+			mv.Judge.Out += c.Out
+		case c.Part == "reviewer" && ok:
+			mv.Reviewers[i].In += c.In
+			mv.Reviewers[i].Out += c.Out
+		}
 	}
-	return p, nil
+	return mv, nil
 }
 
 // logOwner is what a log or diagnostics route reads: the run when the
-// session can see it, and on a member's route ({member} set) that member of
-// the run's panel. A member of another review, or one the run's page does
-// not list, is not found, as an unknown one.
+// session can see it, and on a member's route ({member} set) that reviewer
+// attempt of the run's multi review. A member of another review, the off
+// row, or one the run's page does not list, is not found, as an unknown one.
 func (d *Dashboard) logOwner(r *http.Request) (run store.Run, member string, found bool, err error) {
 	ctx := r.Context()
 	run, found, err = d.visibleRun(ctx, session(r), r.PathValue("id"))
@@ -926,17 +1006,18 @@ func (d *Dashboard) logOwner(r *http.Request) (run store.Run, member string, fou
 	if member == "" {
 		return run, "", true, nil
 	}
-	members, err := d.panelMembers(ctx, run)
+	members, _, err := d.reviewMembers(ctx, run)
 	if err != nil {
 		return store.Run{}, "", false, err
 	}
-	if !slices.ContainsFunc(members, func(m store.PanelMember) bool { return m.ID == member }) {
+	if !slices.ContainsFunc(members, func(m store.ReviewMember) bool { return m.ID == member }) {
 		return store.Run{}, "", false, nil
 	}
 	return run, member, true, nil
 }
 
-// runLog answers the log of a run, or of a member of its panel.
+// runLog answers the log of a run, or of a reviewer attempt of its multi
+// review.
 func (d *Dashboard) runLog(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	run, member, found, err := d.logOwner(r)
@@ -950,7 +1031,7 @@ func (d *Dashboard) runLog(w http.ResponseWriter, r *http.Request) {
 	}
 	var text string
 	if member != "" {
-		text, found, err = d.Store.MemberLog(ctx, member)
+		text, found, err = d.Store.ReviewMemberLog(ctx, member)
 	} else {
 		text, found, err = d.Store.RunLog(ctx, run.ID)
 	}
@@ -965,8 +1046,8 @@ func (d *Dashboard) runLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, LogView{Text: text})
 }
 
-// runDiagnostics answers what was kept of the Job of a run, or of a member
-// of its panel; below admin the clone log is masked.
+// runDiagnostics answers what was kept of the Job of a run, or of a
+// reviewer attempt of its multi review; below admin the clone log is masked.
 func (d *Dashboard) runDiagnostics(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	run, member, found, err := d.logOwner(r)
@@ -980,7 +1061,7 @@ func (d *Dashboard) runDiagnostics(w http.ResponseWriter, r *http.Request) {
 	}
 	var diag store.Diagnostics
 	if member != "" {
-		diag, found, err = d.Store.MemberDiagnostics(ctx, member)
+		diag, found, err = d.Store.ReviewMemberDiagnostics(ctx, member)
 	} else {
 		diag, found, err = d.Store.RunDiagnostics(ctx, run.ID)
 	}

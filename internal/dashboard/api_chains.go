@@ -463,11 +463,11 @@ const (
 )
 
 // repoShown is the chain in effect for repo, as the resolver reads it
-// (chain.LoadSet): its own, else its owner team's, else the global one, which
+// (chain.Load): its own, else its owner team's, else the global one, which
 // is written out in full (chain.GlobalRefs) even with no usable key. owner is
 // its owner team, 0 for none.
 func (d *Dashboard) repoShown(ctx context.Context, repo settings.Effective) (c shownChain, owner int64, err error) {
-	in, err := chain.LoadSet(ctx, d.Store, d.registry, d.now(), store.Run{}, repo, store.ChainA)
+	in, err := chain.Load(ctx, d.Store, d.registry, d.now(), store.Run{}, repo)
 	if err != nil {
 		return shownChain{}, 0, err
 	}

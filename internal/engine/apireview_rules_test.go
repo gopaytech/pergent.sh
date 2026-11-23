@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -92,7 +91,7 @@ func TestAPIReviewMissingDefaultSet(t *testing.T) {
 // rawExec runs sql in the test's schema, for a state the store refuses.
 func rawExec(t *testing.T, env *testEnv, sql string) {
 	t.Helper()
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}

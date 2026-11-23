@@ -55,9 +55,9 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 	run := d.run
 	provider, model := d.provider, d.model
 	if d.keepsRun() {
-		// A panel's members and Job P carry what the review decided at its
-		// split, by the model its run recorded then (member A's): member B
-		// runs on another model by design.
+		// A multi review's reviewers and its judge carry what the review
+		// decided at its split, by the model its run recorded then
+		// (reviewer 1's): the other reviewers run on other models by design.
 		provider, model = deref(run.Provider), deref(run.Model)
 	}
 	switch {
@@ -353,4 +353,12 @@ func dropRulesCarry(carried map[string][]string, withRules map[string]bool, log 
 		out[name] = files
 	}
 	return out
+}
+
+// deref is *s, "" for nil.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

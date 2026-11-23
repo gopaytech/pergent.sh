@@ -335,32 +335,6 @@ func TestRoutesGraphsOnlyWhenOn(t *testing.T) {
 	}
 }
 
-type panelStub struct{}
-
-func (panelStub) PanelMemberResult(context.Context, string, string, string) ([]byte, bool, error) {
-	return []byte("{}"), true, nil
-}
-
-// The panel route is on the public mux only when Panel is set.
-func TestRoutesPanelOnlyWhenSet(t *testing.T) {
-	cfg := &config.Config{}
-	get := func(d Deps) int {
-		req := httptest.NewRequest(http.MethodGet, "/runs/r1/panel/a", nil)
-		req.Header.Set("Authorization", "Bearer t")
-		rec := httptest.NewRecorder()
-		Routes(d).ServeHTTP(rec, req)
-		return rec.Code
-	}
-	d := Deps{Config: cfg, Instances: instances.New(cfg, nil, nil)}
-	if code := get(d); code != http.StatusNotFound {
-		t.Errorf("without Panel = %d; want 404", code)
-	}
-	d.Panel = panelStub{}
-	if code := get(d); code != http.StatusOK {
-		t.Errorf("with Panel = %d; want 200", code)
-	}
-}
-
 type reviewersStub struct{}
 
 func (reviewersStub) ReviewerResultAuth(context.Context, string, string, int) ([]byte, bool, bool, error) {
@@ -384,6 +358,14 @@ func TestRoutesReviewersOnlyWhenSet(t *testing.T) {
 	d.Reviewers = reviewersStub{}
 	if code := get(Routes(d)); code != http.StatusOK {
 		t.Errorf("with Reviewers = %d; want 200", code)
+	}
+	// The review panel's route is gone: its merge Job no longer exists.
+	req := httptest.NewRequest(http.MethodGet, "/runs/r1/panel/a", nil)
+	req.Header.Set("Authorization", "Bearer t")
+	rec := httptest.NewRecorder()
+	Routes(d).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /runs/r1/panel/a = %d; want 404", rec.Code)
 	}
 }
 

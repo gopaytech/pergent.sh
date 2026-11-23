@@ -58,9 +58,10 @@ const (
 	// WaitCIPending: the CI jobs the repository chose are still running;
 	// Run.CIDeadline is when the run stops waiting for them.
 	WaitCIPending = "ci_pending"
-	// WaitPanel: an old panel review's run waits while its members A and B
-	// review (panel_members). A main build left it; RequeueLegacyPanels
-	// queues it again at start. A multi review waits with WaitReviewers.
+	// WaitPanel: a legacy panel review's run waits while its members A and B
+	// review (panel_members). Only a main build wrote it, and only
+	// RequeueLegacyPanels reads it: it queues the run again at start. A multi
+	// review waits with WaitReviewers.
 	WaitPanel = "panel_members"
 )
 
@@ -673,13 +674,12 @@ func (s *Store) supersede(ctx context.Context, id, reason string) error {
 	return err
 }
 
-// CountRunning returns the number of runs, review members and panel
-// members in state running: each holds a jobs.max_running slot.
+// CountRunning returns the number of runs and review members in state
+// running: each holds a jobs.max_running slot.
 func (s *Store) CountRunning(ctx context.Context) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM runs WHERE state = 'running')
-		+ (SELECT count(*) FROM review_members WHERE state = 'running')
-		+ (SELECT count(*) FROM panel_members WHERE state = 'running')`).Scan(&n)
+		+ (SELECT count(*) FROM review_members WHERE state = 'running')`).Scan(&n)
 	return n, err
 }
 
@@ -705,7 +705,7 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip 
 	// again: a run claimed meanwhile is skipped as before. The lock is NO KEY
 	// UPDATE, which is all the claim's update needs: a write that only holds
 	// the run's key (KEY SHARE, as a row that references the run takes, such
-	// as a panel member's usage) does not make the claim skip a due run.
+	// as a review member's usage) does not make the claim skip a due run.
 	rows, err := s.pool.Query(ctx, `UPDATE runs SET state = 'running', claimed_at = $2 WHERE id IN (
 			SELECT id FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
 			  AND instance <> ALL($3::text[])
@@ -909,9 +909,9 @@ func (s *Store) HoldRun(ctx context.Context, id, reason string) (ok bool, err er
 	return tag.RowsAffected() == 1, nil
 }
 
-// panelWaitingSQL is a multi review's run while its members run: live, and on
-// its way.
-const panelWaitingSQL = `(state = 'waiting' AND skip_reason = 'review_members')`
+// multiReviewWaitingSQL is a multi review's run while its members run: live,
+// and on its way.
+const multiReviewWaitingSQL = `(state = 'waiting' AND skip_reason = 'review_members')`
 
 // liveRerunRunSQL finds the run of a head and target that EnqueueRerun leaves
 // as it is ($6 is replace): queued, running, reported or a multi review waiting for
@@ -919,7 +919,7 @@ const panelWaitingSQL = `(state = 'waiting' AND skip_reason = 'review_members')`
 // dispatched or reviews only some files.
 const liveRerunRunSQL = `SELECT id::text FROM runs
 	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-	  AND (state IN ('queued', 'running', 'reported') OR ` + panelWaitingSQL + `)
+	  AND (state IN ('queued', 'running', 'reported') OR ` + multiReviewWaitingSQL + `)
 	  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`
 
 // liveStartRunSQL finds a live (queued, running, reported or a multi review waiting
@@ -927,7 +927,7 @@ const liveRerunRunSQL = `SELECT id::text FROM runs
 // no waiting run or undispatched push run of it was there to start.
 const liveStartRunSQL = `SELECT id::text FROM runs
 	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-	  AND (state IN ('queued', 'running', 'reported') OR ` + panelWaitingSQL + `)`
+	  AND (state IN ('queued', 'running', 'reported') OR ` + multiReviewWaitingSQL + `)`
 
 // undispatchedPushRunSQL is the condition of a push's run that is queued or
 // claimed and not dispatched yet, which StartRun turns into a start.

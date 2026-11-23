@@ -218,8 +218,8 @@ func (h *Handler) check(ctx context.Context, id string, body []byte) (string, er
 
 // checkResult returns why the parsed result res of a Job of run cannot be
 // used, or "": it carries merge fields, it is for another commit, or its
-// skills are not those the Job was started with. A review Job and a panel
-// member's Job are checked the same way.
+// skills are not those the Job was started with. A review Job and a
+// reviewer's Job are checked the same way.
 func checkResult(res *result.Result, run store.Run) string {
 	if reason := checkMerge(res); reason != "" {
 		return reason
@@ -233,9 +233,9 @@ func checkResult(res *result.Result, run store.Run) string {
 // CheckStored checks the stored result body of a Job of run as the handlers
 // check a result when it arrives, and returns it parsed. ok is false, with
 // the failure to record in its place, when it does not parse or checkResult
-// refuses it. The engine checks a panel member's stored result with it again
+// refuses it. The engine checks a reviewer's stored result with it again
 // before the member counts as done, so a result stored but not yet checked
-// (the handler stores, then checks) never reaches Job P.
+// (the handler stores, then checks) never reaches the judge Job.
 func CheckStored(body []byte, run store.Run) (res *result.Result, f store.Failure, ok bool) {
 	res, err := result.Parse(body)
 	if err != nil {

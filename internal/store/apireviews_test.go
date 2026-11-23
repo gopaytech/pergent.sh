@@ -503,7 +503,7 @@ func seedTenantUsage(t *testing.T, s *Store, clientID int64, tenant, subject str
 	id := enqueueAPI(t, s, apiRequest(clientID, tenant, subject))
 	setRun(t, s, id, `state = 'reported', created_at = $2::timestamptz, reported_at = $2::timestamptz, dispatched_at = $2::timestamptz,
 		trigger = $3::text, model = 'm', result = '{"schema_version":1,"status":"completed","skills":[]}'::jsonb`, at, TriggerPush)
-	if err := s.RecordUsage(ctx, id, skills, nil); err != nil {
+	if err := s.RecordUsage(ctx, id, skills); err != nil {
 		t.Fatal(err)
 	}
 	return id

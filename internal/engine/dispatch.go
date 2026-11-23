@@ -120,11 +120,6 @@ func (e *Engine) DispatchOnce(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("dispatch reviewer %d (member %s): %w", m.Reviewer, m.ID, err))
 		}
 	}
-	// A review panel member a main build left: it starts no Job, so it
-	// takes no slot.
-	if err := e.dispatchLegacyMembers(ctx, limit, skip); err != nil {
-		errs = append(errs, err)
-	}
 	if limit -= len(members); limit <= 0 {
 		return errors.Join(errs...)
 	}

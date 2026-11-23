@@ -117,11 +117,11 @@ func TestDashboardOutcomeMultiReviewRunning(t *testing.T) {
 // Job names. A multi review, and a held run, stay as they are.
 func TestRequeueLegacyPanels(t *testing.T) {
 	s := newStore(t)
-	legacy := panelRun(t, s, mr1, "a1")
-	a := memberOf(t, s, legacy, "a")
-	b := memberOf(t, s, legacy, "b")
-	dispatchMember(t, s, a.ID, "ta")
-	doneMember(t, s, b.ID, `{"status":"completed"}`)
+	legacy := legacyPanelRun(t, s, mr1, "a1")
+	a := legacyMemberOf(t, s, legacy, "a")
+	b := legacyMemberOf(t, s, legacy, "b")
+	runLegacyMember(t, s, a.ID, "ta")
+	doneLegacyMember(t, s, b.ID, `{"status":"completed"}`)
 	multi := multiRun(t, s, mr2, "b1", multiSplit(2, nil))
 	first := reviewerOf(t, s, multi, 1)
 	held := heldRun(t, s, mr3, "c1", WaitUntrusted)
@@ -142,8 +142,8 @@ func TestRequeueLegacyPanels(t *testing.T) {
 		t.Errorf("legacy run = %s %q not_before %v dispatched %v; want queued, dispatched_at kept %v",
 			r.State, r.SkipReason, r.NotBefore, r.DispatchedAt, before.DispatchedAt)
 	}
-	for _, m := range members2(t, s, legacy) {
-		if m.State == MemberQueued || m.State == MemberRunning {
+	for _, m := range legacyMembers(t, s, legacy) {
+		if m.State == string(MemberQueued) || m.State == string(MemberRunning) {
 			t.Errorf("panel member %s %s is still live", m.Role, m.State)
 		}
 	}
@@ -170,16 +170,6 @@ func TestRequeueLegacyPanels(t *testing.T) {
 
 // mrLimit is a merge request of its own for the run held at a model limit.
 var mrLimit = MRKey{Instance: "https://gitlab.example.com", ProjectID: 7, IID: 99}
-
-// members2 is every panel member of the review whose first run is root.
-func members2(t *testing.T, s *Store, root string) []PanelMember {
-	t.Helper()
-	ms, err := s.PanelMembers(ctx, root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return ms
-}
 
 // LegacyPanel counts a chain B that has entries, and none that has not.
 func TestLegacyPanelCountsChainsWithEntries(t *testing.T) {

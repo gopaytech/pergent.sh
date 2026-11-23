@@ -18,7 +18,7 @@ import (
 func (e *env) usageRun(f runFix, skills ...store.SkillUsage) string {
 	e.t.Helper()
 	id := e.addRun(f)
-	if err := e.st.RecordUsage(ctx, id, skills, nil); err != nil {
+	if err := e.st.RecordUsage(ctx, id, skills); err != nil {
 		e.t.Fatalf("RecordUsage: %v", err)
 	}
 	return id
@@ -379,7 +379,7 @@ func (e *env) usageAPIReview(client, tenant, subject string, skills ...store.Ski
 	id := e.askAPIReview(client, tenant, subject)
 	at := e.clock.now().Add(-time.Hour)
 	e.exec(`UPDATE runs SET created_at = $2::timestamptz, reported_at = $2::timestamptz WHERE id = $1::uuid`, id, at)
-	if err := e.st.RecordUsage(ctx, id, skills, nil); err != nil {
+	if err := e.st.RecordUsage(ctx, id, skills); err != nil {
 		e.t.Fatalf("RecordUsage: %v", err)
 	}
 	return id
@@ -465,7 +465,7 @@ func TestUsageSplitsSource(t *testing.T) {
 	teamRun := e.addRun(runFix{project: "acme/widgets", number: 2, head: head('2'), at: now.Add(-time.Hour)})
 	e.exec(`UPDATE runs SET model_source = 'team', model_team_id = $2 WHERE id = $1::uuid`, teamRun, team)
 	for id, n := range map[string]int64{global: 100, teamRun: 40} {
-		if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{usageSkill("security", "no_blocking_issues", n, n/10)}, nil); err != nil {
+		if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{usageSkill("security", "no_blocking_issues", n, n/10)}); err != nil {
 			t.Fatal(err)
 		}
 	}

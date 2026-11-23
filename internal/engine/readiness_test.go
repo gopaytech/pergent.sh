@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -85,7 +84,7 @@ func scanOf(t *testing.T, env *testEnv, id string) store.ReadinessScan {
 // allScans returns every scan row, oldest queued first.
 func allScans(t *testing.T, env *testEnv) []store.ReadinessScan {
 	t.Helper()
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -929,7 +928,7 @@ func TestRequestScan(t *testing.T) {
 // querySQL runs a query of one boolean in the test's schema.
 func querySQL(t *testing.T, env *testEnv, sql string) bool {
 	t.Helper()
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -948,7 +947,7 @@ func querySQL(t *testing.T, env *testEnv, sql string) bool {
 
 func execSQL(t *testing.T, env *testEnv, sql string) {
 	t.Helper()
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}

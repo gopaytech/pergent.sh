@@ -245,29 +245,36 @@ func TestParseGraphCommands(t *testing.T) {
 
 const testMemberResult = `{"skills":{}}` + "\n"
 
-// panelServer serves /runs/r1/panel/a and /b with the statuses given per
-// role, one per try (the last one repeats), and counts the tries.
-type panelServer struct {
+func noRetryWait(t *testing.T) {
+	t.Helper()
+	old := resultRetryWait
+	resultRetryWait = 0
+	t.Cleanup(func() { resultRetryWait = old })
+}
+
+// seqServer serves /runs/r1/reviewers/<n> with the statuses given per
+// number, one per try (the last one repeats), and counts the tries.
+type seqServer struct {
 	mu       sync.Mutex
 	statuses map[string][]int
 	tries    map[string]int
-	auth     string
 }
 
-func (ps *panelServer) start(t *testing.T) *httptest.Server {
+func (ss *seqServer) start(t *testing.T) *httptest.Server {
 	t.Helper()
-	ps.tries = map[string]int{}
+	ss.tries = map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ps.mu.Lock()
-		defer ps.mu.Unlock()
-		role := strings.TrimPrefix(r.URL.Path, "/runs/r1/panel/")
-		if r.Method != http.MethodGet || (role != "a" && role != "b") {
+		ss.mu.Lock()
+		defer ss.mu.Unlock()
+		n := strings.TrimPrefix(r.URL.Path, "/runs/r1/reviewers/")
+		list := ss.statuses[n]
+		if r.Method != http.MethodGet || len(list) == 0 {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusTeapot)
+			return
 		}
-		ps.auth = r.Header.Get("Authorization")
-		list := ps.statuses[role]
-		status := list[min(ps.tries[role], len(list)-1)]
-		ps.tries[role]++
+		status := list[min(ss.tries[n], len(list)-1)]
+		ss.tries[n]++
 		w.WriteHeader(status)
 		if status == http.StatusOK {
 			_, _ = io.WriteString(w, testMemberResult)
@@ -277,151 +284,60 @@ func (ps *panelServer) start(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func panelOpts(t *testing.T, srv *httptest.Server) getPanelOptions {
+// reviewersOpts asks srv for reviewers nums into a fresh folder.
+func reviewersOpts(t *testing.T, srv *httptest.Server, nums ...int) getReviewersOptions {
 	t.Helper()
-	return getPanelOptions{aURL: srv.URL + "/runs/r1/panel/a", bURL: srv.URL + "/runs/r1/panel/b", dir: t.TempDir()}
-}
-
-func noRetryWait(t *testing.T) {
-	t.Helper()
-	old := panelRetryWait
-	panelRetryWait = 0
-	t.Cleanup(func() { panelRetryWait = old })
-}
-
-// A member with no result (404) gets no file, at once, and get-panel still
-// exits 0; the other member's file is written.
-func TestGetPanelNotFoundWritesNothing(t *testing.T) {
-	noRetryWait(t)
-	ps := &panelServer{statuses: map[string][]int{"a": {http.StatusOK}, "b": {http.StatusNotFound}}}
-	o := panelOpts(t, ps.start(t))
-	t.Setenv("PERGENT_RESULT_TOKEN", "run-token")
-	var stderr bytes.Buffer
-	if code := runGetPanel(context.Background(), o, &stderr); code != 0 {
-		t.Errorf("exit = %d", code)
-	}
-	if _, err := os.Stat(filepath.Join(o.dir, "b.json")); !os.IsNotExist(err) {
-		t.Errorf("b.json is there: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(o.dir, "b.json.tmp")); !os.IsNotExist(err) {
-		t.Errorf("the temp file is there: %v", err)
-	}
-	if ps.tries["b"] != 1 {
-		t.Errorf("a 404 was tried %d times", ps.tries["b"])
-	}
-	got, err := os.ReadFile(filepath.Join(o.dir, "a.json"))
-	if err != nil || string(got) != testMemberResult {
-		t.Errorf("a.json = %q, %v", got, err)
-	}
-	if strings.Contains(stderr.String(), "run-token") {
-		t.Error("the token is in the log")
-	}
-}
-
-// get-panel writes each result whole, mode 0644 (the pergent container runs
-// as another user), with the run token as bearer.
-func TestGetPanel(t *testing.T) {
-	noRetryWait(t)
-	ps := &panelServer{statuses: map[string][]int{"a": {http.StatusOK}, "b": {http.StatusOK}}}
-	o := panelOpts(t, ps.start(t))
-	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
-	for _, f := range []string{"a.json", "b.json"} {
-		path := filepath.Join(o.dir, f)
-		got, err := os.ReadFile(path)
-		if err != nil || string(got) != testMemberResult {
-			t.Errorf("%s = %q, %v", f, got, err)
-			continue
-		}
-		if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o644 {
-			t.Errorf("%s mode = %v, %v; want 0644", f, st.Mode().Perm(), err)
-		}
-	}
-	if ps.auth != "Bearer run-token" {
-		t.Errorf("auth = %q", ps.auth)
-	}
+	return getReviewersOptions{baseURL: srv.URL + "/runs/r1/reviewers", reviewers: nums, dir: t.TempDir()}
 }
 
 // A failure is tried 3 times; a success on the third try writes the file,
 // and 3 failures write none.
-func TestGetPanelRetries(t *testing.T) {
+func TestGetReviewersRetries(t *testing.T) {
 	noRetryWait(t)
-	ps := &panelServer{statuses: map[string][]int{
-		"a": {http.StatusBadGateway, http.StatusInternalServerError, http.StatusOK},
-		"b": {http.StatusServiceUnavailable},
+	ss := &seqServer{statuses: map[string][]int{
+		"1": {http.StatusBadGateway, http.StatusInternalServerError, http.StatusOK},
+		"2": {http.StatusServiceUnavailable},
 	}}
-	o := panelOpts(t, ps.start(t))
-	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
-	if got, err := os.ReadFile(filepath.Join(o.dir, "a.json")); err != nil || string(got) != testMemberResult {
-		t.Errorf("a.json = %q, %v", got, err)
+	o := reviewersOpts(t, ss.start(t), 1, 2)
+	if getReviewers(context.Background(), o, "run-token", newResultClient(), io.Discard) {
+		t.Error("getReviewers = true with a reviewer that failed 3 times")
 	}
-	if _, err := os.Stat(filepath.Join(o.dir, "b.json")); !os.IsNotExist(err) {
-		t.Errorf("b.json is there after 3 failures: %v", err)
+	if got, err := os.ReadFile(filepath.Join(o.dir, "reviewer-1.json")); err != nil || string(got) != testMemberResult {
+		t.Errorf("reviewer-1.json = %q, %v", got, err)
 	}
-	if ps.tries["a"] != 3 || ps.tries["b"] != 3 {
-		t.Errorf("tries = %v; want 3 each", ps.tries)
+	if _, err := os.Stat(filepath.Join(o.dir, "reviewer-2.json")); !os.IsNotExist(err) {
+		t.Errorf("reviewer-2.json is there after 3 failures: %v", err)
+	}
+	if ss.tries["1"] != resultTries || ss.tries["2"] != resultTries {
+		t.Errorf("tries = %v; want %d each", ss.tries, resultTries)
 	}
 }
 
 // A result over 10 MiB is not written, and not tried again.
-func TestGetPanelTooLarge(t *testing.T) {
+func TestGetReviewersTooLargeNotRetried(t *testing.T) {
 	noRetryWait(t)
-	if maxPanelGet != 10<<20 {
-		t.Errorf("maxPanelGet = %d, want 10 MiB", maxPanelGet)
+	if maxResultGet != 10<<20 {
+		t.Errorf("maxResultGet = %d, want 10 MiB", maxResultGet)
 	}
-	old := maxPanelGet
-	maxPanelGet = 5
-	t.Cleanup(func() { maxPanelGet = old })
-	ps := &panelServer{statuses: map[string][]int{"a": {http.StatusOK}, "b": {http.StatusOK}}}
-	o := panelOpts(t, ps.start(t))
-	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
-	for _, f := range []string{"a.json", "b.json", "a.json.tmp"} {
+	old := maxResultGet
+	maxResultGet = 5
+	t.Cleanup(func() { maxResultGet = old })
+	ss := &seqServer{statuses: map[string][]int{"1": {http.StatusOK}}}
+	o := reviewersOpts(t, ss.start(t), 1)
+	getReviewers(context.Background(), o, "run-token", newResultClient(), io.Discard)
+	for _, f := range []string{"reviewer-1.json", "reviewer-1.json.tmp"} {
 		if _, err := os.Stat(filepath.Join(o.dir, f)); !os.IsNotExist(err) {
 			t.Errorf("%s is there: %v", f, err)
 		}
 	}
-	if ps.tries["a"] != 1 {
-		t.Errorf("a result over the limit was tried %d times", ps.tries["a"])
-	}
-}
-
-// With no token, or no server, get-panel still exits 0.
-func TestRunGetPanelNeverFails(t *testing.T) {
-	noRetryWait(t)
-	o := getPanelOptions{aURL: "http://127.0.0.1:1/runs/r/panel/a", bURL: "http://127.0.0.1:1/runs/r/panel/b", dir: t.TempDir()}
-	t.Setenv("PERGENT_RESULT_TOKEN", "")
-	if code := runGetPanel(context.Background(), o, io.Discard); code != 0 {
-		t.Errorf("exit = %d with no token", code)
-	}
-	t.Setenv("PERGENT_RESULT_TOKEN", "tok")
-	if code := runGetPanel(context.Background(), o, io.Discard); code != 0 {
-		t.Errorf("exit = %d with no server", code)
-	}
-	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
-		t.Errorf("files written: %v", entries)
-	}
-}
-
-// get-panel parses as Job P's panel-inputs container calls it.
-func TestParseGetPanel(t *testing.T) {
-	cmd, err := parseArgs([]string{"get-panel", "--a-url=http://h:8080/runs/r/panel/a", "--b-url=http://h:8080/runs/r/panel/b", "--dir=/panel"}, io.Discard)
-	if err != nil || cmd.name != "get-panel" || cmd.getPanel.dir != "/panel" || cmd.getPanel.bURL != "http://h:8080/runs/r/panel/b" {
-		t.Errorf("get-panel = %+v, %v", cmd, err)
-	}
-	for _, args := range [][]string{
-		{"get-panel", "--a-url=ftp://h/a", "--b-url=http://h/b", "--dir=/panel"},
-		{"get-panel", "--a-url=http://h/a", "--dir=/panel"},
-		{"get-panel", "--a-url=http://h/a", "--b-url=http://h/b"},
-		{"get-panel", "--a-url=http://h/a", "--b-url=http://h/b", "--dir=/panel", "extra"},
-	} {
-		if _, err := parseArgs(args, io.Discard); err == nil {
-			t.Errorf("%q parsed", args)
-		}
+	if ss.tries["1"] != 1 {
+		t.Errorf("a result over the limit was tried %d times", ss.tries["1"])
 	}
 }
 
 // A download cut off in the body (Content-Length larger than what is sent)
 // leaves no file and no temp file, after every try.
-func TestGetPanelCutOff(t *testing.T) {
+func TestGetReviewersCutOff(t *testing.T) {
 	noRetryWait(t)
 	var tries atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -431,18 +347,21 @@ func TestGetPanelCutOff(t *testing.T) {
 		_, _ = io.WriteString(w, `{"skills":`)
 	}))
 	t.Cleanup(srv.Close)
-	o := panelOpts(t, srv)
-	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
+	o := reviewersOpts(t, srv, 1, 2)
+	if getReviewers(context.Background(), o, "run-token", newResultClient(), io.Discard) {
+		t.Error("getReviewers = true for cut off results")
+	}
 	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
 		t.Errorf("files left: %v", entries)
 	}
-	if n := tries.Load(); n != 2*3 {
-		t.Errorf("tries = %d; want 3 per member", n)
+	if n := tries.Load(); n != 2*resultTries {
+		t.Errorf("tries = %d; want %d per reviewer", n, resultTries)
 	}
 }
 
-// A redirect to another host is not followed and writes no file.
-func TestGetPanelNoRedirect(t *testing.T) {
+// A redirect to another host is not followed, is not tried again and writes
+// no file.
+func TestGetReviewersNoRedirect(t *testing.T) {
 	noRetryWait(t)
 	var other atomic.Bool
 	var tries atomic.Int32
@@ -456,13 +375,15 @@ func TestGetPanelNoRedirect(t *testing.T) {
 		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusFound)
 	}))
 	t.Cleanup(srv.Close)
-	o := panelOpts(t, srv)
-	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
+	o := reviewersOpts(t, srv, 1, 2)
+	if getReviewers(context.Background(), o, "run-token", newResultClient(), io.Discard) {
+		t.Error("getReviewers = true for a redirect")
+	}
 	if other.Load() {
 		t.Error("the redirect was followed")
 	}
 	if n := tries.Load(); n != 2 {
-		t.Errorf("tries = %d; want 1 per member (a redirect is final)", n)
+		t.Errorf("tries = %d; want 1 per reviewer (a redirect is final)", n)
 	}
 	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
 		t.Errorf("files written: %v", entries)
@@ -470,48 +391,52 @@ func TestGetPanelNoRedirect(t *testing.T) {
 }
 
 // A 401 or a 403 is final, as a 404 is: tried once, no file.
-func TestGetPanelUnauthorizedNotRetried(t *testing.T) {
+func TestGetReviewersUnauthorizedNotRetried(t *testing.T) {
 	noRetryWait(t)
-	ps := &panelServer{statuses: map[string][]int{"a": {http.StatusUnauthorized, http.StatusOK}, "b": {http.StatusForbidden, http.StatusOK}}}
-	o := panelOpts(t, ps.start(t))
-	getPanel(context.Background(), o, "run-token", newResultClient(), io.Discard)
-	if ps.tries["a"] != 1 || ps.tries["b"] != 1 {
-		t.Errorf("tries = %v; want 1 each", ps.tries)
+	ss := &seqServer{statuses: map[string][]int{"1": {http.StatusUnauthorized, http.StatusOK}, "2": {http.StatusForbidden, http.StatusOK}}}
+	o := reviewersOpts(t, ss.start(t), 1, 2)
+	if getReviewers(context.Background(), o, "run-token", newResultClient(), io.Discard) {
+		t.Error("getReviewers = true for a 401 and a 403")
+	}
+	if ss.tries["1"] != 1 || ss.tries["2"] != 1 {
+		t.Errorf("tries = %v; want 1 each", ss.tries)
 	}
 	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
 		t.Errorf("files written: %v", entries)
 	}
 }
 
-// A hanging member A does not use up member B's time: B gets its tries and
-// its file while A waits for the budget to end.
-func TestGetPanelSlowADoesNotStopB(t *testing.T) {
+// A hanging reviewer does not use up another reviewer's time: the other gets
+// its tries and its file while the first waits for the budget to end.
+func TestGetReviewersSlowOneDoesNotStopOthers(t *testing.T) {
 	noRetryWait(t)
-	var bTries atomic.Int32
+	var tries atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/a") {
+		if strings.HasSuffix(r.URL.Path, "/1") {
 			<-r.Context().Done()
 			return
 		}
-		if bTries.Add(1) < 3 {
+		if tries.Add(1) < 3 {
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
 		_, _ = io.WriteString(w, testMemberResult)
 	}))
 	t.Cleanup(srv.Close)
-	o := panelOpts(t, srv)
+	o := reviewersOpts(t, srv, 1, 2)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	var stderr bytes.Buffer
-	getPanel(ctx, o, "run-token", newResultClient(), &stderr)
-	if got, err := os.ReadFile(filepath.Join(o.dir, "b.json")); err != nil || string(got) != testMemberResult {
-		t.Errorf("b.json = %q, %v", got, err)
+	if getReviewers(ctx, o, "run-token", newResultClient(), &stderr) {
+		t.Error("getReviewers = true with a reviewer that timed out")
 	}
-	if _, err := os.Stat(filepath.Join(o.dir, "a.json")); !os.IsNotExist(err) {
-		t.Errorf("a.json is there: %v", err)
+	if got, err := os.ReadFile(filepath.Join(o.dir, "reviewer-2.json")); err != nil || string(got) != testMemberResult {
+		t.Errorf("reviewer-2.json = %q, %v", got, err)
 	}
-	if !strings.Contains(stderr.String(), "panel a: not downloaded") || !strings.Contains(stderr.String(), "panel b: downloaded") {
+	if _, err := os.Stat(filepath.Join(o.dir, "reviewer-1.json")); !os.IsNotExist(err) {
+		t.Errorf("reviewer-1.json is there: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "reviewer 1: not downloaded") || !strings.Contains(stderr.String(), "reviewer 2: downloaded") {
 		t.Errorf("log = %q", stderr.String())
 	}
 }
@@ -668,9 +593,9 @@ func TestGetReviewersFailures(t *testing.T) {
 		{"no token", status(http.StatusOK), "", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			old := maxPanelGet
-			maxPanelGet = 10
-			t.Cleanup(func() { maxPanelGet = old })
+			old := maxResultGet
+			maxResultGet = 10
+			t.Cleanup(func() { maxResultGet = old })
 			code, dir, stderr := runReviewers(t, tc.handler, []int{1}, tc.token)
 			if code != tc.wantCode {
 				t.Errorf("exit = %d, want %d; stderr: %s", code, tc.wantCode, stderr)
@@ -722,8 +647,8 @@ func TestGetReviewersServerErrorIsTried(t *testing.T) {
 	if code := runGetReviewers(context.Background(), o, io.Discard); code != 1 {
 		t.Errorf("exit = %d", code)
 	}
-	if rs.tries["1"] != panelTries {
-		t.Errorf("tries = %d, want %d", rs.tries["1"], panelTries)
+	if rs.tries["1"] != resultTries {
+		t.Errorf("tries = %d, want %d", rs.tries["1"], resultTries)
 	}
 }
 

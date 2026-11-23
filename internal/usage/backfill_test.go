@@ -2,16 +2,13 @@ package usage
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"log/slog"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/store/storetest"
 )
 
 type fakeRuns struct {
@@ -32,10 +29,7 @@ func (f *fakeRuns) RunsWithoutUsage(ctx context.Context, limit int) ([]store.Run
 	return page, nil
 }
 
-func (f *fakeRuns) RecordUsage(ctx context.Context, id string, skills []store.SkillUsage, models []store.ModelUsage) error {
-	if models != nil {
-		return errors.New("model rows passed")
-	}
+func (f *fakeRuns) RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error {
 	f.recorded[id] = skills
 	return nil
 }
@@ -138,39 +132,11 @@ func TestBackfillReviewMembers(t *testing.T) {
 	}
 }
 
-// newDBStore opens a migrated store in a fresh schema, dropped when the
-// test ends. It skips when no test database is set.
+// newDBStore opens a migrated store on a database of its own, which goes
+// back to the pool when the test ends. It skips when no test database is set.
 func newDBStore(t *testing.T) *store.Store {
 	t.Helper()
-	url := os.Getenv("PERGENT_SH_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("PERGENT_SH_TEST_DATABASE_URL is not set")
-	}
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	schema := "test_usage_" + hex.EncodeToString(b)
-	st, err := store.OpenInSchema(context.Background(), url, schema)
-	if err != nil {
-		t.Fatalf("OpenInSchema: %v", err)
-	}
-	t.Cleanup(func() {
-		st.Close()
-		drop, err := store.OpenInSchema(context.Background(), url, schema)
-		if err != nil {
-			t.Errorf("OpenInSchema: %v", err)
-			return
-		}
-		defer drop.Close()
-		if err := drop.DropSchema(context.Background()); err != nil {
-			t.Errorf("DropSchema: %v", err)
-		}
-	})
-	if err := st.Migrate(context.Background()); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	return st
+	return storetest.Open(t, store.OpenInSchema)
 }
 
 func tokenHash(token string) []byte {

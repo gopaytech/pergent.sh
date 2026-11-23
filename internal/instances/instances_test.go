@@ -2,11 +2,8 @@ package instances
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"log/slog"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -15,36 +12,18 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/store/storetest"
 )
 
 const testDBEnv = "PERGENT_SH_TEST_DATABASE_URL"
 
 var ctx = context.Background()
 
-// newStore opens a migrated store in a fresh schema, dropped when the test
-// ends. It skips when no test database is set.
+// newStore opens a migrated store on a database of its own, which goes back
+// to the pool when the test ends. It skips when no test database is set.
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
-	dbURL := os.Getenv(testDBEnv)
-	if dbURL == "" {
-		t.Skipf("%s is not set", testDBEnv)
-	}
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	st, err := store.OpenInSchema(ctx, dbURL, "test_instances_"+hex.EncodeToString(b))
-	if err != nil {
-		t.Fatalf("OpenInSchema: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = st.DropSchema(context.Background())
-		st.Close()
-	})
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	return st
+	return storetest.Open(t, store.OpenInSchema)
 }
 
 // newBox makes a Box on a key made of fill.

@@ -168,79 +168,6 @@ func TestUsageRecordsOwnerTeam(t *testing.T) {
 	wantOwner(t, "before the move, read again", ownerOf(t, s, byRepo), payments)
 }
 
-// judgedPanel is a panel review of head on mr1 taken to the end: members A
-// (global m1) and B (team t1 of team 4) report their usage, the run is
-// released, and Job P, judging with both, reports its own with a row per
-// model. It returns the run.
-func judgedPanel(t *testing.T, s *Store, head string) string {
-	t.Helper()
-	id, a, b := panelMembersWithEntries(t, s, head)
-	doneMember(t, s, a.ID, `{"status":"completed"}`)
-	doneMember(t, s, b.ID, `{"status":"completed"}`)
-	if err := s.RecordMemberUsage(ctx, a.ID, []SkillUsage{{Skill: "security", In: 100, Out: 10}, {Skill: "style", In: 7, Out: 1}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RecordMemberUsage(ctx, b.ID, []SkillUsage{{Skill: "security", In: 50, Out: 5}}); err != nil {
-		t.Fatal(err)
-	}
-	if released, _, err := s.ReleasePanel(ctx, id, t0); err != nil || !released {
-		t.Fatalf("ReleasePanel = %v, %v", released, err)
-	}
-	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetPanelJudge(ctx, id, "a", RunEntry{Source: SourceGlobal, ID: "m1", Name: "main", Length: 1}, "openai", "gpt-a"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetPanelJudge(ctx, id, "b", RunEntry{Source: SourceTeam, ID: "t1", Name: "team-b", TeamID: 4, Length: 1}, "anthropic", "sonnet-b"); err != nil {
-		t.Fatal(err)
-	}
-	token := "p-" + head
-	if err := s.MarkDispatched(ctx, id, "job-p-"+head, "base-sha", "start-sha", hash(token), t0.Add(time.Hour), t0); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := s.StoreResult(ctx, id, token, []byte(`{}`), t0.Add(2*time.Minute)); err != nil || out != ResultStored {
-		t.Fatal(out, err)
-	}
-	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "security", Verdict: "has_blocking_issues", In: 20, Out: 2}},
-		[]ModelUsage{
-			{Skill: "security", Role: "a", Provider: "openai", Model: "gpt-a", In: 12, Out: 1},
-			{Skill: "security", Role: "b", Provider: "anthropic", Model: "sonnet-b", In: 8, Out: 1},
-		}); err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-// A panel's rows, members and Job P's, keep the owner team too.
-func TestPanelUsageRecordsOwnerTeam(t *testing.T) {
-	s := newStore(t)
-	team := newTeam(t, s, "Payments")
-	ownRepo(t, s, team, mr1.Instance, "acme/widgets")
-	id := judgedPanel(t, s, "a1")
-	wantOwner(t, "run_usage", ownerOf(t, s, id), team)
-	rows, err := s.pool.Query(ctx, `SELECT part, owner_team_id FROM run_usage_models WHERE run_id = $1::uuid`, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	n := 0
-	for rows.Next() {
-		var part string
-		var owner *int64
-		if err := rows.Scan(&part, &owner); err != nil {
-			t.Fatal(err)
-		}
-		wantOwner(t, part+" row", owner, team)
-		n++
-	}
-	if n != 5 { // A: 2 skills, B: 1, P: 2 roles
-		t.Errorf("%d model rows, want 5", n)
-	}
-}
-
-// A limit is set, replaced and cleared per entry and team; clearing names the
-// number it had; ModelLimits lists every one, by entry and team.
 func TestSetAndClearModelLimit(t *testing.T) {
 	s := newStore(t)
 	team := newTeam(t, s, "Payments")
@@ -321,7 +248,7 @@ func entryUsage(t *testing.T, s *Store, ref EntryRef, at time.Time, in, out int6
 	if res, err := s.StoreResult(ctx, id, "tok-"+head, []byte(`{"schema_version":1,"status":"completed","skills":[]}`), at); err != nil || res != ResultStored {
 		t.Fatalf("StoreResult = %v, %v", res, err)
 	}
-	if err := s.RecordUsage(ctx, id, []SkillUsage{skillRow("security", "no_blocking_issues", in, out)}, nil); err != nil {
+	if err := s.RecordUsage(ctx, id, []SkillUsage{skillRow("security", "no_blocking_issues", in, out)}); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -360,28 +287,6 @@ func TestEntryTokensSince(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("row %d = %+v; want %+v", i, got[i], want[i])
 		}
-	}
-}
-
-// A panel counts each Job on its own entry: the members on theirs, Job P's
-// roles on their judges'. Its run_usage rows, the total of all 3 Jobs, are
-// not counted again on the run's entry.
-func TestEntryTokensSincePanel(t *testing.T) {
-	s := newStore(t)
-	id := judgedPanel(t, s, "a1")
-	if _, err := s.pool.Exec(ctx, `UPDATE runs SET model_source = 'global', model_entry_id = 'm1' WHERE id = $1::uuid`, id); err != nil {
-		t.Fatal(err)
-	}
-	got, err := s.EntryTokensSince(ctx, t0.Add(-time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []EntryTokens{
-		{Ref: EntryRef{Source: SourceGlobal, ID: "m1"}, Tokens: 110 + 8 + 13}, // A's 2 skills, P's role a
-		{Ref: EntryRef{Source: SourceTeam, ID: "t1"}, Tokens: 55 + 9},         // B, P's role b
-	}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("EntryTokensSince = %+v; want %+v", got, want)
 	}
 }
 

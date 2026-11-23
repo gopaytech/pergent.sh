@@ -215,9 +215,9 @@ Jobs reach only the addresses in `jobEgress.cidrs`. Before you add a model from 
 
 pergent.sh can't check this for you. A review that can't connect fails, and its log shows the connection error.
 
-## Chain B
+## Reviewers 2 to 5 and the judge
 
-A second chain, chain B, is for the [review panel](review-panel.md). It is experimental, and reviews do not use it yet. Its settings are separate from chain A and follow the same rights.
+A repository's model chain is **reviewer 1**. Reviewers 2 to 5 and a judge are more chains, for [multi review](multi-review.md). It is experimental, and reviews do not use it yet. They are on the repository's **Reviewers** card and follow the same rights as the model chain.
 
 ## Rolling back
 

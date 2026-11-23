@@ -2,10 +2,7 @@ package settings
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
-	"os"
 	"reflect"
 	"slices"
 	"testing"
@@ -17,38 +14,18 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/store/storetest"
 )
 
 const testDBEnv = "PERGENT_SH_TEST_DATABASE_URL"
 
 var ctx = context.Background()
 
-// newStore opens a migrated store in a fresh schema, dropped when the test
-// ends. It skips when no test database is set.
+// newStore opens a migrated store on a database of its own, which goes back
+// to the pool when the test ends. It skips when no test database is set.
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
-	url := os.Getenv(testDBEnv)
-	if url == "" {
-		t.Skipf("%s is not set", testDBEnv)
-	}
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	st, err := store.OpenInSchema(ctx, url, "test_settings_"+hex.EncodeToString(b))
-	if err != nil {
-		t.Fatalf("OpenInSchema: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := st.DropSchema(context.Background()); err != nil {
-			t.Errorf("DropSchema: %v", err)
-		}
-		st.Close()
-	})
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	return st
+	return storetest.Open(t, store.OpenInSchema)
 }
 
 // testConfig has GitLab instance "main", GitHub instance "gh" and the

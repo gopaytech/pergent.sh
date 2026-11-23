@@ -156,7 +156,7 @@ func TestAPIReviewAtModelLimitFails(t *testing.T) {
 func TestLimitReadErrorRetries(t *testing.T) {
 	env := quotaPushEnv(t, 0, 0)
 	setLimit(t, env, configRef(), 0, 100)
-	execSQL(t, env, "DROP TABLE run_usage_models")
+	execSQL(t, env, "DROP TABLE run_usage_by_model")
 	head := sha('a')
 	servePush(env, head)
 	id := env.Enqueue(3, head)

@@ -4,7 +4,7 @@ import { api, isStatus, type DiagnosticsView, type LogView } from "./api";
 import { ErrorBox, Loading } from "./ui";
 
 // RunLog is a run's log and, below it, what was kept of its Job. The paths
-// say which API answers: a merge request's run, a review panel member and an
+// say which API answers: a merge request's run, a multi review reviewer and an
 // API review's run have their own, and the same views. what names whose log
 // it is when none was kept ("run" when not given).
 export default function RunLog({ logPath, diagnosticsPath, what = "run" }: { logPath: string; diagnosticsPath: string; what?: string }) {

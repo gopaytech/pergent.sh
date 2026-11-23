@@ -250,33 +250,49 @@ type RunDetailView struct {
 	// Attempts are every attempt of the review this run is one of, oldest
 	// first, this run included; empty for a review of one attempt.
 	Attempts []AttemptView `json:"attempts"`
-	// Panel is the review panel of a panel review: its members, judges and
-	// the tokens of each model, or why it did not start. The key is left
-	// out for any other run.
-	Panel *RunPanelView `json:"panel,omitempty"`
+	// MultiReview is the multi review of a run that was split, or of a later
+	// attempt of its judge: its reviewers, the judge and the total, or why
+	// it did not start. The key is left out for any other run.
+	MultiReview *RunMultiReviewView `json:"multiReview,omitempty"`
 }
 
-// RunPanelView is a panel review on its run's page: why it did not start
-// (Off), or its members, the entries Job P judged with on this run, and the
-// tokens per model of the whole review, the same on each attempt's page.
-type RunPanelView struct {
-	Off     string            `json:"off,omitempty"`
-	Members []PanelMemberView `json:"members"`
-	Judges  []PanelJudgeView  `json:"judges"`
-	Cost    []ModelCostView   `json:"cost"`
+// RunMultiReviewView is a multi review on its run's page: why it did not
+// start (Off), or one row per reviewer, the judge row and the total. The
+// merged findings are the run's own result; raw reviewer findings are only
+// in the member logs.
+type RunMultiReviewView struct {
+	Off       string         `json:"off,omitempty"`
+	Reviewers []ReviewerView `json:"reviewers"`
+	// Judge is what this run judged with; nil when it recorded nothing (its
+	// reviewers still run, or its judge Job was not dispatched yet).
+	Judge *JudgeView `json:"judge"`
+	// Total is every token of the review: each reviewer attempt and each
+	// judge run, the same on each attempt's page. The run's own tokens stay
+	// in its Tokens.
+	Total TokensView `json:"total"`
 }
 
-// PanelMemberView is member A or B of a panel review: Role is "a" or "b",
-// Attempts its attempts, oldest first (a later one follows a provider's
-// refusal of the one before).
-type PanelMemberView struct {
-	Role     string              `json:"role"`
-	Attempts []MemberAttemptView `json:"attempts"`
+// ReviewerView is one reviewer of a multi review, by its number (1 to 5).
+// Entry is the name, in the frozen copy of its chain, of the entry its final
+// attempt ran on (the chain's first entry when it never started); Provider,
+// Model and State are that attempt's. In and Out are the tokens of all its
+// attempts.
+type ReviewerView struct {
+	Number   int                 `json:"number"`
+	Entry    string              `json:"entry"` // from the frozen copy
+	Provider string              `json:"provider"`
+	Model    string              `json:"model"`
+	State    string              `json:"state"`   // the final attempt's
+	Skipped  string              `json:"skipped"` // the reason, "" when it has a result
+	Findings int                 `json:"findings"`
+	In       int64               `json:"in"`
+	Out      int64               `json:"out"`
+	Attempts []MemberAttemptView `json:"attempts"` // each with its log link by ID
 }
 
-// MemberAttemptView is one attempt of a panel member: the entry it ran on
-// (its name and place in the chain), the model, its state, and why it
-// failed with the step it failed at ("" when it did not fail). Entry,
+// MemberAttemptView is one attempt of a reviewer: the entry it ran on (its
+// name in the frozen chain and its place there), the model, its state, and
+// why it failed with the step it failed at ("" when it did not fail).
 // Provider and Model are "" before the attempt was dispatched.
 type MemberAttemptView struct {
 	ID       string `json:"id"`
@@ -285,33 +301,23 @@ type MemberAttemptView struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	// State is "queued", "running", "reported", "done", "failed",
-	// "fell_back" or "superseded".
+	// "fell_back", "superseded" or "skipped".
 	State   string `json:"state"`
 	Failure string `json:"failure"`
 	Step    string `json:"step"`
 }
 
-// PanelJudgeView is the entry and model a role ("a" or "b") of Job P judged
-// with on this run.
-type PanelJudgeView struct {
-	Role     string `json:"role"`
+// JudgeView is the judge of a multi review: the entry, provider and model
+// this run judged with, or NoJudge and why (Reason) when it ran with no
+// judge. Attempts is how many judge runs the review has (the run that was
+// split and each later attempt); In and Out are the tokens of all of them.
+type JudgeView struct {
 	Entry    string `json:"entry"`
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
-}
-
-// ModelCostView is the tokens one model used in the review: Part is
-// "member" (a member's review) or "merge" (Job P), Role "a" or "b", Run the
-// run they count on, Member the member attempt ("" for a merge), Entry the
-// entry's name.
-type ModelCostView struct {
-	Part     string `json:"part"`
-	Role     string `json:"role"`
-	Run      string `json:"run"`
-	Member   string `json:"member"`
-	Entry    string `json:"entry"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	NoJudge  bool   `json:"noJudge"`
+	Reason   string `json:"reason"`
+	Attempts int    `json:"attempts"`
 	In       int64  `json:"in"`
 	Out      int64  `json:"out"`
 }

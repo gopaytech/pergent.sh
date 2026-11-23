@@ -2,55 +2,25 @@ package actions
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/store/storetest"
 )
 
 const testDBEnv = "PERGENT_SH_TEST_DATABASE_URL"
 
 var ctx = context.Background()
 
-// newStore opens a migrated store in a fresh schema, dropped when the test
-// ends. It skips when no test database is set.
+// newStore opens a migrated store on a database of its own, which goes back
+// to the pool when the test ends. It skips when no test database is set.
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
-	url := os.Getenv(testDBEnv)
-	if url == "" {
-		t.Skipf("%s is not set", testDBEnv)
-	}
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	schema := "test_actions_" + hex.EncodeToString(b)
-	st, err := store.OpenInSchema(ctx, url, schema)
-	if err != nil {
-		t.Fatalf("OpenInSchema: %v", err)
-	}
-	t.Cleanup(func() {
-		st.Close()
-		drop, err := store.OpenInSchema(context.Background(), url, schema)
-		if err != nil {
-			t.Errorf("OpenInSchema: %v", err)
-			return
-		}
-		defer drop.Close()
-		if err := drop.DropSchema(context.Background()); err != nil {
-			t.Errorf("DropSchema: %v", err)
-		}
-	})
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	return st
+	return storetest.Open(t, store.OpenInSchema)
 }
 
 // seedUsage stores a reported run of merge request iid of project 1, as the
@@ -87,7 +57,7 @@ func seedUsageOn(t *testing.T, st *store.Store, iid int64, at time.Time, tokens 
 		t.Fatalf("StoreResult = %v, %v", out, err)
 	}
 	zero := int64(0)
-	if err := st.RecordUsage(ctx, id, []store.SkillUsage{{Skill: "a", Verdict: "no_blocking_issues", In: tokens, CacheRead: &zero, CacheWrite: &zero, Reasoning: &zero}}, nil); err != nil {
+	if err := st.RecordUsage(ctx, id, []store.SkillUsage{{Skill: "a", Verdict: "no_blocking_issues", In: tokens, CacheRead: &zero, CacheWrite: &zero, Reasoning: &zero}}); err != nil {
 		t.Fatalf("RecordUsage: %v", err)
 	}
 }

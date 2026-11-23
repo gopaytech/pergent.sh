@@ -1093,9 +1093,10 @@ func TestE2EJudgeIgnoresLimits(t *testing.T) {
 }
 
 // legacyPanelRun queues a review of head on merge request 1, makes it a
-// legacy panel's (StartPanel, as a main build split it), sets the members
-// by setup, and runs RecoverLegacyPanels, as at start. It returns the run.
-func legacyPanelRun(t *testing.T, env *testEnv, head string, setup func(ms []store.PanelMember)) string {
+// legacy panel's (startLegacyPanel, as a main build split it), sets the
+// members by setup, and runs RecoverLegacyPanels, as at start. It returns
+// the run.
+func legacyPanelRun(t *testing.T, env *testEnv, head string, setup func(ms []legacyMember)) string {
 	t.Helper()
 	servePublish(env, 1, head)
 	id := env.Enqueue(1, head)
@@ -1103,14 +1104,7 @@ func legacyPanelRun(t *testing.T, env *testEnv, head string, setup func(ms []sto
 	if _, err := env.Store.ClaimQueued(env.ctx, 10, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if started, err := env.Store.StartPanel(env.ctx, id, store.PanelSplit{BaseSHA: "base", StartSHA: "start"}, now); err != nil || !started {
-		t.Fatalf("StartPanel = %v, %v", started, err)
-	}
-	ms, err := env.Store.PanelMembers(env.ctx, id)
-	if err != nil || len(ms) != 2 {
-		t.Fatalf("PanelMembers = %d, %v", len(ms), err)
-	}
-	setup(ms)
+	setup(startLegacyPanel(t, env, id, now))
 	env.Engine.RecoverLegacyPanels(env.ctx)
 	if r := env.Run(id); r.State != store.Queued {
 		t.Fatalf("legacy run = %s; want queued again\n%s", r.State, env.Logs())
@@ -1126,10 +1120,10 @@ func legacyPanelRun(t *testing.T, env *testEnv, head string, setup func(ms []sto
 func TestE2ELegacyPanelRunIsSingleReview(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		setup func(t *testing.T, env *testEnv, ms []store.PanelMember)
+		setup func(t *testing.T, env *testEnv, ms []legacyMember)
 	}{
-		{"both superseded", func(*testing.T, *testEnv, []store.PanelMember) {}},
-		{"one done, one superseded", func(t *testing.T, env *testEnv, ms []store.PanelMember) {
+		{"both superseded", func(*testing.T, *testEnv, []legacyMember) {}},
+		{"one done, one superseded", func(t *testing.T, env *testEnv, ms []legacyMember) {
 			execSQL(t, env, fmt.Sprintf(`UPDATE panel_members SET state = 'done', result = '%s'::jsonb,
 				model_source = 'global', model_entry_id = 'config', model_entry_name = 'legacy-a', provider = 'openai', model = 'gpt-legacy'
 				WHERE id = '%s'`, clean(t, sha('a')), ms[0].ID))
@@ -1141,7 +1135,7 @@ func TestE2ELegacyPanelRunIsSingleReview(t *testing.T) {
 			env := e.env
 			env.Engine.ScanImage = testScanImage
 			head := sha('a')
-			id := legacyPanelRun(t, env, head, func(ms []store.PanelMember) { tc.setup(t, env, ms) })
+			id := legacyPanelRun(t, env, head, func(ms []legacyMember) { tc.setup(t, env, ms) })
 
 			dispatch(t, env)
 			wantJobKey(t, env, id, testLLMKey)
@@ -1155,7 +1149,7 @@ func TestE2ELegacyPanelRunIsSingleReview(t *testing.T) {
 					t.Errorf("the review's args %v hold %q", args, bad)
 				}
 			}
-			for _, k := range []string{kube.LabelPanelRole, kube.LabelReviewer, kube.LabelReviewMember} {
+			for _, k := range []string{"pergent.sh/panel-role", kube.LabelReviewer, kube.LabelReviewMember} {
 				if v, ok := job.Labels[k]; ok {
 					t.Errorf("the review Job has the label %s=%q", k, v)
 				}
