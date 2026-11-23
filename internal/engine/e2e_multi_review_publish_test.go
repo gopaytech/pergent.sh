@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -288,33 +289,56 @@ var hiddenModels = []struct{ name, provider, model, url string }{
 	{"rev-two", "beta-prov", "beta-mdl", "https://llm-2.example.test/v1"},
 	{"rev-three", "gamma-prov", "gamma-mdl", "https://llm-3.example.test/v1"},
 	{"the-judge", "delta-prov", "delta-mdl", "https://llm-j.example.test/v1"},
+	{"rev-three-b", "epsilon-prov", "epsilon-mdl", "https://llm-3b.example.test/v1"},
 }
 
-// newHiddenMultiReviewE2E is a multi review of 3 reviewers and a judge, each
-// on a team entry of hiddenModels.
-func newHiddenMultiReviewE2E(t *testing.T) *e2e {
+// newHiddenE2E is a multi review whose entries are hiddenModels, as team
+// entries of a team that owns acme/widgets (key "key-" + name): chain A of
+// the names one, reviewers 2.. of extra and the judge of judge.
+func newHiddenE2E(t *testing.T, one []string, extra [][]string, judge []string) *e2e {
 	t.Helper()
 	multiReviewFloor(t, "v0.5.0")
 	e := newE2E(t)
 	env := e.env
 	env.Engine.ScanImage = testScanImage
 	team := teamOwning(t, env, "Payments")
-	var refs []store.EntryRef
+	refs := map[string]store.EntryRef{}
 	for _, h := range hiddenModels {
 		m, err := env.Store.CreateTeamModel(env.ctx, store.TeamModel{TeamID: team, Name: h.name, Provider: h.provider,
 			Model: h.model, BaseURL: h.url, APIKeySealed: env.Box.Seal([]byte("key-" + h.name))}, env.Now())
 		if err != nil {
 			t.Fatal(err)
 		}
-		refs = append(refs, store.EntryRef{Source: store.SourceTeam, ID: m.ID})
+		refs[h.name] = store.EntryRef{Source: store.SourceTeam, ID: m.ID}
 	}
 	if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
 		t.Fatal(err)
 	}
-	saveChain(t, env, store.Chain{Scope: store.ScopeTeam, TeamID: team, Entries: refs[:1]})
-	saveExtraReviewers(t, env, [][]store.EntryRef{{refs[1]}, {refs[2]}}, []store.EntryRef{refs[3]})
+	of := func(names []string) []store.EntryRef {
+		out := []store.EntryRef{}
+		for _, n := range names {
+			out = append(out, refs[n])
+		}
+		return out
+	}
+	saveChain(t, env, store.Chain{Scope: store.ScopeTeam, TeamID: team, Entries: of(one)})
+	var chains [][]store.EntryRef
+	for _, names := range extra {
+		chains = append(chains, of(names))
+	}
+	saveExtraReviewers(t, env, chains, of(judge))
 	return e
 }
+
+// newHiddenMultiReviewE2E is newHiddenE2E with 3 reviewers and a judge,
+// each on its own entry of hiddenModels.
+func newHiddenMultiReviewE2E(t *testing.T) *e2e {
+	t.Helper()
+	return newHiddenE2E(t, []string{"rev-one"}, [][]string{{"rev-two"}, {"rev-three"}}, []string{"the-judge"})
+}
+
+// fourJobs are the entries of newHiddenMultiReviewE2E.
+var fourJobs = []string{"rev-one", "rev-two", "rev-three", "the-judge"}
 
 // wantNoModelText checks text names no provider, model or base URL of the
 // multi review's Jobs.
@@ -329,12 +353,14 @@ func wantNoModelText(t *testing.T, text string) {
 	}
 }
 
-// modelText is text that names every provider, model and base URL of
-// hiddenModels.
-func modelText() string {
+// modelText is text that names the provider, model and base URL of each
+// entry of hiddenModels named in names.
+func modelText(names ...string) string {
 	var parts []string
 	for _, h := range hiddenModels {
-		parts = append(parts, h.provider+"/"+h.model+" at "+h.url)
+		if slices.Contains(names, h.name) {
+			parts = append(parts, h.provider+"/"+h.model+" at "+h.url)
+		}
 	}
 	return strings.Join(parts, ", ")
 }
@@ -355,7 +381,7 @@ func TestCommentHidesEveryModel(t *testing.T) {
 		}
 		releaseReviewers(t, e, id, ms, clean(t, head), clean(t, head), clean(t, head))
 		env.GitLab.Reset()
-		text := modelText()
+		text := modelText(fourJobs...)
 		body := editResult(t, withMultiReview(t, clean(t, head), 3), func(m map[string]any) {
 			s := firstSkill(m)
 			s["findings"] = []any{map[string]any{"id": "abc123", "fingerprint": "abc123def456", "file": "a.go", "line": 1,
@@ -384,7 +410,7 @@ func TestCommentHidesEveryModel(t *testing.T) {
 		for _, multi := range []bool{false, true} {
 			h := newHarness(t)
 			b, _ := json.Marshal(map[string]any{"id": fpBlocking[:6], "fingerprint": fpBlocking, "file": "db/query.go", "line": 11,
-				"severity": "blocking", "title": "Calls " + modelText(), "explanation": "Ask " + modelText() + " less."})
+				"severity": "blocking", "title": "Calls " + modelText(fourJobs...), "explanation": "Ask " + modelText(fourJobs...) + " less."})
 			o := securityReview(t, h.head, "has_blocking_issues", b)
 			o.Hide = func(s string) string { return policy.HideModels(s, refs, nil) }
 			if multi {
@@ -472,5 +498,48 @@ func TestE2EMultiReviewUsage(t *testing.T) {
 		if byName[name] != want {
 			t.Errorf("entry %s used %d tokens; want %d (each Job on its own entry): %+v", name, byName[name], want, got)
 		}
+	}
+}
+
+// Reviewer 2 failed with an error that names its provider, model and base
+// URL, and the judge's result repeats them; reviewers 1 and 3 are done.
+// Through the judge and through --no-judge, the comment names none of them,
+// and reviewer 2 is skipped in fixed words.
+func TestPublishHidesFailedReviewerModel(t *testing.T) {
+	for _, noJudge := range []bool{false, true} {
+		t.Run(map[bool]string{false: "judge", true: "no judge"}[noJudge], func(t *testing.T) {
+			e := newHiddenMultiReviewE2E(t)
+			env := e.env
+			if noJudge {
+				execSQL(t, env, `DELETE FROM reviewer_chain_entries WHERE chain_id IN (SELECT id FROM reviewer_chains WHERE slot = 'judge')`)
+			}
+			head := sha('a')
+			id := splitReview(t, env, 1, head)
+			dispatch(t, env)
+			var ms []store.ReviewMember
+			for n := 1; n <= 3; n++ {
+				ms = append(ms, memberOf(t, env, id, n))
+			}
+			two := hiddenModels[1]
+			broke := "the call to " + two.provider + "/" + two.model + " at " + two.url + " broke"
+			releaseReviewers(t, e, id, ms, clean(t, head), errorResult(t, head, broke), clean(t, head))
+			dispatch(t, env)
+			judgeJob(t, env, id)
+			if noJudge {
+				wantNoJudge(t, env, id, noJudgeChain)
+			}
+			env.GitLab.Reset()
+			body := editResult(t, withMultiReview(t, clean(t, head), 3, 2), func(m map[string]any) {
+				firstSkill(m)["failures"] = []any{map[string]any{"files": []any{"a.go"}, "message": "reviewer 2: " + broke}}
+			})
+			e.postJudge(t, id, body)
+			publish(t, env)
+			wantPublished(t, env, id)
+			comment := createdComment(t, env, 1)
+			wantNoModelText(t, comment)
+			if !strings.Contains(comment, "Multi review: rev-two was skipped: "+skipReviewFailed+".") {
+				t.Errorf("comment lacks reviewer 2's skip line in fixed words:\n%s", comment)
+			}
+		})
 	}
 }

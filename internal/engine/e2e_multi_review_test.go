@@ -1572,10 +1572,17 @@ func TestE2EMultiReviewExtraOutOfTokens(t *testing.T) {
 // reviewer's reason in the same pass. The status is the failure status,
 // nothing is approved, and success is never set.
 func TestE2EMultiReviewEveryReviewerFails(t *testing.T) {
-	e := newMultiReviewE2E(t, []string{"team-a"}, [][]string{{"team-b"}, {"team-c", "team-c2"}}, []string{"team-j"})
+	e := newHiddenE2E(t, []string{"rev-one"}, [][]string{{"rev-two"}, {"rev-three", "rev-three-b"}}, []string{"the-judge"})
 	env := e.env
 	head := sha('a')
-	id, ms := startReviewers(t, e, head)
+	id := splitReview(t, env, 1, head)
+	dispatch(t, env)
+	var ms []store.ReviewMember
+	for n, name := range []string{"rev-one", "rev-two", "rev-three"} {
+		m := memberOf(t, env, id, n+1)
+		wantMemberKey(t, env, m, "key-"+name)
+		ms = append(ms, m)
+	}
 	if code := e.postMember(t, id, ms[2], failedOn(t, head, "quota")); code != http.StatusOK {
 		t.Fatalf("reviewer 3's result: status %d", code)
 	}
@@ -1584,7 +1591,9 @@ func TestE2EMultiReviewEveryReviewerFails(t *testing.T) {
 	if code := e.postMember(t, id, memberOf(t, env, id, 3), failedOn(t, head, "quota")); code != http.StatusOK {
 		t.Fatalf("reviewer 3's second result: status %d", code)
 	}
-	if code := e.postMember(t, id, ms[0], errorResult(t, head, "the model gave no answer")); code != http.StatusOK {
+	// Reviewer 1's error is the CLI's own text: it names every reviewer's
+	// provider, model and base URL.
+	if code := e.postMember(t, id, ms[0], errorResult(t, head, modelText("rev-one", "rev-two", "rev-three", "rev-three-b")+" gave no answer")); code != http.StatusOK {
 		t.Fatalf("reviewer 1's result: status %d\n%s", code, env.Logs())
 	}
 	if code := e.postMember(t, id, ms[1], clean(t, sha('f'))); code != http.StatusBadRequest {
@@ -1600,14 +1609,20 @@ func TestE2EMultiReviewEveryReviewerFails(t *testing.T) {
 	}
 	wantPublished(t, env, id)
 	r := env.Run(id)
-	want := "every reviewer failed: reviewer 1 (team-a): the model gave no answer; reviewer 2 (team-b): " + unusable +
-		"the result is for a different commit than the one this run reviews; reviewer 3 (team-c2): out of quota"
+	want := "every reviewer failed: reviewer 1 (rev-one): " + modelText("rev-one", "rev-two", "rev-three", "rev-three-b") + " gave no answer; reviewer 2 (rev-two): " + unusable +
+		"the result is for a different commit than the one this run reviews; reviewer 3 (rev-three-b): out of quota"
 	if r.FailureReason != want || r.Result != nil {
 		t.Errorf("run failure = %q (result %v); want %q and no result", r.FailureReason, r.Result != nil, want)
 	}
-	if body := createdComment(t, env, 1); !strings.Contains(body, "the model gave no answer") ||
-		!strings.Contains(body, "the result is for a different commit") || !strings.Contains(body, "out of quota") {
-		t.Errorf("the comment lacks the reviewers' reasons:\n%s", body)
+	// The comment states the failure in fixed words and names no reviewer's
+	// provider, model or base URL (Ruling P55); the stored reason keeps
+	// them for the run page.
+	body := createdComment(t, env, 1)
+	wantNoModelText(t, body)
+	for _, words := range []string{"every reviewer failed", "gave no answer", "the result is for a different commit", "out of quota"} {
+		if !strings.Contains(body, words) {
+			t.Errorf("the comment lacks %q:\n%s", words, body)
+		}
 	}
 	got := statusesOf(t, env, head)
 	if len(got) == 0 || !strings.HasPrefix(got[len(got)-1], "failed: ") {

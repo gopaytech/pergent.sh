@@ -447,3 +447,72 @@ func TestEntryTokensSinceMultiReview(t *testing.T) {
 		t.Errorf("EntryTokensSince = %+v\nwant %+v", got, want)
 	}
 }
+
+// A reviewer with 2 attempts and a judge with a retry: each attempt counts
+// once, on its own entry. Reviewer 2's first attempt on team e2, its
+// fallback on global e2b; the judge on team j1, its retry on global j2. The
+// runs' own entry (reviewer 1's) gets none of them.
+func TestEntryTokensSinceMultiReviewAttempts(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	ownRepo(t, s, team, mr1.Instance, "acme/widgets")
+	id, ms := multiReviewWithEntries(t, s, mr1, "a1", 3)
+	doneReviewer(t, s, ms[0].ID, `{}`)
+	doneReviewer(t, s, ms[2].ID, `{}`)
+	reportReviewer(t, s, ms[1].ID, `{}`)
+	second, created, err := s.EnqueueReviewMemberAttempt(ctx, reviewerOf(t, s, id, 2), quotaMark("e2"))
+	if err != nil || !created {
+		t.Fatal(second, created, err)
+	}
+	if err := s.SetReviewMemberEntry(ctx, second, RunEntry{Source: SourceGlobal, ID: "e2b", Name: "main-2b", Position: 2, Length: 2}, "p2b", "m2b"); err != nil {
+		t.Fatal(err)
+	}
+	doneReviewer(t, s, second, `{}`)
+	for _, rec := range []struct {
+		id     string
+		skills []SkillUsage
+	}{
+		{ms[0].ID, []SkillUsage{{Skill: "security", In: 10, Out: 1}}},
+		{ms[1].ID, []SkillUsage{{Skill: "security", In: 21, Out: 1}}},
+		{second, []SkillUsage{{Skill: "security", In: 22, Out: 2}}},
+		{ms[2].ID, []SkillUsage{{Skill: "security", In: 3, Out: 1}}},
+	} {
+		if err := s.RecordReviewMemberUsage(ctx, rec.id, rec.skills); err != nil {
+			t.Fatal(err)
+		}
+	}
+	judgeRun(t, s, id, JudgeRow{Reviewers: []int{1, 2, 3}, Provider: "anthropic", Model: "judge-m", Entry: judgeEntry})
+	if err := s.RecordJudgeUsage(ctx, id, []SkillUsage{{Skill: "security", In: 5, Out: 1}, {Skill: "style", In: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	// The provider refused the judge entry: the next attempt judges on the
+	// chain's backup.
+	retry, created, err := s.EnqueueJudgeRetry(ctx, getRun(t, s, id))
+	if err != nil || !created {
+		t.Fatal(retry, created, err)
+	}
+	reportJudge(t, s, retry, JudgeRow{Reviewers: []int{1, 2, 3}, Provider: "openai", Model: "judge-2",
+		Entry: RunEntry{Source: SourceGlobal, ID: "j2", Name: "judge-2", Position: 2, Length: 2}})
+	if err := s.RecordJudgeUsage(ctx, retry, []SkillUsage{{Skill: "security", In: 6, Out: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET model_source = 'global', model_entry_id = 'e1' WHERE id IN ($1::uuid, $2::uuid)`, id, retry); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.EntryTokensSince(ctx, t0.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []EntryTokens{
+		{Ref: EntryRef{Source: SourceGlobal, ID: "e1"}, OwnerTeam: team, Tokens: 11},
+		{Ref: EntryRef{Source: SourceGlobal, ID: "e2b"}, OwnerTeam: team, Tokens: 24}, // reviewer 2's fallback
+		{Ref: EntryRef{Source: SourceGlobal, ID: "e3"}, OwnerTeam: team, Tokens: 4},
+		{Ref: EntryRef{Source: SourceGlobal, ID: "j2"}, OwnerTeam: team, Tokens: 9}, // the judge's retry
+		{Ref: EntryRef{Source: SourceTeam, ID: "e2"}, OwnerTeam: team, Tokens: 22},  // reviewer 2's first attempt
+		{Ref: EntryRef{Source: SourceTeam, ID: "j1"}, OwnerTeam: team, Tokens: 8},   // the first judge run
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("EntryTokensSince = %+v\nwant %+v", got, want)
+	}
+}

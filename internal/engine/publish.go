@@ -470,13 +470,27 @@ type reviewComment struct {
 // kept: what the judge was served), else by its chain's first entry; the
 // judge by its entry ("" with no judge); and one Skipped per reviewer with
 // no result, in fixed words. Every reviewer attempt's model and the judge's
-// are hidden. A run with no judge row whose review has an off row that its
+// are hidden; the attempts' models also when there is no judge row (every
+// reviewer failed). A run with no judge row whose review has an off row that its
 // own claim recorded ran as one review: the off line (Ruling P42). A run
 // with neither has nothing, and its comment is today's.
 func (e *Engine) reviewComment(ctx context.Context, run store.Run) (reviewComment, error) {
 	var rc reviewComment
 	if run.Kind != store.KindMR {
 		return rc, nil
+	}
+	// Every reviewer attempt's model is hidden whenever the review has
+	// members, judged or not (Ruling P55): a review whose reviewers all
+	// failed has no judge row, and its failure text holds each reviewer's
+	// reason, which can be the CLI's own error text.
+	ms, err := e.Store.ReviewMembers(ctx, run.ID)
+	if err != nil {
+		return rc, fmt.Errorf("read the multi review's reviewers: %w", err)
+	}
+	for _, m := range ms {
+		if m.State != store.MemberOff && (m.Provider != "" || m.Model != "") {
+			rc.models = append(rc.models, store.ModelUsed{Provider: m.Provider, Model: m.Model})
+		}
 	}
 	j, judged, err := e.Store.JudgeOf(ctx, run.ID)
 	if err != nil {
@@ -491,10 +505,6 @@ func (e *Engine) reviewComment(ctx context.Context, run store.Run) (reviewCommen
 			rc.off = policy.MultiReviewOffLine(reason)
 		}
 		return rc, nil
-	}
-	ms, err := e.Store.ReviewMembers(ctx, run.ID)
-	if err != nil {
-		return rc, fmt.Errorf("read the multi review's reviewers: %w", err)
 	}
 	rc.judged = true
 	names := &render.MultiReviewNames{Reviewers: []string{}}
@@ -530,11 +540,6 @@ func (e *Engine) reviewComment(ctx context.Context, run store.Run) (reviewCommen
 				skipped.Name = "reviewer " + strconv.Itoa(len(names.Reviewers))
 			}
 			names.Skipped = append(names.Skipped, skipped)
-		}
-	}
-	for _, m := range ms {
-		if m.State != store.MemberOff && (m.Provider != "" || m.Model != "") {
-			rc.models = append(rc.models, store.ModelUsed{Provider: m.Provider, Model: m.Model})
 		}
 	}
 	if !j.NoJudge {
