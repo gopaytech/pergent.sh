@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **The dashboard no longer has a Code graph switch.** The code graph is experimental, so a repository turns it on with `PUT /api/repositories/{instance}/{project}/graph` only: [Code graph](concepts/code-graph.md). A repository that has it on keeps it on.
+- **Review panels stay off.** Multi review (several reviewer models and a judge) will replace them.
 
 **Model limits.** An admin can cap the monthly tokens of one global model, for everyone or for one team, and a team's maintainers can cap their own team models: [Model and team limits](concepts/token-quota.md#model-and-team-limits). The admin **Models** page and the team page show them in a later change; this release has the API.
 
@@ -12,8 +13,6 @@
 - **The upgrade month.** Team limits count only the reviews that finished after the upgrade, because older usage rows have no owner team. Model limits count the whole month.
 - **Rolling deploy.** Pods of the previous release start reviews without the new checks until they are replaced.
 - **Rolling back** needs no config change: there is no config key. The limits stay in the database, unused. A change held by a limit shows in the previous release as waiting for a start, with no reason line, and its **Start review** starts it.
-
-- **Review panels stay off.** Multi review (several reviewer models and a judge) will replace them.
 
 ## Upgrading to 0.18.0
 
