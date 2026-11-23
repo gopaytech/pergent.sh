@@ -172,7 +172,7 @@ Everything an account may see or do comes from its role and the teams it is on, 
   | A maintainer of another team only | 404 | 403, the same text |
   | Anyone else | 404 | 404 |
 
-  `GET /api/teams/{id}/limits` is the exception: it answers a viewer 403, the same text as a write.
+  `GET /api/teams/{id}/limits` is the exception: it answers a viewer 403 `only maintainers of this team see its model limits`.
 
   The answer never depends on whether the team exists. The model chain of a repository (`.../chain`) answers 404 to someone who can't see the repository, and 403 `only admins and maintainers of the repository's owner team change its model chain`, or `only admins change the model chain of a repository with no owner team`, to someone who sees it but may not change it. A chain that breaks a rule, or names an entry the person may not use, is 400 with the reason ([What a chain may hold](models.md#what-a-chain-may-hold)). A bad entry name is 400 `name must be 1 to 64 characters: letters, digits, spaces and . _ : / + -, starting with a letter or digit`, and a name taken is 409 `an entry with this name exists already`.
 
