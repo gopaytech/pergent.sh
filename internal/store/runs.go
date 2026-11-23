@@ -58,8 +58,9 @@ const (
 	// WaitCIPending: the CI jobs the repository chose are still running;
 	// Run.CIDeadline is when the run stops waiting for them.
 	WaitCIPending = "ci_pending"
-	// WaitPanel: a panel review's run waits while its members A and B
-	// review (panel_members). The previous release never claims it.
+	// WaitPanel: an old panel review's run waits while its members A and B
+	// review (panel_members). A main build left it; RequeueLegacyPanels
+	// queues it again at start. A multi review waits with WaitReviewers.
 	WaitPanel = "panel_members"
 )
 
@@ -469,7 +470,7 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 // the run whose results the new one keeps.
 //
 // A run of this head and target that is queued, running, reported (its
-// review not yet published) or a panel waiting for its members is not
+// review not yet published) or a multi review waiting for its members is not
 // replaced or duplicated: created is false
 // and id is that run's, nothing is changed. Superseding a reported run would
 // leave its commit status for the cleanup to cancel while the new run
@@ -688,7 +689,7 @@ func (s *Store) CountRunning(ctx context.Context) (int, error) {
 // runs that have to wait for an instance take no slot from the others.
 //
 // An API review is claimed only while its client has fewer than its
-// max_in_flight reviews running (a panel waiting for its members is one
+// max_in_flight reviews running (a multi review waiting for its members is one
 // review running), counting those this claim takes: its due
 // reviews are numbered oldest first, and those past the cap stay queued and
 // take no slot either. A merge request's run is never held by it.
@@ -716,7 +717,7 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip 
 					  AND instance <> ALL($3::text[])) q
 				WHERE q.kind = 'mr'
 				   OR q.n + (SELECT count(*) FROM runs x WHERE x.api_client_id = q.api_client_id
-						AND (x.state = 'running' OR (x.state = 'waiting' AND x.skip_reason = 'panel_members')))
+						AND (x.state = 'running' OR (x.state = 'waiting' AND x.skip_reason = 'review_members')))
 					<= (SELECT c.max_in_flight FROM api_clients c WHERE c.id = q.api_client_id))
 			ORDER BY created_at, id LIMIT $1 FOR NO KEY UPDATE OF runs SKIP LOCKED)
 		RETURNING `+runColumns, limit, now, skip)
@@ -908,12 +909,12 @@ func (s *Store) HoldRun(ctx context.Context, id, reason string) (ok bool, err er
 	return tag.RowsAffected() == 1, nil
 }
 
-// panelWaitingSQL is a panel review's run while its members run: live, and on
+// panelWaitingSQL is a multi review's run while its members run: live, and on
 // its way.
-const panelWaitingSQL = `(state = 'waiting' AND skip_reason = 'panel_members')`
+const panelWaitingSQL = `(state = 'waiting' AND skip_reason = 'review_members')`
 
 // liveRerunRunSQL finds the run of a head and target that EnqueueRerun leaves
-// as it is ($6 is replace): queued, running, reported or a panel waiting for
+// as it is ($6 is replace): queued, running, reported or a multi review waiting for
 // its members, but not, with replace, a push's run that hasn't been
 // dispatched or reviews only some files.
 const liveRerunRunSQL = `SELECT id::text FROM runs
@@ -921,7 +922,7 @@ const liveRerunRunSQL = `SELECT id::text FROM runs
 	  AND (state IN ('queued', 'running', 'reported') OR ` + panelWaitingSQL + `)
 	  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`
 
-// liveStartRunSQL finds a live (queued, running, reported or a panel waiting
+// liveStartRunSQL finds a live (queued, running, reported or a multi review waiting
 // for its members) run of a head and target, which StartRun reaches only when
 // no waiting run or undispatched push run of it was there to start.
 const liveStartRunSQL = `SELECT id::text FROM runs
@@ -940,7 +941,7 @@ const undispatchedPushRunSQL = `state IN ('queued', 'running') AND dispatched_at
 const onItsWaySQL = ` AND (quota_checked OR dispatched_at IS NOT NULL OR trigger = 'start')`
 
 // ReviewActiveForRerun reports whether EnqueueRerun (with replace) would find
-// the head's review already queued, running, reported or a panel waiting for
+// the head's review already queued, running, reported or a multi review waiting for
 // its members, and queue nothing,
 // and the dispatcher won't hold that review for the quota.
 func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, targetBranch string, replace bool) (bool, error) {
@@ -953,7 +954,7 @@ func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, tar
 }
 
 // ReviewActiveForStart reports whether StartRun would find the head's review
-// already queued, running, reported or a panel waiting for its members, and
+// already queued, running, reported or a multi review waiting for its members, and
 // start nothing: any other waiting run, or a push's queued run that hasn't
 // been dispatched, is one it starts. A review
 // the dispatcher will hold for the quota doesn't count.
@@ -969,12 +970,12 @@ func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, tar
 
 // StartRun starts the review of headSHA onto targetBranch of an untrusted
 // author's merge request. A waiting run of that head and target (not a
-// panel waiting for its members, which is on its way) becomes a
+// multi review waiting for its members, which is on its way) becomes a
 // queued run with TriggerStart (started is true, id is that run's), and so
 // does a push's run of it not dispatched yet, queued or claimed (being
 // checked): the dispatcher's hold then leaves it alone, and so does its CI
 // hold (a start skips the CI wait, and the quota check). With none, a live
-// (queued, running, reported, or a panel waiting for its members) run of that
+// (queued, running, reported, or a multi review waiting for its members) run of that
 // head and target is left as it is and returned, started false. Otherwise a new queued TriggerStart run is
 // created, superseding the live runs of other heads and targets and an older
 // finished run of this one, as EnqueueRerun does. The caller checks the
@@ -992,7 +993,7 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL, quota_checked = true,
 			ci_checked = ci_checked OR skip_reason = 'ci_pending'
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state = 'waiting' AND skip_reason <> 'panel_members'
+		  AND state = 'waiting' AND skip_reason <> 'review_members'
 		RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
@@ -1765,11 +1766,11 @@ type WaitingChange struct {
 // WaitingChanges returns the merge requests of project (its path, matched
 // ignoring case) on instance whose newest live run waits, newest first, at
 // most 100. A waiting run with a newer one (left by a release that didn't
-// know waiting runs) isn't listed, nor is a panel waiting for its members.
+// know waiting runs) isn't listed, nor is a multi review waiting for its members.
 func (s *Store) WaitingChanges(ctx context.Context, instance, project string) ([]WaitingChange, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.mr_iid, r.head_sha, r.title, r.author, r.web_url, r.created_at, r.skip_reason FROM runs r
 		WHERE r.instance = $1 AND lower(r.project_path) = lower($2) AND r.state = 'waiting'
-		  AND r.skip_reason <> 'panel_members'
+		  AND r.skip_reason <> 'review_members'
 		  AND NOT EXISTS (SELECT 1 FROM runs n
 			WHERE n.instance = r.instance AND n.project_id = r.project_id AND n.mr_iid = r.mr_iid
 			  AND n.state <> 'superseded' AND (n.created_at, n.id) > (r.created_at, r.id))

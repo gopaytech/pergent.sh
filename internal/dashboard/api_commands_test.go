@@ -1047,9 +1047,9 @@ func TestRunDetailLatestDecided(t *testing.T) {
 	}
 }
 
-// The start button refuses a panel review waiting for its members: it is on
+// The start button refuses a multi review waiting for its members: it is on
 // its way, not waiting for a start. A change held for a start still starts.
-func TestStartButtonRefusesPanel(t *testing.T) {
+func TestStartButtonRefusesMultiReview(t *testing.T) {
 	for _, panel := range []bool{true, false} {
 		e := newEnv(t, nil)
 		e.aliceOn("main", store.RoleMaintainer)
@@ -1060,8 +1060,10 @@ func TestStartButtonRefusesPanel(t *testing.T) {
 			if _, err := e.db.Exec(ctx, `UPDATE runs SET state = 'running', skip_reason = '' WHERE id = $1::uuid`, id); err != nil {
 				t.Fatal(err)
 			}
-			if started, err := e.st.StartPanel(ctx, id, store.PanelSplit{BaseSHA: "base-sha", StartSHA: "start-sha"}, time.Now()); err != nil || !started {
-				t.Fatalf("StartPanel = %v, %v", started, err)
+			split := store.MultiReviewSplit{BaseSHA: "base-sha", StartSHA: "start-sha",
+				Reviewers: []store.SplitReviewer{{Number: 1}, {Number: 2}}}
+			if started, err := e.st.StartMultiReview(ctx, id, split, time.Now()); err != nil || !started {
+				t.Fatalf("StartMultiReview = %v, %v", started, err)
 			}
 		}
 		rec := e.send(c, "POST", buttonURL("start"), `{"head":"`+head('1')+`"}`)
@@ -1073,10 +1075,10 @@ func TestStartButtonRefusesPanel(t *testing.T) {
 			continue
 		}
 		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), msgNotWaiting) {
-			t.Errorf("start of a panel = %d %s; want 409 %q", rec.Code, rec.Body, msgNotWaiting)
+			t.Errorf("start of a multi review = %d %s; want 409 %q", rec.Code, rec.Body, msgNotWaiting)
 		}
 		if len(rows) != 1 || rows[0].ID != id || rows[0].State != "waiting" || rows[0].Trigger != store.TriggerPush {
-			t.Errorf("runs = %+v; want the panel's run still waiting for its members", rows)
+			t.Errorf("runs = %+v; want the review's run still waiting for its members", rows)
 		}
 		if a := e.auditOf("review_start"); len(a) != 0 {
 			t.Errorf("audit = %+v; want no start", a)

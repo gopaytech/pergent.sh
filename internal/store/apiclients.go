@@ -236,7 +236,7 @@ func (s *Store) DeleteAPIClient(ctx context.Context, name string) (jobs []string
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 	rows, err := tx.Query(ctx, `SELECT r.state, r.job_name FROM runs r JOIN api_clients c ON c.id = r.api_client_id
-		WHERE c.name = $1 AND (r.state IN ('queued', 'running') OR (r.state = 'waiting' AND r.skip_reason = 'panel_members'))
+		WHERE c.name = $1 AND r.state IN ('queued', 'running')
 		ORDER BY r.created_at, r.id FOR UPDATE OF r`, name)
 	if err != nil {
 		return nil, false, err

@@ -1038,8 +1038,25 @@ func (s *Store) ReviewerResult(ctx context.Context, runID, token string, reviewe
 
 // ReviewerResultAt is ReviewerResult with the token's expiry checked at now.
 func (s *Store) ReviewerResultAt(ctx context.Context, runID, token string, reviewer int, now time.Time) ([]byte, bool, error) {
-	if !validUUID(runID) || reviewer < 1 || reviewer > maxReviewers {
-		return nil, false, nil
+	body, _, found, err := s.ReviewerResultAuthAt(ctx, runID, token, reviewer, now)
+	return body, found, err
+}
+
+// ReviewerResultAuth is ReviewerResult that also tells a refused token from
+// a reviewer with no result. authed is false for a bad or missing token, a
+// run with no stored token yet, an expired token, a run that is not
+// running, an unknown run, and a reviewer number outside 1 to 5. found is
+// true only when authed is true and the reviewer has a result.
+func (s *Store) ReviewerResultAuth(ctx context.Context, runID, token string, reviewer int) (body []byte, authed, found bool, err error) {
+	return s.ReviewerResultAuthAt(ctx, runID, token, reviewer, time.Now())
+}
+
+// ReviewerResultAuthAt is ReviewerResultAuth with the token's expiry checked at now.
+func (s *Store) ReviewerResultAuthAt(ctx context.Context, runID, token string, reviewer int, now time.Time) (body []byte, authed, found bool, err error) {
+	presented := sha256.Sum256([]byte(token))
+	if !validUUID(runID) {
+		subtle.ConstantTimeCompare(presented[:], noToken[:])
+		return nil, false, false, nil
 	}
 	var (
 		stored  []byte
@@ -1047,32 +1064,36 @@ func (s *Store) ReviewerResultAt(ctx context.Context, runID, token string, revie
 		state   string
 		root    string
 	)
-	err := s.pool.QueryRow(ctx, `SELECT token_hash, token_expires_at, state, COALESCE(attempt_of, id)::text
+	err = s.pool.QueryRow(ctx, `SELECT token_hash, token_expires_at, state, COALESCE(attempt_of, id)::text
 		FROM runs WHERE id = $1::uuid`, runID).Scan(&stored, &expires, &state, &root)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, nil
+		subtle.ConstantTimeCompare(presented[:], noToken[:])
+		return nil, false, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
-	presented := sha256.Sum256([]byte(token))
-	if stored == nil || subtle.ConstantTimeCompare(presented[:], stored) != 1 {
-		return nil, false, nil
+	want := stored
+	if len(want) != sha256.Size {
+		want = noToken[:]
 	}
-	if expires == nil || now.After(*expires) || RunState(state) != Running {
-		return nil, false, nil
+	same := subtle.ConstantTimeCompare(presented[:], want) == 1
+	if !same || stored == nil || expires == nil || now.After(*expires) || RunState(state) != Running {
+		return nil, false, false, nil
 	}
-	var body []byte
+	if reviewer < 1 || reviewer > maxReviewers {
+		return nil, true, false, nil
+	}
 	err = s.pool.QueryRow(ctx, `SELECT result FROM review_members
 		WHERE run_id = $1::uuid AND reviewer = $2 AND state IN ('done', 'failed') AND result IS NOT NULL
 		ORDER BY created_at DESC, id DESC LIMIT 1`, root, reviewer).Scan(&body)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, nil
+		return nil, true, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
-	return body, true, nil
+	return body, true, true, nil
 }
 
 // PutReviewMemberLog stores the redacted log of a member, replacing an

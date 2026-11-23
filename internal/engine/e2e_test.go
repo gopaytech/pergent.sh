@@ -30,6 +30,7 @@ func newE2E(t *testing.T) *e2e {
 		WebhookSecrets: env.Engine.WebhookSecrets,
 		Store:          env.Store,
 		Panel:          env.Store,
+		Reviewers:      env.Store,
 		Wake:           env.Engine.Wake,
 		Now:            env.Now,
 		Background:     &env.background,

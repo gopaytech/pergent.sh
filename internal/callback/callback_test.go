@@ -45,17 +45,18 @@ type fake struct {
 	replErr  error
 
 	recordErr error
-	merge     bool // IsPanelMerge's answer
+	judge     bool // IsJudgeRun's answer
 	recorded  []recordedUsage
 	onRecord  func() // called as RecordUsage starts
 	recordCtx error  // the context's error once onRecord has returned
 }
 
-// recordedUsage is one RecordUsage call.
+// recordedUsage is one RecordUsage or RecordJudgeUsage call.
 type recordedUsage struct {
 	id     string
 	skills []store.SkillUsage
 	models []store.ModelUsage
+	judge  bool // RecordJudgeUsage
 }
 
 func (f *fake) Run(_ context.Context, id string) (store.Run, bool, error) {
@@ -95,11 +96,20 @@ func (f *fake) RecordUsage(ctx context.Context, id string, skills []store.SkillU
 		f.onRecord()
 	}
 	f.recordCtx = ctx.Err()
-	f.recorded = append(f.recorded, recordedUsage{id, skills, models})
+	f.recorded = append(f.recorded, recordedUsage{id: id, skills: skills, models: models})
 	return f.recordErr
 }
 
-func (f *fake) IsPanelMerge(_ context.Context, id string) (bool, error) { return f.merge, nil }
+func (f *fake) RecordJudgeUsage(ctx context.Context, id string, skills []store.SkillUsage) error {
+	if f.onRecord != nil {
+		f.onRecord()
+	}
+	f.recordCtx = ctx.Err()
+	f.recorded = append(f.recorded, recordedUsage{id: id, skills: skills, judge: true})
+	return f.recordErr
+}
+
+func (f *fake) IsJudgeRun(_ context.Context, id string) (bool, error) { return f.judge, nil }
 
 func newFake() *fake {
 	return &fake{known: true, token: "good", run: store.Run{ID: runID, BaseSHA: base, HeadSHA: head}}
@@ -567,40 +577,25 @@ func TestUnreadableUsageStillMarksTheRun(t *testing.T) {
 	}
 }
 
-// Job P's result is recorded with its model rows, A before B; a P result
-// with none still passes an empty list, so its tokens add to the members'.
-// Any other run passes none, as before.
-func TestResultUsagePanelMerge(t *testing.T) {
+// A multi review's judge run is recorded with RecordJudgeUsage, so its
+// tokens add to the rows its reviewers made; a result that names a
+// tokens_by_model list (a legacy Job P's) gives no model rows. Any other run
+// is recorded with RecordUsage and no model rows, as before.
+func TestResultUsageJudgeRun(t *testing.T) {
 	body := `{"schema_version":1,"status":"completed","base":"` + base + `","head":"` + head + `","skills":[{"name":"security",` +
 		`"verdict":"no_blocking_issues","findings":[],"files":{"reviewed":[],"skipped":[],"not_reviewed":[]},` +
-		`"tokens":{"input":3,"output":1},"tokens_by_model":[{"role":"b","provider":"p","model":"mb","tokens":{"input":1,"output":0}},` +
-		`{"role":"a","provider":"p","model":"ma","tokens":{"input":2,"output":1}}]}],"comment":{"markdown":"hi"}}`
-	f := newFake()
-	f.merge = true
-	e := newEnv(f)
-	if rec := e.post(runID, "Bearer good", body); rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
-	}
-	if len(f.recorded) != 1 || len(f.recorded[0].models) != 2 || f.recorded[0].models[0].Model != "ma" || f.recorded[0].skills[0].In != 3 {
-		t.Fatalf("recorded = %+v; want P's skills and both model rows", f.recorded)
-	}
-
-	f = newFake()
-	f.merge = true
-	e = newEnv(f)
-	if rec := e.post(runID, "Bearer good", completedJSON("security")); rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
-	}
-	if len(f.recorded) != 1 || f.recorded[0].models == nil || len(f.recorded[0].models) != 0 {
-		t.Errorf("recorded = %#v; want an empty, not nil, list of model rows", f.recorded)
-	}
-
-	f = newFake()
-	e = newEnv(f)
-	if rec := e.post(runID, "Bearer good", body); rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
-	}
-	if len(f.recorded) != 1 || f.recorded[0].models != nil {
-		t.Errorf("recorded = %#v; want no model rows for a run that is not a panel's merge", f.recorded)
+		`"tokens":{"input":3,"output":1},"tokens_by_model":[{"role":"a","provider":"p","model":"ma","tokens":{"input":2,"output":1}}]}],` +
+		`"comment":{"markdown":"hi"}}`
+	for _, judge := range []bool{true, false} {
+		f := newFake()
+		f.judge = judge
+		e := newEnv(f)
+		if rec := e.post(runID, "Bearer good", body); rec.Code != http.StatusOK {
+			t.Fatalf("judge %v: status = %d: %s", judge, rec.Code, rec.Body)
+		}
+		if len(f.recorded) != 1 || f.recorded[0].judge != judge || f.recorded[0].models != nil ||
+			len(f.recorded[0].skills) != 1 || f.recorded[0].skills[0].In != 3 {
+			t.Errorf("judge %v: recorded = %+v; want the skill's tokens, judge %v, no model rows", judge, f.recorded, judge)
+		}
 	}
 }

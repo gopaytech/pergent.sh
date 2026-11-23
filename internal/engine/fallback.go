@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -30,6 +31,9 @@ func providerError(stored []byte) *result.ProviderError {
 	return r.ProviderError
 }
 
+// roleJudge is the provider_error role of a multi review's judge.
+const roleJudge = "judge"
+
 // fallBack moves a review to the next entry of its chain when the provider
 // said its entry is out of quota or credit, or rejected its key: the entry
 // is marked (until the cooldown ends, or for auth until its key is edited),
@@ -39,18 +43,24 @@ func providerError(stored []byte) *result.ProviderError {
 // on an entry of a chain of at least 2 (a 1-entry chain never falls back),
 // and handled is true only then: the caller publishes the run otherwise. An
 // API review is marked but not retried, since its inputs are gone once its
-// Job has them; it is published as before (markOnly). A review panel's
-// merge (Job P) falls back by its judges instead (fallBackJudge); an API
-// review's Job P marks the judge entry and is published.
+// Job has them; it is published as before (markOnly).
+//
+// A multi review's judge run (it has a review_judges row) falls back by its
+// judge instead (judgeRefused), or runs again with --no-judge (retryJudge).
+// A provider error with a role on any other run is a judge's (a legacy Job
+// P's), never the run's entry: the run is published as it is.
 func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) (handled bool, err error) {
-	if pe := providerError(run.Result); pe != nil {
-		merge, err := e.isPanelMerge(ctx, run)
+	if run.Kind == store.KindMR {
+		j, judged, err := e.Store.JudgeOf(ctx, run.ID)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("read the multi review's judge: %w", err)
 		}
-		if merge {
-			return e.fallBackJudge(ctx, run, pe.Role, log)
+		if judged {
+			return e.judgeRefused(ctx, run, j, log)
 		}
+	}
+	if pe := providerError(run.Result); pe != nil && pe.Role != "" {
+		return false, nil
 	}
 	m, ok := e.refusedMark(store.EntryRef{Source: run.ModelSource, ID: run.ModelEntryID}, run.ChainLength, run.Result)
 	if !ok {
@@ -93,54 +103,25 @@ func (e *Engine) fallBack(ctx context.Context, run store.Run, log *slog.Logger) 
 	return true, nil
 }
 
-// isPanelMerge reports whether run is a review panel's merge (Job P): its
-// review has a member that is not off.
-func (e *Engine) isPanelMerge(ctx context.Context, run store.Run) (bool, error) {
-	ms, err := e.Store.PanelMembers(ctx, run.ID)
-	if err != nil {
-		return false, fmt.Errorf("read the review's panel members: %w", err)
+// judgeRefused acts on the reported judge run, which judged with j. When
+// the provider refused the judge entry (provider_error.role "judge") and the
+// frozen judge chain has 2 entries or more, the entry is marked and audited,
+// the run closes as fell_back and the review's next attempt is queued, in
+// one transaction (EnqueueAttempt): that attempt resolves the judge again,
+// skipping the entry (resolveJudge). The members are not touched, and
+// nothing is posted: the review's status already says it runs. With a
+// 1-entry chain the CLI did the exact merge, and its result is published
+// (D7). Any other judge run goes on to retryJudge.
+func (e *Engine) judgeRefused(ctx context.Context, run store.Run, j store.JudgeRow, log *slog.Logger) (handled bool, err error) {
+	pe := providerError(run.Result)
+	if pe == nil || pe.Role != roleJudge || j.NoJudge {
+		return e.retryJudge(ctx, run, log)
 	}
-	for _, m := range ms {
-		if m.State != store.MemberOff {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// fallBackJudge moves the judge of role ("a" or "b") of Job P run to the
-// next entry of that role's chain when the provider refused its judge
-// entry, as fallBack does for a run: the entry is marked and audited, the
-// run closes as fell_back and the next attempt of P is queued, in one
-// transaction. That attempt picks the role's judge again (resolveMerge);
-// the members are not touched. It acts only on a role that judged with an
-// entry of a chain of at least 2. A provider error with no role is not a
-// judge's: the run is published as it is. When the role has no entry left,
-// the next attempt runs without that judge and pergent's merge keeps its
-// findings. Nothing is posted for the dropped attempt: the review's status
-// already says it runs. An API review's P only marks the entry (markOnly)
-// and is published.
-func (e *Engine) fallBackJudge(ctx context.Context, run store.Run, role string, log *slog.Logger) (handled bool, err error) {
-	if role == "" {
-		return false, nil
-	}
-	js, err := e.Store.PanelJudges(ctx, run.ID)
-	if err != nil {
-		return false, fmt.Errorf("read the review panel's judges: %w", err)
-	}
-	j, ok := js[role]
+	m, ok := e.refusedMark(store.EntryRef{Source: j.Entry.Source, ID: j.Entry.ID}, j.Entry.Length, run.Result)
 	if !ok {
-		return false, nil
+		return e.retryJudge(ctx, run, log)
 	}
-	m, ok := e.refusedMark(store.EntryRef{Source: j.Source, ID: j.ID}, j.Length, run.Result)
-	if !ok {
-		return false, nil
-	}
-	log = log.With("role", role, "model_entry", j.ID, "class", m.Class)
-	if run.Kind != store.KindMR {
-		// An API review's P has no next attempt either.
-		return false, e.markOnly(ctx, run, j.Name, m, run.PublishError == "", log)
-	}
+	log = log.With("model_entry", j.Entry.ID, "class", m.Class)
 	next, created, err := e.Store.EnqueueAttempt(ctx, run, m)
 	if err != nil {
 		return false, fmt.Errorf("queue the next attempt: %w", err)
@@ -149,15 +130,58 @@ func (e *Engine) fallBackJudge(ctx context.Context, run store.Run, role string, 
 		log.Info("not falling back: the run is no longer waiting to be published")
 		return true, nil
 	}
-	log.Warn("the provider refused the review panel's judge entry; the merge runs again on the next entry of its chain", "next_run", next)
-	e.auditMark(ctx, run, j.Name, m.Class, log)
+	log.Warn("the provider refused the multi review's judge entry; the judge runs again on the next entry of its chain", "next_run", next)
+	e.auditMark(ctx, run, j.Entry.Name, m.Class, log)
 	e.Wake()
 	return true, nil
 }
 
+// retryJudge acts on a reported judge run with no usable result (no result,
+// a result whose status is not completed, or one that fails its checks)
+// whose review_judges row has no_judge false: EnqueueJudgeRetry. handled is
+// false otherwise, and the run is published as it is.
+//
+// The retry closes the run as fell_back with reason judge_failed and queues
+// the review's next attempt, whose judge runs --no-judge (resolveJudge): the
+// CLI's exact merge keeps every blocking finding. When that Job also gives
+// no usable result, the review is published as failed. Nothing is posted
+// for the dropped attempt.
+func (e *Engine) retryJudge(ctx context.Context, run store.Run, log *slog.Logger) (handled bool, err error) {
+	j, found, err := e.Store.JudgeOf(ctx, run.ID)
+	if err != nil {
+		return false, fmt.Errorf("read the multi review's judge: %w", err)
+	}
+	if !found || j.NoJudge || judgeResultUsable(run) {
+		return false, nil
+	}
+	next, created, err := e.Store.EnqueueJudgeRetry(ctx, run)
+	if err != nil {
+		return false, fmt.Errorf("queue the judge's retry: %w", err)
+	}
+	if !created {
+		log.Info("not retrying the judge: the run is no longer waiting to be published")
+		return true, nil
+	}
+	log.Warn("the judge Job gave no usable result; the review runs again with no judge", "next_run", next,
+		"failure", e.redact(run.FailureReason))
+	e.Wake()
+	return true, nil
+}
+
+// judgeResultUsable reports whether the judge run has a result the publish
+// can take: stored, completed, and passing the checks its handler made
+// (callback.CheckStored).
+func judgeResultUsable(run store.Run) bool {
+	if run.Result == nil {
+		return false
+	}
+	res, _, ok := callback.CheckStored(run.Result, run)
+	return ok && res.Status == "completed"
+}
+
 // markOnly marks the entry the provider refused, with no next attempt: the
 // rule of an API review, whose inputs are gone once its Job has them, and of
-// its panel's members and Job P. The mark is set again on a retry (the same
+// a member of one. The mark is set again on a retry (the same
 // upsert); with audit the audit entry is written too.
 func (e *Engine) markOnly(ctx context.Context, run store.Run, entryName string, m store.Mark, audit bool, log *slog.Logger) error {
 	if err := e.Store.SetMark(ctx, m); err != nil {
@@ -175,7 +199,7 @@ func (e *Engine) markOnly(ctx context.Context, run store.Run, entryName string, 
 // ends after the cooldown, or for auth when its key is edited. ok is false
 // when nothing falls back: no entry, a chain of 1 (it never falls back), no
 // provider_error, or a plain rate limit or a class this release doesn't
-// know. A review and a panel member decide it the same way.
+// know. A review and a multi review's member decide it the same way.
 func (e *Engine) refusedMark(ref store.EntryRef, chainLength int, stored []byte) (m store.Mark, ok bool) {
 	if ref.ID == "" || chainLength < 2 {
 		return store.Mark{}, false

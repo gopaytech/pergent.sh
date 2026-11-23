@@ -613,6 +613,53 @@ paths:
             text/plain:
               schema: {type: string}
         '500': {$ref: '#/components/responses/PlainTextError'}
+  /runs/{id}/reviewers/{n}:
+    get:
+      operationId: getRunReviewerResult
+      tags: [Job callbacks]
+      summary: Download a multi review reviewer's result
+      description: |
+        Called by a multi review's judge Job, with the judge run's live
+        result token, to read reviewer `n`'s result: the newest attempt of
+        that reviewer that has a stored result and is done, or failed with
+        its result kept. The token is not spent. Any auth failure (no token,
+        a wrong or expired token, a run with no stored token yet, or an
+        unknown run) is the same 401, so the answer never shows whether a
+        run exists. 404 goes only to the run's own judge Job, for a reviewer
+        with no result or an `n` that is not 1 to 5: the judge reads 404 as
+        "no result", so an auth failure is never a 404.
+      x-pergent-access: none
+      security:
+        - runResultToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The judge run's id.
+          schema: {type: string}
+        - name: n
+          in: path
+          required: true
+          description: The reviewer's number, 1 to 5.
+          schema: {type: integer, minimum: 1, maximum: 5}
+      responses:
+        '200':
+          description: The reviewer's agent result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/result.Result'
+        '401':
+          description: No token, a wrong or expired token, a run with no stored token yet, or an unknown run.
+          content:
+            text/plain:
+              schema: {type: string}
+        '404':
+          description: The run's own judge asked for a reviewer with no result, or for a number that is not 1 to 5.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
   /healthz:
     get:
       operationId: getHealth
@@ -8847,8 +8894,8 @@ components:
         suggestion: {type: string}
         linked:
           $ref: '#/components/schemas/result.Linked'
-        panel:
-          $ref: '#/components/schemas/result.FindingPanel'
+        multi_review:
+          $ref: '#/components/schemas/result.FindingMultiReview'
       additionalProperties: true
       required: [file, severity, title]
     result.Linked:
@@ -8921,8 +8968,8 @@ components:
           - $ref: '#/components/schemas/result.RulesInfo'
           - type: 'null'
           description: Set by a pergent that runs with path rules, even when no file had one. Absent from an older image.
-        panel:
-          $ref: '#/components/schemas/result.Panel'
+        multi_review:
+          $ref: '#/components/schemas/result.MultiReview'
       additionalProperties: true
       required: [schema_version, status, comment]
     result.Skill:
@@ -8956,12 +9003,8 @@ components:
           type: integer
           description: The model's own score, 1 to 5 (0 when it gave none).
         confidence_reason: {type: string}
-        panel:
-          $ref: '#/components/schemas/result.SkillPanel'
-        tokens_by_model:
-          type: array
-          items: {$ref: '#/components/schemas/result.ModelTokens'}
-          description: The tokens of the skill's runs, one entry per panel model. Only in a review panel's merge result.
+        multi_review:
+          $ref: '#/components/schemas/result.SkillMultiReview'
       additionalProperties: true
     result.ProviderError:
       description: What pergent read from the provider's error. The provider's response body is never in it.
@@ -8978,62 +9021,66 @@ components:
         model: {type: string}
         role:
           type: string
-          enum: [a, b]
-          description: The panel model of a judge run's error. Only in a review panel's merge result.
+          enum: [judge]
+          description: Set on the error of a multi review's judge. Only in a multi review's judge result.
       additionalProperties: true
       required: [class]
-    result.Panel:
-      description: The two models of a review panel and how their results were merged. Only in a review panel's merge result.
+    result.MultiReview:
+      description: The reviewers and the judge of a multi review. Only in a multi review's judge result.
       type: object
       properties:
-        a: {$ref: '#/components/schemas/result.PanelMember'}
-        b: {$ref: '#/components/schemas/result.PanelMember'}
-        mode:
-          type: string
-          enum: [both, a_only, b_only, none]
-          description: Which members gave a result to merge.
-        judged:
-          type: boolean
-          description: False when no judge run was allowed.
+        reviewers:
+          type: array
+          items: {$ref: '#/components/schemas/result.MultiReviewer'}
+          description: One entry per --reviewer, in that order.
+        judge: {$ref: '#/components/schemas/result.MultiJudge'}
       additionalProperties: true
-      required: [a, b, mode, judged]
-    result.PanelMember:
-      description: The model of one panel member.
+      required: [reviewers, judge]
+    result.MultiReviewer:
+      description: One reviewer of a multi review.
+      type: object
+      properties:
+        number:
+          type: integer
+          description: The reviewer's number, from 1.
+        usable:
+          type: boolean
+          description: False when its result could not be used at all.
+      additionalProperties: true
+      required: [number, usable]
+    result.MultiJudge:
+      description: The judge of a multi review.
       type: object
       properties:
         provider: {type: string}
         model: {type: string}
+        judged:
+          type: boolean
+          description: False when no judge run was allowed (--no-judge); then provider and model are absent.
       additionalProperties: true
-      required: [provider, model]
-    result.SkillPanel:
-      description: How one skill's results were merged. Only in a review panel's merge result.
+      required: [judged]
+    result.SkillMultiReview:
+      description: How a multi review merged one skill. Only in a multi review's judge result.
       type: object
       properties:
-        mode:
-          type: string
-          enum: [both, a_only, b_only, none]
-        judges:
+        reviewers:
           type: array
-          items: {$ref: '#/components/schemas/result.PanelJudge'}
+          items: {type: integer}
+          description: The reviewers whose answers were used.
+        failed:
+          type: array
+          items: {type: integer}
+          description: The reviewers that failed for this skill.
+        judge:
+          type: string
+          enum: [ok, failed, skipped, not_run]
+          description: The status of the judge run.
+        judge_cause: {$ref: '#/components/schemas/result.Cause'}
         exact_merge:
           type: boolean
           description: True when the merge was exact and needed no judge.
       additionalProperties: true
-      required: [mode]
-    result.PanelJudge:
-      description: One judge run of a review panel.
-      type: object
-      properties:
-        role:
-          type: string
-          enum: [a, b]
-          description: The model that judged.
-        status:
-          type: string
-          enum: [ok, failed, not_run, skipped]
-        cause: {$ref: '#/components/schemas/result.Cause'}
-      additionalProperties: true
-      required: [role, status]
+      required: [reviewers, judge]
     result.Cause:
       description: Why a judge run failed.
       type: object
@@ -9043,37 +9090,31 @@ components:
         provider_error: {$ref: '#/components/schemas/result.ProviderError'}
       additionalProperties: true
       required: [kind, message]
-    result.FindingPanel:
-      description: What a review panel's merge says about one finding. Only in a review panel's merge result.
+    result.FindingMultiReview:
+      description: What a multi review's merge says about one finding. Only in a multi review's judge result.
       type: object
       properties:
         found_by:
-          type: string
-          enum: [a, b, both]
+          type: array
+          items: {type: integer}
+          description: The reviewers that found it.
         also:
           type: array
           items: {type: string}
           description: Fingerprints of the other findings merged into this one. A dismissal of any of them dismisses this finding.
-        disagreed_by:
-          type: string
-          description: The member that did not agree.
+        judge_disagreed:
+          type: boolean
+          description: True when the judge rated it differently from the reviewers.
         reason: {type: string}
-        rated_suggestion_by: {type: string}
-        unjudged_by: {type: string}
+        rated_suggestion_by:
+          type: array
+          items: {type: integer}
+          description: The reviewers that rated it a suggestion.
+        unjudged:
+          type: boolean
+          description: True when no judge result was used for it.
       additionalProperties: true
       required: [found_by]
-    result.ModelTokens:
-      description: The tokens of a skill's runs on one panel model.
-      type: object
-      properties:
-        role:
-          type: string
-          enum: [a, b]
-        provider: {type: string}
-        model: {type: string}
-        tokens: {$ref: '#/components/schemas/result.Tokens'}
-      additionalProperties: true
-      required: [role, provider, model, tokens]
     result.Tokens:
       description: Model usage of runs.
       type: object

@@ -141,7 +141,7 @@ func (s *Store) EnqueueAPIReview(ctx context.Context, n NewAPIReview) (id string
 	if _, err := tx.Exec(ctx, `WITH s AS (
 			UPDATE runs SET state = 'superseded'
 			WHERE id IN (SELECT run_id FROM api_reviews WHERE client_id = $1 AND tenant = $2 AND subject = $3)
-			  AND (state IN ('queued', 'running') OR (state = 'waiting' AND skip_reason = 'panel_members'))
+			  AND state IN ('queued', 'running')
 			RETURNING id)
 		INSERT INTO api_callbacks (run_id, client_id)
 		SELECT s.id, c.id FROM s JOIN api_clients c ON c.id = $1 WHERE c.callback_url <> ''
@@ -235,13 +235,12 @@ type APIReviewFilter struct {
 
 // apiStatusSQL is each v1 status of an API review, from its run's state: the
 // rules of reviewapi.StatusOf. A claimed run without a Job is still queued; a
-// panel waiting for its members is running, and so is a reported one until
-// its result is out. Once published it is completed when the stored result's
+// reported run is running until its result is out. Once published it is completed when the stored result's
 // status is, and failed otherwise (also when there is no result, only a
 // failure); publish_failed is failed.
 var apiStatusSQL = map[string]string{
 	"queued":     `(runs.state = 'queued' OR (runs.state = 'running' AND runs.job_name = ''))`,
-	"running":    `((runs.state = 'running' AND runs.job_name <> '') OR runs.state = 'reported' OR (runs.state = 'waiting' AND runs.skip_reason = 'panel_members'))`,
+	"running":    `((runs.state = 'running' AND runs.job_name <> '') OR runs.state = 'reported')`,
 	"completed":  `(runs.state = 'published' AND runs.result->>'status' = 'completed')`,
 	"failed":     `(runs.state = 'publish_failed' OR (runs.state = 'published' AND runs.result->>'status' IS DISTINCT FROM 'completed'))`,
 	"superseded": `runs.state = 'superseded'`,

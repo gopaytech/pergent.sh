@@ -504,37 +504,3 @@ func TestWatchRecoversUnlaunchedRun(t *testing.T) {
 	}
 	wantRunning(t, env, recent)
 }
-
-// A panel member claimed but never given a Job goes back to the queue once
-// its claim is five minutes old, with no attempt counted; a recent claim is
-// left alone. The run still waits.
-func TestRecoverUnlaunchedMembers(t *testing.T) {
-	e := newPanelE2E(t, []string{"team-a"}, []string{"team-b"})
-	env := e.env
-	id := splitPanel(t, env, 1, sha('a'))
-	b := memberOfRole(t, env, id, "b")
-	execSQL(t, env, `UPDATE panel_members SET not_before = now() + interval '1 day' WHERE id = '`+b.ID+`'`)
-	if ms, err := env.Store.ClaimQueuedMembers(env.ctx, 10, env.Now().Add(-6*time.Minute)); err != nil || len(ms) != 1 {
-		t.Fatalf("ClaimQueuedMembers = %d, %v; want A", len(ms), err)
-	}
-	execSQL(t, env, `UPDATE panel_members SET not_before = NULL WHERE id = '`+b.ID+`'`)
-	if ms, err := env.Store.ClaimQueuedMembers(env.ctx, 10, env.Now().Add(-time.Minute)); err != nil || len(ms) != 1 {
-		t.Fatalf("ClaimQueuedMembers = %d, %v; want B", len(ms), err)
-	}
-	woken(env)
-
-	watch(t, env)
-
-	if a := memberOfRole(t, env, id, "a"); a.State != store.MemberQueued || a.Attempts != 0 {
-		t.Errorf("stranded member A = %s with %d attempts; want queued with 0", a.State, a.Attempts)
-	}
-	if got := memberOfRole(t, env, id, "b"); got.State != store.MemberRunning {
-		t.Errorf("recent member B = %s; want still running", got.State)
-	}
-	if !woken(env) {
-		t.Errorf("the dispatcher was not woken after the recovery")
-	}
-	if r := env.Run(id); r.State != store.Waiting {
-		t.Errorf("run = %s; want still waiting", r.State)
-	}
-}
