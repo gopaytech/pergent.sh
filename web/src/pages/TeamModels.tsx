@@ -4,11 +4,11 @@ import { Link, useParams } from "react-router";
 
 import { api, isStatus, paths, type ChainEntryView, type ChainRef, type ChainView, type TeamModelsView, type TeamModelView } from "../api";
 import ChainEditor from "../ChainEditor";
-import PanelChainCard from "../PanelChainCard";
 import { useWrite } from "../layout/write";
 import MarkBanner, { markText } from "../MarkBanner";
 import { AddModelForm, EditModelForm } from "../ModelForms";
 import { ErrorBox, Loading, NotFound, secretText } from "../ui";
+import TeamLimits from "./TeamLimits";
 
 // TeamModels is a team's page in the user area: the team's own models and
 // keys, and its chain. Every member sees them (never a key, and a viewer no
@@ -44,16 +44,8 @@ export default function TeamModels() {
           <TeamModelRow key={m.id} team={v.team.id} m={m} canEdit={v.canEdit} />
         ))}
       </section>
+      <TeamLimits team={v.team.id} role={v.role} canEdit={v.canEdit} />
       <TeamChain team={v.team.id} />
-      <PanelChainCard
-        title="Team chain B (review panel)"
-        intro="With a chain B, each review of the repositories this team owns also runs on its first entry, unless a repository sets its own. Save it with no entries for none."
-        path={paths.apiTeamPanelChain(v.team.id)}
-        queryKey={["team-panel-chain", v.team.id]}
-        inheritNote="This team has no chain B of its own: its repositories use the global chain B, if there is one."
-        clearPath={(e) => (e.source === "team" ? paths.apiTeamModelMark(v.team.id, e.id) : paths.apiAdminModelMark(e.id))}
-        also={[["repo-panel-chain"], ["repo"], ["team-chain", v.team.id], ["repo-chain"]]}
-      />
       {v.canEdit && <AddTeamModel team={v.team.id} />}
     </div>
   );
@@ -65,10 +57,10 @@ function useTeamChanged(team: number) {
   const client = useQueryClient();
   return () => {
     client.invalidateQueries({ queryKey: ["team-models", team] });
+    client.invalidateQueries({ queryKey: ["team-limits", team] });
     client.invalidateQueries({ queryKey: ["team-chain", team] });
     client.invalidateQueries({ queryKey: ["repo-chain"] });
-    client.invalidateQueries({ queryKey: ["team-panel-chain", team] });
-    client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
+    client.invalidateQueries({ queryKey: ["repo-reviewers"] });
   };
 }
 
@@ -142,7 +134,7 @@ function TeamChain({ team }: { team: number }) {
       client.setQueryData(key, next);
       client.invalidateQueries({ queryKey: ["team-models", team] });
       client.invalidateQueries({ queryKey: ["repo-chain"] });
-      client.invalidateQueries({ queryKey: ["repo-panel-chain"] });
+      client.invalidateQueries({ queryKey: ["repo-reviewers"] });
       setStarting(false);
       setNote("Saved.");
     },
@@ -153,7 +145,6 @@ function TeamChain({ team }: { team: number }) {
       write<void>("DELETE", e.source === "team" ? paths.apiTeamModelMark(team, e.id) : paths.apiAdminModelMark(e.id)),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: key });
-      client.invalidateQueries({ queryKey: ["team-panel-chain", team] });
       client.invalidateQueries({ queryKey: ["team-models", team] });
     },
   });

@@ -44,6 +44,10 @@ type Handler struct {
 	// Wake nudges the publisher after a result or failure was recorded. May be nil.
 	Wake func()
 	Log  *slog.Logger
+	// Background, when set, counts the usage writes that outlive a request,
+	// so whoever owns the store can wait for them before closing or dropping
+	// it. Nil: the handler counts them itself (usageWork).
+	Background *sync.WaitGroup
 
 	// usageWork counts the usage writes still running, so a test can wait.
 	usageWork sync.WaitGroup
@@ -133,9 +137,10 @@ func (h *Handler) stored(w http.ResponseWriter, ctx context.Context, id string, 
 // the background fill at the next start.
 func (h *Handler) recordUsageLater(ctx context.Context, id string, body []byte) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), usageTimeout)
-	h.usageWork.Add(1)
+	work := backgroundOr(h.Background, &h.usageWork)
+	work.Add(1)
 	go func() {
-		defer h.usageWork.Done()
+		defer work.Done()
 		defer cancel()
 		// Outside the request, net/http no longer stops a panic from
 		// ending the process.
@@ -172,6 +177,14 @@ func (h *Handler) recordUsage(ctx context.Context, id string, body []byte) {
 	if err := h.Results.RecordUsage(ctx, id, skills, models); err != nil {
 		h.log().Warn("couldn't record the result's usage", "run", id, "error", err.Error())
 	}
+}
+
+// backgroundOr is shared, or own when shared is nil.
+func backgroundOr(shared, own *sync.WaitGroup) *sync.WaitGroup {
+	if shared != nil {
+		return shared
+	}
+	return own
 }
 
 func errText(err error) string {

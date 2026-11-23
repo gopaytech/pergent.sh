@@ -179,8 +179,9 @@ func TestDispatchJobUnchanged(t *testing.T) {
 // panelFloor sets the first pergent with a review panel for the test.
 func panelFloor(t *testing.T, v string) {
 	t.Helper()
+	old := config.PanelMinVersion
 	config.PanelMinVersion = v
-	t.Cleanup(func() { config.PanelMinVersion = "" })
+	t.Cleanup(func() { config.PanelMinVersion = old })
 }
 
 // saveChainB stores chain B c. A panel needs pergent.sh's own image for its
@@ -437,6 +438,10 @@ func TestPanelOffReason(t *testing.T) {
 		{"same model and a removed entry", []string{chain.ReasonSameModel, chain.ReasonRemoved}, panelOffNone},
 		{"quota and a mark", []string{chain.ReasonInstanceQuota, store.ClassQuota}, panelOffNone},
 		{"no key", []string{chain.ReasonKeyUnusable}, panelOffNone},
+		{"model limit only", []string{chain.ReasonModelLimit}, panelOffQuota},
+		{"team limit and same model", []string{chain.ReasonTeamLimit, chain.ReasonSameModel}, panelOffQuota},
+		{"quota and a team limit", []string{chain.ReasonInstanceQuota, chain.ReasonTeamLimit}, panelOffQuota},
+		{"a limit and a mark", []string{chain.ReasonTeamLimit, store.ClassQuota}, panelOffNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var dec chain.Decision

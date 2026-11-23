@@ -834,6 +834,7 @@ func inputSchema(v any) schemaType  { return schemaType{Type: reflect.TypeOf(v),
 // "readiness.Checklist".
 var openAPISchemas = map[string]schemaType{
 	"meView":                  outputSchema(meView{}),
+	"TeamLimitView":           outputSchema(TeamLimitView{}),
 	"signInOptionsView":       outputSchema(signInOptionsView{}),
 	"OverviewView":            outputSchema(OverviewView{}),
 	"SetupView":               outputSchema(SetupView{}),
@@ -859,7 +860,7 @@ var openAPISchemas = map[string]schemaType{
 	"RepositoryView":          outputSchema(RepositoryView{}),
 	"Last7View":               outputSchema(Last7View{}),
 	"RepositoryDetailView":    outputSchema(RepositoryDetailView{}),
-	"PanelView":               outputSchema(PanelView{}),
+	"MultiReviewView":         outputSchema(MultiReviewView{}),
 	"WaitingView":             outputSchema(WaitingView{}),
 	"QuotaView":               outputSchema(QuotaView{}),
 	"GraphView":               outputSchema(GraphView{}),
@@ -933,6 +934,9 @@ var openAPISchemas = map[string]schemaType{
 	"MarkView":                outputSchema(MarkView{}),
 	"ChainView":               outputSchema(ChainView{}),
 	"ChainEntryView":          outputSchema(ChainEntryView{}),
+	"ReviewersView":           outputSchema(ReviewersView{}),
+	"ReviewerChain":           outputSchema(ReviewerChain{}),
+	"ChainEntryRef":           inputSchema(entryInput{}),
 	"RunEntryView":            outputSchema(RunEntryView{}),
 	"AttemptView":             outputSchema(AttemptView{}),
 	"RunPanelView":            outputSchema(RunPanelView{}),
@@ -943,6 +947,9 @@ var openAPISchemas = map[string]schemaType{
 	"MyTeamView":              outputSchema(MyTeamView{}),
 	"TeamModelsView":          outputSchema(TeamModelsView{}),
 	"TeamModelView":           outputSchema(TeamModelView{}),
+	"TeamLimitsView":          outputSchema(TeamLimitsView{}),
+	"TeamModelLimitView":      outputSchema(TeamModelLimitView{}),
+	"TeamGlobalLimitView":     outputSchema(TeamGlobalLimitView{}),
 	"SignInAdminView":         outputSchema(SignInAdminView{}),
 	"SignInTestView":          outputSchema(SignInTestView{}),
 	"ssoView":                 outputSchema(ssoView{}),
@@ -1032,9 +1039,11 @@ var openAPISchemas = map[string]schemaType{
 var openAPIUntypedSchemas = map[string]string{
 	"ErrorBody":                 "map[string]string{error, code}",
 	"ChainRequest":              "struct in decodeChain",
+	"ReviewersRequest":          "struct in decodeReviewers",
 	"StatusBody":                "map[string]string{status}",
 	"InstanceTrustRequest":      "struct in Dashboard.putInstanceTrust",
 	"InstanceTokenQuotaRequest": "struct in Dashboard.putInstanceQuota",
+	"ModelLimitRequest":         "struct in limitBody",
 	"StartRequest":              "struct in Dashboard.reviewAction",
 	"TrustedAuthorInput":        "store.TrustedAuthor with id optional, in trustedAuthorsSetting",
 	"Outcome":                   "the Outcome* constants, spelled in the enum",
@@ -1429,12 +1438,13 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		{"ReviewSummary", "outcome", outcomes},
 		{"RunSummary", "outcome", outcomes},
 		{"TeamMemberView", "role", teamRoles},
+		{"TeamGlobalLimitView", "modelLimit", []string{limitNone, limitRoomLeft, limitUsedUp}},
 		{"ReviewDetailView", "role", append(append([]string{}, roles...), "")},
 		{"RepositoryDetailView", "role", roles},
 		{"MyTeamView", "role", roles},
 		{"TeamModelsView", "role", roles},
 		{"MarkView", "class", []string{store.ClassQuota, store.ClassBilling, store.ClassAuth}},
-		{"AttemptView", "reason", []string{"", store.ClassQuota, store.ClassBilling, store.ClassAuth}},
+		{"AttemptView", "reason", []string{"", store.ClassQuota, store.ClassBilling, store.ClassAuth, store.OutcomeJudgeFailed}},
 		{"MemberAttemptView", "state", []string{string(store.MemberQueued), string(store.MemberRunning), string(store.MemberReported),
 			string(store.MemberDone), string(store.MemberFailed), string(store.MemberFellBack), string(store.MemberSuperseded)}},
 		{"PanelMemberView", "role", []string{"a", "b"}},
@@ -1443,7 +1453,8 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		{"ModelCostView", "part", []string{"member", "merge"}},
 		{"ChainEntryView", "class", []string{"", store.ClassQuota, store.ClassBilling, store.ClassAuth}},
 		{"ChainEntryView", "state", []string{stateOf(""), stateOf(store.ClassQuota), stateOf(store.ClassAuth), chain.ReasonRemoved,
-			chain.ReasonNotAllowed, chain.ReasonNotOwner, chain.ReasonKeyUnusable}},
+			chain.ReasonNotAllowed, chain.ReasonNotOwner, chain.ReasonKeyUnusable, chain.ReasonModelLimit, chain.ReasonTeamLimit}},
+		{"WaitingView", "reason", []string{store.WaitUntrusted, store.WaitCheckFailed, store.WaitQuota, store.WaitLimit}},
 		{"UserView", "kind", kinds},
 		{"UserView", "role", accountRoles},
 		{"meView", "kind", kinds},
@@ -1475,7 +1486,9 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		known               [][]string
 	}{
 		// nothing_reviewed is an API review's outcome: no run view shows it.
-		{"internal/store/*.go", "Outcome", "", [][]string{outcomes, {store.OutcomeNothingReviewed}}},
+		// judge_failed is not an outcome but the reason of a fell_back judge
+		// run: AttemptView.reason lists it.
+		{"internal/store/*.go", "Outcome", "", [][]string{outcomes, {store.OutcomeNothingReviewed, store.OutcomeJudgeFailed}}},
 		// An account's role is admin or user (a team member's, viewer or
 		// maintainer, is in the roles above). The platform kind is hidden: no
 		// view of the API shows it.

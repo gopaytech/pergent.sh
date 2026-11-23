@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/chain"
@@ -27,10 +28,11 @@ func (d *Dashboard) teamRoutes(mux *http.ServeMux) {
 	route("PUT /api/teams/{id}/models/{model}", d.updateTeamModel)
 	route("DELETE /api/teams/{id}/models/{model}", d.deleteTeamModel)
 	route("DELETE /api/teams/{id}/models/{model}/mark", d.clearTeamMark)
+	route("PUT /api/teams/{id}/models/{model}/limit", d.putTeamModelLimit)
+	route("DELETE /api/teams/{id}/models/{model}/limit", d.deleteTeamModelLimit)
+	route("GET /api/teams/{id}/limits", d.teamLimits)
 	route("GET /api/teams/{id}/chain", d.getTeamChain)
 	route("PUT /api/teams/{id}/chain", d.putTeamChain)
-	route("GET /api/teams/{id}/panel-chain", d.getTeamPanelChain)
-	route("PUT /api/teams/{id}/panel-chain", d.putTeamPanelChain)
 }
 
 // teamAccess is what se may do on team id: RoleAdmin for an admin, the
@@ -387,7 +389,7 @@ func (d *Dashboard) deleteTeamModel(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	changed, changedB, err := d.Store.DeleteTeamModel(ctx, t.ID, id)
+	changed, changedR, err := d.Store.DeleteTeamModel(ctx, t.ID, id)
 	if errors.Is(err, store.ErrModelNotFound) {
 		notFound(w)
 		return
@@ -399,30 +401,34 @@ func (d *Dashboard) deleteTeamModel(w http.ResponseWriter, r *http.Request) {
 	}
 	d.reloadModels(ctx, "")
 	detail := t.Name + ": " + modelDetail(before.Name, before.Provider, before.Model)
-	if len(changed) > 0 || len(changedB) > 0 {
+	if len(changed) > 0 || len(changedR) > 0 {
 		teams, err := d.teamNames(ctx)
 		if err != nil {
 			d.Log.Error("dashboard: listing teams failed", "error", err.Error())
 		}
+		// A repository's reviewer chains share its label: each label once.
 		labels := func(chains []store.Chain) string {
 			out := make([]string, 0, len(chains))
 			for _, c := range chains {
-				out = append(out, chainLabel(c, teams))
+				if l := chainLabel(c, teams); !slices.Contains(out, l) {
+					out = append(out, l)
+				}
 			}
 			return strings.Join(out, ", ")
 		}
 		if len(changed) > 0 {
 			detail += ", removed from " + labels(changed)
 		}
-		// Only when a chain B named it, so the line is as before otherwise.
-		if len(changedB) > 0 {
-			detail += ", removed from chain B: " + labels(changedB)
+		// Only when a reviewer chain named it, so the line is as before
+		// otherwise.
+		if len(changedR) > 0 {
+			detail += ", removed from reviewer chains: " + labels(changedR)
 		}
 	}
 	args := []any{"team", t.ID, "model_id", id, "chains", len(changed)}
-	// Only when a chain B changed, so the line is as before otherwise.
-	if len(changedB) > 0 {
-		args = append(args, "panel_chains", len(changedB))
+	// Only when a reviewer chain changed, so the line is as before otherwise.
+	if len(changedR) > 0 {
+		args = append(args, "reviewer_chains", len(changedR))
 	}
 	d.Log.Info("dashboard: team model removed", append(args, "by", se.Username)...)
 	d.audit(ctx, se, "team_model_removed", "", "", detail)
@@ -469,15 +475,15 @@ func (d *Dashboard) teamChoices(team int64) []instances.Model {
 	return out
 }
 
-// teamShown is team t's chain of set, or, while it has none (or an empty
-// one), the global chain of set its repositories use.
-func (d *Dashboard) teamShown(ctx context.Context, t store.Team, set store.ChainSet) (shownChain, error) {
-	c, found, err := d.Store.ChainOf(ctx, set, store.ScopeTeam, t.ID, "", "")
+// teamShown is team t's chain, or, while it has none (or an empty one), the
+// global chain its repositories use.
+func (d *Dashboard) teamShown(ctx context.Context, t store.Team) (shownChain, error) {
+	c, found, err := d.Store.ChainOf(ctx, store.ChainA, store.ScopeTeam, t.ID, "", "")
 	if err != nil {
 		return shownChain{}, err
 	}
 	if !found || len(c.Entries) == 0 {
-		g, err := d.globalShown(ctx, set)
+		g, err := d.globalShown(ctx)
 		g.scope = store.ScopeTeam
 		return g, err
 	}
@@ -490,11 +496,17 @@ func (d *Dashboard) teamShown(ctx context.Context, t store.Team, set store.Chain
 	return shownChain{scope: store.ScopeTeam, source: store.ScopeTeam, team: t.Name, in: in}, nil
 }
 
-func (d *Dashboard) writeTeamChain(w http.ResponseWriter, r *http.Request, se Session, t store.Team, role Role, set store.ChainSet) {
+func (d *Dashboard) writeTeamChain(w http.ResponseWriter, r *http.Request, se Session, t store.Team, role Role) {
 	ctx := r.Context()
-	c, err := d.teamShown(ctx, t, set)
+	c, err := d.teamShown(ctx, t)
 	if err != nil {
 		d.failed(w, r, "reading the team's chain", err)
+		return
+	}
+	// The team's repositories are what its chain, or the global one it
+	// shows, runs for: its limits apply.
+	if err := d.chainViewLimits(ctx, &c.in, t.ID); err != nil {
+		d.failed(w, r, "reading the model limits", err)
 		return
 	}
 	teams, err := d.teamNames(ctx)
@@ -510,39 +522,23 @@ func (d *Dashboard) writeTeamChain(w http.ResponseWriter, r *http.Request, se Se
 	writeJSON(w, http.StatusOK, d.chainView(c, choices, teams, clears))
 }
 
-// --- GET /api/teams/{id}/chain and .../panel-chain ---
+// --- GET /api/teams/{id}/chain ---
 
 func (d *Dashboard) getTeamChain(w http.ResponseWriter, r *http.Request) {
-	d.getTeamChainOf(w, r, store.ChainA)
-}
-
-func (d *Dashboard) getTeamPanelChain(w http.ResponseWriter, r *http.Request) {
-	d.getTeamChainOf(w, r, store.ChainB)
-}
-
-func (d *Dashboard) getTeamChainOf(w http.ResponseWriter, r *http.Request, set store.ChainSet) {
 	t, role, ok := d.teamFor(w, r, RoleViewer)
 	if !ok {
 		return
 	}
-	d.writeTeamChain(w, r, session(r), t, role, set)
+	d.writeTeamChain(w, r, session(r), t, role)
 }
 
-// --- PUT /api/teams/{id}/chain and .../panel-chain ---
+// --- PUT /api/teams/{id}/chain ---
 
-func (d *Dashboard) putTeamChain(w http.ResponseWriter, r *http.Request) {
-	d.putTeamChainOf(w, r, store.ChainA)
-}
-
-func (d *Dashboard) putTeamPanelChain(w http.ResponseWriter, r *http.Request) {
-	d.putTeamChainOf(w, r, store.ChainB)
-}
-
-// putTeamChainOf saves the team's chain of set: its own entries and the
+// putTeamChain saves the team's chain: its own entries and the
 // global entries teams may use, at most 5; another team's entry, or a global
 // one teams may not use, is 400, for an admin too (the resolver would skip
 // it). No entries is no chain: the team's repositories use the global one.
-func (d *Dashboard) putTeamChainOf(w http.ResponseWriter, r *http.Request, set store.ChainSet) {
+func (d *Dashboard) putTeamChain(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	t, role, ok := d.teamFor(w, r, RoleMaintainer)
 	if !ok {
@@ -562,14 +558,10 @@ func (d *Dashboard) putTeamChainOf(w http.ResponseWriter, r *http.Request, set s
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	if !d.saveChain(ctx, w, set, store.Chain{Scope: store.ScopeTeam, TeamID: t.ID, Entries: refs, SavedByAdmin: se.Admin}) {
+	if !d.saveChain(ctx, w, store.Chain{Scope: store.ScopeTeam, TeamID: t.ID, Entries: refs, SavedByAdmin: se.Admin}) {
 		return
 	}
-	detail := "team " + t.Name + ": " + entryNames(refs, in.Entries)
-	if set == store.ChainB {
-		detail = "scope=team team=" + t.Name + " entries=" + entryNames(refs, in.Entries)
-	}
-	d.Log.Info(chainLog(set), "chain", "team", "team", t.ID, "by", se.Username)
-	d.audit(ctx, se, chainAudit(set), "", "", detail)
-	d.writeTeamChain(w, r, se, t, role, set)
+	d.Log.Info("dashboard: model chain changed", "chain", "team", "team", t.ID, "by", se.Username)
+	d.audit(ctx, se, "chain_changed", "", "", "team "+t.Name+": "+entryNames(refs, in.Entries))
+	d.writeTeamChain(w, r, se, t, role)
 }

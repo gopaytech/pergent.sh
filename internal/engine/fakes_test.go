@@ -259,6 +259,10 @@ type testEnv struct {
 	Engine *Engine
 
 	logs lockedWriter
+	// background counts the work the HTTP side starts that outlives its
+	// request (server.Deps.Background). The schema is dropped only once it
+	// is done: a usage write still running then deadlocks with the drop.
+	background sync.WaitGroup
 
 	clockMu sync.Mutex
 	now     time.Time
@@ -310,6 +314,9 @@ func newTestEnv(t *testing.T) *testEnv {
 		// Wall time, so the runs' created_at (set by the database) is "now".
 		now: time.Now().UTC().Truncate(time.Second),
 	}
+	// Cleanups run last first: this one runs after an e2e server closes
+	// (no request can start more work) and before the schema is dropped.
+	t.Cleanup(env.background.Wait)
 	env.Engine = &Engine{
 		Store:     st,
 		Config:    cfg,

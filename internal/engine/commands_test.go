@@ -770,6 +770,49 @@ func TestCommandOfABotIsDropped(t *testing.T) {
 	}
 }
 
+// When pergent.sh can't say whether the author is a bot (no user ID, or
+// GitLab sends no bot attribute and the username is not a token bot's), the
+// command is dropped as a bot's is: a 👎, no reply, no run and no access
+// lookup. It is not tried again.
+func TestCommandWhenBotStatusIsUnknownIsDropped(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		userID int64
+	}{
+		{"no bot attribute", userDeveloper},
+		{"no user ID", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCommandFixture(t)
+			f.review(skillOf(t, "security", "no_blocking_issues"))
+			f.GitLab.Reply(http.MethodGet, userPath(userDeveloper), http.StatusOK, map[string]any{"id": userDeveloper, "username": "dev"})
+
+			c := f.sayAs(1, "dev", tc.userID, "review", "", "", time.Now())
+			f.run()
+
+			f.wantReactions(1, c, eyes, down)
+			f.wantReplies(1)
+			if n := len(f.queued()); n != 0 {
+				t.Errorf("%d runs queued when pergent.sh can't say whether the author is a bot", n)
+			}
+			if n := len(f.GitLab.Requests(http.MethodGet, membersPath(tc.userID))); n != 0 {
+				t.Errorf("the author's access was looked up %d times", n)
+			}
+			if !strings.Contains(f.Logs(), "dropped: pergent.sh can't say whether the author is a bot") {
+				t.Errorf("no log line gives the reason:\n%s", f.Logs())
+			}
+
+			// Not tried again: a later pass does nothing more.
+			f.SetNow(f.Now().Add(10 * time.Minute))
+			f.run()
+			f.wantReactions(1, c, eyes, down)
+			if n := len(f.queued()); n != 0 {
+				t.Errorf("%d runs queued on a later pass", n)
+			}
+		})
+	}
+}
+
 // When GitLab can't say whether the author is a bot, nothing is done and the
 // command is tried again, then given up on (never run).
 func TestCommandWhenTheAuthorCannotBeReadIsRetried(t *testing.T) {
@@ -2172,6 +2215,7 @@ func TestWhoMayOutcome(t *testing.T) {
 		store.CommandNoop("help"):                      false,
 		store.CommandThrottled:                         false,
 		dropped("the author is a bot").outcome:         false,
+		dropped(whyBotUnknown).outcome:                 false,
 		"gave up: boom":                                false,
 	} {
 		if got := whoMayOutcome(outcome); got != want {

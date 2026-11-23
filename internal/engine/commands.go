@@ -94,6 +94,10 @@ const (
 	whyUntrusted = "author not trusted"
 )
 
+// whyBotUnknown drops the command of an author when the platform can't say
+// whether the author is a bot ("dropped: " + why), as a bot's is dropped.
+const whyBotUnknown = "pergent.sh can't say whether the author is a bot"
+
 // replyOnlyAuthorAndMaintainers is the gate's refusal reply. term is what the
 // platform calls a change (changeTerm).
 func replyOnlyAuthorAndMaintainers(term string) string {
@@ -440,11 +444,15 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 		return dropped("the repository is not switched on"), nil
 	}
 	// GitLab project, group and service-account bots are no person whatever
-	// their comments say: asked of the platform, and when it can't say the
-	// command is tried again, never acted on.
-	if bot, err := plat.Forge.IsBot(ctx, cmd.AuthorID); err != nil {
+	// their comments say: asked of the platform. When its answer can't say
+	// whether the author is a bot, the command is dropped as a bot's is; when
+	// the request fails, the command is tried again, never acted on.
+	switch bot, err := plat.Forge.IsBot(ctx, cmd.AuthorID); {
+	case errors.Is(err, forge.ErrBotUnknown):
+		return dropped(whyBotUnknown), nil
+	case err != nil:
 		return verdict{}, fmt.Errorf("check that the commenter is a person: %w", err)
-	} else if bot {
+	case bot:
 		return dropped("the author is a bot"), nil
 	}
 	// A dismissal in a thread names no ID (its thread says which finding), and
@@ -629,7 +637,7 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 	switch res.Status {
 	case actions.RerunNothingFailed:
 		return noop("nothing failed", replyNothingFailed), nil
-	case actions.RerunQuotaUsedUp:
+	case actions.RerunQuotaUsedUp, actions.RerunTeamLimit:
 		return c.refuseQuota(ctx), nil
 	case actions.RerunCapped:
 		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil
@@ -700,7 +708,7 @@ func (c *commandRun) start(ctx context.Context) (verdict, error) {
 		return verdict{}, err
 	}
 	switch res.Status {
-	case actions.RerunQuotaUsedUp:
+	case actions.RerunQuotaUsedUp, actions.RerunTeamLimit:
 		return c.refuseQuota(ctx), nil
 	case actions.RerunCapped:
 		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil

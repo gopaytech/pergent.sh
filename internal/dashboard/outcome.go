@@ -68,7 +68,7 @@ func judge(r store.RunDigest) judged {
 		if r.SkipReason == store.WaitCIPending {
 			return judged{OutcomeWaiting, reasonWaitingCI, ""}
 		}
-		if r.SkipReason == store.WaitQuota {
+		if r.SkipReason == store.WaitQuota || r.SkipReason == store.WaitLimit {
 			return judged{OutcomeWaiting, reasonQuotaUsedUp, ""}
 		}
 		return judged{OutcomeWaiting, reasonWaitingStart, ""}

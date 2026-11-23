@@ -22,7 +22,9 @@ const (
 	ReasonNotOwner      = "not_owner"      // a team entry of a team that doesn't own the repository
 	ReasonKeyUnusable   = "key_unusable"   // no key, or it can't be opened
 	ReasonInstanceQuota = "instance_quota" // a global entry, and the instance's token quota is used up
-	ReasonSameModel     = "same_model"     // the model Avoid names: a panel's member A runs on it
+	ReasonSameModel     = "same_model"     // a model Avoid names: an earlier reviewer runs on it
+	ReasonModelLimit    = "model_limit"    // a global entry whose model limit is used up this month
+	ReasonTeamLimit     = "team_limit"     // the owner team's limit on the entry is used up this month
 )
 
 // SameModel is a provider and a model. Two entries with the same ones are one
@@ -35,13 +37,25 @@ func (s SameModel) is(m instances.Model) bool {
 	return s != SameModel{} && strings.EqualFold(s.Provider, m.LLM.Provider) && strings.EqualFold(s.Model, m.LLM.Model)
 }
 
+// avoided reports whether m runs on any model of avoid.
+func avoided(avoid []SameModel, m instances.Model) bool {
+	for _, s := range avoid {
+		if s.is(m) {
+			return true
+		}
+	}
+	return false
+}
+
 // Input is everything Resolve reads. Entries holds every entry known now,
 // with its key ("" when it has none or it can't be opened); a ref missing
 // from it is a removed entry. OwnerTeam is the team that owns the repository,
 // 0 for none. Tried is the entries earlier attempts of this review ran.
 // SavedByAdmin is whether an admin saved the chain (store.Chain's). Avoid
-// is a model no entry may run on (a panel's member B avoids member A's); the
-// zero value avoids none.
+// is the models no entry may run on (reviewer k avoids the models reviewers
+// 1 to k-1 run on); nil, or a zero SameModel, avoids none. ModelLimitUsedUp
+// and TeamLimitUsedUp are the entries whose model limit, or whose limit for
+// OwnerTeam, is used up this month; LoadSet reads them.
 type Input struct {
 	Scope               string // store.ScopeGlobal, ScopeTeam or ScopeRepo
 	Refs                []store.EntryRef
@@ -51,7 +65,9 @@ type Input struct {
 	Marks               map[store.EntryRef]store.Mark
 	Tried               map[store.EntryRef]bool
 	InstanceQuotaUsedUp bool
-	Avoid               SameModel
+	ModelLimitUsedUp    map[store.EntryRef]bool
+	TeamLimitUsedUp     map[store.EntryRef]bool
+	Avoid               []SameModel
 	Now                 time.Time
 }
 
@@ -65,8 +81,9 @@ type Skip struct {
 // Decision is what the attempt does. With an entry to run, Entry and Ref are
 // it, Position its place in the chain (from 1) and FirstSkip why position 1
 // was passed over ("" when it runs). Otherwise exactly one of Wait (the chain
-// is empty: wait as with no model), Hold (only the instance quota stopped
-// entries: hold on it) and Exhausted (fail) is set. Length is the chain's.
+// is empty: wait as with no model), Hold (only quotas and limits stopped the
+// entries it has not tried: hold on them; Limited is set when a model or team
+// limit is one of them) and Exhausted (fail) is set. Length is the chain's.
 type Decision struct {
 	Entry     instances.Model
 	Ref       store.EntryRef
@@ -76,6 +93,7 @@ type Decision struct {
 	Skips     []Skip
 	Wait      bool
 	Hold      bool
+	Limited   bool
 	Exhausted bool
 }
 
@@ -105,21 +123,35 @@ func Resolve(in Input) Decision {
 		}
 		d.Skips = append(d.Skips, Skip{Ref: ref, Name: name, Reason: reason})
 	}
-	d.Hold = true
-	for _, s := range d.Skips {
-		if s.Reason != ReasonInstanceQuota {
-			d.Hold = false
-			break
-		}
-	}
+	d.Hold, d.Limited = holds(d.Skips)
 	d.Exhausted = !d.Hold
 	return d
 }
 
+// holds reports whether skips hold the review rather than fail it: a quota or
+// a limit, which frees up, stopped at least one entry, and every other entry
+// is one this review already tried. A mark, a bad key or any other reason
+// fails it. limited is whether a model or team limit is among them.
+func holds(skips []Skip) (hold, limited bool) {
+	for _, s := range skips {
+		switch s.Reason {
+		case ReasonModelLimit, ReasonTeamLimit:
+			hold, limited = true, true
+		case ReasonInstanceQuota:
+			hold = true
+		case ReasonTried:
+		default:
+			return false, false
+		}
+	}
+	return hold, hold && limited
+}
+
 // skipReason is why ref is passed over, "" when it runs. A live mark comes
 // before tried, so the entry an earlier attempt fell back from reads as its
-// class (the footer says why); the instance quota comes last, so a hold
-// waits only for entries that could run once it frees up.
+// class (the footer says why); the instance quota and the limits come last, so a hold
+// waits only for entries that could run once it frees up. A limit stops a
+// 1-entry chain too: marks come from provider errors, limits are a budget.
 func skipReason(in Input, ref store.EntryRef, m instances.Model, known bool) string {
 	switch {
 	case !known:
@@ -128,7 +160,7 @@ func skipReason(in Input, ref store.EntryRef, m instances.Model, known bool) str
 		return ReasonNotAllowed
 	case ref.Source == store.SourceTeam && (in.OwnerTeam == 0 || m.TeamID != in.OwnerTeam):
 		return ReasonNotOwner
-	case in.Avoid.is(m):
+	case avoided(in.Avoid, m):
 		return ReasonSameModel
 	}
 	if mk, ok := in.Marks[ref]; ok && len(in.Refs) > 1 && live(mk, in.Now) {
@@ -141,6 +173,10 @@ func skipReason(in Input, ref store.EntryRef, m instances.Model, known bool) str
 		return ReasonKeyUnusable
 	case ref.Source == store.SourceGlobal && in.InstanceQuotaUsedUp:
 		return ReasonInstanceQuota
+	case ref.Source == store.SourceGlobal && in.ModelLimitUsedUp[ref]:
+		return ReasonModelLimit
+	case in.TeamLimitUsedUp[ref]:
+		return ReasonTeamLimit
 	}
 	return ""
 }
@@ -151,6 +187,28 @@ func EntryReason(in Input, ref store.EntryRef) string {
 	m, known := in.Entries[ref]
 	return skipReason(in, ref, m, known)
 }
+
+// PastAdminLimits drops what an admin's start goes past: the instance quota,
+// the model limits and the team limits on global entries. A team's own limit
+// on its team entry stays: that is the team's money. The maps of the Input it
+// was copied from are not changed.
+func (in *Input) PastAdminLimits() {
+	in.InstanceQuotaUsedUp, in.ModelLimitUsedUp = false, nil
+	var own map[store.EntryRef]bool
+	for ref := range in.TeamLimitUsedUp {
+		if ref.Source == store.SourceTeam {
+			if own == nil {
+				own = map[store.EntryRef]bool{}
+			}
+			own[ref] = true
+		}
+	}
+	in.TeamLimitUsedUp = own
+}
+
+// IgnoreLimits drops every model and team limit: Job P's judge ends a review
+// that has started, as a running review finishes after a quota runs out.
+func (in *Input) IgnoreLimits() { in.ModelLimitUsedUp, in.TeamLimitUsedUp = nil, nil }
 
 // teamSaved reports whether the chain is held to what teams may use: a team
 // chain, or the chain of a repository a team owns that a team's maintainer
@@ -181,7 +239,9 @@ var reasonWords = map[string]string{
 	ReasonNotOwner:      "its team doesn't own this repository",
 	ReasonKeyUnusable:   "no usable key",
 	ReasonInstanceQuota: "instance token quota used up",
-	ReasonSameModel:     "the model the other review runs on",
+	ReasonSameModel:     "the model another reviewer runs on",
+	ReasonModelLimit:    "model limit used up",
+	ReasonTeamLimit:     "team limit used up",
 }
 
 // ReasonWords is reason as words.

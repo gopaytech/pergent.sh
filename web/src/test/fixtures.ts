@@ -23,6 +23,7 @@ import type {
   RepositoryView,
   RepoTeamsView,
   ReviewDetailView,
+  ReviewersView,
   ReviewSummary,
   Role,
   RunDetailView,
@@ -31,6 +32,7 @@ import type {
   SignInAdminView,
   SkillResultView,
   SkillTokensView,
+  TeamLimitsView,
   TeamModelsView,
   TeamModelView,
   TeamView,
@@ -352,7 +354,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   waiting: [],
   instanceTrustedAuthorsOnly: "follow_visibility",
   model: "anthropic / claude-sonnet",
-  panel: { on: false, mode: "inherit" },
+  multiReview: { on: false, reviewers: 1, judge: "" },
   // Only an admin is given the usage against the quotas.
   quota: null,
   graph: {
@@ -591,6 +593,9 @@ export const modelSonnet: ModelAdminView = {
   repositories: [],
   usedIn: ["global chain"],
   mark: null,
+  limit: null,
+  used: 0,
+  teamLimits: [],
 };
 export const modelOpus: ModelAdminView = {
   id: "m-opus",
@@ -605,6 +610,9 @@ export const modelOpus: ModelAdminView = {
   repositories: [{ instance: "main", project: "acme/payments" }],
   usedIn: ["main/acme/payments"],
   mark: null,
+  limit: null,
+  used: 0,
+  teamLimits: [],
 };
 
 // The list of models: three repositories follow the default.
@@ -1084,6 +1092,15 @@ export const teamModelsPayments: TeamModelsView = {
   models: [teamModelQwen],
 };
 
+// Payments' limits as its maintainer sees them: its own entry near its
+// limit, and an admin's limit for it on a global entry whose model limit is
+// used up.
+export const teamLimitsPayments: TeamLimitsView = {
+  team: { id: 2, name: "Payments" },
+  models: [{ id: "t-qwen", name: "qwen3.5", limit: 500, used: 450 }],
+  global: [{ id: "m-sonnet", name: "Claude Sonnet", limit: 1000, used: 150, modelLimit: "used_up" }],
+};
+
 // Payments' own chain: its entry, then a global entry teams may use.
 export const chainTeam: ChainView = {
   scope: "team",
@@ -1135,26 +1152,23 @@ export const builtInRules: BuiltInRule[] = [
   { name: "ts_js", paths: ["**/*.ts", "**/*.js"], rule: "Check for floating promises." },
 ];
 
-// Chain B of acme/payments while nothing is set anywhere: no entries.
-export const panelRepoInherit: ChainView = {
-  ...chainRepoInherit,
-  source: "global",
-  team: "",
-  mode: "inherit",
-  entries: [],
-};
+// acme/payments' reviewers while it has only reviewer 1, as an admin of it
+// sees them.
+export const reviewersNone: ReviewersView = { readOnly: false, reviewers: [], judge: null, warnings: [], addRefusal: "" };
 
-// Its own chain B: Opus.
-export const panelRepoCustom: ChainView = {
+// reviewerChain is a reviewer chain (or a judge chain) of acme/payments with
+// entries, as an admin of it sees it: every global entry and the team's are
+// choices.
+export const reviewerChain = (...entries: ChainEntryView[]): ChainView => ({
   ...chainRepoCustom,
-  mode: "custom",
-};
+  savedByAdmin: false,
+  entries: entries.map((e, i) => ({ ...e, position: i + 1 })),
+});
 
-// The panel switched off for the repository.
-export const panelRepoOff: ChainView = {
-  ...chainRepoInherit,
-  source: "repository",
-  team: "",
-  mode: "off",
-  entries: [],
-};
+// reviewersWith is acme/payments with reviewers 2.. (each chain's entries
+// in order) and a judge.
+export const reviewersWith = (extra: ChainEntryView[][], judge: ChainEntryView[]): ReviewersView => ({
+  ...reviewersNone,
+  reviewers: extra.map((e, i) => ({ number: i + 2, chain: reviewerChain(...e) })),
+  judge: reviewerChain(...judge),
+});

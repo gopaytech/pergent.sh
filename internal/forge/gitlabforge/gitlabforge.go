@@ -274,10 +274,11 @@ func (f *Forge) AccessLevel(ctx context.Context, projectID int64, _ string, user
 }
 
 // IsBot reads the user from GitLab and tells whether it marks it as a bot. A
-// user without an ID is not one (it has no access either).
+// user without an ID, or one whose GitLab answer can't say whether it is a
+// bot, is forge.ErrBotUnknown.
 func (f *Forge) IsBot(ctx context.Context, userID int64) (bool, error) {
 	if userID == 0 {
-		return false, nil
+		return false, forge.ErrBotUnknown
 	}
 	bot, err := f.c.UserIsBot(ctx, userID)
 	return bot, mapErr(err)
@@ -388,6 +389,8 @@ func mapErr(err error) error {
 		return &mapped{err: err, sentinel: forge.ErrNotFound}
 	case errors.Is(err, gitlab.ErrHeadMoved):
 		return &mapped{err: err, sentinel: forge.ErrHeadMoved}
+	case errors.Is(err, gitlab.ErrBotUnknown):
+		return &mapped{err: err, sentinel: forge.ErrBotUnknown}
 	default:
 		return err
 	}

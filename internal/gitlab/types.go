@@ -195,6 +195,9 @@ var (
 	ErrForbidden = errors.New("gitlab: forbidden")
 	// ErrHeadMoved is returned by Approve when the MR head is no longer the given SHA.
 	ErrHeadMoved = errors.New("gitlab: merge request head moved")
+	// ErrBotUnknown is returned by UserIsBot when GitLab sends no bot
+	// attribute and the username is not one of GitLab's bot names.
+	ErrBotUnknown = errors.New("gitlab: pergent.sh can't say whether the user is a bot")
 	// ErrPartialDiff is returned when a diff may not list every changed
 	// file: using it as the whole diff would drop files silently.
 	ErrPartialDiff = errors.New("gitlab: the diff may be incomplete")

@@ -12,6 +12,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -29,20 +30,20 @@ const (
 	msgUnknownEntry     = "every entry must be an entry of the list"
 	msgGlobalOnly       = "the global chain holds global entries only"
 	msgConfigFirst      = "the config file's entries stay at the front of the global chain, in their order"
-	msgGlobalBOnly      = "the global chain B holds dashboard entries only"
 	msgForeignTeamEntry = "a team's entry can be in its own team's chain and in the chains of repositories the team owns, nowhere else"
 	msgNotTeamsMayUse   = "teams may not use this global entry: an admin can turn on teams may use"
-	msgNoPanelImage     = "no review image supports a review panel yet"
 )
 
-// panelImageRefusal is the 400's message when a chain B can't be saved
-// because jobs.image runs no pergent with a review panel; "" when it can.
-func (d *Dashboard) panelImageRefusal() string {
+// reviewerImageRefusal is the 400's message when a save can't add a
+// reviewer because jobs.image runs no pergent with multi review; "" when it
+// can. While the floor is unset, no pergent release has multi review yet,
+// so every image is refused.
+func (d *Dashboard) reviewerImageRefusal() string {
 	if ok, _ := config.PanelImage(d.cfg.Jobs.Image); ok {
 		return ""
 	}
 	if config.PanelMinVersion == "" {
-		return msgNoPanelImage
+		return msgNoReviewerImage
 	}
 	tag := config.ImageTag(d.cfg.Jobs.Image)
 	switch _, known := result.VersionAtLeast(tag, config.PanelMinVersion); {
@@ -51,23 +52,7 @@ func (d *Dashboard) panelImageRefusal() string {
 	case !known:
 		tag += " (not a version)"
 	}
-	return "chain B needs a review image with pergent " + config.PanelMinVersion + " or later; jobs.image is " + tag
-}
-
-// chainAudit is the audit action of a change to a chain of set.
-func chainAudit(set store.ChainSet) string {
-	if set == store.ChainB {
-		return "panel_chain_changed"
-	}
-	return "chain_changed"
-}
-
-// chainLog is the log line of a change to a chain of set.
-func chainLog(set store.ChainSet) string {
-	if set == store.ChainB {
-		return "dashboard: panel chain changed"
-	}
-	return "dashboard: model chain changed"
+	return "a second reviewer needs a review image with pergent " + config.PanelMinVersion + " or later; jobs.image is " + tag
 }
 
 // entryNamePattern is what an entry name may hold. A name reaches the MR
@@ -168,8 +153,6 @@ type shownChain struct {
 	team          string
 	in            chain.Input
 	fixed         int
-	// mode is a repository's chain B mode (ChainView.Mode); "" otherwise.
-	mode string
 }
 
 // chainEntries reads the entries every chain view needs: every entry known
@@ -185,6 +168,18 @@ func (d *Dashboard) chainEntries(ctx context.Context) (chain.Input, error) {
 	}
 	in.Marks = marks
 	return in, nil
+}
+
+// chainViewLimits puts on in the limits used up this month for the
+// repositories team owns (0: the model limits alone), so a chain view tags an
+// entry at its limit as the resolver skips it (chain.EntryReason).
+func (d *Dashboard) chainViewLimits(ctx context.Context, in *chain.Input, team int64) error {
+	lim, err := quota.ReadLimits(ctx, d.Store, in.Now, team)
+	if err != nil {
+		return err
+	}
+	in.ModelLimitUsedUp, in.TeamLimitUsedUp = lim.Model, lim.Team
+	return nil
 }
 
 // entryView is ref as a chain shows it, at position pos (0 for a choice).
@@ -208,7 +203,7 @@ func entryView(in chain.Input, ref store.EntryRef, pos int, teams map[int64]stri
 // in the chain; nil makes the view read-only.
 func (d *Dashboard) chainView(c shownChain, choices []instances.Model, teams map[int64]string, canClear func(store.EntryRef) bool) ChainView {
 	v := ChainView{Scope: c.scope, Source: c.source, Team: c.team, ReadOnly: choices == nil, SavedByAdmin: c.in.SavedByAdmin,
-		Mode: c.mode, Entries: make([]ChainEntryView, 0, len(c.in.Refs)), Choices: []ChainEntryView{}}
+		Entries: make([]ChainEntryView, 0, len(c.in.Refs)), Choices: []ChainEntryView{}}
 	for i, ref := range c.in.Refs {
 		v.Entries = append(v.Entries, entryView(c.in, ref, i+1, teams, canClear))
 	}
@@ -236,11 +231,17 @@ func decodeChain(r *http.Request) ([]store.EntryRef, string) {
 	if err := decodeStrict(r, &in); err != nil || in.Entries == nil {
 		return nil, msgBadChainBody
 	}
-	out := make([]store.EntryRef, 0, len(in.Entries))
+	return refsOf(in.Entries, msgBadChainBody)
+}
+
+// refsOf is one chain of a PUT body as refs; msg is the 400's message when
+// an entry is wrong (bad) or in the chain twice.
+func refsOf(in []entryInput, bad string) ([]store.EntryRef, string) {
+	out := make([]store.EntryRef, 0, len(in))
 	seen := map[store.EntryRef]bool{}
-	for _, e := range in.Entries {
+	for _, e := range in {
 		if (e.Source != store.SourceGlobal && e.Source != store.SourceTeam) || e.ID == "" {
-			return nil, msgBadChainBody
+			return nil, bad
 		}
 		ref := store.EntryRef{Source: e.Source, ID: e.ID}
 		if seen[ref] {
@@ -294,30 +295,19 @@ func entryNames(refs []store.EntryRef, known map[store.EntryRef]instances.Model)
 	return strings.Join(names, ", ")
 }
 
-// saveChain stores c in set, or answers the error: 400 for a chain too long
-// or a team entry removed meanwhile, 500 otherwise. ok is false when it
+// saveChain stores c in chain A, or answers the error: 400 for a chain too
+// long or a team entry removed meanwhile, 500 otherwise. ok is false when it
 // answered. It is every chain save's last step, after the rights and the
-// entries are checked: a chain B with entries needs a review image with a
-// panel (400 otherwise). An empty one is no chain B, so it needs none.
-func (d *Dashboard) saveChain(ctx context.Context, w http.ResponseWriter, set store.ChainSet, c store.Chain) bool {
-	if set == store.ChainB && len(c.Entries) > 0 {
-		if msg := d.panelImageRefusal(); msg != "" {
-			writeError(w, http.StatusBadRequest, msg)
-			return false
-		}
-	}
-	err := d.Store.SaveChainOf(ctx, set, c, d.now())
+// entries are checked.
+func (d *Dashboard) saveChain(ctx context.Context, w http.ResponseWriter, c store.Chain) bool {
+	err := d.Store.SaveChainOf(ctx, store.ChainA, c, d.now())
 	switch {
 	case errors.Is(err, store.ErrChainTooLong):
 		writeError(w, http.StatusBadRequest, msgChainTooLong)
 	case errors.Is(err, store.ErrModelNotFound):
 		writeError(w, http.StatusBadRequest, msgUnknownEntry)
 	case err != nil:
-		if set == store.ChainB {
-			d.Log.Error("dashboard: saving a panel chain failed", "scope", c.Scope, "error", d.registry.Redact(err.Error()))
-		} else {
-			d.Log.Error("dashboard: saving a model chain failed", "scope", c.Scope, "error", d.registry.Redact(err.Error()))
-		}
+		d.Log.Error("dashboard: saving a model chain failed", "scope", c.Scope, "error", d.registry.Redact(err.Error()))
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 	default:
 		return true
@@ -327,21 +317,11 @@ func (d *Dashboard) saveChain(ctx context.Context, w http.ResponseWriter, set st
 
 // --- the global chain (admins) ---
 
-// globalShown is the global chain of set as it is written: chain A's
-// chain.GlobalRefs, chain B's stored chain alone (no config entries, no
-// default).
-func (d *Dashboard) globalShown(ctx context.Context, set store.ChainSet) (shownChain, error) {
+// globalShown is the global chain as it is written: chain.GlobalRefs.
+func (d *Dashboard) globalShown(ctx context.Context) (shownChain, error) {
 	in, err := d.chainEntries(ctx)
 	if err != nil {
 		return shownChain{}, err
-	}
-	if set == store.ChainB {
-		c, _, err := d.Store.ChainOf(ctx, set, store.ScopeGlobal, 0, "", "")
-		if err != nil {
-			return shownChain{}, err
-		}
-		in.Scope, in.Refs, in.SavedByAdmin = store.ScopeGlobal, c.Entries, true
-		return shownChain{scope: store.ScopeGlobal, source: store.ScopeGlobal, in: in}, nil
 	}
 	refs, fixed, _, err := chain.GlobalRefs(ctx, d.Store, d.registry)
 	if err != nil {
@@ -363,11 +343,16 @@ func (d *Dashboard) globalChoices() []instances.Model {
 	return out
 }
 
-func (d *Dashboard) writeGlobalChain(w http.ResponseWriter, r *http.Request, set store.ChainSet) {
+func (d *Dashboard) writeGlobalChain(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	c, err := d.globalShown(ctx, set)
+	c, err := d.globalShown(ctx)
 	if err != nil {
 		d.failed(w, r, "reading the global chain", err)
+		return
+	}
+	// The global chain has no owner team: only the model limits apply.
+	if err := d.chainViewLimits(ctx, &c.in, 0); err != nil {
+		d.failed(w, r, "reading the model limits", err)
 		return
 	}
 	teams, err := d.teamNames(ctx)
@@ -378,38 +363,25 @@ func (d *Dashboard) writeGlobalChain(w http.ResponseWriter, r *http.Request, set
 	writeJSON(w, http.StatusOK, d.chainView(c, d.globalChoices(), teams, adminClears))
 }
 
-// --- GET /api/admin/chain and /api/admin/panel-chain ---
+// --- GET /api/admin/chain ---
 
 func (d *Dashboard) getGlobalChain(w http.ResponseWriter, r *http.Request) {
-	d.writeGlobalChain(w, r, store.ChainA)
+	d.writeGlobalChain(w, r)
 }
 
-func (d *Dashboard) getGlobalPanelChain(w http.ResponseWriter, r *http.Request) {
-	d.writeGlobalChain(w, r, store.ChainB)
-}
+// --- PUT /api/admin/chain ---
 
-// --- PUT /api/admin/chain and /api/admin/panel-chain ---
-
+// putGlobalChain saves the global chain. The config file's entries stay in
+// front: the body may start with them, in their order, or leave them out;
+// anywhere else is 400. They count towards the 5 entries.
 func (d *Dashboard) putGlobalChain(w http.ResponseWriter, r *http.Request) {
-	d.putGlobalChainOf(w, r, store.ChainA)
-}
-
-func (d *Dashboard) putGlobalPanelChain(w http.ResponseWriter, r *http.Request) {
-	d.putGlobalChainOf(w, r, store.ChainB)
-}
-
-// putGlobalChainOf saves the global chain of set. Chain A: the config
-// file's entries stay in front: the body may start with them, in their
-// order, or leave them out; anywhere else is 400. They count towards the 5
-// entries. Chain B has no config entries.
-func (d *Dashboard) putGlobalChainOf(w http.ResponseWriter, r *http.Request, set store.ChainSet) {
 	ctx, se := r.Context(), session(r)
 	refs, msg := decodeChain(r)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	cur, err := d.globalShown(ctx, set)
+	cur, err := d.globalShown(ctx)
 	if err != nil {
 		d.failed(w, r, "reading the global chain", err)
 		return
@@ -424,12 +396,7 @@ func (d *Dashboard) putGlobalChainOf(w http.ResponseWriter, r *http.Request, set
 			return
 		}
 		if m, ok := cur.in.Entries[ref]; ok && m.Source == instances.SourceConfig {
-			// Chain B has no config entries in front to keep.
-			msg := msgConfigFirst
-			if set == store.ChainB {
-				msg = msgGlobalBOnly
-			}
-			writeError(w, http.StatusBadRequest, msg)
+			writeError(w, http.StatusBadRequest, msgConfigFirst)
 			return
 		}
 	}
@@ -441,20 +408,15 @@ func (d *Dashboard) putGlobalChainOf(w http.ResponseWriter, r *http.Request, set
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	if !d.saveChain(ctx, w, set, store.Chain{Scope: store.ScopeGlobal, Entries: refs, SavedByAdmin: true}) {
+	if !d.saveChain(ctx, w, store.Chain{Scope: store.ScopeGlobal, Entries: refs, SavedByAdmin: true}) {
 		return
 	}
 	names := entryNames(append(append([]store.EntryRef{}, fixed...), refs...), cur.in.Entries)
-	detail := "global: " + names
-	if set == store.ChainB {
-		detail = "scope=global entries=" + names
-	} else {
-		// Position 1 became the default, which the registry holds.
-		d.reloadModels(ctx, "")
-	}
-	d.Log.Info(chainLog(set), "chain", "global", "by", se.Username)
-	d.audit(ctx, se, chainAudit(set), "", "", detail)
-	d.writeGlobalChain(w, r, set)
+	// Position 1 became the default, which the registry holds.
+	d.reloadModels(ctx, "")
+	d.Log.Info("dashboard: model chain changed", "chain", "global", "by", se.Username)
+	d.audit(ctx, se, "chain_changed", "", "", "global: "+names)
+	d.writeGlobalChain(w, r)
 }
 
 // --- DELETE /api/admin/models/{id}/mark ---
@@ -498,45 +460,23 @@ const (
 	msgRepoChainWrite   = "only admins and maintainers of the repository's owner team change its model chain"
 	msgRepoChainNoOwner = "only admins change the model chain of a repository with no owner team"
 	msgEmptyRepoChain   = "a repository's chain needs an entry: reset it to inherit its owner team's or the global chain"
-	msgEmptyRepoPanel   = "a repository's chain B needs an entry: reset it to inherit, or turn it off"
 )
 
-// repoShown is the chain of set in effect for repo, as the resolver reads it
-// (chain.LoadSet): its own, else its owner team's, else the global one. Chain
-// A's global one is written out in full (chain.GlobalRefs) even with no
-// usable key. Chain B has a mode: custom (its own), off (none, source
-// "repository") or inherit. owner is its owner team, 0 for none.
-func (d *Dashboard) repoShown(ctx context.Context, repo settings.Effective, set store.ChainSet) (c shownChain, owner int64, err error) {
-	in, err := chain.LoadSet(ctx, d.Store, d.registry, d.now(), store.Run{}, repo, set)
+// repoShown is the chain in effect for repo, as the resolver reads it
+// (chain.LoadSet): its own, else its owner team's, else the global one, which
+// is written out in full (chain.GlobalRefs) even with no usable key. owner is
+// its owner team, 0 for none.
+func (d *Dashboard) repoShown(ctx context.Context, repo settings.Effective) (c shownChain, owner int64, err error) {
+	in, err := chain.LoadSet(ctx, d.Store, d.registry, d.now(), store.Run{}, repo, store.ChainA)
 	if err != nil {
 		return shownChain{}, 0, err
 	}
 	c = shownChain{scope: store.ScopeRepo, in: in}
-	if set == store.ChainB {
-		// An off repository's chain B is read before its owner team, which the
-		// rights need all the same.
-		if in.OwnerTeam, _, err = d.Store.OwnerTeam(ctx, repo.Instance, repo.Project); err != nil {
-			return shownChain{}, 0, err
-		}
-		c.in.OwnerTeam, c.mode = in.OwnerTeam, store.PanelCustom
-		if in.Scope != store.ScopeRepo {
-			mode, err := d.Store.RepoPanelMode(ctx, repo.Instance, repo.Project)
-			if err != nil {
-				return shownChain{}, 0, err
-			}
-			c.mode = store.PanelInherit
-			if mode == store.PanelOff {
-				c.mode = store.PanelOff
-			}
-		}
-	}
 	switch {
-	case in.Scope == store.ScopeRepo || c.mode == store.PanelOff:
+	case in.Scope == store.ScopeRepo:
 		c.source = "repository"
 	case in.Scope == store.ScopeTeam:
 		c.source = store.ScopeTeam
-	case set == store.ChainB:
-		c.source = store.ScopeGlobal
 	default:
 		c.source = store.ScopeGlobal
 		if c.in.Refs, c.fixed, _, err = chain.GlobalRefs(ctx, d.Store, d.registry); err != nil {
@@ -594,10 +534,10 @@ func repoClears(se Session, owner int64, choices []instances.Model, in chain.Inp
 	return teamClears(se.Admin, owner, in)
 }
 
-// writeRepoChain answers with repo's chain of set as se sees it.
-func (d *Dashboard) writeRepoChain(w http.ResponseWriter, r *http.Request, se Session, repo settings.Effective, set store.ChainSet) {
+// writeRepoChain answers with repo's chain as se sees it.
+func (d *Dashboard) writeRepoChain(w http.ResponseWriter, r *http.Request, se Session, repo settings.Effective) {
 	ctx := r.Context()
-	c, owner, err := d.repoShown(ctx, repo, set)
+	c, owner, err := d.repoShown(ctx, repo)
 	if err != nil {
 		d.failed(w, r, "reading the model chain", err)
 		return
@@ -617,23 +557,10 @@ func (d *Dashboard) writeRepoChain(w http.ResponseWriter, r *http.Request, se Se
 	writeJSON(w, http.StatusOK, d.chainView(c, choices, teams, repoClears(se, owner, choices, c.in)))
 }
 
-// --- GET .../chain and .../panel-chain ---
+// --- GET .../chain ---
 
 func (d *Dashboard) repositoryChain(w http.ResponseWriter, r *http.Request, se Session, repo settings.Effective) {
-	d.writeRepoChain(w, r, se, repo, store.ChainA)
-}
-
-func (d *Dashboard) repositoryPanelChain(w http.ResponseWriter, r *http.Request, se Session, repo settings.Effective) {
-	d.writeRepoChain(w, r, se, repo, store.ChainB)
-}
-
-// repoChainPath is the path of a repository's chain of set, after the
-// project.
-func repoChainPath(set store.ChainSet) string {
-	if set == store.ChainB {
-		return "/panel-chain"
-	}
-	return "/chain"
+	d.writeRepoChain(w, r, se, repo)
 }
 
 // repoChainTarget is the repository of a chain write, with the entries se
@@ -662,25 +589,17 @@ func (d *Dashboard) repoChainTarget(w http.ResponseWriter, r *http.Request, suff
 	return repo, choices, true
 }
 
-// --- PUT .../chain and .../panel-chain ---
+// --- PUT .../chain ---
 
-func (d *Dashboard) putRepoChain(w http.ResponseWriter, r *http.Request) {
-	d.putRepoChainOf(w, r, store.ChainA)
-}
-
-func (d *Dashboard) putRepoPanelChain(w http.ResponseWriter, r *http.Request) {
-	d.putRepoChainOf(w, r, store.ChainB)
-}
-
-// putRepoChainOf gives the repository its own chain of set, which replaces
+// putRepoChain gives the repository its own chain, which replaces
 // its owner team's for it alone. The chain records whether an admin saved
 // it: one an admin saved may keep global entries teams may not use (owner
 // ruling 2026-11-20); a maintainer's save may hold only what teams may use.
 // A repository the config file switches on has no dashboard row, and its
 // chain is saved all the same: the resolver reads it.
-func (d *Dashboard) putRepoChainOf(w http.ResponseWriter, r *http.Request, set store.ChainSet) {
+func (d *Dashboard) putRepoChain(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
-	repo, choices, ok := d.repoChainTarget(w, r, repoChainPath(set))
+	repo, choices, ok := d.repoChainTarget(w, r, "/chain")
 	if !ok {
 		return
 	}
@@ -690,11 +609,7 @@ func (d *Dashboard) putRepoChainOf(w http.ResponseWriter, r *http.Request, set s
 		return
 	}
 	if len(refs) == 0 {
-		msg := msgEmptyRepoChain
-		if set == store.ChainB {
-			msg = msgEmptyRepoPanel
-		}
-		writeError(w, http.StatusBadRequest, msg)
+		writeError(w, http.StatusBadRequest, msgEmptyRepoChain)
 		return
 	}
 	in, err := d.chainEntries(ctx)
@@ -706,99 +621,60 @@ func (d *Dashboard) putRepoChainOf(w http.ResponseWriter, r *http.Request, set s
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	if !d.saveChain(ctx, w, set, store.Chain{Scope: store.ScopeRepo, Instance: repo.Instance, Project: repo.Project,
+	if !d.saveChain(ctx, w, store.Chain{Scope: store.ScopeRepo, Instance: repo.Instance, Project: repo.Project,
 		Entries: refs, SavedByAdmin: se.Admin}) {
 		return
 	}
-	detail := "repository: " + entryNames(refs, in.Entries)
-	if set == store.ChainB {
-		detail = "scope=repo entries=" + entryNames(refs, in.Entries)
-	}
-	d.Log.Info(chainLog(set), "chain", "repository", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
-	d.audit(ctx, se, chainAudit(set), repo.Instance, repo.Project, detail)
-	d.writeRepoChain(w, r, se, repo, set)
+	d.Log.Info("dashboard: model chain changed", "chain", "repository", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
+	d.audit(ctx, se, "chain_changed", repo.Instance, repo.Project, "repository: "+entryNames(refs, in.Entries))
+	d.writeRepoChain(w, r, se, repo)
 }
 
-// --- POST .../chain/reset and .../panel-chain/reset ---
+// --- POST .../chain/reset ---
 
+// resetRepoChain drops the repository's own chain: it inherits again. Who may
+// is who may save it; it needs no image check. (DELETE on a repository's path
+// is the admins' Remove, so the reset is a POST, as the settings' is.)
 func (d *Dashboard) resetRepoChain(w http.ResponseWriter, r *http.Request) {
-	d.resetRepoChainOf(w, r, store.ChainA)
-}
-
-func (d *Dashboard) resetRepoPanelChain(w http.ResponseWriter, r *http.Request) {
-	d.resetRepoChainOf(w, r, store.ChainB)
-}
-
-// resetRepoChainOf drops the repository's own chain of set: it inherits
-// again (chain B from off too). Who may is who may save it; it needs no
-// image check. (DELETE on a repository's path is the admins' Remove, so the
-// reset is a POST, as the settings' is.)
-func (d *Dashboard) resetRepoChainOf(w http.ResponseWriter, r *http.Request, set store.ChainSet) {
 	ctx, se := r.Context(), session(r)
-	repo, _, ok := d.repoChainTarget(w, r, repoChainPath(set)+"/reset")
+	repo, _, ok := d.repoChainTarget(w, r, "/chain/reset")
 	if !ok {
 		return
 	}
-	what, detail := "model", "repository: inherit"
-	if set == store.ChainB {
-		what, detail = "panel", "scope=repo mode="+store.PanelInherit
-	}
-	if err := d.Store.ResetRepoChainOf(ctx, set, repo.Instance, repo.Project); err != nil {
-		d.Log.Error("dashboard: resetting a "+what+" chain failed", "instance", repo.Instance, "project", repo.Project, "error", err.Error())
+	if err := d.Store.ResetRepoChainOf(ctx, store.ChainA, repo.Instance, repo.Project); err != nil {
+		d.Log.Error("dashboard: resetting a model chain failed", "instance", repo.Instance, "project", repo.Project, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return
 	}
-	d.Log.Info("dashboard: "+what+" chain reset", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
-	d.audit(ctx, se, chainAudit(set), repo.Instance, repo.Project, detail)
-	d.writeRepoChain(w, r, se, repo, set)
-}
-
-// --- POST .../panel-chain/off ---
-
-// offRepoPanelChain turns the review panel off for the repository, whatever
-// its owner team's or the global chain B: its own chain B goes. Who may is
-// who may save it; it needs no image check, so it always works, on a
-// repository the config file switches on too (store.SetRepoPanelOff).
-func (d *Dashboard) offRepoPanelChain(w http.ResponseWriter, r *http.Request) {
-	ctx, se := r.Context(), session(r)
-	repo, _, ok := d.repoChainTarget(w, r, "/panel-chain/off")
-	if !ok {
-		return
-	}
-	if err := d.Store.SetRepoPanelOff(ctx, repo.Instance, repo.Project, d.now()); err != nil {
-		d.Log.Error("dashboard: turning a review panel off failed", "instance", repo.Instance, "project", repo.Project, "error", err.Error())
-		writeError(w, http.StatusInternalServerError, msgWriteFailed)
-		return
-	}
-	d.Log.Info(chainLog(store.ChainB), "chain", "repository", "instance", repo.Instance, "project", repo.Project, "mode", "off", "by", se.Username)
-	d.audit(ctx, se, chainAudit(store.ChainB), repo.Instance, repo.Project, "scope=repo mode="+store.PanelOff)
-	d.writeRepoChain(w, r, se, repo, store.ChainB)
+	d.Log.Info("dashboard: model chain reset", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
+	d.audit(ctx, se, "chain_changed", repo.Instance, repo.Project, "repository: inherit")
+	d.writeRepoChain(w, r, se, repo)
 }
 
 // repoChainSummary is what the repository view says of its chains: the
-// model ("provider / model" of position 1 of chain A in effect; "" when
-// there is none or it was removed) and the panel.
-func (d *Dashboard) repoChainSummary(ctx context.Context, repo settings.Effective) (string, PanelView, error) {
-	a, _, err := d.repoShown(ctx, repo, store.ChainA)
+// model ("provider / model" of position 1 of the chain in effect; "" when
+// there is none or it was removed) and the multi review (its count of
+// reviewers and the name of the judge chain's first entry).
+func (d *Dashboard) repoChainSummary(ctx context.Context, repo settings.Effective) (string, MultiReviewView, error) {
+	a, _, err := d.repoShown(ctx, repo)
 	if err != nil {
-		return "", PanelView{}, err
+		return "", MultiReviewView{}, err
 	}
-	b, _, err := d.repoShown(ctx, repo, store.ChainB)
+	rv, err := d.Store.Reviewers(ctx, repo.Instance, repo.Project)
 	if err != nil {
-		return "", PanelView{}, err
+		return "", MultiReviewView{}, err
 	}
-	model, nameA := "", ""
+	model := ""
 	if len(a.in.Refs) > 0 {
 		if m, ok := a.in.Entries[a.in.Refs[0]]; ok {
-			model, nameA = modelLabel(m.LLM.Provider, m.LLM.Model), m.Name
+			model = modelLabel(m.LLM.Provider, m.LLM.Model)
 		}
 	}
-	p := PanelView{On: len(b.in.Refs) > 0, Mode: b.mode}
-	if p.On {
-		p.A = nameA
-		if m, ok := b.in.Entries[b.in.Refs[0]]; ok {
-			p.B = m.Name
+	multi := MultiReviewView{On: len(rv.Extra) > 0, Reviewers: 1 + len(rv.Extra)}
+	if multi.On && len(rv.Judge.Entries) > 0 {
+		if m, ok := a.in.Entries[rv.Judge.Entries[0]]; ok {
+			multi.Judge = m.Name
 		}
 	}
-	return model, p, nil
+	return model, multi, nil
 }

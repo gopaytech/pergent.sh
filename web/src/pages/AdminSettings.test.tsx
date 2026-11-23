@@ -19,6 +19,8 @@ import {
   operator,
   ruleSets,
   ssoAdmin,
+  teamEmpty,
+  teamPayments,
   viewer,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
@@ -33,7 +35,6 @@ const routes = (me = ssoAdmin) => ({
   "GET /api/rule-sets": { body: ruleSets },
   "GET /api/admin/models": { body: models },
   "GET /api/admin/chain": { body: { ...chainGlobal, entries: [entrySonnet] } },
-  "GET /api/admin/panel-chain": { body: { ...chainGlobal, entries: [] } },
 });
 
 describe("AdminSettings comment footer", () => {
@@ -772,7 +773,83 @@ describe("AdminSettings models", () => {
     expect(opus).toHaveTextContent("In chains: main/acme/payments");
     // No key is ever in the page, nor an input for one until Replace.
     expect(within(opus).queryByLabelText("New API key")).not.toBeInTheDocument();
-    expect(within(opus).queryByRole("textbox")).not.toBeInTheDocument();
+    // The only text input is the model limit: none for a key.
+    expect(within(opus).getAllByRole("textbox").map((e) => e.getAttribute("aria-label"))).toEqual(["Model limit of Claude Opus"]);
+  });
+
+  it("shows each entry's tokens this month against its model limit, amber from 80% and red when used up", async () => {
+    fakeApi(
+      listed({
+        models: [
+          { ...modelSonnet, used: 1234 },
+          { ...modelOpus, limit: 5000, used: 4200 },
+          { ...modelOpus, id: "m-full", name: "Full", limit: 100, used: 100 },
+        ],
+      }),
+    );
+    renderApp("/admin/settings");
+    const sonnet = await entry("Claude Sonnet");
+    expect(sonnet).toHaveTextContent("Tokens this month: 1,234");
+    expect(within(sonnet).queryByRole("meter")).not.toBeInTheDocument();
+    expect(within(sonnet).getByLabelText("Model limit of Claude Sonnet")).toHaveValue("");
+    const opus = await entry("Claude Opus");
+    expect(opus).toHaveTextContent("Tokens this month: 4,200 of 5,000");
+    expect(within(opus).getByRole("meter", { name: "Tokens of Claude Opus this month" })).toHaveClass("warn");
+    expect(within(opus).getByLabelText("Model limit of Claude Opus")).toHaveValue("5000");
+    expect(within(await entry("Full")).getByRole("meter", { name: "Tokens of Full this month" })).toHaveClass("full");
+  });
+
+  it("sets a model limit with a PUT, stripped of separators, and removes it when emptied", async () => {
+    const fake = fakeApi({
+      ...listed({ models: [modelSonnet, { ...modelOpus, limit: 5000, used: 10 }] }),
+      "PUT /api/admin/models/m-opus/limit": { status: 204 },
+      "DELETE /api/admin/models/m-opus/limit": { status: 204 },
+    });
+    renderApp("/admin/settings");
+    const opus = await entry("Claude Opus");
+    const input = within(opus).getByLabelText("Model limit of Claude Opus");
+    const save = within(opus).getByRole("button", { name: "Save the model limit of Claude Opus" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "1,000,000");
+    await userEvent.click(save);
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/models/m-opus/limit")).toHaveLength(1));
+    const [put] = fake.find("PUT", "/api/admin/models/m-opus/limit");
+    expect(put.body).toEqual({ monthlyTokens: 1000000 });
+    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    // The list is read again, so the bar follows.
+    await vi.waitFor(() => expect(fake.find("GET", "/api/admin/models").length).toBeGreaterThanOrEqual(2));
+    await userEvent.clear(input);
+    await userEvent.click(save);
+    await vi.waitFor(() => expect(fake.find("DELETE", "/api/admin/models/m-opus/limit")).toHaveLength(1));
+  });
+
+  it("refuses a limit that is not a whole number, and shows the server's refusal", async () => {
+    const fake = fakeApi({
+      ...listed(),
+      "PUT /api/admin/models/m-opus/limit": { status: 400, body: { error: "monthlyTokens must be a whole number from 1 to 1000000000000000" } },
+    });
+    renderApp("/admin/settings");
+    const opus = await entry("Claude Opus");
+    const input = within(opus).getByLabelText("Model limit of Claude Opus");
+    await userEvent.type(input, "5M");
+    await userEvent.click(within(opus).getByRole("button", { name: "Save the model limit of Claude Opus" }));
+    expect(await within(opus).findByText("The limit is a whole number from 1 to 1000000000000000, or empty.")).toBeInTheDocument();
+    expect(fake.find("PUT", "/api/admin/models/m-opus/limit")).toHaveLength(0);
+    await userEvent.clear(input);
+    await userEvent.type(input, "7");
+    await userEvent.click(within(opus).getByRole("button", { name: "Save the model limit of Claude Opus" }));
+    expect(await within(opus).findByRole("alert")).toHaveTextContent("monthlyTokens must be a whole number");
+  });
+
+  it("limits the config file's entry too", async () => {
+    const config: ModelAdminView = { ...modelSonnet, id: "config", source: "config", default: true, name: "anthropic/claude-sonnet" };
+    const fake = fakeApi({ ...listed({ canSetDefault: false, models: [config] }), "PUT /api/admin/models/config/limit": { status: 204 } });
+    renderApp("/admin/settings");
+    const row = await entry("anthropic/claude-sonnet");
+    await userEvent.type(within(row).getByLabelText("Model limit of anthropic/claude-sonnet"), "900");
+    await userEvent.click(within(row).getByRole("button", { name: "Save the model limit of anthropic/claude-sonnet" }));
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/models/config/limit")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/admin/models/config/limit")[0].body).toEqual({ monthlyTokens: 900 });
   });
 
   it("shows a name, provider or model as text, never as HTML", async () => {
@@ -1022,13 +1099,17 @@ describe("AdminSettings models", () => {
     expect(await within(row).findByRole("alert")).toHaveTextContent("could not save");
   });
 
-  it("gives the config file's entry no controls, and says where to change it", async () => {
+  it("gives the config file's entry no controls but its limit, and says where to change it", async () => {
     const config: ModelAdminView = { ...modelSonnet, id: "config", source: "config", default: true, name: "anthropic/claude-sonnet" };
     fakeApi(listed({ canSetDefault: false, models: [config, { ...modelOpus, default: false }] }));
     renderApp("/admin/settings");
     const row = await entry("anthropic/claude-sonnet");
     expect(row).toHaveTextContent("from the config file");
-    expect(within(row).queryByRole("button")).not.toBeInTheDocument();
+    // Only its limits can be changed here: the model limit and the team limits (the fold button has no label).
+    expect(within(row).getAllByRole("button").map((e) => e.getAttribute("aria-label") ?? e.textContent)).toEqual([
+      "Save the model limit of anthropic/claude-sonnet",
+      "Team limits (0)",
+    ]);
     expect(within(row).queryByRole("switch")).not.toBeInTheDocument();
     // The config's llm: block is the default, but entries can still be
     // added, changed and removed.
@@ -1073,6 +1154,82 @@ describe("AdminSettings models", () => {
     fakeApi({ ...routes(operator), "GET /api/admin/models": { status: 500, body: { error: "boom" } } });
     renderApp("/admin/settings");
     expect(await screen.findByText("boom")).toBeInTheDocument();
+  });
+});
+
+describe("AdminSettings team limits", () => {
+  const opusLimited: ModelAdminView = { ...modelOpus, limit: 5000, used: 4200, teamLimits: [{ teamId: 2, team: "Payments", limit: 400, used: 350 }] };
+  const page = (extra: Parameters<typeof fakeApi>[0] = {}) =>
+    fakeApi({
+      ...routes(operator),
+      "GET /api/admin/models": { body: { ...models, models: [modelSonnet, opusLimited] } },
+      "GET /api/teams": { body: [teamPayments, teamEmpty] },
+      ...extra,
+    });
+  // open unfolds the team limits of the entry name and returns the list.
+  const open = async (name: string) => {
+    const row = await screen.findByRole("group", { name });
+    await userEvent.click(within(row).getByRole("button", { name: /^Team limits/ }));
+    return within(row).getByRole("group", { name: `Team limits on ${name}` });
+  };
+
+  it("folds the team limits until opened, then lists each with its team's tokens", async () => {
+    const fake = page();
+    renderApp("/admin/settings");
+    const row = await screen.findByRole("group", { name: "Claude Opus" });
+    const toggle = within(row).getByRole("button", { name: "Team limits (1)" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(row).queryByRole("group", { name: "Team limits on Claude Opus" })).not.toBeInTheDocument();
+    // The teams are read only when the list is opened.
+    expect(fake.find("GET", "/api/teams")).toHaveLength(0);
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const payments = within(within(row).getByRole("group", { name: "Team limits on Claude Opus" })).getByRole("group", { name: "Team Payments" });
+    expect(payments).toHaveTextContent("Tokens this month: 350 of 400");
+    expect(within(payments).getByRole("meter", { name: "Tokens of Payments on Claude Opus this month" })).toHaveClass("warn");
+    expect(within(payments).getByLabelText("Limit of Payments on Claude Opus")).toHaveValue("400");
+    expect(within(await screen.findByRole("group", { name: "Claude Sonnet" })).getByRole("button", { name: "Team limits (0)" })).toBeInTheDocument();
+  });
+
+  it("changes and removes a team's limit with the admin routes", async () => {
+    const fake = page({
+      "PUT /api/admin/models/m-opus/team-limits/2": { status: 204 },
+      "DELETE /api/admin/models/m-opus/team-limits/2": { status: 204 },
+    });
+    renderApp("/admin/settings");
+    const payments = within(await open("Claude Opus")).getByRole("group", { name: "Team Payments" });
+    const input = within(payments).getByLabelText("Limit of Payments on Claude Opus");
+    await userEvent.clear(input);
+    await userEvent.type(input, "800");
+    await userEvent.click(within(payments).getByRole("button", { name: "Save the limit of Payments on Claude Opus" }));
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/models/m-opus/team-limits/2")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/admin/models/m-opus/team-limits/2")[0].body).toEqual({ monthlyTokens: 800 });
+    await userEvent.click(within(payments).getByRole("button", { name: "Remove the limit of Payments on Claude Opus" }));
+    await vi.waitFor(() => expect(fake.find("DELETE", "/api/admin/models/m-opus/team-limits/2")).toHaveLength(1));
+  });
+
+  it("adds a limit for a team that has none, and offers no team twice", async () => {
+    const fake = page({ "PUT /api/admin/models/m-opus/team-limits/3": { status: 204 } });
+    renderApp("/admin/settings");
+    const list = await open("Claude Opus");
+    const pick = await within(list).findByRole("combobox", { name: "Team to limit on Claude Opus" });
+    // Payments has a limit on it already: only Platform is offered.
+    expect(within(pick).getAllByRole("option").map((o) => o.textContent)).toEqual(["Pick a team", "Platform"]);
+    const add = within(list).getByRole("button", { name: "Add a team limit on Claude Opus" });
+    await userEvent.click(add);
+    expect(within(list).getByText("Pick a team and type its limit: a whole number from 1 to 1000000000000000.")).toBeInTheDocument();
+    expect(fake.find("PUT", "/api/admin/models/m-opus/team-limits/3")).toHaveLength(0);
+    await userEvent.selectOptions(pick, "Platform");
+    await userEvent.type(within(list).getByLabelText("New team limit on Claude Opus"), "300");
+    await userEvent.click(add);
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/models/m-opus/team-limits/3")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/admin/models/m-opus/team-limits/3")[0].body).toEqual({ monthlyTokens: 300 });
+  });
+
+  it("shows the error when the teams can't be read", async () => {
+    page({ "GET /api/teams": { status: 500, body: { error: "boom" } } });
+    renderApp("/admin/settings");
+    expect(await within(await open("Claude Opus")).findByRole("alert")).toHaveTextContent("boom");
   });
 });
 
@@ -1142,36 +1299,13 @@ describe("AdminSettings access", () => {
   });
 });
 
-describe("AdminSettings global chain B", () => {
-  const panel: ChainView = { ...chainGlobal, entries: [], choices: [choice(entrySonnet), choice(entryOpus)] };
-
-  it("saves chain B with a PUT, and an empty one is allowed", async () => {
-    const saved: ChainView = { ...panel, entries: [{ ...entryOpus, position: 1 }] };
-    const fake = fakeApi({
-      ...routes(operator),
-      "GET /api/admin/panel-chain": { body: panel },
-      "PUT /api/admin/panel-chain": { body: saved },
-    });
+describe("AdminSettings: no chain B", () => {
+  it("has no global chain B card, and asks for no panel chain", async () => {
+    const fake = fakeApi(routes(operator));
     renderApp("/admin/settings");
-    const card = await screen.findByRole("region", { name: "Global chain B (review panel)" });
-    await userEvent.selectOptions(await within(card).findByRole("combobox", { name: "Entry to add" }), `global:${entryOpus.id}`);
-    await userEvent.click(within(card).getByRole("button", { name: "Add" }));
-    await userEvent.click(within(card).getByRole("button", { name: "Save chain" }));
-    expect(fake.find("PUT", "/api/admin/panel-chain")[0].body).toEqual({ entries: [{ source: "global", id: entryOpus.id }] });
-    expect(await within(card).findByText("Saved.")).toBeInTheDocument();
-  });
-
-  it("shows the message of a refused save", async () => {
-    fakeApi({
-      ...routes(operator),
-      "GET /api/admin/panel-chain": { body: panel },
-      "PUT /api/admin/panel-chain": { status: 400, body: { error: "no review image supports a review panel yet" } },
-    });
-    renderApp("/admin/settings");
-    const card = await screen.findByRole("region", { name: "Global chain B (review panel)" });
-    await userEvent.selectOptions(await within(card).findByRole("combobox", { name: "Entry to add" }), `global:${entryOpus.id}`);
-    await userEvent.click(within(card).getByRole("button", { name: "Add" }));
-    await userEvent.click(within(card).getByRole("button", { name: "Save chain" }));
-    expect(await within(card).findByText(/no review image supports a review panel yet/)).toBeInTheDocument();
+    const card = await screen.findByRole("region", { name: "Global chain" });
+    expect(await within(card).findByText("Claude Sonnet")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/\bchain B\b/i);
+    expect(fake.calls.filter((c) => c.url.includes("panel-chain"))).toHaveLength(0);
   });
 });

@@ -36,6 +36,9 @@ type MemberHandler struct {
 	// Wake nudges the engine after a result or failure was recorded. May be nil.
 	Wake func()
 	Log  *slog.Logger
+	// Background, when set, counts the usage writes that outlive a request,
+	// as Handler.Background does. Nil: the handler counts them itself.
+	Background *sync.WaitGroup
 
 	// usageWork counts the usage writes still running, so a test can wait.
 	usageWork sync.WaitGroup
@@ -146,9 +149,10 @@ func (h *MemberHandler) stored(w http.ResponseWriter, ctx context.Context, log *
 // start (usage.BackfillMembers).
 func (h *MemberHandler) recordUsageLater(ctx context.Context, log *slog.Logger, id string, body []byte, run store.Run) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), usageTimeout)
-	h.usageWork.Add(1)
+	work := backgroundOr(h.Background, &h.usageWork)
+	work.Add(1)
 	go func() {
-		defer h.usageWork.Done()
+		defer work.Done()
 		defer cancel()
 		defer func() {
 			if p := recover(); p != nil {

@@ -102,7 +102,8 @@ func newDashboardE2E(t *testing.T, edit ...func(o *dashboard.Options)) *dashE2E 
 	}
 	mux := server.Routes(server.Deps{
 		Config: cfg, Instances: env.Engine.Instances, WebhookSecrets: env.Engine.WebhookSecrets, Store: env.Store,
-		Wake: env.Engine.Wake, Now: env.Now, Dashboard: d.Handler(), ReadinessScans: env.Engine, Log: env.Engine.Log,
+		Wake: env.Engine.Wake, Now: env.Now, Dashboard: d.Handler(), ReadinessScans: env.Engine,
+		Background: &env.background, Log: env.Engine.Log,
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

@@ -1095,28 +1095,44 @@ func TestMemberAccessLevelError(t *testing.T) {
 
 func TestUserIsBot(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		body map[string]any
-		want bool
+		name    string
+		body    map[string]any
+		want    bool
+		unknown bool // ErrBotUnknown: it can't say whether the user is a bot
 	}{
-		{"a bot", map[string]any{"id": 12, "username": "project_7_bot", "bot": true}, true},
-		{"a person", map[string]any{"id": 12, "username": "dev", "bot": false}, false},
-		{"no attribute", map[string]any{"id": 12, "username": "dev"}, false},
+		{"a bot", map[string]any{"id": 12, "username": "project_7_bot", "bot": true}, true, false},
+		{"a person", map[string]any{"id": 12, "username": "dev", "bot": false}, false, false},
+		// The attribute wins over the username.
+		{"a person named like a bot", map[string]any{"id": 12, "username": "project_7_bot", "bot": false}, false, false},
+		// No attribute: the username says it, or nothing does.
+		{"no attribute, a person's username", map[string]any{"id": 12, "username": "dev"}, false, true},
+		{"a null attribute", map[string]any{"id": 12, "username": "dev", "bot": nil}, false, true},
+		{"no attribute, no username", map[string]any{"id": 12}, false, true},
+		{"project token bot", map[string]any{"id": 12, "username": "project_7_bot"}, true, false},
+		{"project token bot, numbered", map[string]any{"id": 12, "username": "project_7_bot3"}, true, false},
+		{"project token bot, hashed", map[string]any{"id": 12, "username": "project_7_bot_0a1b2c3d"}, true, false},
+		{"group token bot", map[string]any{"id": 12, "username": "group_42_bot_9f8e"}, true, false},
+		{"service account", map[string]any{"id": 12, "username": "service_account_6018816a18e515214e0c34c2b33523fc"}, true, false},
+		{"group service account", map[string]any{"id": 12, "username": "service_account_group_42_abcd"}, true, false},
+		{"case is ignored", map[string]any{"id": 12, "username": "Project_7_BOT"}, true, false},
+		{"no project ID", map[string]any{"id": 12, "username": "project_bot"}, false, true},
+		{"not at the start", map[string]any{"id": 12, "username": "my_project_7_bot"}, false, true},
+		{"group with no ID", map[string]any{"id": 12, "username": "group_x_bot"}, false, true},
 	} {
 		c, reqs := serve(t, jsonReply(tc.body))
 		got, err := c.UserIsBot(context.Background(), 12)
-		if err != nil || got != tc.want {
-			t.Errorf("%s: bot=%v err=%v, want %v", tc.name, got, err, tc.want)
+		if got != tc.want || errors.Is(err, ErrBotUnknown) != tc.unknown || (err != nil && !tc.unknown) {
+			t.Errorf("%s: bot=%v err=%v, want %v (unknown %v)", tc.name, got, err, tc.want, tc.unknown)
 		}
 		expect(t, (*reqs)[0], "GET", "/api/v4/users/12", "")
 	}
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"404 User Not Found"}`, 404) })
-	if _, err := c.UserIsBot(context.Background(), 12); !errors.Is(err, ErrNotFound) {
+	if _, err := c.UserIsBot(context.Background(), 12); !errors.Is(err, ErrNotFound) || errors.Is(err, ErrBotUnknown) {
 		t.Errorf("unknown user: err = %v, want ErrNotFound", err)
 	}
 	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"403 Forbidden"}`, 403) })
-	if _, err := c.UserIsBot(context.Background(), 12); err == nil {
-		t.Error("a 403 was taken for a person")
+	if _, err := c.UserIsBot(context.Background(), 12); err == nil || errors.Is(err, ErrBotUnknown) {
+		t.Errorf("a 403: err = %v, want a request error", err)
 	}
 }
 

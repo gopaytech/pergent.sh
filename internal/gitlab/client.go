@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -788,16 +789,31 @@ func (c *Client) MemberAccessLevel(ctx context.Context, projectID, userID int64)
 
 // UserIsBot reports whether GitLab marks the user as a bot (its `bot`
 // attribute: project and group access token users, service accounts and the
-// like). A user GitLab doesn't know is ErrNotFound.
+// like). With no attribute the username decides: GitLab's names for token
+// bots and service accounts are a bot, any other name is ErrBotUnknown, never
+// a person. A user GitLab doesn't know is ErrNotFound.
 func (c *Client) UserIsBot(ctx context.Context, userID int64) (bool, error) {
 	var u struct {
-		Bot bool `json:"bot"`
+		Bot      *bool  `json:"bot"`
+		Username string `json:"username"`
 	}
 	if _, err := c.getJSON(ctx, "/users/"+strconv.FormatInt(userID, 10), nil, &u); err != nil {
 		return false, err
 	}
-	return u.Bot, nil
+	switch {
+	case u.Bot != nil:
+		return *u.Bot, nil
+	case botUsername.MatchString(u.Username):
+		return true, nil
+	}
+	return false, fmt.Errorf("user %d: %w", userID, ErrBotUnknown)
 }
+
+// botUsername matches the usernames GitLab gives its bot users:
+// project_<id>_bot… and group_<id>_bot… for access tokens, service_account_…
+// for service accounts. Keep it in step with gitlabBotName in
+// internal/webhook/commands.go, which reads the webhook's username.
+var botUsername = regexp.MustCompile(`(?i)^((project|group)_[0-9]+_bot|service_account_)`)
 
 // UserByUsername returns the user whose username is username, ignoring case
 // (GET /users?username=). None is ErrNotFound.

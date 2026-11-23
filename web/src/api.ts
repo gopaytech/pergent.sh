@@ -29,8 +29,9 @@ export type TrustMode = "follow_visibility" | "on" | "off";
 export type TrustedAuthor = { id?: number; username: string };
 
 // WaitingView is a change whose review waits for someone with write access to
-// start it. reason is "untrusted_author", "trust_check_failed" or
-// "quota_used_up" (the monthly token quota held it; only an admin starts it).
+// start it. reason is "untrusted_author", "trust_check_failed",
+// "quota_used_up" (the monthly token quota held it; only an admin starts it) or
+// "limit_used_up" (held the same way, and a model limit or a team limit took part).
 export type WaitingView = {
   number: number;
   // head is the commit that waits; Start review sends it back.
@@ -39,7 +40,7 @@ export type WaitingView = {
   author: string;
   webUrl: string;
   since: string;
-  reason: "untrusted_author" | "trust_check_failed" | "quota_used_up";
+  reason: "untrusted_author" | "trust_check_failed" | "quota_used_up" | "limit_used_up";
 };
 
 // Me is the signed-in account, from GET /api/me: a local admin ("password")
@@ -298,8 +299,14 @@ export type RunEntryView = { name: string; position: number; length: number; sou
 
 // AttemptView is one attempt of a review. outcome is "fell_back" for one
 // dropped for the next entry ("" while it runs); reason is then the class it
-// was dropped on.
-export type AttemptView = { runId: string; name: string; position: number; outcome: Outcome | ""; reason: MarkClass | "" };
+// was dropped on, or "judge_failed" for a judge run that crashed.
+export type AttemptView = {
+  runId: string;
+  name: string;
+  position: number;
+  outcome: Outcome | "";
+  reason: MarkClass | "judge_failed" | "";
+};
 
 export type LogView = { text: string };
 
@@ -435,8 +442,9 @@ export type RepositoryDetailView = {
   // (GET .../chain has the chain); "" when the chain is empty or that entry
   // was removed. Never a base URL or key.
   model: string;
-  // panel is the review panel: whether a chain B is in effect, and its mode.
-  panel: PanelView;
+  // multiReview is the repository's multi review: on with reviewers 2 to 5
+  // (GET .../reviewers), the count of reviewers and the judge's name.
+  multiReview: MultiReviewView;
   // quota is this month's tokens against the quotas; null for anyone but an
   // admin, and when the usage could not be read.
   quota: QuotaView | null;
@@ -942,7 +950,17 @@ export type ModelAdminView = {
   // Payments", "main/acme/payments").
   usedIn: string[];
   mark: MarkView | null;
+  // limit is the model limit, tokens per UTC month on every instance and
+  // repository (null: none), and used the entry's tokens this month.
+  limit: number | null;
+  used: number;
+  // teamLimits are each team's limit on the entry, by team name.
+  teamLimits: TeamLimitView[];
 };
+
+// TeamLimitView is a team's limit on a global entry, and that team's tokens
+// on it this month.
+export type TeamLimitView = { teamId: number; team: string; limit: number; used: number };
 
 // ModelsAdminView is the list of models. canSetDefault is false while the
 // config file has an llm: block (adding, changing and removing still work).
@@ -965,8 +983,19 @@ export type MarkClass = "quota" | "billing" | "auth";
 // until has passed; reviews then use the entry again.
 export type MarkView = { class: MarkClass; until: string | null; setAt: string; live: boolean };
 
-// EntryState is what reviews do with a chain entry now.
-export type EntryState = "ready" | "exhausted" | "key_rejected" | "removed" | "not_allowed" | "not_owner" | "key_unusable";
+// EntryState is what reviews do with a chain entry now. model_limit and
+// team_limit: its model limit, or the owner team's limit on it, is used up
+// this month.
+export type EntryState =
+  | "ready"
+  | "exhausted"
+  | "key_rejected"
+  | "removed"
+  | "not_allowed"
+  | "not_owner"
+  | "key_unusable"
+  | "model_limit"
+  | "team_limit";
 
 // ChainEntryView is an entry of a chain, or one that may be put in it
 // (position 0). class and until are its mark's ("" and null with none);
@@ -1000,19 +1029,36 @@ export type ChainView = {
   team: string;
   readOnly: boolean;
   savedByAdmin: boolean;
-  // mode is a repository's chain B mode (GET .../panel-chain and its writes
-  // only): inherit, custom (its own) or off (no panel). Absent on chain A.
-  mode?: PanelMode;
   entries: ChainEntryView[];
   choices: ChainEntryView[];
 };
 
-// PanelMode is how a repository gets its chain B.
-export type PanelMode = "inherit" | "custom" | "off";
+// MultiReviewView is a repository's multi review on its page. on is true
+// with a reviewer beyond reviewer 1. reviewers counts them all, reviewer 1
+// too (1 when off). judge is the name of the judge chain's first entry: ""
+// with no judge, an empty judge chain or a removed entry.
+export type MultiReviewView = { on: boolean; reviewers: number; judge: string };
 
-// PanelView is a repository's review panel: on when a chain B is in effect;
-// a and b name position 1 of each chain while on. Never a key or a URL.
-export type PanelView = { on: boolean; mode: PanelMode; a?: string; b?: string };
+// ReviewerChain is one of reviewers 2 to 5: its number and its chain.
+export type ReviewerChain = { number: number; chain: ChainView };
+
+// ReviewersView is GET .../reviewers: reviewers 2 to 5, reviewer 2 first,
+// and the judge (reviewer 1 is GET .../chain). judge is null with no judge;
+// its entries are empty when its last entry was deleted. warnings are what
+// the card shows. addRefusal says why a reviewer can't be added now ("" when
+// it can). Never a base URL or a key.
+export type ReviewersView = {
+  readOnly: boolean;
+  reviewers: ReviewerChain[];
+  judge: ChainView | null;
+  warnings: string[];
+  addRefusal: string;
+};
+
+// ReviewersUpdate is the body of PUT .../reviewers: reviewers 2 to 5 in
+// order, each its entries, and the judge's entries. One save replaces them
+// all; a reviewer left out is removed.
+export type ReviewersUpdate = { reviewers: ChainRef[][]; judge: ChainRef[] };
 
 // ChainRef names an entry in the body of a chain's PUT.
 export type ChainRef = { source: EntrySource; id: string };
@@ -1297,6 +1343,20 @@ export type TeamModelView = {
 // add, change and remove the entries (a maintainer of the team, or an admin).
 export type TeamModelsView = { team: TeamRef; role: Role; canEdit: boolean; models: TeamModelView[] };
 
+// TeamLimitsView is GET /api/teams/{id}/limits, for the team's maintainers
+// and admins: the team's own entries with their limits (null: none), and the
+// global entries an admin limited for the team. A global entry's model limit
+// is only its state (modelLimit), because its numbers count other teams.
+export type TeamLimitsView = { team: TeamRef; models: TeamModelLimitView[]; global: TeamGlobalLimitView[] };
+export type TeamModelLimitView = { id: string; name: string; limit: number | null; used: number };
+export type TeamGlobalLimitView = {
+  id: string;
+  name: string;
+  limit: number;
+  used: number;
+  modelLimit: "none" | "room_left" | "used_up";
+};
+
 // AddUserBody is the body of POST /api/admin/users: an email, and the teams to
 // put the account on, each with its role (viewer when left out).
 export type AddUserBody = { email: string; teams?: { teamId: number; role?: MemberRole }[] };
@@ -1548,20 +1608,21 @@ export const paths = {
   // The repository's model chain: GET, PUT {entries}; POST .../reset to inherit again.
   apiRepoChain: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/chain`,
   apiRepoChainReset: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/chain/reset`,
-  // The repository's chain B (the review panel): GET, PUT {entries}; POST .../reset to inherit, .../off for no panel.
-  apiRepoPanelChain: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/panel-chain`,
-  apiRepoPanelChainReset: (instance: string, project: string) =>
-    `/api/repositories/${seg(instance)}/${proj(project)}/panel-chain/reset`,
-  apiRepoPanelChainOff: (instance: string, project: string) =>
-    `/api/repositories/${seg(instance)}/${proj(project)}/panel-chain/off`,
-  apiTeamPanelChain: (id: number) => `/api/teams/${seg(String(id))}/panel-chain`,
+  // The repository's reviewers 2 to 5 and its judge: GET, PUT {reviewers, judge}.
+  apiRepoReviewers: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/reviewers`,
   // The team pages of the user area, and the team routes.
   team: (id: number) => `/teams/${seg(String(id))}`,
   apiTeamModels: (id: number) => `/api/teams/${seg(String(id))}/models`,
   apiTeamModel: (id: number, model: string) => `/api/teams/${seg(String(id))}/models/${seg(model)}`,
   apiTeamModelMark: (id: number, model: string) => `/api/teams/${seg(String(id))}/models/${seg(model)}/mark`,
   apiTeamChain: (id: number) => `/api/teams/${seg(String(id))}/chain`,
+  // A team's limits (GET), and the limit of one of its own entries: PUT {monthlyTokens}, DELETE for none.
+  apiTeamLimits: (id: number) => `/api/teams/${seg(String(id))}/limits`,
+  apiTeamModelLimit: (id: number, model: string) => `/api/teams/${seg(String(id))}/models/${seg(model)}/limit`,
   apiAdminModelMark: (id: string) => `/api/admin/models/${seg(id)}/mark`,
+  // A global entry's model limit, and a team's limit on it: PUT {monthlyTokens}, DELETE for none.
+  apiAdminModelLimit: (id: string) => `/api/admin/models/${seg(id)}/limit`,
+  apiAdminModelTeamLimit: (id: string, team: number) => `/api/admin/models/${seg(id)}/team-limits/${seg(String(team))}`,
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
   apiRepoReadiness: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/readiness`,
   apiRepoReadinessScan: (instance: string, project: string) =>

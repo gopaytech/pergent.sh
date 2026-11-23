@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { api, isStatus, paths, safeHref, type InputsView, type PanelView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
+import { api, isStatus, paths, safeHref, type InputsView, type MultiReviewView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
 import { useWrite } from "../layout/write";
 import { QuotaLine } from "../quota";
 import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, platformName, skillOrigin } from "../ui";
@@ -54,7 +54,7 @@ export default function RepositoryDetail() {
         {platformName(repo.platform)} · {repo.instance} ·{" "}
         {repo.source === "config" ? "managed by config" : repo.paused ? "paused in the dashboard" : "switched on in the dashboard"}
       </div>
-      <div className="sub spaced">{panelText(view.panel)}</div>
+      <div className="sub spaced">{multiReviewText(view.multiReview)}</div>
       {repo.paused && (
         <div className="alert" role="note" aria-label="Paused">
           <span className="prose">
@@ -109,12 +109,19 @@ export default function RepositoryDetail() {
   );
 }
 
-// panelText is the panel line: on with the first entry of each chain, or off.
-const panelText = (p: PanelView) => (p.on ? `Panel: on (A: ${p.a ?? "none"}, B: ${p.b ?? "none"})` : "Panel: off");
+// multiReviewText is the multi review line: on with the count of reviewers
+// and the judge's name, or off.
+const multiReviewText = (m: MultiReviewView) =>
+  m.on ? `Multi review: on (${m.reviewers} reviewers, ${m.judge ? `judge ${m.judge}` : "no judge"})` : "Multi review: off";
+
+// heldForTokens says a change waits because the tokens ran out: a quota, or
+// a model or team limit with it. Only an admin starts one.
+const heldForTokens = (w: WaitingView) => w.reason === "quota_used_up" || w.reason === "limit_used_up";
 
 // Waiting is the changes whose review waits for someone to start it: authors
 // the repository doesn't trust (a maintainer or an admin starts those) and
-// changes held by a used-up token quota (only an admin starts those).
+// changes held by a used-up token quota, model limit or team limit (only an
+// admin starts those).
 function Waiting({
   instance,
   project,
@@ -165,8 +172,9 @@ function Waiting({
             {w.title && <span className="meta"> · {w.title}</span>}
             {w.reason === "trust_check_failed" && <div className="meta">Couldn't check the author's access.</div>}
             {w.reason === "quota_used_up" && <div className="meta">Monthly token quota used up.</div>}
+            {w.reason === "limit_used_up" && <div className="meta">No model in the chain has room this month.</div>}
           </div>
-          {!paused && (role === "admin" || (role === "maintainer" && w.reason !== "quota_used_up")) && (
+          {!paused && (role === "admin" || (role === "maintainer" && !heldForTokens(w))) && (
             <button
               type="button"
               className="btn small"

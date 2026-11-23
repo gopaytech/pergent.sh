@@ -1,6 +1,6 @@
 # Review panel (experimental)
 
-**Status: experimental, off by default.** A repository with no chain B in effect reviews as before, byte for byte. This release accepts no review image for a panel yet, the default pergent v0.11.0 included (see [The image check](#the-image-check)), so nothing changes until a later release turns panels on.
+**Status: experimental, off by default.** A repository with no chain B in effect reviews as before, byte for byte. No image is accepted for a panel (see [The image check](#the-image-check)), so panels stay off. Multi review (several reviewer models and a judge) will replace this feature.
 
 A review panel runs each review on two model chains and puts the two results together. Chain A is the [model chain](models.md) you know. Chain B is the second chain.
 
@@ -33,7 +33,7 @@ Sometimes chain B is in effect but model B can not start. The review then runs o
 | --- | --- |
 | `the review image does not support it` | The review image is too old for `--panel`. |
 | `no entry of chain B can be used` | No entry of chain B has a key that works (for example all are marked or removed). |
-| `the token quota stopped model B` | The repository quota is used up, or the instance quota is used up and only global entries are left in chain B. |
+| `the token quota stopped model B` | The repository quota is used up, or the instance quota is used up and only global entries are left in chain B, or a model or team limit stops every entry of chain B. |
 | `model B is the model A runs on` | Every usable entry of chain B is the model A runs on. |
 | `chain B could not be read` | A database error while loading chain B. The review still runs, on A alone. |
 | `pergent.sh's own image is not set` | `PERGENT_SH_IMAGE` is empty. Job P needs it to fetch the members' results. The chart sets it. |
@@ -76,7 +76,7 @@ Chain B is a list of models, like chain A. Its first entry is the second model o
 
 ## The image check
 
-Saving a chain B with entries needs a review image that supports a review panel. pergent.sh knows the first pergent version that does (`PanelMinVersion`). It is unset in this build, so no image supports a panel yet: every save is refused with `no review image supports a review panel yet`, and a chain B that is already stored makes no panel (`panel off: the review image does not support it`). Nothing changes until a release sets it. Clearing a chain B, `off` and **Inherit** need no check.
+No image is accepted for a panel. `PanelMinVersion` is empty, so saving a chain B with entries fails with `no review image supports a review panel yet`, the default `jobs.image` included, and a chain B that is already stored makes no panel. This feature will be replaced by multi review. Clearing a chain B, `off` and **Inherit** need no check.
 
 ## What you see
 
@@ -86,5 +86,3 @@ On the repository page, one line shows the panel (the mode **Off** is set on the
 | --- | --- |
 | `Panel: on (A: <entry>, B: <entry>)` | A chain B is in effect. |
 | `Panel: off` | No panel. |
-
-The API is in the [OpenAPI](../../openapi.yaml) file: `/panel-chain`, `/panel-chain/reset` and `/panel-chain/off` on a repository, `/api/teams/{id}/panel-chain` and `/api/admin/panel-chain`.

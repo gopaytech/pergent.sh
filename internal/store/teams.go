@@ -286,28 +286,34 @@ func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) erro
 	return true, nil
 }
 
-// OwnerTeam returns the team that owns project on instance: the owner of
-// its own entry (matched ignoring case), else of the instance entry. ok is
-// false when neither has an owner.
+// ownerTeamSQL is the team that owns the repository whose instance and path
+// the SQL expressions instance and project give, NULL for none: the owner of
+// its own entry (matched ignoring case), else of the instance entry.
+// OwnerTeam and the usage writes read it, so the 2 never disagree.
+func ownerTeamSQL(instance, project string) string {
+	return `(SELECT o.team_id FROM team_repos o WHERE o.owner AND o.instance = ` + instance +
+		` AND (lower(o.project) = lower(` + project + `) OR o.project = '') ORDER BY o.project = '' LIMIT 1)`
+}
+
+// OwnerTeam returns the team that owns project on instance (ownerTeamSQL).
+// ok is false when neither its own entry nor the instance entry has an owner.
 func (s *Store) OwnerTeam(ctx context.Context, instance, project string) (teamID int64, ok bool, err error) {
-	err = s.pool.QueryRow(ctx, `SELECT team_id FROM team_repos
-		WHERE owner AND instance = $1 AND (lower(project) = lower($2) OR project = '')
-		ORDER BY project = '' LIMIT 1`, instance, project).Scan(&teamID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, nil
-	}
-	if err != nil {
+	var id *int64
+	if err := s.pool.QueryRow(ctx, `SELECT `+ownerTeamSQL("$1::text", "$2::text"), instance, project).Scan(&id); err != nil {
 		return 0, false, err
 	}
-	return teamID, true, nil
+	if id == nil {
+		return 0, false, nil
+	}
+	return *id, true, nil
 }
 
 // DeleteTeam removes a team with its members, repositories, entries, chain
 // and the marks of its entries (not the accounts), and takes its entries out
-// of the repository chains (chain A and chain B) that name them; ok is false when there is no such team. When check is not nil
+// of the repository chains (chain A and the reviewer chains) that name them; ok is false when there is no such team. When check is not nil
 // it is handed the team under the lock UpdateTeam takes, so what it decides
 // on can't change before the team goes; an error from it keeps the team and
-// is returned.
+// is returned. Its model limits go with it (ON DELETE CASCADE).
 func (s *Store) DeleteTeam(ctx context.Context, id int64, check func(Team) error) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -341,7 +347,7 @@ func (s *Store) DeleteTeam(ctx context.Context, id int64, check func(Team) error
 		return false, err
 	}
 	at := time.Now()
-	for _, set := range []ChainSet{ChainA, ChainB} {
+	for _, set := range []ChainSet{ChainA, ChainReviewers} {
 		if _, err := removeFromChains(ctx, tx, set, SourceTeam, modelIDs, at); err != nil {
 			return false, err
 		}

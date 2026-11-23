@@ -14,7 +14,7 @@ import {
   entryTeamQwen,
   librarySkills,
   maintainer,
-  panelRepoInherit,
+  reviewersNone,
   myTeams,
   repoDetail,
   repoGadgets,
@@ -42,8 +42,8 @@ const base = {
   "GET /api/repositories/main/acme/widgets/teams": { body: repoTeams },
   "GET /api/repositories/main/acme/payments/chain": { body: chainRepoInherit },
   "GET /api/repositories/main/acme/widgets/chain": { body: chainRepoInherit },
-  "GET /api/repositories/main/acme/payments/panel-chain": { body: panelRepoInherit },
-  "GET /api/repositories/main/acme/widgets/panel-chain": { body: panelRepoInherit },
+  "GET /api/repositories/main/acme/payments/reviewers": { body: reviewersNone },
+  "GET /api/repositories/main/acme/widgets/reviewers": { body: reviewersNone },
 };
 
 const teamsSection = () => screen.findByRole("region", { name: "Teams" });
@@ -129,7 +129,7 @@ describe("RepositorySettings: Teams", () => {
   });
 });
 
-describe("RepositorySettings: Model chain", () => {
+describe("RepositorySettings: reviewer 1, the model chain", () => {
   const payments = "/api/repositories/main/acme/payments";
   const chainPath = `${payments}/chain`;
   const routes = (detail: RepositoryDetailView, me = ssoAdmin, chain: ChainView = chainRepoInherit) => ({
@@ -138,10 +138,14 @@ describe("RepositorySettings: Model chain", () => {
     [`GET ${payments}`]: { body: detail },
     [`PUT ${payments}/settings`]: { body: detail },
     [`GET ${chainPath}`]: { body: chain },
+    [`GET ${payments}/reviewers`]: { body: reviewersNone },
   });
-  const card = () => screen.findByRole("region", { name: "Model chain" });
+  // card is reviewer 1 in the Reviewers card.
+  const card = async () => within(await screen.findByRole("region", { name: "Reviewers" })).findByRole("group", { name: "Reviewer 1" });
+  // edit opens reviewer 1's editor.
+  const edit = async (box: HTMLElement) => userEvent.click(await within(box).findByRole("button", { name: "Edit reviewer 1" }));
   const names = (box: HTMLElement) =>
-    within(within(box).getByRole("list", { name: "Model chain" }))
+    within(within(box).getByRole("list", { name: "Reviewer 1 chain" }))
       .getAllByRole("listitem")
       .map((r) => r.querySelector("b")?.textContent);
 
@@ -161,6 +165,7 @@ describe("RepositorySettings: Model chain", () => {
     expect(await within(box).findByText("Inherited from the chain of its owner team, Payments.")).toBeInTheDocument();
     expect(names(box)).toEqual(["qwen3.5", "Claude Sonnet"]);
     expect(within(box).queryByRole("button", { name: "Save chain" })).not.toBeInTheDocument();
+    expect(within(box).getByRole("button", { name: "Edit reviewer 1" })).toBeInTheDocument();
   });
 
   it("says when the repository inherits the global chain", async () => {
@@ -173,7 +178,7 @@ describe("RepositorySettings: Model chain", () => {
     const fake = fakeApi({ ...routes(repoDetail(repoPayments)), [`PUT ${chainPath}`]: { body: chainRepoCustom } });
     renderApp("/repos/main/acme/payments?tab=settings");
     const box = await card();
-    await userEvent.click(await within(box).findByRole("button", { name: "Give it its own chain" }));
+    await edit(box);
     await userEvent.click(within(box).getByRole("button", { name: "Remove Claude Sonnet" }));
     await userEvent.selectOptions(within(box).getByRole("combobox", { name: "Entry to add" }), "Claude Opus (global)");
     await userEvent.click(within(box).getByRole("button", { name: "Add" }));
@@ -199,6 +204,7 @@ describe("RepositorySettings: Model chain", () => {
     renderApp("/repos/main/acme/payments?tab=settings");
     const box = await card();
     expect(await within(box).findByText("This repository has its own chain.")).toBeInTheDocument();
+    await edit(box);
     await userEvent.click(within(box).getByRole("button", { name: "Inherit again" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("owner team's chain, or the global chain"));
     const [post] = fake.find("POST", `${chainPath}/reset`);
@@ -212,6 +218,7 @@ describe("RepositorySettings: Model chain", () => {
     const fake = fakeApi({ ...routes(repoDetail(repoPayments), ssoAdmin, chain), [`PUT ${chainPath}`]: { body: chain } });
     renderApp("/repos/main/acme/payments?tab=settings");
     const box = await card();
+    await edit(box);
     await userEvent.click(await within(box).findByRole("button", { name: "Move openai/gpt-5 up" }));
     await userEvent.click(within(box).getByRole("button", { name: "Save chain" }));
     expect(fake.find("PUT", chainPath)[0].body).toEqual({
@@ -228,18 +235,24 @@ describe("RepositorySettings: Model chain", () => {
     renderApp("/repos/main/acme/payments?tab=settings");
     const box = await card();
     expect(await within(box).findByText("An admin saved this chain.")).toBeInTheDocument();
+    await edit(box);
     expect(within(box).getByText("You can't keep this entry here. Remove it to save.")).toBeInTheDocument();
     expect(within(box).getByRole("button", { name: "Save chain" })).toBeDisabled();
   });
 
   it("shows a maintainer of another team the chain with no button that changes it", async () => {
     // The server says read-only: the session doesn't maintain the owner team.
-    fakeApi(routes(repoDetail(repoPayments, "maintainer"), viewer, { ...chainRepoCustom, readOnly: true, choices: [] }));
+    fakeApi({
+      ...routes(repoDetail(repoPayments, "maintainer"), viewer, { ...chainRepoCustom, readOnly: true, choices: [] }),
+      [`GET ${payments}/reviewers`]: { body: { ...reviewersNone, readOnly: true } },
+    });
     renderApp("/repos/main/acme/payments?tab=settings");
     const box = await card();
     expect(await within(box).findByText("This repository has its own chain.")).toBeInTheDocument();
     expect(within(box).queryByRole("button")).not.toBeInTheDocument();
-    expect(box).toHaveTextContent("Only admins and maintainers of the repository's owner team change its chain.");
+    const reviewers = screen.getByRole("region", { name: "Reviewers" });
+    expect(await within(reviewers).findByText("Only admins and maintainers of the repository's owner team change its reviewers.")).toBeInTheDocument();
+    expect(within(reviewers).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("shows a viewer the chain, read-only, on the Skills & instructions tab", async () => {

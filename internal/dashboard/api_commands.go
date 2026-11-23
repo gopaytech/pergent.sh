@@ -30,6 +30,9 @@ const (
 	msgNotWaiting      = "this change isn't waiting for someone to start its review"
 	msgDraftsNotOn     = "drafts aren't reviewed in this repository"
 	msgQuotaUsedUp     = "the monthly token quota is used up"
+	// msgTeamLimitUsedUp is an admin's 409, and only the dashboard's: it names
+	// the team, never a number.
+	msgTeamLimitUsedUp = "every model of the chain is at the team's own limit: a maintainer of %s can raise it on the team page"
 	msgPlatformFailed  = "could not read this change from its platform, please try again"
 	msgRedecideFailed  = "the change was saved, but the review could not be decided again yet; the next review will use it"
 )
@@ -252,6 +255,8 @@ func (d *Dashboard) rerun(w http.ResponseWriter, r *http.Request, b reviewButton
 	switch res.Status {
 	case actions.RerunNothingFailed:
 		accepted(w, http.StatusAccepted, "nothing failed")
+	case actions.RerunTeamLimit:
+		writeError(w, http.StatusConflict, fmt.Sprintf(msgTeamLimitUsedUp, res.Team))
 	case actions.RerunQuotaUsedUp:
 		writeError(w, http.StatusConflict, msgQuotaUsedUp)
 	case actions.RerunCapped:
@@ -304,6 +309,8 @@ func (d *Dashboard) start(w http.ResponseWriter, r *http.Request, b reviewButton
 		return
 	}
 	switch res.Status {
+	case actions.RerunTeamLimit:
+		writeError(w, http.StatusConflict, fmt.Sprintf(msgTeamLimitUsedUp, res.Team))
 	case actions.RerunQuotaUsedUp:
 		writeError(w, http.StatusConflict, msgQuotaUsedUp)
 	case actions.RerunCapped:

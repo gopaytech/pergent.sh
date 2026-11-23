@@ -50,6 +50,11 @@ const (
 	WaitCheckFailed = "trust_check_failed"
 	// WaitQuota: the repository's monthly token quota is used up.
 	WaitQuota = "quota_used_up"
+	// WaitLimit: the monthly token quotas and limits stop every entry of the
+	// run's chain, and a model limit or a team limit is one of them. It is
+	// held, noted and started as WaitQuota is; only the dashboard tells them
+	// apart.
+	WaitLimit = "limit_used_up"
 	// WaitCIPending: the CI jobs the repository chose are still running;
 	// Run.CIDeadline is when the run stops waiting for them.
 	WaitCIPending = "ci_pending"
@@ -667,11 +672,12 @@ func (s *Store) supersede(ctx context.Context, id, reason string) error {
 	return err
 }
 
-// CountRunning returns the number of runs and panel members in state
-// running: each holds a jobs.max_running slot.
+// CountRunning returns the number of runs, review members and panel
+// members in state running: each holds a jobs.max_running slot.
 func (s *Store) CountRunning(ctx context.Context) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM runs WHERE state = 'running')
+		+ (SELECT count(*) FROM review_members WHERE state = 'running')
 		+ (SELECT count(*) FROM panel_members WHERE state = 'running')`).Scan(&n)
 	return n, err
 }

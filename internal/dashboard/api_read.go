@@ -1137,9 +1137,9 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if project, ok := strings.CutSuffix(rest, "/panel-chain"); ok {
+	if project, ok := strings.CutSuffix(rest, "/reviewers"); ok {
 		if repo, ok := find(project); ok {
-			d.repositoryPanelChain(w, r, se, repo)
+			d.repositoryReviewers(w, r, se, repo)
 			return
 		}
 	}
@@ -1193,12 +1193,12 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
-	model, panel, err := d.repoChainSummary(ctx, repo)
+	model, multi, err := d.repoChainSummary(ctx, repo)
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
-		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model, Panel: panel,
+		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model, MultiReview: multi,
 		Quota: d.quotaView(ctx, se, repo), Graph: gv, BuiltInRulesOff: builtInRulesOff(d.cfg.Jobs.Image)}, nil
 }
 

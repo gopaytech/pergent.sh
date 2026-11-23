@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -171,5 +172,47 @@ func TestEveryAdminRouteIsNotFoundForAUser(t *testing.T) {
 	// Nothing was changed by them.
 	if teams, _ := e.st.Teams(ctx); len(teams) != 2 {
 		t.Errorf("%d teams after the walk, want the 2 the test made", len(teams))
+	}
+}
+
+// The chain B routes are gone: each answers 404 for an admin, whatever the
+// state of the repository or the team.
+func TestPanelChainRoutesGone(t *testing.T) {
+	te := newTeamsEnv(t)
+	te.gadgetsOwnedByPayments()
+	team := strconv.FormatInt(te.payments, 10)
+	for _, p := range []string{
+		"GET /api/admin/panel-chain",
+		"PUT /api/admin/panel-chain",
+		"GET /api/teams/" + team + "/panel-chain",
+		"PUT /api/teams/" + team + "/panel-chain",
+		"GET /api/repositories/main/acme/gadgets/panel-chain",
+		"PUT /api/repositories/main/acme/gadgets/panel-chain",
+		"POST /api/repositories/main/acme/gadgets/panel-chain/reset",
+		"POST /api/repositories/main/acme/gadgets/panel-chain/off",
+	} {
+		method, target, _ := strings.Cut(p, " ")
+		var rec *httptest.ResponseRecorder
+		if method == "GET" {
+			rec = te.get(te.admin, target)
+		} else {
+			rec = te.send(te.admin, method, target, `{"entries":[]}`)
+		}
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s = %d %s; want 404", p, rec.Code, rec.Body)
+		}
+	}
+}
+
+// The repository view has no panel key: multi review replaced the panel.
+func TestRepositoryViewHasNoPanel(t *testing.T) {
+	te := newTeamsEnv(t)
+	te.gadgetsOwnedByPayments()
+	keys := rawKeys(te.env, te.viewer, "/api/repositories/main/acme/gadgets")
+	if _, ok := keys["panel"]; ok {
+		t.Errorf("the repository view has a panel key: %s", keys["panel"])
+	}
+	if _, ok := keys["multiReview"]; !ok {
+		t.Error("the repository view has no multiReview key")
 	}
 }

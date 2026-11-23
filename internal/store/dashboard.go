@@ -550,7 +550,7 @@ func (s *Store) SetDashboardRepoEnabled(ctx context.Context, instance, project s
 }
 
 // RemoveDashboardRepo deletes the dashboard repository project on instance
-// (matched ignoring case), paused or not, its own chain A and chain B and
+// (matched ignoring case), paused or not, its own chain A and reviewer chains and
 // the team links to it, in one transaction. A team's link to the whole instance and links to the same path
 // on another instance stay. found is false, and nothing is deleted, when
 // there is no such row.
@@ -574,7 +574,7 @@ func (s *Store) RemoveDashboardRepo(ctx context.Context, instance, project strin
 	}
 	// Its own chain goes with its settings: the resolver reads a chain row
 	// whatever the repository's row says, so one added again would run on it.
-	for _, set := range []ChainSet{ChainA, ChainB} {
+	for _, set := range []ChainSet{ChainA, ChainReviewers} {
 		if _, err := tx.Exec(ctx, `DELETE FROM `+set.chains+` WHERE scope = 'repo' AND instance = $1 AND lower(project) = lower($2)`,
 			instance, project); err != nil {
 			return false, err
@@ -618,11 +618,13 @@ func (s *Store) RunLog(ctx context.Context, runID string) (string, bool, error) 
 	return text, true, nil
 }
 
-// PruneRunLogs deletes the logs and the diagnostics of runs and of panel
-// members stored before the given time and returns how many there were in all.
+// PruneRunLogs deletes the logs and the diagnostics of runs, of review
+// members and of panel members stored before the given time and returns how
+// many there were in all.
 func (s *Store) PruneRunLogs(ctx context.Context, before time.Time) (int, error) {
 	n := 0
-	for _, table := range []string{"run_logs", "run_diagnostics", "panel_member_logs", "panel_member_diagnostics"} {
+	for _, table := range []string{"run_logs", "run_diagnostics", "review_member_logs", "review_member_diagnostics",
+		"panel_member_logs", "panel_member_diagnostics"} {
 		tag, err := s.pool.Exec(ctx, `DELETE FROM `+table+` WHERE created_at < $1`, before)
 		if err != nil {
 			return n, err

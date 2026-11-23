@@ -127,10 +127,10 @@ When a review's Job ends, pergent.sh reads `provider_error` in pergent's result:
 - **Each attempt reads the chain again** and takes the first entry that is not skipped and that this review has not tried. A chain edited during a fallback is used as it is now.
 - **When no entry is left**, the review fails with `all models exhausted:` and each entry with why it was skipped, such as `all models exhausted: main (out of quota), backup (key rejected)`. It is never approved and never `success`. A repository's chain of 1 entry still fails with `the model chosen for this repository can't be used: an admin can change it on the repository's Settings tab`.
 - **An empty chain** makes the review wait, as an empty list did before.
-- **When only the instance token quota stops the entries**, the review is held for the quota, as before ([Monthly token quota](token-quota.md)).
+- **When only the token quotas and the model limits stop the entries this review has not tried**, the review is held as for a used-up quota ([Model and team limits](token-quota.md#model-and-team-limits)).
 - After a fallback to a different model, the review of the next push is a full review on the next push ([A change of model](#a-change-of-model)).
 
-Why an entry is skipped, as the failure text and the pages say it: `out of quota`, `out of credit`, `key rejected` (a mark), `already tried`, `removed` (`a removed model` in place of its name), `teams may not use it`, `its team doesn't own this repository`, `no usable key`, `instance token quota used up`.
+Why an entry is skipped, as the failure text and the pages say it: `out of quota`, `out of credit`, `key rejected` (a mark), `already tried`, `removed` (`a removed model` in place of its name), `teams may not use it`, `its team doesn't own this repository`, `no usable key`, `instance token quota used up`, `model limit used up`, `team limit used up`.
 
 ### The pergent image
 
@@ -157,6 +157,8 @@ Each entry of a chain shows its state:
 | `not allowed for teams any more` | A global entry teams may no longer use |
 | `team no longer owns this repository` | A team entry in the chain of a repository its team doesn't own now |
 | `key can't be read` | No key, or `PERGENT_SH_SECRET_KEY` changed. Enter the key again. |
+| `model limit used up` | Its model limit is used up this month ([Model and team limits](token-quota.md#model-and-team-limits)) |
+| `team limit used up` | The owner team's limit on it is used up this month. On a team's chain, it is that team's limit. |
 
 ### Review API
 

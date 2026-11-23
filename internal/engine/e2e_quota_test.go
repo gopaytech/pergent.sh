@@ -185,19 +185,7 @@ func TestUntrustedWaitsForTrustNotQuota(t *testing.T) {
 // no Job, and the run goes back to the queue.
 func TestQuotaReadErrorRetries(t *testing.T) {
 	env := quotaPushEnv(t, 100, 0)
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.RuntimeParams["search_path"] = env.schema
-	conn, err := pgx.ConnectConfig(env.ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(env.ctx)
-	if _, err := conn.Exec(env.ctx, `DROP TABLE run_usage`); err != nil {
-		t.Fatal(err)
-	}
+	execSQL(t, env, "DROP TABLE run_usage")
 
 	head := sha('a')
 	servePush(env, head)
