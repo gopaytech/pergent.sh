@@ -5,14 +5,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -21,6 +19,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/store/storetest"
 )
 
 func TestParseArgs(t *testing.T) {
@@ -45,40 +44,23 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
-// testDatabaseURL returns a database URL bound to a fresh, migrated schema
-// (dropped when the test ends) and a store on it. It skips when no test
-// database is set.
+// testDatabaseURL returns a database URL of a migrated database of its own
+// (back to the pool when the test ends), bound to its schema, and a store on
+// it. It skips when no test database is set.
 func testDatabaseURL(t *testing.T) (string, *store.Store) {
 	t.Helper()
-	dbURL := os.Getenv("PERGENT_SH_TEST_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("PERGENT_SH_TEST_DATABASE_URL is not set")
-	}
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	schema := "test_cmd_" + hex.EncodeToString(b)
-	ctx := context.Background()
-	st, err := store.OpenInSchema(ctx, dbURL, schema)
+	dbURL := storetest.URL(t, store.OpenInSchema)
+	st, err := store.OpenInSchema(context.Background(), dbURL, storetest.Schema)
 	if err != nil {
 		t.Fatalf("OpenInSchema: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := st.DropSchema(context.Background()); err != nil {
-			t.Errorf("DropSchema: %v", err)
-		}
-		st.Close()
-	})
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(st.Close)
 	u, err := url.Parse(dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	q := u.Query()
-	q.Set("search_path", schema)
+	q.Set("search_path", storetest.Schema)
 	u.RawQuery = q.Encode()
 	return u.String(), st
 }

@@ -2,7 +2,6 @@ package engine
 
 import (
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -302,7 +301,7 @@ func TestUnflaggedStartDispatchesOnUsedUpQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {
 		t.Fatal(err)
 	}
