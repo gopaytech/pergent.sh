@@ -12,6 +12,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -185,6 +186,18 @@ func (d *Dashboard) chainEntries(ctx context.Context) (chain.Input, error) {
 	}
 	in.Marks = marks
 	return in, nil
+}
+
+// chainViewLimits puts on in the limits used up this month for the
+// repositories team owns (0: the model limits alone), so a chain view tags an
+// entry at its limit as the resolver skips it (chain.EntryReason).
+func (d *Dashboard) chainViewLimits(ctx context.Context, in *chain.Input, team int64) error {
+	lim, err := quota.ReadLimits(ctx, d.Store, d.now(), team)
+	if err != nil {
+		return err
+	}
+	in.ModelLimitUsedUp, in.TeamLimitUsedUp = lim.Model, lim.Team
+	return nil
 }
 
 // entryView is ref as a chain shows it, at position pos (0 for a choice).
@@ -368,6 +381,11 @@ func (d *Dashboard) writeGlobalChain(w http.ResponseWriter, r *http.Request, set
 	c, err := d.globalShown(ctx, set)
 	if err != nil {
 		d.failed(w, r, "reading the global chain", err)
+		return
+	}
+	// The global chain has no owner team: only the model limits apply.
+	if err := d.chainViewLimits(ctx, &c.in, 0); err != nil {
+		d.failed(w, r, "reading the model limits", err)
 		return
 	}
 	teams, err := d.teamNames(ctx)

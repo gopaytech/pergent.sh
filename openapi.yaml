@@ -6924,7 +6924,7 @@ components:
         state:
           type: string
           enum: [ready, exhausted, key_rejected, removed, not_allowed, not_owner, key_unusable, model_limit, team_limit]
-          description: What a review does with the entry now. `exhausted` is a quota or billing mark, `key_rejected` an auth mark. A 1-entry chain ignores marks, so its entry reads `ready` with `class` set. `model_limit` and `team_limit` mean its model limit, or the owner team's limit on it, is used up this month (a repository's chain only).
+          description: What a review does with the entry now. `exhausted` is a quota or billing mark, `key_rejected` an auth mark. A 1-entry chain ignores marks, so its entry reads `ready` with `class` set. `model_limit` and `team_limit` mean its model limit, or the owner team's limit on it, is used up this month. The global chain shows the model limits only; a team's chain, and the global chain a team page shows while the team has none, also that team's limits.
         class:
           type: string
           enum: ['', quota, billing, auth]

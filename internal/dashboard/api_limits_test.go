@@ -236,3 +236,53 @@ func TestModelListShowsLimits(t *testing.T) {
 		t.Errorf("an entry with no limit = %+v; want null, 0 and []", p)
 	}
 }
+
+// entryStates is each entry's state in v, by source/id.
+func entryStates(v ChainView) map[string]string {
+	out := map[string]string{}
+	for _, en := range v.Entries {
+		out[en.Source+"/"+en.ID] = en.State
+	}
+	return out
+}
+
+// The global and team chain views tag an entry at its limit, as the
+// resolver skips it: the global chain with the model limits alone; a team's
+// chain, and the global chain it shows while it has none, with that team's
+// limits too.
+func TestChainViewsShowLimits(t *testing.T) {
+	te := newTeamsEnv(t)
+	shared, private := te.sharedAndPrivate()
+	own := te.addTeamModel(te.maintainer, te.payments, "pay-a", teamKeyOne)
+	decode[ChainView](t, te.sendJSON(te.admin, "PUT", adminChainURL, entryBody("global/"+shared.ID, "global/"+private.ID)), "PUT global", http.StatusOK)
+	// Payments owns acme/payments, so these tokens count for Payments.
+	spend := func(n int64, c byte, source, id string, tokens int64) {
+		run := te.usageRun(runFix{project: "acme/payments", number: n, head: head(c)}, usageSkill("code-review", "no_blocking_issues", tokens, 0))
+		te.exec(`UPDATE runs SET model_source = $2, model_entry_id = $3 WHERE id = $1::uuid`, run, source, id)
+	}
+	spend(50, '5', store.SourceGlobal, shared.ID, 150)
+	spend(51, '6', store.SourceGlobal, private.ID, 30)
+	spend(52, '7', store.SourceTeam, own.ID, 20)
+	wantCode(t, te.send(te.admin, "PUT", modelLimitURL(shared.ID), `{"monthlyTokens":100}`), "model limit", http.StatusNoContent)
+	wantCode(t, te.send(te.admin, "PUT", teamLimitURL(private.ID, te.payments), `{"monthlyTokens":30}`), "team limit", http.StatusNoContent)
+	wantCode(t, te.send(te.maintainer, "PUT", teamURL(te.payments, "/models/"+own.ID+"/limit"), `{"monthlyTokens":20}`), "own limit", http.StatusNoContent)
+
+	check := func(name string, v ChainView, want map[string]string) {
+		t.Helper()
+		got := entryStates(v)
+		for ref, state := range want {
+			if got[ref] != state {
+				t.Errorf("%s: %s = %q; want %q (all: %v)", name, ref, got[ref], state, got)
+			}
+		}
+	}
+	g, p, o := "global/"+shared.ID, "global/"+private.ID, "team/"+own.ID
+	check("global chain", getJSON[ChainView](te.env, te.admin, adminChainURL),
+		map[string]string{g: "model_limit", p: "ready"})
+	check("Payments, no chain of its own", getJSON[ChainView](te.env, te.maintainer, teamURL(te.payments, "/chain")),
+		map[string]string{g: "model_limit", p: "team_limit"})
+	check("Widgets, no chain of its own", getJSON[ChainView](te.env, te.otherMaintainer, teamURL(te.widgets, "/chain")),
+		map[string]string{g: "model_limit", p: "ready"})
+	check("Payments' own chain, as saved", decode[ChainView](t, te.sendJSON(te.maintainer, "PUT", teamURL(te.payments, "/chain"), entryBody(o, g)), "PUT team chain", http.StatusOK),
+		map[string]string{o: "team_limit", g: "model_limit"})
+}
