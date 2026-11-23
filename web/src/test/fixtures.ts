@@ -31,6 +31,7 @@ import type {
   SignInAdminView,
   SkillResultView,
   SkillTokensView,
+  TeamLimitsView,
   TeamModelsView,
   TeamModelView,
   TeamView,
@@ -591,6 +592,9 @@ export const modelSonnet: ModelAdminView = {
   repositories: [],
   usedIn: ["global chain"],
   mark: null,
+  limit: null,
+  used: 0,
+  teamLimits: [],
 };
 export const modelOpus: ModelAdminView = {
   id: "m-opus",
@@ -605,6 +609,9 @@ export const modelOpus: ModelAdminView = {
   repositories: [{ instance: "main", project: "acme/payments" }],
   usedIn: ["main/acme/payments"],
   mark: null,
+  limit: null,
+  used: 0,
+  teamLimits: [],
 };
 
 // The list of models: three repositories follow the default.
@@ -1082,6 +1089,15 @@ export const teamModelsPayments: TeamModelsView = {
   role: "maintainer",
   canEdit: true,
   models: [teamModelQwen],
+};
+
+// Payments' limits as its maintainer sees them: its own entry near its
+// limit, and an admin's limit for it on a global entry whose model limit is
+// used up.
+export const teamLimitsPayments: TeamLimitsView = {
+  team: { id: 2, name: "Payments" },
+  models: [{ id: "t-qwen", name: "qwen3.5", limit: 500, used: 450 }],
+  global: [{ id: "m-sonnet", name: "Claude Sonnet", limit: 1000, used: 150, modelLimit: "used_up" }],
 };
 
 // Payments' own chain: its entry, then a global entry teams may use.
