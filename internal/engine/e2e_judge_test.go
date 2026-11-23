@@ -352,8 +352,8 @@ func TestE2EJudgeJob(t *testing.T) {
 		if code, body := e.getReviewer(t, id, m.Reviewer, token); code != http.StatusOK || !jsonEqual(t, body, clean(t, head)) {
 			t.Errorf("reviewer %d on the route = %d %s; want its result", m.Reviewer, code, body)
 		}
-		if code, _ := e.getReviewer(t, id, m.Reviewer, string(env.Secret(m.ID).Data["result-token"])); code != http.StatusNotFound {
-			t.Errorf("reviewer %d with a member's token = %d; want 404", m.Reviewer, code)
+		if code, _ := e.getReviewer(t, id, m.Reviewer, string(env.Secret(m.ID).Data["result-token"])); code != http.StatusUnauthorized {
+			t.Errorf("reviewer %d with a member's token = %d; want 401", m.Reviewer, code)
 		}
 	}
 	e.postJudge(t, id, clean(t, head))
