@@ -173,9 +173,10 @@ type Forge interface {
 	AccessLevel(ctx context.Context, projectID int64, username string, userID int64) (Access, error)
 	// IsBot reports whether the platform marks the user as an automated
 	// account: GitLab's project, group and service-account bots, which a
-	// comment's username only suggests. An error means it could not be told
-	// (a command from such an author must not be acted on then). GitHub's
-	// webhook says it itself and never asks.
+	// comment's username only suggests. ErrBotUnknown means the platform
+	// answered and can't tell (such an author is never a person); any other
+	// error means it could not be asked (a command from such an author must
+	// not be acted on then). GitHub's webhook says it itself and never asks.
 	IsBot(ctx context.Context, userID int64) (bool, error)
 	// Visibility reads who may read repo, a path ("owner/name"), through the
 	// review App's installation. It is only ever told by the platform: a
@@ -383,4 +384,9 @@ var (
 	// ErrUnsupported is matched by an error for something the platform has no
 	// support for (GitLab has no linked repositories).
 	ErrUnsupported = errors.New("forge: not supported on this platform")
+	// ErrBotUnknown is matched by IsBot's error when the platform answered
+	// but its answer can't tell the user from a bot (a user with no ID, a
+	// user with no bot attribute whose username is not a bot's). It is an
+	// answer, not a failure to try again, and the user is never a person.
+	ErrBotUnknown = errors.New("forge: the user can't be told from a bot")
 )

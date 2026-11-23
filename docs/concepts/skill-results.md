@@ -13,7 +13,7 @@ A finding on a deleted file (see [Deleted and renamed files](deleted-files.md)) 
 
 The tab has one row for each skill and severity, for the last 30 or 90 days. **Raised** is the number of findings. **Addressed** is Fixed divided by Raised, as a whole percent. Dismissed doesn't count as addressed. A row shows Addressed only from 10 raised, not 10 findings of any kind. Rows with the lowest Addressed come first, and rows without one come last. So a skill with 9 ignored findings sits at the bottom until it has 10.
 
-Only merged changes opened by people count. A change closed without a merge, and a change opened by a bot, say nothing about whether a finding helped. The one exception is Dismissed, which also counts findings dismissed on closed changes opened by people. So Raised can be less than the sum of the columns.
+Only merged changes opened by people count. A change closed without a merge, and a change opened by a bot, say nothing about whether a finding helped. The one exception is Dismissed, which also counts findings dismissed on closed changes opened by people. So Raised can be less than the sum of the columns. On GitLab, a change whose author pergent.sh can't tell from a bot (no user ID, or no `bot` flag from GitLab and a username that is not a bot's) is left out as a bot's. When GitLab doesn't answer at all, the change counts as a person's.
 
 When a skill was edited inside the window, its row says so, for example `Edited 12 days ago: numbers include the old version`. Rows aren't split by version, because that would leave too few findings in each.
 
@@ -22,7 +22,7 @@ When a skill was edited inside the window, its row says so, for example `Edited 
 - A change merged with no findings is counted, so the section covers more changes than the table.
 - A bot-opened change merged with no findings is counted too, because a bot is known only from its findings. The table leaves bot changes out.
 - A change counted because of one skill's dismissal counts the tokens of every skill on it.
-- The tokens are those of all of a counted change's reviews, not only the ones inside the period.
+- The tokens are those of all of a counted change's reviews, also the ones outside the period.
 
 **What to expect.**
 
