@@ -41,9 +41,9 @@ const (
 	// PanelAFile and PanelBFile are where Job P's pergent finds the results.
 	PanelAFile = panelMount + "/a.json"
 	PanelBFile = panelMount + "/b.json"
-	// panelSize bounds the panel volume: 2 results of at most 10 MiB each,
+	// panelSize bounds the panel volume: 5 results of at most 10 MiB each,
 	// and a temp file while one downloads.
-	panelSize = "32Mi"
+	panelSize = "64Mi"
 )
 
 // PanelParams is what a merge Job needs beyond a review Job's checkout.
@@ -65,6 +65,14 @@ func forPanel(p JobParams) JobParams {
 	if p.Panel == nil {
 		return p
 	}
+	p = dropRefusedInputs(p)
+	p.Timeout = PanelTimeout
+	return p
+}
+
+// dropRefusedInputs is p without the inputs pergent refuses with --panel and
+// --multi-review. p itself is not changed.
+func dropRefusedInputs(p JobParams) JobParams {
 	if p.Inputs != nil {
 		in := *p.Inputs
 		in.Previous, in.Carried, in.Description, in.Linked, in.CIResults = nil, nil, nil, nil, nil
@@ -73,13 +81,15 @@ func forPanel(p JobParams) JobParams {
 	p.LinkedClones = nil
 	p.GraphURL, p.GraphImage = "", ""
 	p.SkipSkillVerify = false
-	p.Timeout = PanelTimeout
 	return p
 }
 
-// deadline is the Job's activeDeadlineSeconds. Job P's counts the
-// panel-inputs fetch too.
+// deadline is the Job's activeDeadlineSeconds. Job P's and the judge Job's
+// count the result fetch too.
 func deadline(p JobParams) time.Duration {
+	if p.Judge != nil {
+		return Deadline(p.Timeout+JudgeFetchTimeout, p.CloneAllowance)
+	}
 	if p.Panel != nil {
 		return Deadline(p.Timeout+PanelFetchTimeout, p.CloneAllowance)
 	}

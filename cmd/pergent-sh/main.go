@@ -8,6 +8,7 @@
 //	pergent-sh post-graph --work <dir> --out <dir> --result-url <url>
 //	pergent-sh get-graph --url <url> --out <file>
 //	pergent-sh get-panel --a-url <url> --b-url <url> --dir <dir>
+//	pergent-sh get-reviewers --base-url <url> --reviewers <n,n,...> --dir <dir>
 //
 // serve needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus
 // the LLM key, the GitLab tokens, the GitHub App private keys (or approve
@@ -30,7 +31,8 @@
 // needs only PERGENT_SH_GRAPH_TOKEN. get-graph runs in a review Job and
 // downloads the run's code graph; it needs only PERGENT_RESULT_TOKEN.
 // get-panel runs in a review panel's merge Job and downloads the members'
-// results; it needs only PERGENT_RESULT_TOKEN too.
+// results; it needs only PERGENT_RESULT_TOKEN too. get-reviewers does the
+// same in a multi review's judge Job, for the reviewers' results.
 package main
 
 import (
@@ -95,7 +97,8 @@ const (
 		"       pergent-sh scan-repo --dir <clone> --commit-file <file> --error-file <file> --input-file <file> --result-url <url>\n" +
 		"       pergent-sh post-graph --work <dir> --out <dir> --result-url <url>\n" +
 		"       pergent-sh get-graph --url <url> --out <file>\n" +
-		"       pergent-sh get-panel --a-url <url> --b-url <url> --dir <dir>"
+		"       pergent-sh get-panel --a-url <url> --b-url <url> --dir <dir>\n" +
+		"       pergent-sh get-reviewers --base-url <url> --reviewers <n,n,...> --dir <dir>"
 )
 
 func main() {
@@ -124,6 +127,8 @@ func main() {
 		os.Exit(runGetGraph(ctx, cmd.getGraph, os.Stderr))
 	case "get-panel":
 		os.Exit(runGetPanel(ctx, cmd.getPanel, os.Stderr))
+	case "get-reviewers":
+		os.Exit(runGetReviewers(ctx, *cmd.getReviewers, os.Stderr))
 	}
 	if err := serve(ctx, cmd.configPath, log); err != nil {
 		log.Error("pergent-sh stopped", "error", err.Error())
@@ -143,6 +148,9 @@ type command struct {
 	postGraph  postGraphOptions
 	getGraph   getGraphOptions
 	getPanel   getPanelOptions
+
+	// getReviewers is a pointer: its slice would make command not comparable.
+	getReviewers *getReviewersOptions
 }
 
 // parseArgs reads "serve [--config <path>]", "admin reset-password
@@ -198,6 +206,12 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 			return command{}, err
 		}
 		return command{name: "get-panel", getPanel: o}, nil
+	case "get-reviewers":
+		o, err := parseGetReviewersArgs(args[1:], stderr)
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: "get-reviewers", getReviewers: &o}, nil
 	}
 	return command{}, errors.New(usage)
 }

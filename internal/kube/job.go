@@ -138,6 +138,14 @@ type JobParams struct {
 	// its init container fetches the member results, and LLM is model A,
 	// Panel.B model B. Nil leaves the Job a review.
 	Panel *PanelParams
+	// ReviewMemberID and Reviewer label a multi review's Jobs: the member's
+	// ID, and "1" to "5" for a reviewer or ReviewerJudge for the judge. Both
+	// empty for a review. A reviewer's Job also sets SkipSkillVerify.
+	ReviewMemberID, Reviewer string
+	// Judge makes the Job a multi review's judge (pergent agent
+	// --multi-review): its init container fetches the reviewer results, and
+	// LLM is the judge's model. Nil leaves the Job a review.
+	Judge *JudgeParams
 }
 
 // LinkedClone is one linked repository to clone: Dir is its directory name
@@ -225,6 +233,8 @@ func labels(p JobParams) map[string]string {
 		set(LabelPanelMember, p.PanelMemberID)
 		set(LabelPanelRole, p.PanelRole)
 	}
+	set(LabelReviewMember, p.ReviewMemberID)
+	set(LabelReviewer, p.Reviewer)
 	return l
 }
 
@@ -286,9 +296,10 @@ func lockedDown() *corev1.SecurityContext {
 }
 
 // BuildJob builds the (not yet suspended) review Job; Launch suspends it.
-// With p.Panel set it is a review panel's merge (forPanel).
+// With p.Panel set it is a review panel's merge (forPanel); with p.Judge set
+// it is a multi review's judge (forJudge).
 func BuildJob(p JobParams) *batchv1.Job {
-	p = forPanel(p)
+	p = forJudge(forPanel(p))
 	secret := secretsName(p)
 	hasInstructions := p.Inputs != nil && len(p.Inputs.Instructions) > 0
 	hasPrevious := p.Inputs != nil && len(p.Inputs.Previous) > 0
@@ -321,6 +332,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 	}
 	if p.Panel != nil {
 		args = append(args, panelArgs(p.Panel)...)
+	}
+	if p.Judge != nil {
+		args = append(args, judgeArgs(p.Judge)...)
 	}
 	args = append(args,
 		"--scrub-instructions",
@@ -376,8 +390,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if p.Panel != nil {
 		mainEnv = append(mainEnv, panelEnv(p)...)
 	}
-	if p.Panel == nil || !p.Panel.NoJudge {
-		// --panel-no-judge runs no model, so Job P then gets no LLM key.
+	if (p.Panel == nil || !p.Panel.NoJudge) && (p.Judge == nil || !p.Judge.NoJudge) {
+		// --panel-no-judge and --no-judge run no model, so the Job then gets
+		// no LLM key.
 		mainEnv = append(mainEnv, secretEnv("OPENCODE_API_KEY", secret, keyLLMKey))
 	}
 	mainEnv = append(mainEnv, secretEnv("PERGENT_RESULT_TOKEN", secret, keyResultToken))
@@ -437,6 +452,10 @@ func BuildJob(p JobParams) *batchv1.Job {
 		initContainers = append(initContainers, panelInputsContainer(p))
 		pergent.VolumeMounts = append(pergent.VolumeMounts, corev1.VolumeMount{Name: "panel", MountPath: panelMount, ReadOnly: true})
 	}
+	if p.Judge != nil {
+		initContainers = append(initContainers, reviewersContainer(p))
+		pergent.VolumeMounts = append(pergent.VolumeMounts, corev1.VolumeMount{Name: "panel", MountPath: panelMount, ReadOnly: true})
+	}
 
 	// ConfigMap keys can't contain "/", so items put each skill under skills/.
 	var items []corev1.KeyToPath
@@ -469,6 +488,12 @@ func BuildJob(p JobParams) *batchv1.Job {
 		items = append(items, corev1.KeyToPath{Key: "rules.json", Path: "rules.json"})
 	}
 
+	if p.Judge != nil {
+		// Every judge Job has the file, with --no-judge too: a flag, not an
+		// env var, because pergent has no env for it.
+		items = append(items, corev1.KeyToPath{Key: keyMRDismissals, Path: keyMRDismissals})
+	}
+
 	volumes := []corev1.Volume{
 		{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: workVolume(workSizeFor(p.WorkSize, len(p.LinkedClones)))}},
 		{Name: "inputs", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
@@ -479,7 +504,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasGraph {
 		volumes = append(volumes, graphVolume())
 	}
-	if p.Panel != nil {
+	if p.Panel != nil || p.Judge != nil {
 		volumes = append(volumes, panelVolume())
 	}
 	if p.Import != nil {
@@ -538,7 +563,7 @@ func ownerRef(job *batchv1.Job) []metav1.OwnerReference {
 // Job P only what --panel takes). owner may be nil (tests); Launch always
 // passes the created Job.
 func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
-	p = forPanel(p)
+	p = forJudge(forPanel(p))
 	data := map[string]string{}
 	if p.Inputs != nil {
 		for i, n := range skillNames(p.Inputs) {
@@ -569,6 +594,9 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 			data["linked-repos.json"] = string(p.Inputs.Linked)
 		}
 	}
+	if p.Judge != nil {
+		data[keyMRDismissals] = mrDismissalsData(p.Judge)
+	}
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: inputsName(p), Namespace: p.Namespace, Labels: labels(p),
@@ -580,7 +608,9 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 
 // BuildSecret holds the per-Job credentials, owned by the Job. A panel's
 // merge (p.Panel) holds model B's key too when it is not empty, and no LLM key
-// at all with --panel-no-judge; any other Job holds its own entry's key only.
+// at all with --panel-no-judge. A judge Job (p.Judge) holds the judge's key as
+// llm-api-key, and none with --no-judge; it never holds llm-api-key-b. Any
+// other Job holds its own entry's key only.
 func BuildSecret(p JobParams, owner *batchv1.Job, s Secrets) *corev1.Secret {
 	data := map[string][]byte{
 		keyGitToken:    []byte(s.GitToken),
@@ -594,6 +624,9 @@ func BuildSecret(p JobParams, owner *batchv1.Job, s Secrets) *corev1.Secret {
 		case s.LLMKeyB != "":
 			data[keyLLMKeyB] = []byte(s.LLMKeyB)
 		}
+	}
+	if p.Judge != nil && p.Judge.NoJudge {
+		delete(data, keyLLMKey)
 	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{

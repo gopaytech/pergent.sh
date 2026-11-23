@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -512,5 +513,123 @@ func TestGetPanelSlowADoesNotStopB(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "panel a: not downloaded") || !strings.Contains(stderr.String(), "panel b: downloaded") {
 		t.Errorf("log = %q", stderr.String())
+	}
+}
+
+// reviewerServer serves /runs/r1/reviewers/<n> with the status given per
+// number (200 when none), and counts the tries.
+type reviewerServer struct {
+	mu       sync.Mutex
+	statuses map[string]int
+	tries    map[string]int
+	auth     string
+}
+
+func (rs *reviewerServer) start(t *testing.T) *httptest.Server {
+	t.Helper()
+	rs.tries = map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
+		n := strings.TrimPrefix(r.URL.Path, "/runs/r1/reviewers/")
+		if r.Method != http.MethodGet || n == r.URL.Path {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		rs.auth = r.Header.Get("Authorization")
+		rs.tries[n]++
+		status := http.StatusOK
+		if s, ok := rs.statuses[n]; ok {
+			status = s
+		}
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_, _ = io.WriteString(w, `{"reviewer":`+n+`}`+"\n")
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// The results land as reviewer-<n>.json by number; a 404 writes no file; the
+// command exits 0.
+func TestGetReviewersWritesByNumber(t *testing.T) {
+	noRetryWait(t)
+	rs := &reviewerServer{statuses: map[string]int{"2": http.StatusNotFound}}
+	srv := rs.start(t)
+	dir := t.TempDir()
+	o, err := parseGetReviewersArgs([]string{"--base-url=" + srv.URL + "/runs/r1/reviewers/", "--reviewers=1,2,3", "--dir=" + dir}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PERGENT_RESULT_TOKEN", "run-token")
+	var stderr bytes.Buffer
+	if code := runGetReviewers(context.Background(), o, &stderr); code != 0 {
+		t.Errorf("exit = %d", code)
+	}
+	entries, _ := os.ReadDir(dir)
+	var got []string
+	for _, e := range entries {
+		got = append(got, e.Name())
+	}
+	if want := []string{"reviewer-1.json", "reviewer-3.json"}; !slices.Equal(got, want) {
+		t.Errorf("files = %v, want %v", got, want)
+	}
+	for n, want := range map[string]string{"1": `{"reviewer":1}` + "\n", "3": `{"reviewer":3}` + "\n"} {
+		b, err := os.ReadFile(filepath.Join(dir, "reviewer-"+n+".json"))
+		if err != nil || string(b) != want {
+			t.Errorf("reviewer-%s.json = %q, %v", n, b, err)
+		}
+		if fi, _ := os.Stat(filepath.Join(dir, "reviewer-"+n+".json")); fi.Mode().Perm() != 0o644 {
+			t.Errorf("reviewer-%s.json mode = %v", n, fi.Mode().Perm())
+		}
+	}
+	if rs.tries["2"] != 1 {
+		t.Errorf("a 404 was tried %d times", rs.tries["2"])
+	}
+	if rs.auth != "Bearer run-token" {
+		t.Errorf("Authorization = %q", rs.auth)
+	}
+	if strings.Contains(stderr.String(), "run-token") {
+		t.Error("the token is in the log")
+	}
+}
+
+// Only numbers 1 to 5 are accepted, and the other flags are needed.
+func TestGetReviewersArgs(t *testing.T) {
+	cmd, err := parseArgs([]string{"get-reviewers", "--base-url=http://h:8080/runs/r/reviewers", "--reviewers=1,2,5", "--dir=/panel"}, io.Discard)
+	if err != nil || cmd.name != "get-reviewers" || cmd.getReviewers.dir != "/panel" || !slices.Equal(cmd.getReviewers.reviewers, []int{1, 2, 5}) {
+		t.Errorf("get-reviewers = %+v, %v", cmd, err)
+	}
+	for _, args := range [][]string{
+		{"get-reviewers", "--base-url=http://h/r", "--reviewers=6", "--dir=/panel"},
+		{"get-reviewers", "--base-url=http://h/r", "--reviewers=0", "--dir=/panel"},
+		{"get-reviewers", "--base-url=http://h/r", "--reviewers=1,1", "--dir=/panel"},
+		{"get-reviewers", "--base-url=http://h/r", "--reviewers=a", "--dir=/panel"},
+		{"get-reviewers", "--base-url=http://h/r", "--reviewers=", "--dir=/panel"},
+		{"get-reviewers", "--base-url=ftp://h/r", "--reviewers=1", "--dir=/panel"},
+		{"get-reviewers", "--reviewers=1", "--dir=/panel"},
+		{"get-reviewers", "--base-url=http://h/r", "--reviewers=1"},
+		{"get-reviewers", "--base-url=http://h/r", "--reviewers=1", "--dir=/panel", "extra"},
+	} {
+		if _, err := parseArgs(args, io.Discard); err == nil {
+			t.Errorf("%q parsed", args)
+		}
+	}
+}
+
+// With no token, or no server, get-reviewers still exits 0 and writes nothing.
+func TestRunGetReviewersNeverFails(t *testing.T) {
+	noRetryWait(t)
+	o := getReviewersOptions{baseURL: "http://127.0.0.1:1/runs/r/reviewers", reviewers: []int{1, 2}, dir: t.TempDir()}
+	t.Setenv("PERGENT_RESULT_TOKEN", "")
+	if code := runGetReviewers(context.Background(), o, io.Discard); code != 0 {
+		t.Errorf("exit = %d with no token", code)
+	}
+	t.Setenv("PERGENT_RESULT_TOKEN", "tok")
+	if code := runGetReviewers(context.Background(), o, io.Discard); code != 0 {
+		t.Errorf("exit = %d with no server", code)
+	}
+	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
+		t.Errorf("files written: %v", entries)
 	}
 }
