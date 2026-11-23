@@ -6,6 +6,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -19,8 +20,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopaytech/pergent/rule"
 
+	"github.com/gopaytech/pergent.sh/internal/actions"
 	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
@@ -1986,4 +1990,434 @@ func TestE2EMultiReviewMemberFinishedNoResult(t *testing.T) {
 		}
 	}
 	wantWaiting(t, env, id)
+}
+
+// rerunRun is the one re-run (a "rerun" or "rerun_failed" run) of the test's
+// store.
+func rerunRun(t *testing.T, env *testEnv) string {
+	t.Helper()
+	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RuntimeParams["search_path"] = env.schema
+	conn, err := pgx.ConnectConfig(env.ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(env.ctx)
+	var ids []string
+	rows, err := conn.Query(env.ctx, `SELECT id::text FROM runs WHERE trigger IN ($1, $2)`, store.TriggerRerun, store.TriggerRerunFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("re-runs = %v; want one\n%s", ids, env.Logs())
+	}
+	return ids[0]
+}
+
+// askRerun asks for a re-run of merge request 1's head, as via says: the
+// command "review" (or "review_failed" with failedOnly) written by mo, a
+// maintainer, and answered by the command step; or the dashboard's button,
+// which queues through the same actions.Rerun. It returns the re-run.
+func (e *e2e) askRerun(t *testing.T, via, head string, failedOnly bool) string {
+	t.Helper()
+	env := e.env
+	switch via {
+	case "command":
+		off := false
+		env.Engine.Config.Repositories[0].CommandsAuthorAndMaintainersOnly = &off
+		env.GitLab.Reply(http.MethodGet, membersPath(userMaintainer), http.StatusOK, member(40))
+		env.GitLab.Reply(http.MethodGet, userPath(userMaintainer), http.StatusOK, map[string]any{"id": userMaintainer, "bot": false})
+		const comment = 3001
+		kind := "review"
+		if failedOnly {
+			kind = "review_failed"
+		}
+		env.GitLab.Reply(http.MethodPost, emojiPath(1, comment), http.StatusCreated, `{}`)
+		env.GitLab.Reply(http.MethodGet, notePath(1, comment), http.StatusOK, map[string]any{
+			"id": comment, "body": commandText(kind, "", ""), "system": false,
+			"author": map[string]any{"id": userMaintainer, "username": "mo"},
+		})
+		if _, err := env.Store.InsertCommand(env.ctx, store.Command{
+			MR: env.MRKey(1), ProjectPath: testProjectPath, Platform: "gitlab", Kind: kind,
+			CommentID: comment, Author: "mo", AuthorID: userMaintainer, CreatedAt: env.Now(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := env.Engine.CommandsOnce(env.ctx); err != nil {
+			t.Fatalf("CommandsOnce: %v", err)
+		}
+		var got []string
+		for _, r := range env.GitLab.Requests(http.MethodPost, emojiPath(1, comment)) {
+			got = append(got, r.JSON(t)["name"].(string))
+		}
+		if !slices.Equal(got, []string{eyes, up}) {
+			t.Fatalf("reactions on the command = %v; want it carried out\n%s", got, env.Logs())
+		}
+	case "dashboard":
+		repo, found, err := env.Engine.settings().Get(env.ctx, testInstance, testProjectPath)
+		if err != nil || !found {
+			t.Fatalf("settings = %v, %v", found, err)
+		}
+		res, err := actions.Rerun(env.ctx, env.Store, actions.RerunRequest{
+			MR: env.MRKey(1), ProjectPath: testProjectPath, Head: head, TargetBranch: "main",
+			FailedOnly: failedOnly, Repo: repo, Now: env.Now(), Models: env.Engine.registry(),
+		})
+		if err != nil || res.Status != actions.RerunQueued {
+			t.Fatalf("Rerun = %+v, %v; want queued", res, err)
+		}
+	default:
+		t.Fatalf("no way to ask for a re-run %q", via)
+	}
+	return rerunRun(t, env)
+}
+
+// judgeAndPublish dispatches the judge Job of released run id, posts body as
+// its result and publishes the run.
+func (e *e2e) judgeAndPublish(t *testing.T, id string, body []byte) {
+	t.Helper()
+	dispatch(t, e.env)
+	judgeJob(t, e.env, id)
+	e.postJudge(t, id, body)
+	publish(t, e.env)
+	wantPublished(t, e.env, id)
+}
+
+// jobsOf is the number of Jobs that belong to run id (its own, its
+// reviewers' and its judge's).
+func jobsOf(env *testEnv, id string) int {
+	n := 0
+	for _, j := range env.Jobs() {
+		if j.Labels["pergent.sh/run"] == id {
+			n++
+		}
+	}
+	return n
+}
+
+// configText is every value of the ConfigMap of run or member id, joined.
+func configText(env *testEnv, id string) string {
+	var b strings.Builder
+	for _, v := range env.ConfigMap(id).Data {
+		b.WriteString(v)
+	}
+	return b.String()
+}
+
+// A re-run, asked for by a command or by the dashboard's button, is split
+// again as a new multi review: new reviewers with their own Jobs, and its
+// own judge. It reuses nothing of the earlier multi review: the earlier
+// reviewers' results and judge's result are neither read nor touched. Its
+// judge gets the merge request's dismissals as they are now (D11), and the
+// re-run reviews the merge request's base. Its own judge's result is what is
+// published.
+func TestE2ERerunIsMultiReview(t *testing.T) {
+	for _, via := range []string{"command", "dashboard"} {
+		t.Run(via, func(t *testing.T) {
+			e := newThreeReviewers(t)
+			env := e.env
+			head := sha('a')
+			first, oldMs := releasedReview(t, e, head)
+			e.judgeAndPublish(t, first, clean(t, head))
+			oldMs = reviewMembers(t, env, first)
+			oldJudge := judgeOf(t, env, first)
+			if _, err := env.Store.Dismiss(env.ctx, store.Dismissal{
+				MR: env.MRKey(1), Fingerprint: "fp-later", Severity: "blocking", Reason: "not ours", Actor: "mo",
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			id := e.askRerun(t, via, head, false)
+			if id == first {
+				t.Fatalf("the re-run is the first run")
+			}
+			dispatch(t, env)
+			r := env.Run(id)
+			if r.State != store.Waiting || r.SkipReason != store.WaitReviewers || r.Trigger != store.TriggerRerun {
+				t.Fatalf("re-run = %s/%q %q; want a multi review of a re-run\n%s", r.State, r.SkipReason, r.Trigger, env.Logs())
+			}
+			if r.BaseSHA != sha('b') || r.StartSHA == "" || r.StartSHA != env.Run(first).StartSHA || r.SkillSubset != nil || r.BaseRunID != nil || r.Incremental {
+				t.Errorf("re-run = base %q start %q subset %v base run %v incremental %v; want a full review on the base",
+					r.BaseSHA, r.StartSHA, r.SkillSubset, r.BaseRunID, r.Incremental)
+			}
+			if n := jobsOf(env, id); n != 0 {
+				t.Fatalf("%d Jobs of the re-run after its split; want none", n)
+			}
+			ms := reviewMembers(t, env, id)
+			if len(ms) != 3 {
+				t.Fatalf("re-run members = %+v; want 3 new reviewers", ms)
+			}
+			for _, m := range ms {
+				if m.State != store.MemberQueued || m.Result != nil || m.Entry.ID != "" {
+					t.Errorf("re-run reviewer %d = %s result %s entry %q; want queued with nothing", m.Reviewer, m.State, m.Result, m.Entry.ID)
+				}
+				for _, o := range oldMs {
+					if o.ID == m.ID {
+						t.Errorf("re-run reviewer %d is the earlier review's member %s", m.Reviewer, o.ID)
+					}
+				}
+			}
+			if _, found, err := env.Store.JudgeOf(env.ctx, id); err != nil || found {
+				t.Errorf("re-run judge row before its judge = %v, %v; want none", found, err)
+			}
+
+			// New results: the earlier ones reviewed a.go, these z.go.
+			fresh := resultFor(t, head, reviewed("no_blocking_issues", "z.go"))
+			dispatch(t, env)
+			var newMs []store.ReviewMember
+			for n, name := range []string{"team-a", "team-b", "team-c"} {
+				m := memberOf(t, env, id, n+1)
+				wantMemberKey(t, env, m, "key-"+name)
+				if got := env.Job(m.ID).Labels["pergent.sh/run"]; got != id {
+					t.Errorf("re-run reviewer %d's Job is of run %q; want %s", n+1, got, id)
+				}
+				newMs = append(newMs, m)
+			}
+			releaseReviewers(t, e, id, newMs, fresh, fresh, fresh)
+			if r := env.Run(id); r.Result != nil {
+				t.Errorf("released re-run has a result before its judge: %s", r.Result)
+			}
+
+			dispatch(t, env)
+			args := judgeArgs(t, env, id)
+			for _, want := range []string{"--base=" + sha('b'), "--mr-dismissals=" + kube.MRDismissalsFile,
+				"--result-url=" + testCallbackURL + "/runs/" + id + "/result"} {
+				if !hasArg(args, want) {
+					t.Errorf("re-run judge args %v lack %q", args, want)
+				}
+			}
+			if got, want := env.ConfigMap(id).Data["mr-dismissals.json"], `[{"fingerprint":"fp-later","severity":"blocking"}]`; got != want {
+				t.Errorf("re-run judge mr-dismissals.json = %s; want %s", got, want)
+			}
+			if j := judgeOf(t, env, id); !slices.Equal(j.Reviewers, []int{1, 2, 3}) || j.NoJudge || j.Entry.Name != "team-j" {
+				t.Errorf("re-run judge row = %+v; want reviewers 1 to 3 judged by team-j", j)
+			}
+			token := string(env.Secret(id).Data["result-token"])
+			for n := 1; n <= 3; n++ {
+				if code, body := e.getReviewer(t, id, n, token); code != http.StatusOK || !jsonEqual(t, body, fresh) {
+					t.Errorf("re-run reviewer %d on its judge's route = %d %s; want the re-run's own result", n, code, body)
+				}
+			}
+
+			e.postJudge(t, id, fresh)
+			publish(t, env)
+			wantPublished(t, env, id)
+			got, err := result.Parse(env.Run(id).Result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Merged || len(got.Skills) != 1 || !slices.Equal(got.Skills[0].Files.Reviewed, []string{"z.go"}) {
+				t.Errorf("published re-run result = %+v; want its own judge's result alone", got)
+			}
+
+			// The earlier review is as it was.
+			for i, m := range reviewMembers(t, env, first) {
+				if o := oldMs[i]; m.ID != o.ID || m.State != o.State || !bytes.Equal(m.Result, o.Result) {
+					t.Errorf("earlier reviewer %d changed: %s -> %s", m.Reviewer, o.State, m.State)
+				}
+			}
+			if j := judgeOf(t, env, first); !reflect.DeepEqual(j, oldJudge) {
+				t.Errorf("earlier judge row changed: %+v -> %+v", oldJudge, j)
+			}
+			if !jsonEqual(t, string(env.Run(first).Result), clean(t, head)) {
+				t.Errorf("earlier result changed: %s", env.Run(first).Result)
+			}
+		})
+	}
+}
+
+// twoSkillReview is newThreeReviewers with the skills security and style,
+// and a published multi review of head on merge request 1 in which style
+// failed and security found nothing. It returns the run.
+func twoSkillReview(t *testing.T, e *e2e, head string) string {
+	t.Helper()
+	env := e.env
+	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
+	env.SetDefaultSkills("security", "style")
+	body := resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", ""))
+	id, ms := startReviewers(t, e, head)
+	releaseReviewers(t, e, id, ms, body, body, body)
+	e.judgeAndPublish(t, id, body)
+	if r := env.Run(id); r.SkillVersions == nil || len(r.SkillSources) != 2 || len(r.SkillHashes) != 2 {
+		t.Fatalf("the multi review recorded skills %v %v %v; want both with their versions", r.SkillSources, r.SkillVersions, r.SkillHashes)
+	}
+	return id
+}
+
+// A re-run of the failed skills of a multi review is split again: its
+// reviewers and its judge get the failed skill alone, the run keeps the
+// subset and the base run it was queued with, and records the whole
+// review's skills. The judge's result is merged with the base run's results
+// of the other skills, as for a review on one model.
+func TestE2ERerunFailedSkillsMultiReview(t *testing.T) {
+	for _, via := range []string{"command", "dashboard"} {
+		t.Run(via, func(t *testing.T) {
+			e := newThreeReviewers(t)
+			env := e.env
+			head := sha('a')
+			base := twoSkillReview(t, e, head)
+			baseRun := env.Run(base)
+
+			id := e.askRerun(t, via, head, true)
+			dispatch(t, env)
+			r := env.Run(id)
+			if r.State != store.Waiting || r.SkipReason != store.WaitReviewers {
+				t.Fatalf("re-run = %s/%q; want a multi review\n%s", r.State, r.SkipReason, env.Logs())
+			}
+			if r.Trigger != store.TriggerRerunFailed || !slices.Equal(r.SkillSubset, []string{"style"}) || r.BaseRunID == nil || *r.BaseRunID != base {
+				t.Errorf("re-run = %q %v %v; want the re-run of style on %s", r.Trigger, r.SkillSubset, r.BaseRunID, base)
+			}
+			if r.SkillSources["security"] != baseRun.SkillSources["security"] || r.SkillVersions["security"] != baseRun.SkillVersions["security"] ||
+				r.SkillHashes["security"] != baseRun.SkillHashes["security"] || r.SkillHashes["style"] == "" {
+				t.Errorf("re-run skills = %v %v %v; want security kept from %s and style recorded", r.SkillSources, r.SkillVersions, r.SkillHashes, base)
+			}
+			if r.BaseSHA != sha('b') {
+				t.Errorf("re-run base = %q; want the merge request's", r.BaseSHA)
+			}
+
+			dispatch(t, env)
+			style := resultFor(t, head, namedSkill(t, "style", "no_blocking_issues", "suggestion", "cccccc000001"))
+			var ms []store.ReviewMember
+			for n := 1; n <= 3; n++ {
+				m := memberOf(t, env, id, n)
+				if env.Job(m.ID) == nil {
+					t.Fatalf("re-run reviewer %d has no Job\n%s", n, env.Logs())
+				}
+				text := configText(env, m.ID)
+				if !strings.Contains(text, "Check the style.") || strings.Contains(text, "Look for security problems.") {
+					t.Errorf("re-run reviewer %d's inputs are not the style skill alone:\n%s", n, text)
+				}
+				ms = append(ms, m)
+			}
+			releaseReviewers(t, e, id, ms, style, style, style)
+
+			dispatch(t, env)
+			judgeJob(t, env, id)
+			text := configText(env, id)
+			if !strings.Contains(text, "Check the style.") || strings.Contains(text, "Look for security problems.") {
+				t.Errorf("re-run judge's inputs are not the style skill alone:\n%s", text)
+			}
+			e.postJudge(t, id, style)
+			publish(t, env)
+			wantPublished(t, env, id)
+
+			got, err := result.Parse(env.Run(id).Result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.Merged || len(got.Skills) != 2 || got.Skills[0].Name != "security" || got.Skills[0].Verdict != "no_blocking_issues" ||
+				got.Skills[1].Name != "style" || got.Skills[1].Verdict != "no_blocking_issues" {
+				t.Errorf("published result = %+v; want the kept security and the re-run style", got)
+			}
+			posts := env.GitLab.Requests(http.MethodPost, notesPath(1))
+			if len(posts) == 0 {
+				t.Fatalf("no comment was posted")
+			}
+			body, _ := posts[len(posts)-1].JSON(t)["body"].(string)
+			for _, want := range []string{"| `security` |", "| `style` |", "finding of style"} {
+				if !strings.Contains(body, want) {
+					t.Errorf("comment lacks %q:\n%s", want, body)
+				}
+			}
+		})
+	}
+}
+
+// carriedResult is a completed result of head by pergent 0.5.0 (which takes
+// --carried): the security skill reviewed reviewed and carried carried.
+func carriedResult(t *testing.T, head string, reviewed, carried []string) []byte {
+	t.Helper()
+	b, err := json.Marshal(result.Result{
+		SchemaVersion: result.SchemaVersion, Status: "completed", PergentVersion: "0.5.0",
+		Base: sha('b'), Head: head, Skills: []result.Skill{{Name: "security", Verdict: "no_blocking_issues",
+			Files: result.Files{Reviewed: reviewed, Carried: carried}}},
+		Comment: result.Comment{Markdown: testMarkdown, FindingsBlock: "<!-- pergent:findings [] -->"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// A push after a published multi review is an incremental multi review: the
+// split records it as incremental on the earlier review, each reviewer gets
+// --carried with the files that review covers, and the judge does not
+// (pergent refuses it with --multi-review). The published result keeps the
+// carried files, merged from the earlier review.
+func TestE2EIncrementalMultiReview(t *testing.T) {
+	e := newThreeReviewers(t)
+	env := e.env
+	headA, headB := sha('1'), sha('2')
+	all := []string{"a.go", "b.go", "c.go"}
+	first, ms := startReviewers(t, e, headA)
+	full := carriedResult(t, headA, all, nil)
+	releaseReviewers(t, e, first, ms, full, full, full)
+	e.judgeAndPublish(t, first, full)
+
+	servePublish(env, 1, headB)
+	serveChangedSince(env, "b.go")
+	id := env.Enqueue(1, headB)
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Waiting || r.SkipReason != store.WaitReviewers || jobsOf(env, id) != 0 {
+		t.Fatalf("run = %s/%q with %d Jobs; want a multi review\n%s", r.State, r.SkipReason, jobsOf(env, id), env.Logs())
+	}
+	if r := env.Run(id); !r.Incremental || r.BaseRunID == nil || *r.BaseRunID != first {
+		t.Fatalf("run incremental = %v, base = %v; want an incremental multi review on %s\n%s", r.Incremental, r.BaseRunID, first, env.Logs())
+	}
+
+	dispatch(t, env)
+	var newMs []store.ReviewMember
+	for n := 1; n <= 3; n++ {
+		m := memberOf(t, env, id, n)
+		job := env.Job(m.ID)
+		if job == nil {
+			t.Fatalf("reviewer %d has no Job\n%s", n, env.Logs())
+		}
+		if !hasArg(job.Spec.Template.Spec.Containers[0].Args, "--carried=/in/carried.json") {
+			t.Errorf("reviewer %d's args %v lack --carried", n, job.Spec.Template.Spec.Containers[0].Args)
+		}
+		if got, want := env.ConfigMap(m.ID).Data["carried.json"], `{"security":["a.go","c.go"]}`; got != want {
+			t.Errorf("reviewer %d's carried.json = %s, want %s", n, got, want)
+		}
+		newMs = append(newMs, m)
+	}
+	part := carriedResult(t, headB, []string{"b.go"}, []string{"a.go", "c.go"})
+	releaseReviewers(t, e, id, newMs, part, part, part)
+
+	dispatch(t, env)
+	for _, a := range judgeArgs(t, env, id) {
+		if strings.HasPrefix(a, "--carried") {
+			t.Errorf("the judge got %q", a)
+		}
+	}
+	if _, ok := env.ConfigMap(id).Data["carried.json"]; ok {
+		t.Errorf("the judge got carried.json")
+	}
+	if r := env.Run(id); !r.Incremental || r.BaseRunID == nil || *r.BaseRunID != first {
+		t.Errorf("judged run incremental = %v, base = %v; want it kept", r.Incremental, r.BaseRunID)
+	}
+	// The CLI's judge keeps the first reviewer's files, the carried ones too.
+	e.postJudge(t, id, part)
+	publish(t, env)
+	wantPublished(t, env, id)
+	got, err := result.Parse(env.Run(id).Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Merged || len(got.Skills) != 1 || !slices.Equal(slices.Sorted(slices.Values(got.Skills[0].Files.Reviewed)), all) {
+		t.Errorf("published result = %+v; want security with the carried files kept", got)
+	}
 }
