@@ -435,6 +435,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	// Results stored before usage was recorded are read here, after the
 	// server listens: parsing each (up to 10 MB) must never hold up startup.
 	loops = append(loops, func(ctx context.Context) {
+		// A review panel a main build left in flight is queued again as a
+		// single review first, so the fill below never reads its members.
+		eng.RecoverLegacyPanels(ctx)
 		if n := tokenusage.Backfill(ctx, st, log); n > 0 {
 			log.Info("recorded the usage of earlier reviews", "runs", n)
 		}
