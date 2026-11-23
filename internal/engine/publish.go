@@ -982,9 +982,10 @@ func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logg
 
 // CleanupOnce deletes the Jobs of superseded runs (keeping each one's log
 // first, best effort, within 10 s), sets their commit status
-// to canceled when they had been dispatched, supersedes the panel members
-// whose run no longer waits for them and deletes the Jobs of superseded
-// members the same way (with no status: a member never sets one), and
+// to canceled when they had been dispatched, supersedes a multi review's
+// members whose run no longer waits for them and deletes the Jobs of
+// superseded members the same way (with no status: a member never sets
+// one), and
 // removes the approve bot's
 // approvals of a head or target branch that is no longer the MR's newest
 // run's, and every approval it holds in a repository whose "approve clean
@@ -1099,29 +1100,29 @@ func (e *Engine) withdraw(ctx context.Context, a store.Approval, done, failed st
 	log.Info(done)
 }
 
-// cleanUpMembers supersedes the live panel members whose run no longer waits
-// for them (a push, a close or a supersede took it), then deletes the Job of
-// every superseded member not yet cleaned up, keeping its log first, best
-// effort and once. Its Secret and ConfigMap go with the Job, as a run's do.
-// A member that fails is left for the next pass.
+// cleanUpMembers supersedes a multi review's live members whose run no
+// longer waits for them (a push, a close or a supersede took it), then
+// deletes the Job of every superseded member not yet cleaned up, keeping its
+// log first, best effort and once. Its Secret and ConfigMap go with the Job,
+// as a run's do. A member that fails is left for the next pass.
 func (e *Engine) cleanUpMembers(ctx context.Context) error {
 	var errs []error
-	if n, err := e.Store.SupersedeOrphanMembers(ctx); err != nil {
-		errs = append(errs, fmt.Errorf("cleanup: supersede orphan panel members: %w", err))
+	if n, err := e.Store.SupersedeOrphanReviewMembers(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("cleanup: supersede orphan reviewers: %w", err))
 	} else if n > 0 {
-		e.log().Info("superseded panel members whose run is gone", "members", n)
+		e.log().Info("superseded reviewers whose run is gone", "members", n)
 	}
-	ms, err := e.Store.MembersToCleanUp(ctx)
+	ms, err := e.Store.ReviewMembersToCleanUp(ctx)
 	if err != nil {
-		errs = append(errs, fmt.Errorf("cleanup: list superseded panel members: %w", err))
+		errs = append(errs, fmt.Errorf("cleanup: list superseded reviewers: %w", err))
 	}
 	for _, m := range ms {
 		if ctx.Err() != nil {
 			break
 		}
-		log := e.log().With("run", m.RunID, "member", m.ID, "role", m.Role)
+		log := e.log().With("run", m.RunID, "member", m.ID, "reviewer", m.Reviewer)
 		if err := e.cleanUpMember(ctx, m, log); err != nil {
-			log.Warn("couldn't clean up the superseded panel member; will try again", "error", e.redact(err.Error()))
+			log.Warn("couldn't clean up the superseded reviewer; will try again", "error", e.redact(err.Error()))
 		}
 	}
 	return errors.Join(errs...)
@@ -1129,17 +1130,17 @@ func (e *Engine) cleanUpMembers(ctx context.Context) error {
 
 // cleanUpMember deletes superseded member m's Job, if it has one, and
 // records it is cleaned up. It sets no status.
-func (e *Engine) cleanUpMember(ctx context.Context, m store.PanelMember, log *slog.Logger) error {
+func (e *Engine) cleanUpMember(ctx context.Context, m store.ReviewMember, log *slog.Logger) error {
 	if m.JobName != "" {
 		e.captureJobLog(ctx, e.memberJob(m, false), kube.Observation{}, log.With("job", m.JobName), supersededLogTimeout)
 		if err := e.Launcher.Delete(ctx, m.JobName); err != nil {
 			return err
 		}
 	}
-	if err := e.Store.MarkMemberCleanedUp(ctx, m.ID); err != nil {
+	if err := e.Store.MarkReviewMemberCleanedUp(ctx, m.ID); err != nil {
 		return fmt.Errorf("mark cleaned up: %w", err)
 	}
-	log.Info("superseded panel member cleaned up", "job", m.JobName)
+	log.Info("superseded reviewer cleaned up", "job", m.JobName)
 	return nil
 }
 

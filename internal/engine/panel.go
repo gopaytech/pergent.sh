@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"slices"
-	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
-	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -29,230 +26,6 @@ var errInputsChanged = errors.New(reasonInputsChanged)
 // reasonNoPanelImage fails a review whose merge, Job P, can't fetch its
 // members' results: pergent.sh's own image is not set.
 const reasonNoPanelImage = "a review panel needs pergent.sh's own image (PERGENT_SH_IMAGE, set by the chart) to merge its members"
-
-// isMember reports whether the dispatch starts a panel member's Job.
-func (d *dispatcher) isMember() bool { return d.stage == stageMember }
-
-// dispatchMember starts the Job of the claimed panel member m, with the same
-// dispatch as a review, in stageMember: its run is the one waiting for m. A
-// member whose run no longer waits goes back to the queue, where nothing
-// claims it, and the sweep supersedes it.
-func (e *Engine) dispatchMember(ctx context.Context, m store.PanelMember) error {
-	d := &dispatcher{e: e, stage: stageMember, member: m, run: store.Run{ID: m.RunID},
-		log: e.log().With("run", m.RunID, "member", m.ID, "role", m.Role)}
-	run, found, err := e.Store.PanelRun(ctx, m.RunID)
-	if err != nil {
-		return d.retry(ctx, fmt.Errorf("load the panel's run: %w", err))
-	}
-	if !found {
-		d.log.Info("the panel's run no longer waits for its members; the member is left to the sweep")
-		return d.postpone(ctx, e.now())
-	}
-	d.run = run
-	d.log = e.log().With("run", run.ID, "member", m.ID, "role", m.Role, "instance", run.MR.Instance,
-		"project", run.ProjectPath, "mr", run.MR.IID, "head", run.HeadSHA)
-	if run.Kind == store.KindAPI {
-		// An API review is never split now, so no member of one is left
-		// but a legacy one: it fails, and its run is left to the sweep.
-		return d.fail(ctx, reasonAPINoMultiReview)
-	}
-	return d.dispatch(ctx)
-}
-
-// reasonAPINoMultiReview fails a member of an API review.
-const reasonAPINoMultiReview = "an API review never runs multi review"
-
-// resolveMember picks the member's entry. Member A reads chain A as its run
-// did, but the instance quota never holds it: the run passed the quota hold.
-// Member B reads chain B and never runs on the model A runs on; the instance
-// quota stops B's global entries, as at the split. Each skips the entries
-// its role's earlier attempts ran.
-func (d *dispatcher) resolveMember(ctx context.Context, repo settings.Effective, instanceUsedUp bool) (chain.Decision, error) {
-	ms, err := d.e.Store.PanelMembers(ctx, d.member.RunID)
-	if err != nil {
-		return chain.Decision{}, fmt.Errorf("read the panel's members: %w", err)
-	}
-	if d.member.Role == kube.PanelRoleA {
-		dec, in, err := d.resolveA(ctx, repo, ms, instanceUsedUp)
-		if err != nil {
-			return chain.Decision{}, err
-		}
-		d.attempt = len(in.Tried) + 1
-		d.entry, d.scope = dec, in.Scope
-		return dec, nil
-	}
-	in, err := chain.LoadSet(ctx, d.e.Store, d.e.registry(), d.e.now(), d.run, repo, store.ChainB)
-	if err != nil {
-		return chain.Decision{}, err
-	}
-	in.Tried = triedBy(ms, d.member)
-	modelA, err := d.modelOfA(ctx, repo, ms, instanceUsedUp)
-	if err != nil {
-		return chain.Decision{}, err
-	}
-	in.Avoid = []chain.SameModel{modelA}
-	in.InstanceQuotaUsedUp = instanceUsedUp
-	dec := chain.Resolve(in)
-	d.attempt = len(in.Tried) + 1
-	d.entry, d.scope = dec, in.Scope
-	return dec, nil
-}
-
-// resolveA resolves chain A for member A of the review whose members are ms:
-// the run's chain and tried entries, the entries member A's earlier attempts
-// ran, and no hold: it goes past the instance quota and the admin limits (pastAdmin).
-func (d *dispatcher) resolveA(ctx context.Context, repo settings.Effective, ms []store.PanelMember, instanceUsedUp bool) (chain.Decision, chain.Input, error) {
-	in, err := d.chainA(ctx, repo)
-	if err != nil {
-		return chain.Decision{}, chain.Input{}, err
-	}
-	a := store.PanelMember{Role: kube.PanelRoleA}
-	if d.member.Role == kube.PanelRoleA {
-		a = d.member
-	}
-	for ref := range triedBy(ms, a) {
-		if in.Tried == nil {
-			in.Tried = map[store.EntryRef]bool{}
-		}
-		in.Tried[ref] = true
-	}
-	in.InstanceQuotaUsedUp = instanceUsedUp
-	dec := chain.Resolve(in)
-	if dec.Hold {
-		dec = pastAdmin(in)
-	}
-	return dec, in, nil
-}
-
-// modelOfA is the model member A runs on, which B avoids: that of A's newest
-// attempt with an entry, else the entry chain A resolves to now (none when it
-// resolves to nothing).
-func (d *dispatcher) modelOfA(ctx context.Context, repo settings.Effective, ms []store.PanelMember, instanceUsedUp bool) (chain.SameModel, error) {
-	var newest *store.PanelMember
-	for i := range ms {
-		if ms[i].Role == kube.PanelRoleA && ms[i].Entry.ID != "" {
-			newest = &ms[i]
-		}
-	}
-	if newest != nil {
-		return chain.SameModel{Provider: newest.Provider, Model: newest.Model}, nil
-	}
-	dec, _, err := d.resolveA(ctx, repo, ms, instanceUsedUp)
-	if err != nil || !dec.Runs() {
-		return chain.SameModel{}, err
-	}
-	return chain.SameModel{Provider: dec.Entry.LLM.Provider, Model: dec.Entry.LLM.Model}, nil
-}
-
-// triedBy is the entries the other attempts of m's role ran (ms are the
-// review's members).
-func triedBy(ms []store.PanelMember, m store.PanelMember) map[store.EntryRef]bool {
-	var out map[store.EntryRef]bool
-	for _, o := range ms {
-		if o.Role != m.Role || o.ID == m.ID || o.Entry.ID == "" {
-			continue
-		}
-		if out == nil {
-			out = map[store.EntryRef]bool{}
-		}
-		out[store.EntryRef{Source: o.Entry.Source, ID: o.Entry.ID}] = true
-	}
-	return out
-}
-
-// memberCannotRun acts on a member whose chain gives it no entry (dec does
-// not run). Member A with no entry at all waits, as a run does; with none
-// usable it fails as a run does. Member B fails: without B the review goes on
-// with A alone.
-func (d *dispatcher) memberCannotRun(ctx context.Context, dec chain.Decision) error {
-	switch {
-	case d.member.Role == kube.PanelRoleA && dec.Wait:
-		d.e.warnEvery("no-llm", msgNoLLM)
-		return d.postpone(ctx, d.e.now().Add(waitDelay))
-	case d.member.Role == kube.PanelRoleA:
-		return d.failExhausted(ctx, dec)
-	case dec.Wait:
-		return d.fail(ctx, skipNone)
-	case dec.Hold:
-		return d.fail(ctx, skipQuota)
-	}
-	return d.fail(ctx, chain.FailureText(dec))
-}
-
-// memberInputsMatch reports whether the fitted inputs of a member, or of Job
-// P, are what its run recorded when it was dispatched: the rules, the skills (where each
-// came from and its content's hash), whether it is incremental and since
-// which run, and the linked repositories. A member whose skills changed
-// stops here, before its Job, as its result would fail its check.
-func (d *dispatcher) memberInputsMatch(in *inputs.Inputs, last store.Run, links linkPlan) bool {
-	run := d.run
-	if run.SkillSources != nil {
-		sources, _, hashes := d.runInputs(in)
-		if !maps.Equal(sources, run.SkillSources) || (run.SkillHashes != nil && !maps.Equal(hashes, run.SkillHashes)) {
-			d.log.Info("the review's skills changed since its panel started")
-			return false
-		}
-	}
-	if run.RulesHash != nil && *run.RulesHash != d.rulesHash {
-		d.log.Info("the review's rules changed since its panel started")
-		return false
-	}
-	incremental := len(in.Carried) > 0
-	if incremental != run.Incremental || (incremental && (run.BaseRunID == nil || *run.BaseRunID != last.ID)) {
-		d.log.Info("the files the review carries changed since its panel started")
-		return false
-	}
-	if !slices.EqualFunc(links.Matched, run.LinkedRepos, sameLink) {
-		d.log.Info("the review's linked repositories changed since its panel started")
-		return false
-	}
-	return true
-}
-
-// sameLink reports whether a and b are one link (a nil and an empty watched
-// list are the same).
-func sameLink(a, b store.Link) bool {
-	return a.Target == b.Target && a.CanBlock == b.CanBlock && slices.Equal(a.Watched, b.Watched)
-}
-
-// requeueMember puts the member back in the queue with an attempt counted. A
-// member that is no longer queued or running (superseded meanwhile) can't be,
-// and that is not an error.
-func (d *dispatcher) requeueMember(ctx context.Context, notBefore time.Time) error {
-	err := d.e.Store.RequeueMember(ctx, d.member.ID, notBefore)
-	if err == nil {
-		return nil
-	}
-	ms, lerr := d.e.Store.PanelMembers(ctx, d.member.RunID)
-	if lerr == nil {
-		for _, m := range ms {
-			if m.ID == d.member.ID && m.State != store.MemberQueued && m.State != store.MemberRunning {
-				return nil
-			}
-		}
-	}
-	return fmt.Errorf("requeue the member: %w", err)
-}
-
-// memberRunningText is the running status the review's first member Job
-// sets: the run's own, which says a backup for an attempt after the first.
-func (d *dispatcher) memberRunningText(ctx context.Context) string {
-	run := d.run
-	if run.AttemptOf == nil {
-		return runningDescription
-	}
-	as, err := d.e.Store.Attempts(ctx, *run.AttemptOf)
-	if err != nil {
-		d.log.Info("couldn't read the review's attempts for its status", "error", d.redact(err.Error()))
-		return runningDescription
-	}
-	for i, a := range as {
-		if a.ID == run.ID && i+1 <= run.ChainLength {
-			return fmt.Sprintf(backupDescription, i+1, run.ChainLength)
-		}
-	}
-	return runningDescription
-}
 
 // reasonMemberError fails a member whose result says its review failed and
 // gives no message.
@@ -422,7 +195,7 @@ type judge struct {
 func (p mergePlan) key(role string) string { return p.judges[role].model.Key }
 
 // resolveMerge decides what Job P runs with (d.merge) from the review's
-// members (d.members). Each role with a done member judges with that
+// members (d.panelMembers). Each role with a done member judges with that
 // member's final entry when it still has a key, has no mark and, for B, is
 // not the model A ran on; else with the next usable entry of the role's
 // chain, skipping what earlier attempts of P fell back from on that role; a
@@ -434,8 +207,8 @@ func (p mergePlan) key(role string) string { return p.judges[role].model.Key }
 // the same. d.entry names model A and its key for the Job. err is a store error.
 func (d *dispatcher) resolveMerge(ctx context.Context, repo settings.Effective, repoUsedUp, instanceUsedUp bool) error {
 	done := map[string]*store.PanelMember{}
-	for i := range d.members {
-		if m := &d.members[i]; m.State == store.MemberDone {
+	for i := range d.panelMembers {
+		if m := &d.panelMembers[i]; m.State == store.MemberDone {
 			done[m.Role] = m
 		}
 	}
@@ -526,8 +299,8 @@ func (d *dispatcher) roleLLM(plan mergePlan, role string, entries map[store.Entr
 	if j, ok := plan.judges[role]; ok {
 		return j.model.LLM
 	}
-	for i := len(d.members) - 1; i >= 0; i-- {
-		m := d.members[i]
+	for i := len(d.panelMembers) - 1; i >= 0; i-- {
+		m := d.panelMembers[i]
 		if m.Role != role || m.State == store.MemberOff || m.Entry.ID == "" {
 			continue
 		}

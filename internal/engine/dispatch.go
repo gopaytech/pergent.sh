@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,17 +107,23 @@ func (e *Engine) DispatchOnce(ctx context.Context) error {
 	if len(skip) > 0 {
 		e.warnUnconnected(ctx, skip)
 	}
-	// A panel's members first: their runs passed every check already, and
-	// each holds a slot as a run does (CountRunning counts both).
-	members, err := e.Store.ClaimQueuedMembers(ctx, limit, e.now(), skip...)
+	// A multi review's reviewers first: their runs passed every check
+	// already, and each holds a slot as a run does (CountRunning counts
+	// both).
+	members, err := e.Store.ClaimQueuedReviewMembers(ctx, limit, e.now(), skip...)
 	if err != nil {
-		return fmt.Errorf("dispatch: claim queued panel members: %w", err)
+		return fmt.Errorf("dispatch: claim queued reviewers: %w", err)
 	}
 	var errs []error
 	for _, m := range members {
 		if err := e.dispatchMember(ctx, m); err != nil {
-			errs = append(errs, fmt.Errorf("dispatch panel member %s: %w", m.ID, err))
+			errs = append(errs, fmt.Errorf("dispatch reviewer %d (member %s): %w", m.Reviewer, m.ID, err))
 		}
+	}
+	// A review panel member a main build left: it starts no Job, so it
+	// takes no slot.
+	if err := e.dispatchLegacyMembers(ctx, limit, skip); err != nil {
+		errs = append(errs, err)
 	}
 	if limit -= len(members); limit <= 0 {
 		return errors.Join(errs...)
@@ -174,8 +181,8 @@ func (e *Engine) warnUnconnected(ctx context.Context, names []string) {
 	}
 }
 
-// stage is what a dispatch starts: a review (today's), a panel member's Job
-// or a panel's merge (Job P).
+// stage is what a dispatch starts: a review (today's), a reviewer's Job of
+// a multi review, or a legacy panel's merge (Job P).
 type stage int
 
 const (
@@ -184,21 +191,25 @@ const (
 	stageMerge
 )
 
-// dispatcher handles one claimed run, or one claimed panel member of a run
-// that waits for it. Its methods return only store errors; everything else is
-// turned into the run's (or the member's) next state.
+// dispatcher handles one claimed run, or one claimed reviewer (a member) of
+// a run that waits for it. Its methods return only store errors; everything
+// else is turned into the run's (or the member's) next state.
 type dispatcher struct {
 	e   *Engine
 	run store.Run
 	log *slog.Logger
 	// stage is what the dispatch starts. In stageMember, member is the
-	// claimed member and run the run waiting for it, which is never written.
-	// In stageMerge, members are the review's members and merge what Job P
-	// runs with (resolveMerge).
-	stage   stage
-	member  store.PanelMember
-	members []store.PanelMember
-	merge   mergePlan
+	// claimed member, members are the review's members (resolveMember reads
+	// them), base is the chain input read at this dispatch (entries, marks
+	// and limits now), and run is the run waiting for them, which is never
+	// written. In stageMerge, panelMembers are a legacy panel's members and
+	// merge what Job P runs with (resolveMerge).
+	stage        stage
+	member       store.ReviewMember
+	members      []store.ReviewMember
+	base         chain.Input
+	panelMembers []store.PanelMember
+	merge        mergePlan
 	// secrets are values that must never reach a failure reason or a log.
 	secrets []string
 	// keptSources are the sources of the skills a re-run of some skills keeps
@@ -254,7 +265,7 @@ func (d *dispatcher) dispatchRun(ctx context.Context) error {
 	if merge, live := panelStage(ms); live {
 		return d.waitForMembers(ctx)
 	} else if merge {
-		d.stage, d.members = stageMerge, ms
+		d.stage, d.panelMembers = stageMerge, ms
 	}
 	if d.stage == stageMerge && d.run.AttemptOf != nil && d.run.DispatchedAt.IsZero() {
 		if err := d.e.Store.InheritPanelSplit(ctx, d.run.ID); err != nil {
@@ -384,14 +395,14 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		}
 		e.Wake()
 		if d.isMember() {
-			// The panel's run is superseded with the old head: the member
-			// goes back to the queue, so it holds no slot, and the sweep
-			// supersedes it.
+			// The multi review's run is superseded with the old head: the
+			// member goes back to the queue, so it holds no slot, and the
+			// sweep supersedes it.
 			return d.postpone(ctx, e.now())
 		}
 		return nil
 	}
-	// A member's run passed trust, the quota hold and CI before it was split.
+	// A reviewer's run passed trust, the quota hold and CI before it was split.
 	if d.stage == stageReview && run.Trigger == store.TriggerPush && run.AttemptOf == nil {
 		// Before any token, Job or model call. A later attempt is the same
 		// review of the same head, its author checked by the first. The retries of a check that
@@ -453,7 +464,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	var dec chain.Decision
 	switch d.stage {
 	case stageMember:
-		dec, err = d.resolveMember(ctx, repo, instanceUsedUp)
+		dec, err = d.resolveMember(ctx, repo, repoUsedUp, instanceUsedUp)
 	case stageMerge:
 		if e.ScanImage == "" {
 			return d.fail(ctx, reasonNoPanelImage)
@@ -469,7 +480,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	case d.stage == stageMerge:
 		// Job P always starts: a role with no entry left does not judge.
 	case d.isMember() && !dec.Runs():
-		return d.memberCannotRun(ctx, dec)
+		return d.memberCannotRun(ctx, dec, repoUsedUp)
 	case dec.Wait:
 		// No entry at all, or no usable one in the chain of before chains:
 		// the run waits, as when the list is empty.
@@ -502,9 +513,9 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		return d.postpone(ctx, e.now().Add(diffRefsDelay))
 	}
 	if d.keepsRun() && run.BaseSHA != "" {
-		// Both members, and Job P, review the base their run recorded at the
-		// split, not the merge request's base now (GitHub's follows the base
-		// branch), and their results are checked against it.
+		// Every reviewer, and Job P, review the base their run recorded at
+		// the split, not the merge request's base now (GitHub's follows the
+		// base branch), and their results are checked against it.
 		mr.BaseSHA, mr.StartSHA = run.BaseSHA, run.StartSHA
 	}
 
@@ -802,14 +813,16 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	return d.launch(ctx, plat, repo, project, mr, in, links, gitToken, gitUser)
 }
 
-// launch starts the Job of the run, or of the member in stageMember, with
+// launch starts the Job of the run, or of the reviewer in stageMember, with
 // the fitted inputs in, and records it. gitToken is the clone token (a
-// GitHub one is minted here). A member's Job has its own name, result route
-// and token, its own entry's key alone and --no-skill-verify; it records
-// itself on the member and sets the running status only when it is the
-// review's first member Job. It writes nothing to the run, with one
-// exception: on GitHub that first status stores its Check Run's ref on the
-// run (status_ref, best effort, in setStatus), so Job P updates the same one.
+// GitHub one is minted here). A reviewer's Job has its own name, result
+// route (the member route of the review's first run) and token, its own
+// entry's key alone, --no-skill-verify and the labels of its member and
+// number; it records itself on the member and sets the running status only
+// when it is the review's first member Job. It writes nothing to the run,
+// with one exception: on GitHub that first status stores its Check Run's ref
+// on the run (status_ref, best effort, in setStatus), so the later Jobs
+// update the same one.
 // Job P (stageMerge) is the run's own Job with its result route, and
 // MarkDispatched keeps the split's base: it holds the judges' keys
 // (resolveMerge), fetches the member results from the panel route, has its
@@ -850,8 +863,8 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 	name, runID := kube.JobName(run.ID), run.ID
 	resultURL := strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/result"
 	if d.isMember() {
-		// The member's Job is named and reports by the member; it belongs to
-		// the review's first run.
+		// The reviewer's Job is named and reports by its member; it belongs
+		// to the review's first run.
 		m := d.member
 		name, runID = kube.JobName(m.ID), m.RunID
 		resultURL = strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + m.RunID + "/members/" + m.ID + "/result"
@@ -871,7 +884,7 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 		case merging:
 			// Job P takes no graph (forPanel).
 		case d.isMember():
-			d.log.Info("the code graph is left out for a panel member")
+			d.log.Info("the code graph is left out for a reviewer of a multi review")
 		default:
 			graphURL = e.reviewGraphURL(ctx, run.ID, repo.Instance, repo.Project, mr.TargetBranch)
 		}
@@ -927,10 +940,10 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 	}
 	if d.isMember() {
 		params.SkipSkillVerify = true
-		params.PanelMemberID, params.PanelRole = d.member.ID, d.member.Role
-		// Before the Job starts, as for a run: the other member avoids it,
-		// and the role's next attempt skips it.
-		if err := e.Store.SetMemberEntry(ctx, d.member.ID, runEntry(d.entry), d.provider, d.model); err != nil {
+		params.ReviewMemberID, params.Reviewer = d.member.ID, strconv.Itoa(d.member.Reviewer)
+		// Before the Job starts, as for a run: a later reviewer avoids it,
+		// and this reviewer's next attempt skips it.
+		if err := e.Store.SetReviewMemberEntry(ctx, d.member.ID, runEntry(d.entry), d.provider, d.model); err != nil {
 			return d.retry(ctx, fmt.Errorf("record the member's model entry: %w", err))
 		}
 	}
@@ -945,7 +958,7 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 
 	first := true
 	if d.isMember() {
-		first, err = e.Store.MarkMemberDispatched(ctx, d.member.ID, name, tokenHash, expires, now)
+		first, err = e.Store.MarkReviewMemberDispatched(ctx, d.member.ID, name, tokenHash, expires, now)
 	} else {
 		err = e.Store.MarkDispatched(ctx, run.ID, name, mr.BaseSHA, mr.StartSHA, tokenHash, expires, now)
 	}
@@ -976,8 +989,8 @@ func (d *dispatcher) launch(ctx context.Context, plat Platform, repo settings.Ef
 		return nil
 	}
 	if d.isMember() {
-		// The review's running status, once: the other member's Job, and
-		// Job P later, find it set.
+		// The review's running status, once: the other reviewers' Jobs,
+		// and the judge's later, find it set.
 		if first {
 			if err := e.setStatus(ctx, plat, run, forge.StatusRunning, d.memberRunningText(ctx)); err != nil {
 				d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
@@ -1298,14 +1311,14 @@ func settleCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
 }
 
-// supersede supersedes the run; in stageMember, the panel's run and its live
-// members.
+// supersede supersedes the run; in stageMember, the multi review's run and
+// its live members.
 func (d *dispatcher) supersede(ctx context.Context) error {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
 	if d.isMember() {
-		if err := d.e.Store.SupersedePanel(sctx, d.run.ID, ""); err != nil {
-			return fmt.Errorf("supersede the panel: %w", err)
+		if err := d.e.Store.SupersedeMultiReview(sctx, d.run.ID, ""); err != nil {
+			return fmt.Errorf("supersede the multi review: %w", err)
 		}
 		return nil
 	}
@@ -1321,8 +1334,8 @@ func (d *dispatcher) supersedeDraft(ctx context.Context) error {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
 	if d.isMember() {
-		if err := d.e.Store.SupersedePanel(sctx, d.run.ID, store.SupersededDraft); err != nil {
-			return fmt.Errorf("supersede the panel: %w", err)
+		if err := d.e.Store.SupersedeMultiReview(sctx, d.run.ID, store.SupersededDraft); err != nil {
+			return fmt.Errorf("supersede the multi review: %w", err)
 		}
 		return nil
 	}
@@ -1335,16 +1348,12 @@ func (d *dispatcher) supersedeDraft(ctx context.Context) error {
 // fail reports the run with reason; the publisher posts it. In stageMember it
 // reports the member only: the run goes on waiting for its members.
 func (d *dispatcher) fail(ctx context.Context, reason string) error {
+	if d.isMember() {
+		return d.failMember(ctx, store.Failure{Reason: reason})
+	}
 	reason = d.redact(reason)
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
-	if d.isMember() {
-		d.log.Warn("the panel member can't start; reporting it as failed", "reason", reason)
-		if _, err := d.e.Store.ReportMemberFailure(sctx, d.member.ID, store.Failure{Reason: reason}, d.e.now()); err != nil {
-			return fmt.Errorf("report the member's failure: %w", err)
-		}
-		return nil
-	}
 	d.log.Warn("review can't start; reporting the run as failed", "reason", reason)
 	if _, err := d.e.Store.ReportFailure(sctx, d.run.ID, store.Failure{Reason: reason}, d.e.now()); err != nil {
 		return fmt.Errorf("report failure: %w", err)
@@ -1379,8 +1388,9 @@ func (d *dispatcher) retry(ctx context.Context, cause error) error {
 	return d.requeue(ctx, notBefore)
 }
 
-// requeue puts the run back in the queue. A run that was superseded or
-// reported meanwhile can't be requeued, and that is not an error.
+// requeue puts the run (in stageMember, the member) back in the queue. A
+// run that was superseded or reported meanwhile can't be requeued, and that
+// is not an error.
 func (d *dispatcher) requeue(ctx context.Context, notBefore time.Time) error {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
@@ -1472,7 +1482,7 @@ func (d *dispatcher) postpone(ctx context.Context, notBefore time.Time) error {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
 	if d.isMember() {
-		if err := d.e.Store.PostponeMember(sctx, d.member.ID, notBefore); err != nil {
+		if err := d.e.Store.PostponeReviewMember(sctx, d.member.ID, notBefore); err != nil {
 			return fmt.Errorf("postpone the member: %w", err)
 		}
 		return nil
