@@ -303,3 +303,27 @@ func TestMarkQuotaCheckedLeavesAWaitingRun(t *testing.T) {
 		t.Errorf("run = %s, checked %v; want waiting, unchecked", r.State, r.QuotaChecked)
 	}
 }
+
+// A limit holds a run as the quota does, with its own reason: an automatic
+// run waits, a run asked for or a start is left alone, and a start takes the
+// waiting run.
+func TestHoldForLimit(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, "h1")
+	if ok, err := s.HoldForLimit(ctx, id); err != nil || !ok {
+		t.Fatalf("HoldForLimit = %v, %v", ok, err)
+	}
+	if r := getRun(t, s, id); r.State != Waiting || r.SkipReason != WaitLimit || WaitLimit != "limit_used_up" {
+		t.Fatalf("run = %s/%q; want waiting/limit_used_up", r.State, r.SkipReason)
+	}
+	if got, err := s.ClaimQueued(ctx, 10, t0); err != nil || len(got) != 0 {
+		t.Fatalf("ClaimQueued = %v, %v; a held run is never claimed", got, err)
+	}
+	started, ok, err := s.StartRun(ctx, mr1, "acme/widgets", "h1", "main")
+	if err != nil || !ok || started != id {
+		t.Fatalf("StartRun = %s, %v, %v; want the held run", started, ok, err)
+	}
+	if ok, err := s.HoldForLimit(ctx, id); err != nil || ok {
+		t.Errorf("HoldForLimit of a start = %v, %v; want left alone", ok, err)
+	}
+}

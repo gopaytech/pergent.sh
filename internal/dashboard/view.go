@@ -579,7 +579,8 @@ type QuotaUseView struct {
 // WaitingView is a change of an author the repository doesn't trust, not
 // reviewed until someone starts it, or a change the monthly token quota holds.
 // Reason is "untrusted_author", "trust_check_failed" (the author's access
-// couldn't be read) or "quota_used_up" (only an admin starts it).
+// couldn't be read), "quota_used_up" (only an admin starts it) or
+// "limit_used_up" (held like "quota_used_up"; a limit took part).
 type WaitingView struct {
 	Number int64 `json:"number"`
 	// Head is the commit that waits; Start review sends it back, and a
@@ -1305,6 +1306,37 @@ type TeamModelView struct {
 	Mark     *MarkView  `json:"mark"`
 }
 
+// TeamLimitsView is GET /api/teams/{id}/limits, for the team's maintainers
+// and admins: each of the team's own entries with its limit and the team's
+// use of it this month, and each global entry with an admin's limit for the
+// team. Never another team's numbers.
+type TeamLimitsView struct {
+	Team   TeamRef               `json:"team"`
+	Models []TeamModelLimitView  `json:"models"`
+	Global []TeamGlobalLimitView `json:"global"`
+}
+
+// TeamModelLimitView is one of the team's entries: its limit (null: none,
+// which a maintainer of the team sets) and its tokens this month.
+type TeamModelLimitView struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Limit *int64 `json:"limit"`
+	Used  int64  `json:"used"`
+}
+
+// TeamGlobalLimitView is a global entry with an admin's limit for the team:
+// that limit and the team's tokens on the entry this month, read-only for a
+// maintainer. ModelLimit is the state of the entry's model limit alone,
+// "none", "room_left" or "used_up": its numbers count other teams.
+type TeamGlobalLimitView struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Limit      int64  `json:"limit"`
+	Used       int64  `json:"used"`
+	ModelLimit string `json:"modelLimit"`
+}
+
 // RepoTeamsView is GET .../teams of a repository: every team, by name
 // ignoring case.
 type RepoTeamsView struct {
@@ -1518,19 +1550,33 @@ type ModelsAdminView struct {
 // sent. Repositories are those whose old model setting names the entry;
 // UsedIn labels every chain that names it ("global chain", "team <name>",
 // "<instance>/<project>"). Mark is null unless the provider marked it.
+// Limit is its model limit (null: none) and Used its tokens this month on
+// every instance; TeamLimits each team's limit on it, by team name.
 type ModelAdminView struct {
-	ID           string        `json:"id"`
-	Name         string        `json:"name"`
-	Provider     string        `json:"provider"`
-	Model        string        `json:"model"`
-	BaseURL      string        `json:"baseURL"`
-	Source       string        `json:"source"`
-	Default      bool          `json:"default"`
-	TeamsMayUse  bool          `json:"teamsMayUse"`
-	Key          SecretView    `json:"key"`
-	Repositories []RepoRefView `json:"repositories"`
-	UsedIn       []string      `json:"usedIn"`
-	Mark         *MarkView     `json:"mark"`
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Provider     string          `json:"provider"`
+	Model        string          `json:"model"`
+	BaseURL      string          `json:"baseURL"`
+	Source       string          `json:"source"`
+	Default      bool            `json:"default"`
+	TeamsMayUse  bool            `json:"teamsMayUse"`
+	Key          SecretView      `json:"key"`
+	Repositories []RepoRefView   `json:"repositories"`
+	UsedIn       []string        `json:"usedIn"`
+	Mark         *MarkView       `json:"mark"`
+	Limit        *int64          `json:"limit"`
+	Used         int64           `json:"used"`
+	TeamLimits   []TeamLimitView `json:"teamLimits"`
+}
+
+// TeamLimitView is a team's limit on a global entry and that team's tokens on
+// it this month.
+type TeamLimitView struct {
+	TeamID int64  `json:"teamId"`
+	Team   string `json:"team"`
+	Limit  int64  `json:"limit"`
+	Used   int64  `json:"used"`
 }
 
 // MarkView is what the provider said about an entry: Class "quota" or
@@ -1590,7 +1636,8 @@ type ReviewerChain struct {
 // resolver does with it now: "ready", "exhausted" (a quota or billing mark),
 // "key_rejected" (an auth mark), "removed", "not_allowed" (a global entry
 // teams may not use), "not_owner" (a team entry of a team that doesn't own
-// the repository) or "key_unusable". Class and Until are its mark's, "" and
+// the repository), "key_unusable", "model_limit" (its model limit is used up
+// this month) or "team_limit" (the owner team's limit on it is). Class and Until are its mark's, "" and
 // null with none; CanClear is whether the session may clear it. Fixed is set
 // on the config file's entries, which stay at the front of the global chain.
 // Never a base URL or a key.

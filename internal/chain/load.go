@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -16,7 +17,7 @@ import (
 // earlier attempts of this review ran. The chain is the repository's own
 // (custom), else its owner team's, else the global one. An API review has no
 // repository and no team: it gets the global chain. The caller sets
-// InstanceQuotaUsedUp. The dispatcher and the requests that start a review
+// InstanceQuotaUsedUp; the limits are read here. The dispatcher and the requests that start a review
 // (re-run, start) read it here, so they apply the same rules.
 func Load(ctx context.Context, st *store.Store, reg *instances.Registry, now time.Time, run store.Run, repo settings.Effective) (Input, error) {
 	return LoadSet(ctx, st, reg, now, run, repo, store.ChainA)
@@ -29,7 +30,24 @@ func Load(ctx context.Context, st *store.Store, reg *instances.Registry, now tim
 // Scope "", which means no panel. An API review has no repository, so it
 // gets the global chain B whatever a repository's mode is. For chain B the
 // caller sets Tried (the panel member's earlier attempts), not run.AttemptOf.
+// Both carry the limits used up this month (quota.ReadLimits): the model
+// limits, and the owner team's limits (none without an owner team, so none
+// for an API review). A limit read that fails is the load's error, so no
+// review starts unchecked.
 func LoadSet(ctx context.Context, st *store.Store, reg *instances.Registry, now time.Time, run store.Run, repo settings.Effective, set store.ChainSet) (Input, error) {
+	in, err := loadSet(ctx, st, reg, now, run, repo, set)
+	if err != nil {
+		return Input{}, err
+	}
+	lim, err := quota.ReadLimits(ctx, st, now, in.OwnerTeam)
+	if err != nil {
+		return Input{}, fmt.Errorf("read the model limits: %w", err)
+	}
+	in.ModelLimitUsedUp, in.TeamLimitUsedUp = lim.Model, lim.Team
+	return in, nil
+}
+
+func loadSet(ctx context.Context, st *store.Store, reg *instances.Registry, now time.Time, run store.Run, repo settings.Effective, set store.ChainSet) (Input, error) {
 	in := Input{Entries: map[store.EntryRef]instances.Model{}, Now: now}
 	for _, m := range reg.AllModels() {
 		in.Entries[RefOf(m)] = m

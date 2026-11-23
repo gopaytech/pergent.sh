@@ -23,7 +23,8 @@ type SkillUsage struct {
 
 // RecordUsage stores what each skill of run id used, with the run's
 // repository, merge request, trigger, provider, model and time, and whose key
-// paid (the run's entry: global, or a team and its ID), and marks the run as
+// paid (the run's entry: global, or a team and its ID), and the owner team of
+// its repository now (ownerTeamSQL), which a team limit counts by, and marks the run as
 // recorded, even with no skills. A row already there is kept.
 //
 // For a run with model rows (models not nil: a review panel's merge, Job P,
@@ -41,12 +42,12 @@ func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage,
 	for _, u := range skills {
 		if _, err := tx.Exec(ctx, `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid,
 				trigger, incremental, provider, model, verdict, reported_at, tokens_in, tokens_out, cache_read, cache_write,
-				reasoning, findings, blocking, source, team_id)
+				reasoning, findings, blocking, source, team_id, owner_team_id)
 			SELECT r.id, $2::text, r.instance, r.project_id, r.project_path, r.mr_iid, r.trigger, r.incremental,
 				COALESCE(r.provider, ''), COALESCE(r.model, ''), $3::text, COALESCE(r.reported_at, r.created_at), $4::bigint, $5::bigint,
 				$6::bigint, $7::bigint, $8::bigint, $9::integer, $10::integer,
 				CASE WHEN r.model_source = 'team' THEN 'team' ELSE 'global' END,
-				CASE WHEN r.model_source = 'team' THEN r.model_team_id END
+				CASE WHEN r.model_source = 'team' THEN r.model_team_id END, `+ownerTeamSQL("r.instance", "r.project_path")+`
 			FROM runs r WHERE r.id = $1::uuid
 			ON CONFLICT (run_id, skill) DO NOTHING`,
 			id, u.Skill, u.Verdict, u.In, u.Out, u.CacheRead, u.CacheWrite, u.Reasoning, u.Findings, u.Blocking); err != nil {
@@ -60,9 +61,9 @@ func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage,
 }
 
 // usageInsertSQL inserts what skill $2 of run $1 used into run_usage, with
-// the run's repository, merge request, trigger, provider, model and whose key
-// paid. The verdict, the time and the counts are $3, $4 and $10, $11; the
-// tokens $5 to $9. On a conflict the tokens are added; a count one side
+// the run's repository, merge request, trigger, provider, model, whose key
+// paid and the owner team of its repository now (ownerTeamSQL). The verdict, the time and the counts
+// are $3, $4 and $10, $11; the tokens $5 to $9. On a conflict the tokens are added; a count one side
 // reported is kept when the other side's is unknown, and stays unknown only
 // when both are. What else a conflict does follows it.
 //
@@ -71,14 +72,14 @@ func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage,
 // keeps those). So the instance quota, which counts global keys only, counts
 // a team-key member of a review on a global entry, and misses a global-key
 // member of a review on a team entry. The quota rules are not changed here.
-const usageInsertSQL = `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid,
+var usageInsertSQL = `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid,
 		trigger, incremental, provider, model, verdict, reported_at, tokens_in, tokens_out, cache_read, cache_write,
-		reasoning, findings, blocking, source, team_id)
+		reasoning, findings, blocking, source, team_id, owner_team_id)
 	SELECT r.id, $2::text, r.instance, r.project_id, r.project_path, r.mr_iid, r.trigger, r.incremental,
 		COALESCE(r.provider, ''), COALESCE(r.model, ''), $3::text, $4::timestamptz, $5::bigint, $6::bigint,
 		$7::bigint, $8::bigint, $9::bigint, $10::integer, $11::integer,
 		CASE WHEN r.model_source = 'team' THEN 'team' ELSE 'global' END,
-		CASE WHEN r.model_source = 'team' THEN r.model_team_id END
+		CASE WHEN r.model_source = 'team' THEN r.model_team_id END, ` + ownerTeamSQL("r.instance", "r.project_path") + `
 	FROM runs r WHERE r.id = $1::uuid
 	ON CONFLICT (run_id, skill) DO UPDATE SET tokens_in = run_usage.tokens_in + EXCLUDED.tokens_in,
 		tokens_out = run_usage.tokens_out + EXCLUDED.tokens_out,
@@ -93,12 +94,12 @@ func (s *Store) recordMergeUsage(ctx context.Context, id string, skills []SkillU
 	return s.recordJudgedUsage(ctx, id, skills, func(tx pgx.Tx, at time.Time) error {
 		for _, m := range models {
 			if _, err := tx.Exec(ctx, `INSERT INTO run_usage_models (run_id, part, role, skill, provider, model, entry_name,
-					source, team_id, reported_at, tokens_in, tokens_out, cache_read, cache_write, reasoning)
+					source, team_id, reported_at, tokens_in, tokens_out, cache_read, cache_write, reasoning, owner_team_id)
 				SELECT r.id, 'merge', $2::text, $3::text, COALESCE(NULLIF($4::text, ''), j.provider, ''),
 					COALESCE(NULLIF($5::text, ''), j.model, ''), COALESCE(j.model_entry_name, ''),
 					CASE WHEN j.model_source = 'team' THEN 'team' ELSE 'global' END,
 					CASE WHEN j.model_source = 'team' THEN j.model_team_id END,
-					$6::timestamptz, $7::bigint, $8::bigint, $9::bigint, $10::bigint, $11::bigint
+					$6::timestamptz, $7::bigint, $8::bigint, $9::bigint, $10::bigint, $11::bigint, `+ownerTeamSQL("r.instance", "r.project_path")+`
 				FROM runs r LEFT JOIN panel_judges j ON j.run_id = r.id AND j.role = $2::text
 				WHERE r.id = $1::uuid
 				ON CONFLICT (run_id, skill, role) WHERE part = 'merge' DO NOTHING`,
@@ -216,12 +217,13 @@ type memberUsage struct {
 var (
 	panelMemberUsage = memberUsage{table: "panel_members", runSQL: memberUsageRunSQL,
 		rowSQL: `INSERT INTO run_usage_models (run_id, member_id, part, role, skill, provider, model,
-			entry_name, source, team_id, reported_at, tokens_in, tokens_out, cache_read, cache_write, reasoning)
+			entry_name, source, team_id, reported_at, tokens_in, tokens_out, cache_read, cache_write, reasoning, owner_team_id)
 		SELECT $9::uuid, m.id, 'member', m.role, $2::text, m.provider, m.model, m.model_entry_name,
 			CASE WHEN m.model_source = 'team' THEN 'team' ELSE 'global' END,
 			CASE WHEN m.model_source = 'team' THEN m.model_team_id END,
-			COALESCE(m.reported_at, $3::timestamptz), $4::bigint, $5::bigint, $6::bigint, $7::bigint, $8::bigint
-		FROM panel_members m WHERE m.id = $1::uuid
+			COALESCE(m.reported_at, $3::timestamptz), $4::bigint, $5::bigint, $6::bigint, $7::bigint, $8::bigint,
+			` + ownerTeamSQL("r.instance", "r.project_path") + `
+		FROM panel_members m JOIN runs r ON r.id = $9::uuid WHERE m.id = $1::uuid
 		ON CONFLICT (member_id, skill) WHERE part = 'member' DO NOTHING`}
 	reviewMemberUsage = memberUsage{table: "review_members", runSQL: reviewMemberUsageRunSQL,
 		rowSQL: `INSERT INTO run_usage_by_model (run_id, member_id, part, reviewer, skill, provider, model,

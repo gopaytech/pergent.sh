@@ -73,13 +73,17 @@ const (
 	RerunCapped
 	// RerunQuotaUsedUp: a monthly token quota is used up; nothing was queued.
 	RerunQuotaUsedUp
+	// RerunTeamLimit: an admin's request, and the chain has nothing left but
+	// team entries at their team's own monthly limit, which is the team's
+	// money; nothing was queued. RerunResult.Team names the team.
+	RerunTeamLimit
 )
 
 // RerunRequest asks for the review of the change mr at Head and TargetBranch
 // to be run again. ProjectPath is the repository's path as the platform
 // spells it. Repo holds the caps and the quotas, and Now is the clock they
 // count by. PastQuota is set only for an admin's dashboard action, which goes
-// past a used-up quota. Models is the list of entries, for asking the chain
+// past a used-up quota and the admin limits. Models is the list of entries, for asking the chain
 // whether a team's entry is left under a used-up instance quota; nil refuses
 // as a used-up quota did before chains.
 type RerunRequest struct {
@@ -95,18 +99,21 @@ type RerunRequest struct {
 
 // RerunResult is what Rerun did. Action and Detail are what the audit log
 // records when Status is RerunQueued. Whole is set when "failed only" had no
-// skill to single out and the whole review was queued.
+// skill to single out and the whole review was queued. Team is the owner
+// team of a RerunTeamLimit.
 type RerunResult struct {
 	Status         RerunStatus
 	Whole          bool
 	Action, Detail string
+	Team           string
 }
 
 // Rerun is the one sequence a comment command and a button follow: for "failed
 // only", the skills to run again (nothing failed ends it; no way to single
-// them out re-runs the whole review), then the token quota (an admin's
-// request goes past it; a used-up quota with a review of the head already
-// queued or running answers RerunAlreadyQueued), then the caps, then queueing
+// them out re-runs the whole review), then the token quota and the model
+// limits (an admin's request goes past the quotas and the admin limits, not
+// a team's own; a refusal with a review of the head already queued or
+// running answers RerunAlreadyQueued), then the caps, then queueing
 // the run.
 // The caller checks permissions, drafts and the change's state first, and
 // wakes the engine and audits when the result is RerunQueued.
@@ -132,11 +139,11 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 		}
 	}
 
-	used, err := quotaUsedUp(ctx, st, req.PastQuota, req.Now, req.MR, req.Repo, req.Models)
+	refuse, team, err := refusal(ctx, st, req.PastQuota, req.Now, req.MR, req.Repo, req.Models)
 	if err != nil {
 		return RerunResult{}, err
 	}
-	if used {
+	if refuse != RerunQueued {
 		// A review of the head that is queued or running is on its way: the
 		// request is answered as any request for it is, not refused.
 		active, err := st.ReviewActiveForRerun(ctx, req.MR, req.Head, req.TargetBranch, !req.FailedOnly)
@@ -146,7 +153,7 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 		if active {
 			return RerunResult{Status: RerunAlreadyQueued}, nil
 		}
-		return RerunResult{Status: RerunQuotaUsedUp}, nil
+		return RerunResult{Status: refuse, Team: team}, nil
 	}
 	capped, err := CapReached(ctx, st, req.Now, req.MR, req.Repo)
 	if err != nil {
@@ -166,42 +173,78 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 	return res, nil
 }
 
-// quotaUsedUp tells whether a request for the change mr is refused because a
-// monthly token quota of its repository or instance is used up. An admin's
-// request (pastQuota) is checked nowhere. The repository's quota counts every
-// token and refuses. The instance's counts global keys only, so it refuses
-// only when the chain in effect, read as the dispatcher reads it, has no
-// entry left once global entries are stopped (owner ruling 2026-11-20): a
-// team's entry left lets the review start, and the dispatcher stops global
-// entries for it too.
-func quotaUsedUp(ctx context.Context, st *store.Store, pastQuota bool, now time.Time, mr store.MRKey, repo settings.Effective, models *instances.Registry) (bool, error) {
+// refusal is why a request for the change mr is refused before anything is
+// queued: RerunQuotaUsedUp, RerunTeamLimit (team names the owner team), or
+// RerunQueued when it may go ahead. The repository's quota counts every token
+// and refuses. Then the chain in effect is read as the dispatcher reads it,
+// with the instance quota and the limits (owner ruling 2026-11-20): a request
+// is refused when they alone stop every entry, and, under a used-up instance
+// quota, whenever no entry is left. models nil refuses on the instance quota
+// as before chains, and reads no limit. An admin's request (pastQuota) is
+// adminRefusal's.
+func refusal(ctx context.Context, st *store.Store, pastQuota bool, now time.Time, mr store.MRKey, repo settings.Effective, models *instances.Registry) (RerunStatus, string, error) {
 	if pastQuota {
-		return false, nil
+		return adminRefusal(ctx, st, now, mr, repo, models)
 	}
 	repoUsed, instanceUsed, err := quota.Check(ctx, st, now, mr.Instance, mr.ProjectID, repo)
 	if err != nil {
-		return false, fmt.Errorf("check the token quota: %w", err)
+		return 0, "", fmt.Errorf("check the token quota: %w", err)
 	}
-	if repoUsed || !instanceUsed {
-		return repoUsed, nil
-	}
-	if models == nil {
-		return true, nil
+	switch {
+	case repoUsed, models == nil && instanceUsed:
+		return RerunQuotaUsedUp, "", nil
+	case models == nil:
+		return RerunQueued, "", nil
 	}
 	// A new review: no attempt of it ran yet.
 	in, err := chain.Load(ctx, st, models, now, store.Run{MR: mr}, repo)
 	if err != nil {
-		return false, fmt.Errorf("read the model chain: %w", err)
+		return 0, "", fmt.Errorf("read the model chain: %w", err)
 	}
-	in.InstanceQuotaUsedUp = true
-	return !chain.Resolve(in).Runs(), nil
+	in.InstanceQuotaUsedUp = instanceUsed
+	if dec := chain.Resolve(in); dec.Hold || (instanceUsed && !dec.Runs()) {
+		return RerunQuotaUsedUp, "", nil
+	}
+	return RerunQueued, "", nil
+}
+
+// adminRefusal is refusal for an admin's request: with no entry of room it
+// goes past every quota and the admin limits (chain.Input.PastAdminLimits),
+// so the dispatcher runs it on the first global entry with no mark. It is
+// refused only when nothing but team entries at their team's own limit is
+// left. A chain left with no entry for another reason goes ahead and fails
+// at dispatch, as before.
+func adminRefusal(ctx context.Context, st *store.Store, now time.Time, mr store.MRKey, repo settings.Effective, models *instances.Registry) (RerunStatus, string, error) {
+	if models == nil {
+		return RerunQueued, "", nil
+	}
+	in, err := chain.Load(ctx, st, models, now, store.Run{MR: mr}, repo)
+	if err != nil {
+		return 0, "", fmt.Errorf("read the model chain: %w", err)
+	}
+	if !chain.Resolve(in).Hold {
+		return RerunQueued, "", nil
+	}
+	in.PastAdminLimits()
+	if !chain.Resolve(in).Hold {
+		return RerunQueued, "", nil
+	}
+	t, found, err := st.Team(ctx, in.OwnerTeam)
+	if err != nil {
+		return 0, "", fmt.Errorf("read the owner team: %w", err)
+	}
+	if !found {
+		// Deleted in a race: no team to name, so the plain refusal.
+		return RerunQuotaUsedUp, "", nil
+	}
+	return RerunTeamLimit, t.Name, nil
 }
 
 // StartRequest asks for the review of an untrusted author's change mr at
 // Head and TargetBranch to be started. Repo holds the change's cap and the
 // quotas, and Now is the clock they count by. PastQuota is set only for an
-// admin's dashboard action, which goes past a used-up quota. Models is
-// RerunRequest's.
+// admin's dashboard action, which goes past a used-up quota and the admin
+// limits. Models is RerunRequest's.
 type StartRequest struct {
 	MR                 store.MRKey
 	ProjectPath        string
@@ -213,19 +256,20 @@ type StartRequest struct {
 }
 
 // Start is what a comment command and a button follow to start the review of
-// an untrusted author's change: the token quota (an admin's start goes past
-// it; a used-up quota with a review of the head already queued or running
-// answers RerunAlreadyQueued), the change's re-run cap (a start doesn't count against the
+// an untrusted author's change: the token quota and the model limits (an
+// admin's start goes past the quotas and the admin limits, not a team's own;
+// a refusal with a review of the head already queued or running answers
+// RerunAlreadyQueued), the change's re-run cap (a start doesn't count against the
 // repository's), then the waiting run of the head queued as
 // a start, or a new start. The caller checks that the person has write
 // access, drafts and the change's state first, and wakes the engine and
 // audits when the result is RerunQueued.
 func Start(ctx context.Context, st *store.Store, req StartRequest) (RerunResult, error) {
-	used, err := quotaUsedUp(ctx, st, req.PastQuota, req.Now, req.MR, req.Repo, req.Models)
+	refuse, team, err := refusal(ctx, st, req.PastQuota, req.Now, req.MR, req.Repo, req.Models)
 	if err != nil {
 		return RerunResult{}, err
 	}
-	if used {
+	if refuse != RerunQueued {
 		// As for Rerun: a review of the head already on its way isn't refused.
 		active, err := st.ReviewActiveForStart(ctx, req.MR, req.Head, req.TargetBranch)
 		if err != nil {
@@ -234,7 +278,7 @@ func Start(ctx context.Context, st *store.Store, req StartRequest) (RerunResult,
 		if active {
 			return RerunResult{Status: RerunAlreadyQueued}, nil
 		}
-		return RerunResult{Status: RerunQuotaUsedUp}, nil
+		return RerunResult{Status: refuse, Team: team}, nil
 	}
 	now := req.Now.UTC()
 	since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)

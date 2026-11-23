@@ -43,8 +43,9 @@ func entryRef(m instances.Model) store.EntryRef { return chain.RefOf(m) }
 
 // resolve picks the run's entry. instanceUsedUp is whether the instance's
 // token quota stops global entries. A run somebody asked for (askedFor) is
-// never held for it: when only the quota stops its entries, it runs on the
-// first global one, as before chains.
+// never held: when only quotas and limits stop its entries, it goes past what
+// an admin's start goes past (pastAdmin), as before chains it ran on the
+// first global entry.
 func (d *dispatcher) resolve(ctx context.Context, repo settings.Effective, instanceUsedUp, askedFor bool) (chain.Decision, error) {
 	in, err := d.e.chainFor(ctx, d.run, repo)
 	if err != nil {
@@ -53,12 +54,25 @@ func (d *dispatcher) resolve(ctx context.Context, repo settings.Effective, insta
 	in.InstanceQuotaUsedUp = instanceUsedUp
 	dec := chain.Resolve(in)
 	if dec.Hold && askedFor {
-		in.InstanceQuotaUsedUp = false
-		dec = chain.Resolve(in)
+		dec = pastAdmin(in)
 	}
 	d.attempt = len(in.Tried) + 1
 	d.entry, d.scope = dec, in.Scope
 	return dec, nil
+}
+
+// pastAdmin resolves in past the instance quota and the admin limits
+// (chain.Input.PastAdminLimits), for a run that must not be held: one
+// somebody asked for, or member A, which passed the hold with its run. When a
+// team's own limit still stops every entry left, it fails: HoldForQuota never
+// holds such a run, so a hold would only come back to the queue.
+func pastAdmin(in chain.Input) chain.Decision {
+	in.PastAdminLimits()
+	dec := chain.Resolve(in)
+	if dec.Hold {
+		dec.Hold, dec.Limited, dec.Exhausted = false, false, true
+	}
+	return dec
 }
 
 // failExhausted fails a run no entry of its chain can run: each entry and

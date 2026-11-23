@@ -484,3 +484,38 @@ func TestReviewersNoKeyInResponses(t *testing.T) {
 	re.get(re.admin, "/api/audit")
 	re.wantNoSecret(llmKeyOne, llmKeyTwo, llmKeyThree, teamKeyOne, teamKeyTwo)
 }
+
+// The reviewer chains read the model and team limits as chain A does: an
+// entry whose model limit is used up reads model_limit, and a team entry at
+// the owner team's limit reads team_limit, in a reviewer and in the judge.
+func TestReviewersShowLimitStates(t *testing.T) {
+	re := newReviewersEnv(t)
+	re.storeReviewers(true, []string{teamRef(re.own)}, []string{globalRef(re.shared), teamRef(re.own)})
+	used := re.usageRun(runFix{project: reviewersProject, number: 99, head: head('9')}, usageSkill("code-review", "no_blocking_issues", 6, 4))
+	re.exec(`UPDATE runs SET model_source = 'global', model_entry_id = $2 WHERE id = $1::uuid`, used, re.shared.ID)
+	used = re.usageRun(runFix{project: reviewersProject, number: 98, head: head('8')}, usageSkill("code-review", "no_blocking_issues", 6, 4))
+	re.exec(`UPDATE runs SET model_source = 'team', model_entry_id = $2 WHERE id = $1::uuid`, used, re.own.ID)
+	for _, l := range []store.ModelLimit{
+		{Ref: store.EntryRef{Source: store.SourceGlobal, ID: re.shared.ID}, MonthlyTokens: 10},
+		{Ref: store.EntryRef{Source: store.SourceTeam, ID: re.own.ID}, TeamID: re.payments, MonthlyTokens: 10},
+	} {
+		l.UpdatedAt, l.UpdatedBy = re.clock.now(), "test"
+		if err := re.st.SetModelLimit(ctx, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	states := func(c ChainView) []string {
+		out := []string{}
+		for _, en := range c.Entries {
+			out = append(out, en.State)
+		}
+		return out
+	}
+	v := getJSON[ReviewersView](re.env, re.viewer, reviewersURL(reviewersProject))
+	if len(v.Reviewers) != 1 || !slices.Equal(states(v.Reviewers[0].Chain), []string{"model_limit", "team_limit"}) {
+		t.Errorf("reviewers = %+v; want reviewer 2 with model_limit, team_limit", v.Reviewers)
+	}
+	if v.Judge == nil || !slices.Equal(states(*v.Judge), []string{"team_limit"}) {
+		t.Errorf("judge = %+v; want team_limit", v.Judge)
+	}
+}

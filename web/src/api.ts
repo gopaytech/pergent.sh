@@ -967,7 +967,16 @@ export type MarkClass = "quota" | "billing" | "auth";
 export type MarkView = { class: MarkClass; until: string | null; setAt: string; live: boolean };
 
 // EntryState is what reviews do with a chain entry now.
-export type EntryState = "ready" | "exhausted" | "key_rejected" | "removed" | "not_allowed" | "not_owner" | "key_unusable";
+export type EntryState =
+  | "ready"
+  | "exhausted"
+  | "key_rejected"
+  | "removed"
+  | "not_allowed"
+  | "not_owner"
+  | "key_unusable"
+  | "model_limit"
+  | "team_limit";
 
 // ChainEntryView is an entry of a chain, or one that may be put in it
 // (position 0). class and until are its mark's ("" and null with none);

@@ -361,6 +361,145 @@ func TestResolveAvoid(t *testing.T) {
 	}
 }
 
+// A used-up model limit skips a global entry, a used-up team limit any
+// entry: the next entry runs.
+func TestResolveLimitsSkip(t *testing.T) {
+	in := input(store.ScopeTeam, g("a"), tm("b"), g("c"))
+	in.ModelLimitUsedUp = map[store.EntryRef]bool{g("a"): true}
+	in.TeamLimitUsedUp = map[store.EntryRef]bool{tm("b"): true}
+	d := Resolve(in)
+	if d.Ref != g("c") || d.Position != 3 || d.FirstSkip != ReasonModelLimit || d.Skips[1].Reason != ReasonTeamLimit {
+		t.Fatalf("decision = %+v", d)
+	}
+}
+
+// The order: a mark, then the instance quota, then the model limit, then the
+// team limit.
+func TestResolveLimitOrder(t *testing.T) {
+	in := input(store.ScopeTeam, g("a"), tm("b"))
+	in.ModelLimitUsedUp = map[store.EntryRef]bool{g("a"): true}
+	in.TeamLimitUsedUp = map[store.EntryRef]bool{g("a"): true}
+	if d := Resolve(in); d.FirstSkip != ReasonModelLimit {
+		t.Errorf("model before team: first skip %q", d.FirstSkip)
+	}
+	in.InstanceQuotaUsedUp = true
+	if d := Resolve(in); d.FirstSkip != ReasonInstanceQuota {
+		t.Errorf("quota before limits: first skip %q", d.FirstSkip)
+	}
+	in.Marks = map[store.EntryRef]store.Mark{g("a"): mark(g("a"), store.ClassQuota, at(time.Hour))}
+	if d := Resolve(in); d.FirstSkip != store.ClassQuota {
+		t.Errorf("mark first: first skip %q", d.FirstSkip)
+	}
+}
+
+// A team entry has no model limit: only its team's limit stops it.
+func TestResolveModelLimitIsGlobalOnly(t *testing.T) {
+	in := input(store.ScopeTeam, tm("a"))
+	in.ModelLimitUsedUp = map[store.EntryRef]bool{tm("a"): true}
+	if d := Resolve(in); d.Ref != tm("a") {
+		t.Fatalf("decision = %+v; want the team entry to run", d)
+	}
+}
+
+// A 1-entry chain ignores marks, not limits: at a limit it is held.
+func TestResolveLimitsHoldOneEntryChain(t *testing.T) {
+	in := input(store.ScopeGlobal, g("a"))
+	in.Marks = map[store.EntryRef]store.Mark{g("a"): mark(g("a"), store.ClassAuth, nil)}
+	if d := Resolve(in); !d.Runs() {
+		t.Fatalf("a mark stopped a 1-entry chain: %+v", d)
+	}
+	in.ModelLimitUsedUp = map[store.EntryRef]bool{g("a"): true}
+	if d := Resolve(in); !d.Hold || !d.Limited || d.Exhausted {
+		t.Fatalf("decision = %+v; want a hold a limit took part in", d)
+	}
+}
+
+// Held when quotas and limits alone stop the entries this review has not
+// tried; Limited when a limit is one of them. A mark or a bad key fails it,
+// and names the limits too.
+func TestResolveHoldRules(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		edit          func(in *Input)
+		hold, limited bool
+		text          string
+	}{
+		{"quota only", func(in *Input) {
+			in.InstanceQuotaUsedUp = true
+			in.Tried = map[store.EntryRef]bool{tm("b"): true}
+		}, true, false, ""},
+		{"quota and a team limit", func(in *Input) {
+			in.InstanceQuotaUsedUp = true
+			in.TeamLimitUsedUp = map[store.EntryRef]bool{tm("b"): true}
+		}, true, true, ""},
+		{"tried and a team limit", func(in *Input) {
+			in.Tried = map[store.EntryRef]bool{g("a"): true}
+			in.TeamLimitUsedUp = map[store.EntryRef]bool{tm("b"): true}
+		}, true, true, ""},
+		{"tried only", func(in *Input) {
+			in.Tried = map[store.EntryRef]bool{g("a"): true, tm("b"): true}
+		}, false, false, "all models exhausted: n-a (already tried), n-b (already tried)"},
+		{"a mark and a team limit", func(in *Input) {
+			in.Marks = map[store.EntryRef]store.Mark{g("a"): mark(g("a"), store.ClassQuota, at(time.Hour))}
+			in.TeamLimitUsedUp = map[store.EntryRef]bool{tm("b"): true}
+		}, false, false, "all models exhausted: n-a (out of quota), n-b (team limit used up)"},
+		{"no key and a model limit", func(in *Input) {
+			m := in.Entries[tm("b")]
+			m.Key = ""
+			in.Entries[tm("b")] = m
+			in.ModelLimitUsedUp = map[store.EntryRef]bool{g("a"): true}
+		}, false, false, "all models exhausted: n-a (model limit used up), n-b (no usable key)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := input(store.ScopeTeam, g("a"), tm("b"))
+			c.edit(&in)
+			d := Resolve(in)
+			if d.Hold != c.hold || d.Limited != c.limited || d.Exhausted == c.hold || d.Runs() {
+				t.Fatalf("decision = %+v; want hold %v, limited %v", d, c.hold, c.limited)
+			}
+			if c.text != "" && FailureText(d) != c.text {
+				t.Errorf("FailureText = %q\nwant %q", FailureText(d), c.text)
+			}
+		})
+	}
+}
+
+// An admin's start goes past the instance quota, the model limits and the
+// team limits on global entries; a team's own limit on its team entry stays.
+func TestPastAdminLimits(t *testing.T) {
+	in := input(store.ScopeRepo, tm("a"), g("b"))
+	in.SavedByAdmin, in.InstanceQuotaUsedUp = true, true
+	in.ModelLimitUsedUp = map[store.EntryRef]bool{g("b"): true}
+	in.TeamLimitUsedUp = map[store.EntryRef]bool{tm("a"): true, g("b"): true}
+	if d := Resolve(in); !d.Hold {
+		t.Fatalf("before: %+v; want a hold", d)
+	}
+	past := in
+	past.PastAdminLimits()
+	if d := Resolve(past); d.Ref != g("b") || d.FirstSkip != ReasonTeamLimit {
+		t.Fatalf("past the admin limits: %+v; want the global entry, the team's own limit still skipping its entry", d)
+	}
+	if !in.TeamLimitUsedUp[g("b")] || !in.ModelLimitUsedUp[g("b")] {
+		t.Error("PastAdminLimits changed the maps of the Input it was copied from")
+	}
+	own := input(store.ScopeTeam, tm("a"))
+	own.TeamLimitUsedUp = map[store.EntryRef]bool{tm("a"): true}
+	own.PastAdminLimits()
+	if d := Resolve(own); !d.Hold {
+		t.Fatalf("only the team's own entry: %+v; want still held", d)
+	}
+	own.IgnoreLimits()
+	if d := Resolve(own); !d.Runs() {
+		t.Fatalf("IgnoreLimits: %+v; want it to run", d)
+	}
+}
+
+func TestReasonWordsLimits(t *testing.T) {
+	if ReasonWords(ReasonModelLimit) != "model limit used up" || ReasonWords(ReasonTeamLimit) != "team limit used up" {
+		t.Errorf("words = %q, %q", ReasonWords(ReasonModelLimit), ReasonWords(ReasonTeamLimit))
+	}
+}
+
 // Avoid holds the models of every earlier reviewer: each is skipped, in any
 // case, and a chain of only those models is exhausted.
 func TestResolveAvoidSeveral(t *testing.T) {

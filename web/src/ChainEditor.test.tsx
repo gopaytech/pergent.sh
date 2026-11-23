@@ -111,6 +111,8 @@ describe("ChainEditor", () => {
     expect(entryStateText({ ...entryTeamQwen, state: "not_allowed" })).toBe("not allowed for teams any more");
     expect(entryStateText({ ...entryTeamQwen, state: "not_owner" })).toBe("team no longer owns this repository");
     expect(entryStateText({ ...entryTeamQwen, state: "key_unusable" })).toBe("key can't be read");
+    expect(entryStateText({ ...entryTeamQwen, state: "model_limit" })).toBe("model limit used up");
+    expect(entryStateText({ ...entryTeamQwen, state: "team_limit" })).toBe("team limit used up");
   });
 
   it("offers Clear mark only where the session may clear it, and calls back with the entry", async () => {
