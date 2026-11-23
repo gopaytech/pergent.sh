@@ -651,3 +651,24 @@ func TestMultiReviewUsageSplitBySource(t *testing.T) {
 		t.Errorf("TokensSince = %d, %v; want %d", n, err, team+global+plainT)
 	}
 }
+
+// The cache counts of 2 reviewers on one run_usage row: both sides known add
+// up (2 + 5 = 7), one side known is kept, and neither side known stays
+// unknown (usageInsertSQL).
+func TestRecordReviewMemberUsageCacheMerge(t *testing.T) {
+	s := newStore(t)
+	id, ms := multiReviewWithEntries(t, s, mr1, "a1", 2)
+	two, five := int64(2), int64(5)
+	if err := s.RecordReviewMemberUsage(ctx, ms[0].ID, []SkillUsage{{Skill: "both", CacheRead: &two}, {Skill: "one", CacheRead: &two}, {Skill: "none"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordReviewMemberUsage(ctx, ms[1].ID, []SkillUsage{{Skill: "both", CacheRead: &five}, {Skill: "one"}, {Skill: "none"}}); err != nil {
+		t.Fatal(err)
+	}
+	for skill, want := range map[string]*int64{"both": ptrTo(int64(7)), "one": ptrTo(int64(2)), "none": nil} {
+		u, ok := usageOf(t, s, id, skill)
+		if !ok || (u.cache == nil) != (want == nil) || (want != nil && *u.cache != *want) {
+			t.Errorf("%s cache_read = %v, %v; want %v", skill, u.cache, ok, want)
+		}
+	}
+}

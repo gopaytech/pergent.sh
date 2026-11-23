@@ -641,7 +641,7 @@ func (d *Dashboard) resetRepoChain(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := d.Store.ResetRepoChainOf(ctx, store.ChainA, repo.Instance, repo.Project); err != nil {
+	if err := d.Store.ResetRepoChain(ctx, repo.Instance, repo.Project); err != nil {
 		d.Log.Error("dashboard: resetting a model chain failed", "instance", repo.Instance, "project", repo.Project, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return

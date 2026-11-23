@@ -127,3 +127,87 @@ func legacyPanelOff(t *testing.T, s *Store, id, reason string) {
 		t.Fatal(err)
 	}
 }
+
+// A legacy panel review whose merge left no result (panelNoResult's
+// panel_members clause): its members' tokens count as wasted, and the
+// review counts as one with no result, never as a review in the metrics.
+func TestUsageLegacyPanelNoResult(t *testing.T) {
+	s := newStore(t)
+	mr := usageMR(7, 1)
+	id := legacyPanelRun(t, s, mr, "a1")
+	// The members' tokens, as that build added them to the run's row.
+	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "security", In: 100, Out: 10}}); err != nil {
+		t.Fatal(err)
+	}
+	// Job P ran and left no result.
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'reported', skip_reason = '', failure_reason = 'the Job timed out',
+		failure_step = 'review', reported_at = $2, created_at = $3 WHERE id = $1::uuid`, id, usageAt(5, 10, 0), usageAt(5, 9, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE run_usage SET reported_at = $2 WHERE run_id = $1::uuid`, id, usageAt(5, 10, 0)); err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.UsageWasted(ctx, mr.Instance, 7, usageSince)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Failed.In != 100 || w.Failed.Out != 10 || w.NoResult != 1 {
+		t.Errorf("wasted = %+v; want the members' tokens as failed and one review with no result", w)
+	}
+	m, err := s.MetricsTotals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Reviews) != 0 || len(m.SkillRuns) != 0 {
+		t.Errorf("reviews %+v, skill runs %+v; want none: the review has no result", m.Reviews, m.SkillRuns)
+	}
+	if len(m.NoResult) != 1 || m.NoResult[0].Reviews != 1 {
+		t.Errorf("no result = %+v; want the review once", m.NoResult)
+	}
+	if len(m.Tokens) != 1 || m.Tokens[0].Tokens.In != 100 {
+		t.Errorf("tokens = %+v; want the members' 100 kept", m.Tokens)
+	}
+}
+
+// PruneRunLogs prunes the logs and diagnostics a main build left for legacy
+// panel members too: an old row goes, a fresh one stays.
+func TestPruneRunLogsPrunesLegacyPanelMembers(t *testing.T) {
+	s := newStore(t)
+	id := legacyPanelRun(t, s, mr1, "a1")
+	a, b := legacyMemberOf(t, s, id, "a"), legacyMemberOf(t, s, id, "b")
+	for _, m := range []struct {
+		id  string
+		age string
+	}{{a.ID, "31 days"}, {b.ID, "0 days"}} {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO panel_member_logs (member_id, text, created_at)
+			VALUES ($1::uuid, 'log', now() - $2::interval)`, m.id, m.age); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.pool.Exec(ctx, `INSERT INTO panel_member_diagnostics (member_id, clone_log, clone_log_masked, pod_state, created_at)
+			VALUES ($1::uuid, 'c', 'cm', 'p', now() - $2::interval)`, m.id, m.age); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := s.PruneRunLogs(ctx, time.Now().Add(-30*24*time.Hour))
+	if err != nil || n != 2 {
+		t.Fatalf("PruneRunLogs = %d, %v; want 2", n, err)
+	}
+	for _, table := range []string{"panel_member_logs", "panel_member_diagnostics"} {
+		var ids []string
+		rows, err := s.pool.Query(ctx, `SELECT member_id::text FROM `+table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if len(ids) != 1 || ids[0] != b.ID {
+			t.Errorf("%s = %v; want member b's fresh row only", table, ids)
+		}
+	}
+}
