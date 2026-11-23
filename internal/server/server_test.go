@@ -361,6 +361,32 @@ func TestRoutesPanelOnlyWhenSet(t *testing.T) {
 	}
 }
 
+type reviewersStub struct{}
+
+func (reviewersStub) ReviewerResult(context.Context, string, string, int) ([]byte, bool, error) {
+	return []byte("{}"), true, nil
+}
+
+// The reviewer route is on the public mux only when Reviewers is set.
+func TestRoutesReviewersOnlyWhenSet(t *testing.T) {
+	cfg := &config.Config{}
+	get := func(h http.Handler) int {
+		req := httptest.NewRequest(http.MethodGet, "/runs/r1/reviewers/1", nil)
+		req.Header.Set("Authorization", "Bearer t")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	d := Deps{Config: cfg, Instances: instances.New(cfg, nil, nil)}
+	if code := get(Routes(d)); code != http.StatusNotFound {
+		t.Errorf("without Reviewers = %d; want 404", code)
+	}
+	d.Reviewers = reviewersStub{}
+	if code := get(Routes(d)); code != http.StatusOK {
+		t.Errorf("with Reviewers = %d; want 200", code)
+	}
+}
+
 // The member result route is on the public mux beside the run's: a post
 // without a token reaches the handler (401) before it touches the store,
 // which is nil here, and a GET is refused.

@@ -16,15 +16,15 @@ import (
 
 // MemberResults is the part of the store the member handler needs.
 type MemberResults interface {
-	PanelRun(ctx context.Context, root string) (store.Run, bool, error)
-	StoreMemberResult(ctx context.Context, runID, id, token string, body []byte, now time.Time) (store.ResultOutcome, error)
-	ReportMemberFailure(ctx context.Context, id string, f store.Failure, now time.Time) (bool, error)
-	ReplaceMemberWithFailure(ctx context.Context, id string, f store.Failure) error
-	RecordMemberUsage(ctx context.Context, id string, skills []store.SkillUsage) error
+	MultiReviewRun(ctx context.Context, root string) (store.Run, bool, error)
+	StoreReviewMemberResult(ctx context.Context, runID, id, token string, body []byte, now time.Time) (store.ResultOutcome, error)
+	ReportReviewMemberFailure(ctx context.Context, id string, f store.Failure, now time.Time) (bool, error)
+	ReplaceReviewMemberWithFailure(ctx context.Context, id string, f store.Failure) error
+	RecordReviewMemberUsage(ctx context.Context, id string, skills []store.SkillUsage) error
 }
 
-// MemberHandler serves POST /runs/{id}/members/{member}/result: a panel
-// member's Job posts its result with the member's own token. The body is
+// MemberHandler serves POST /runs/{id}/members/{member}/result: a multi
+// review's reviewer Job posts its result with the member's own token. The body is
 // checked as a review Job's is (checkResult), with the same size cap and
 // answers. A result that can't be used fails the member, never the run, and
 // nothing is ever published from here. A member that is not the run's, an
@@ -73,7 +73,7 @@ func (h *MemberHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The token is checked first, on the raw body, and with it that the
 	// member is the run's: its Job's URL names the run the member belongs
 	// to (StoreMemberResult). Every refusal takes the same steps there.
-	outcome, err := h.Members.StoreMemberResult(ctx, runID, id, token, body, now)
+	outcome, err := h.Members.StoreReviewMemberResult(ctx, runID, id, token, body, now)
 	switch {
 	case errors.Is(err, store.ErrInvalidResult):
 		h.fail(w, ctx, log, id, now, "the body is not valid JSON")
@@ -108,16 +108,16 @@ func (h *MemberHandler) stored(w http.ResponseWriter, ctx context.Context, log *
 		reason = err.Error()
 	} else {
 		var found bool
-		run, found, err = h.Members.PanelRun(ctx, runID)
+		run, found, err = h.Members.MultiReviewRun(ctx, runID)
 		if err != nil {
-			log.Error("read the panel's run", "error", err)
+			log.Error("read the review's run", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		if !found {
 			// A push or a close took the run after the result was stored:
 			// the sweep supersedes the member, and its result is never used.
-			log.Info("the panel's run no longer waits; the member's result is left to the sweep")
+			log.Info("the review's run no longer waits; the member's result is left to the sweep")
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -126,7 +126,7 @@ func (h *MemberHandler) stored(w http.ResponseWriter, ctx context.Context, log *
 	if reason != "" {
 		// ErrNotReported: the engine's settle pass ran the same check on the
 		// stored result first and already failed the member.
-		if err := h.Members.ReplaceMemberWithFailure(ctx, id, unusableFailure(reason)); err != nil && !errors.Is(err, store.ErrNotReported) {
+		if err := h.Members.ReplaceReviewMemberWithFailure(ctx, id, unusableFailure(reason)); err != nil && !errors.Is(err, store.ErrNotReported) {
 			log.Error("replace member result with failure", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
@@ -165,7 +165,7 @@ func (h *MemberHandler) recordUsageLater(ctx context.Context, log *slog.Logger, 
 			log.Warn("couldn't read the member result's usage", "error", err.Error())
 			skills = nil
 		}
-		if err := h.Members.RecordMemberUsage(ctx, id, skills); err != nil {
+		if err := h.Members.RecordReviewMemberUsage(ctx, id, skills); err != nil {
 			log.Warn("couldn't record the member result's usage", "error", err.Error())
 		}
 	}()
@@ -173,7 +173,7 @@ func (h *MemberHandler) recordUsageLater(ctx context.Context, log *slog.Logger, 
 
 // fail reports the member failed with an unusable result.
 func (h *MemberHandler) fail(w http.ResponseWriter, ctx context.Context, log *slog.Logger, id string, now time.Time, reason string) {
-	if _, err := h.Members.ReportMemberFailure(ctx, id, unusableFailure(reason), now); err != nil {
+	if _, err := h.Members.ReportReviewMemberFailure(ctx, id, unusableFailure(reason), now); err != nil {
 		log.Error("report member failure", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

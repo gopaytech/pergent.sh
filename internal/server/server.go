@@ -63,6 +63,9 @@ type Deps struct {
 	// Panel serves a panel's merge Job (Job P) its done members' results:
 	// the store. Nil leaves the route absent.
 	Panel callback.PanelResults
+	// Reviewers serves a multi review's judge Job its reviewers' results:
+	// GET /runs/{id}/reviewers/{n}. Nil leaves the route off.
+	Reviewers callback.ReviewerResults
 	// ReviewAPI serves /v1/, the review API. Nil, when the dashboard is off:
 	// the paths are absent.
 	ReviewAPI *reviewapi.Handler
@@ -130,6 +133,9 @@ func Routes(d Deps) *http.ServeMux {
 	}
 	if d.Panel != nil {
 		mux.Handle("GET /runs/{id}/panel/{role}", &callback.PanelHandler{Panel: d.Panel, Log: d.Log})
+	}
+	if d.Reviewers != nil {
+		mux.Handle("GET /runs/{id}/reviewers/{n}", &callback.ReviewersHandler{Reviewers: d.Reviewers, Log: d.Log})
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
