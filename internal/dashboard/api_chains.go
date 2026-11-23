@@ -35,14 +35,22 @@ const (
 	msgNoPanelImage     = "no review image supports a review panel yet"
 )
 
-// panelImageRefusal is the 400's message when a chain B can't be saved
-// because jobs.image runs no pergent with a review panel; "" when it can.
-func (d *Dashboard) panelImageRefusal() string {
+// reviewerImageRefusal is the 400's message when a save can't add a
+// reviewer because jobs.image runs no pergent with multi review; "" when it
+// can.
+func (d *Dashboard) reviewerImageRefusal() string {
+	return d.imageRefusal(msgNoReviewerImage, "a second reviewer")
+}
+
+// imageRefusal is reviewerImageRefusal with the words of a save: none while
+// no pergent release has the floor set, else what needs the image. Chain B
+// has its own words until its routes go.
+func (d *Dashboard) imageRefusal(none, what string) string {
 	if ok, _ := config.PanelImage(d.cfg.Jobs.Image); ok {
 		return ""
 	}
 	if config.PanelMinVersion == "" {
-		return msgNoPanelImage
+		return none
 	}
 	tag := config.ImageTag(d.cfg.Jobs.Image)
 	switch _, known := result.VersionAtLeast(tag, config.PanelMinVersion); {
@@ -51,7 +59,7 @@ func (d *Dashboard) panelImageRefusal() string {
 	case !known:
 		tag += " (not a version)"
 	}
-	return "chain B needs a review image with pergent " + config.PanelMinVersion + " or later; jobs.image is " + tag
+	return what + " needs a review image with pergent " + config.PanelMinVersion + " or later; jobs.image is " + tag
 }
 
 // chainAudit is the audit action of a change to a chain of set.
@@ -236,11 +244,17 @@ func decodeChain(r *http.Request) ([]store.EntryRef, string) {
 	if err := decodeStrict(r, &in); err != nil || in.Entries == nil {
 		return nil, msgBadChainBody
 	}
-	out := make([]store.EntryRef, 0, len(in.Entries))
+	return refsOf(in.Entries, msgBadChainBody)
+}
+
+// refsOf is one chain of a PUT body as refs; msg is the 400's message when
+// an entry is wrong (bad) or in the chain twice.
+func refsOf(in []entryInput, bad string) ([]store.EntryRef, string) {
+	out := make([]store.EntryRef, 0, len(in))
 	seen := map[store.EntryRef]bool{}
-	for _, e := range in.Entries {
+	for _, e := range in {
 		if (e.Source != store.SourceGlobal && e.Source != store.SourceTeam) || e.ID == "" {
-			return nil, msgBadChainBody
+			return nil, bad
 		}
 		ref := store.EntryRef{Source: e.Source, ID: e.ID}
 		if seen[ref] {
@@ -301,7 +315,7 @@ func entryNames(refs []store.EntryRef, known map[store.EntryRef]instances.Model)
 // panel (400 otherwise). An empty one is no chain B, so it needs none.
 func (d *Dashboard) saveChain(ctx context.Context, w http.ResponseWriter, set store.ChainSet, c store.Chain) bool {
 	if set == store.ChainB && len(c.Entries) > 0 {
-		if msg := d.panelImageRefusal(); msg != "" {
+		if msg := d.imageRefusal(msgNoPanelImage, "chain B"); msg != "" {
 			writeError(w, http.StatusBadRequest, msg)
 			return false
 		}
@@ -777,15 +791,20 @@ func (d *Dashboard) offRepoPanelChain(w http.ResponseWriter, r *http.Request) {
 
 // repoChainSummary is what the repository view says of its chains: the
 // model ("provider / model" of position 1 of chain A in effect; "" when
-// there is none or it was removed) and the panel.
-func (d *Dashboard) repoChainSummary(ctx context.Context, repo settings.Effective) (string, PanelView, error) {
+// there is none or it was removed), the panel and the multi review (its
+// count of reviewers and the name of the judge chain's first entry).
+func (d *Dashboard) repoChainSummary(ctx context.Context, repo settings.Effective) (string, PanelView, MultiReviewView, error) {
 	a, _, err := d.repoShown(ctx, repo, store.ChainA)
 	if err != nil {
-		return "", PanelView{}, err
+		return "", PanelView{}, MultiReviewView{}, err
 	}
 	b, _, err := d.repoShown(ctx, repo, store.ChainB)
 	if err != nil {
-		return "", PanelView{}, err
+		return "", PanelView{}, MultiReviewView{}, err
+	}
+	rv, err := d.Store.Reviewers(ctx, repo.Instance, repo.Project)
+	if err != nil {
+		return "", PanelView{}, MultiReviewView{}, err
 	}
 	model, nameA := "", ""
 	if len(a.in.Refs) > 0 {
@@ -800,5 +819,11 @@ func (d *Dashboard) repoChainSummary(ctx context.Context, repo settings.Effectiv
 			p.B = m.Name
 		}
 	}
-	return model, p, nil
+	multi := MultiReviewView{On: len(rv.Extra) > 0, Reviewers: 1 + len(rv.Extra)}
+	if multi.On && len(rv.Judge.Entries) > 0 {
+		if m, ok := a.in.Entries[rv.Judge.Entries[0]]; ok {
+			multi.Judge = m.Name
+		}
+	}
+	return model, p, multi, nil
 }

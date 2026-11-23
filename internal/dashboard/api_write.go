@@ -578,6 +578,10 @@ func (d *Dashboard) repositoryPut(w http.ResponseWriter, r *http.Request) {
 		d.putRepoPanelChain(w, r)
 		return
 	}
+	if strings.HasSuffix(r.PathValue("rest"), "/reviewers") {
+		d.putReviewers(w, r)
+		return
+	}
 	if strings.HasSuffix(r.PathValue("rest"), "/chain") {
 		d.putRepoChain(w, r)
 		return
