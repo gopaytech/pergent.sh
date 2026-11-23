@@ -40,14 +40,14 @@ func (d *dispatcher) holdForQuota(ctx context.Context, plat Platform, limited bo
 	}
 	held, err := hold(sctx, run.ID)
 	if err != nil {
-		return d.retry(ctx, fmt.Errorf("hold the run for the quota: %w", err))
+		return d.retry(ctx, fmt.Errorf("hold the run: %w", err))
 	}
 	if !held {
 		// Superseded meanwhile, or asked for while it was being checked: back
 		// to the queue, which a superseded run doesn't go to.
 		return d.postpone(ctx, e.now())
 	}
-	d.log.Info("run waits: the monthly token quota is used up", "reason", reason)
+	d.log.Info("run waits: quotas or limits stop every entry", "reason", reason)
 	now := e.now()
 	d.announceHold(sctx, plat, quotaDescription, &holdNote{
 		what: "a used-up token quota",

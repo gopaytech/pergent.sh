@@ -229,9 +229,13 @@ func adminRefusal(ctx context.Context, st *store.Store, now time.Time, mr store.
 	if !chain.Resolve(in).Hold {
 		return RerunQueued, "", nil
 	}
-	t, _, err := st.Team(ctx, in.OwnerTeam)
+	t, found, err := st.Team(ctx, in.OwnerTeam)
 	if err != nil {
 		return 0, "", fmt.Errorf("read the owner team: %w", err)
+	}
+	if !found {
+		// Deleted in a race: no team to name, so the plain refusal.
+		return RerunQuotaUsedUp, "", nil
 	}
 	return RerunTeamLimit, t.Name, nil
 }

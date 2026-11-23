@@ -39,6 +39,10 @@ func LoadSet(ctx context.Context, st *store.Store, reg *instances.Registry, now 
 	if err != nil {
 		return Input{}, err
 	}
+	if len(in.Refs) == 0 {
+		// No entry, nothing a limit could stop (most chain B lists).
+		return in, nil
+	}
 	lim, err := quota.ReadLimits(ctx, st, now, in.OwnerTeam)
 	if err != nil {
 		return Input{}, fmt.Errorf("read the model limits: %w", err)
