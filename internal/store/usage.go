@@ -61,10 +61,9 @@ func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage)
 // when both are. What else a conflict does follows it.
 //
 // A multi review's members and its judge add to the row of the run they
-// count on: its source is that run's entry, not each model's own
-// (run_usage_by_model keeps those). So the instance quota, which counts global keys only, counts
-// a team-key member of a review on a global entry, and misses a global-key
-// member of a review on a team entry. The quota rules are not changed here.
+// count on: its source and model are that run's (reviewer 1's), not each
+// model's own. run_usage_by_model keeps those, so every count that splits by
+// source or model reads splitUsageSQL instead (Ruling P62).
 var usageInsertSQL = `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid,
 		trigger, incremental, provider, model, verdict, reported_at, tokens_in, tokens_out, cache_read, cache_write,
 		reasoning, findings, blocking, source, team_id, owner_team_id)
@@ -79,6 +78,22 @@ var usageInsertSQL = `INSERT INTO run_usage (run_id, skill, instance, project_id
 		cache_read = COALESCE(run_usage.cache_read + EXCLUDED.cache_read, run_usage.cache_read, EXCLUDED.cache_read),
 		cache_write = COALESCE(run_usage.cache_write + EXCLUDED.cache_write, run_usage.cache_write, EXCLUDED.cache_write),
 		reasoning = COALESCE(run_usage.reasoning + EXCLUDED.reasoning, run_usage.reasoning, EXCLUDED.reasoning)`
+
+// splitUsageSQL is run_usage with a multi review's tokens split by Job, as
+// entryTokensSQL counts them (Ruling L8, P62): a run that has
+// run_usage_by_model rows counts those, each reviewer attempt and each judge
+// on its own source, provider and model, with its run's repository. That
+// run's run_usage rows, the total of all its Jobs on reviewer 1's source and
+// model, are left out. Any other run, a --no-judge run among them, counts
+// its run_usage rows as they are. The columns are the ones the counts by
+// source and by model read.
+const splitUsageSQL = `(SELECT u.run_id, u.instance, u.project_id, u.project_path, u.skill, u.provider, u.model,
+		u.source, u.reported_at, u.tokens_in, u.tokens_out, u.cache_read, u.cache_write, u.reasoning
+	FROM run_usage u WHERE NOT EXISTS (SELECT 1 FROM run_usage_by_model b WHERE b.run_id = u.run_id)
+	UNION ALL
+	SELECT b.run_id, r.instance, r.project_id, r.project_path, b.skill, b.provider, b.model,
+		b.source, b.reported_at, b.tokens_in, b.tokens_out, b.cache_read, b.cache_write, b.reasoning
+	FROM run_usage_by_model b JOIN runs r ON r.id = b.run_id) split_usage`
 
 // RecordJudgeUsage is RecordUsage of a multi review's judge run id
 // (recordJudgedUsage): each skill's tokens are added to the run's run_usage
@@ -444,6 +459,12 @@ const tokenSumColumns = `COALESCE(sum(tokens_in), 0), COALESCE(sum(tokens_out), 
 	COALESCE(sum(cache_read), 0), COALESCE(sum(cache_write), 0), COALESCE(sum(reasoning), 0),
 	count(*) FILTER (WHERE cache_read IS NULL OR cache_write IS NULL OR reasoning IS NULL)`
 
+// tokenSumColumnsNamed is tokenSumColumns with a name per column, for a
+// subquery: t_in, t_out, cr, cw, rs and unknown.
+const tokenSumColumnsNamed = `COALESCE(sum(tokens_in), 0) AS t_in, COALESCE(sum(tokens_out), 0) AS t_out,
+	COALESCE(sum(cache_read), 0) AS cr, COALESCE(sum(cache_write), 0) AS cw, COALESCE(sum(reasoning), 0) AS rs,
+	count(*) FILTER (WHERE cache_read IS NULL OR cache_write IS NULL OR reasoning IS NULL) AS unknown`
+
 // tokenSumColumnsOfUsage is tokenSumColumns for a query that joins runs, so
 // the columns say they are run_usage's.
 var tokenSumColumnsOfUsage = strings.NewReplacer(
@@ -457,14 +478,20 @@ const (
 )
 
 // sourceTokensColumns are the tokens (in plus out) on global keys and on
-// teams' own, of run_usage rows.
+// teams' own, of splitUsageSQL rows.
 const sourceTokensColumns = `COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'global'), 0),
 			COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'team'), 0)`
 
+// sourceTokensColumnsNamed is sourceTokensColumns named global and team,
+// for a subquery.
+const sourceTokensColumnsNamed = `COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'global'), 0) AS global,
+			COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'team'), 0) AS team`
+
 // UsageBySource returns the tokens (in plus out) one repository used since
-// the given time on global keys and on teams' own.
+// the given time on global keys and on teams' own. A multi review counts
+// each Job on its own source (splitUsageSQL).
 func (s *Store) UsageBySource(ctx context.Context, instance string, projectID int64, since time.Time) (global, team int64, err error) {
-	err = s.pool.QueryRow(ctx, `SELECT `+sourceTokensColumns+` FROM run_usage
+	err = s.pool.QueryRow(ctx, `SELECT `+sourceTokensColumns+` FROM `+splitUsageSQL+`
 		WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz`,
 		instance, projectID, since).Scan(&global, &team)
 	return global, team, err
@@ -475,11 +502,18 @@ func (s *Store) UsageBySource(ctx context.Context, instance string, projectID in
 // run once, however many skills it ran. An API review has no repository (its
 // instance is empty) and is left out.
 func (s *Store) UsageByRepository(ctx context.Context, since time.Time) ([]RepoUsage, error) {
-	rows, err := s.pool.Query(ctx, `SELECT instance, project_id, (array_agg(project_path ORDER BY reported_at DESC))[1], `+tokenSumColumns+`,
-			count(DISTINCT run_id), `+sourceTokensColumns+`
-		FROM run_usage WHERE reported_at >= $1::timestamptz AND instance <> ''
-		GROUP BY instance, project_id
-		ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, instance, project_id`, since)
+	// The split by source reads splitUsageSQL, so a multi review counts each
+	// Job on its own source; the totals stay run_usage's.
+	rows, err := s.pool.Query(ctx, `SELECT a.instance, a.project_id, a.path, a.t_in, a.t_out, a.cr, a.cw, a.rs, a.unknown,
+			a.reviews, COALESCE(src.global, 0), COALESCE(src.team, 0)
+		FROM (SELECT instance, project_id, (array_agg(project_path ORDER BY reported_at DESC))[1] AS path,
+				`+tokenSumColumnsNamed+`, count(DISTINCT run_id) AS reviews
+			FROM run_usage WHERE reported_at >= $1::timestamptz AND instance <> ''
+			GROUP BY instance, project_id) a
+		LEFT JOIN (SELECT instance, project_id, `+sourceTokensColumnsNamed+`
+			FROM `+splitUsageSQL+` WHERE reported_at >= $1::timestamptz AND instance <> ''
+			GROUP BY instance, project_id) src USING (instance, project_id)
+		ORDER BY a.t_in + a.t_out DESC, a.instance, a.project_id`, since)
 	if err != nil {
 		return nil, err
 	}
@@ -587,10 +621,11 @@ func (s *Store) UsageBySkill(ctx context.Context, instance string, projectID int
 
 // UsageByModel returns what each model used in a repository since the given
 // time, busiest first; one provider's model is apart from another's of the
-// same name. Runs counts a run once, however many skills it ran.
+// same name. Runs counts a run once, however many skills it ran. A multi
+// review counts each Job on its own model (splitUsageSQL).
 func (s *Store) UsageByModel(ctx context.Context, instance string, projectID int64, since time.Time) ([]NamedUsage, error) {
 	return s.namedUsage(ctx, `SELECT provider, model, `+tokenSumColumns+`, count(DISTINCT run_id), 0::bigint
-		FROM run_usage WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz
+		FROM `+splitUsageSQL+` WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz
 		GROUP BY provider, model ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, model, provider`,
 		instance, projectID, since)
 }
@@ -979,8 +1014,9 @@ type APICallbackTotal struct {
 // repository's rows when the repository is switched off.
 func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	var t MetricsTotals
+	// A multi review counts each Job on its own model (splitUsageSQL).
 	rows, err := s.pool.Query(ctx, `SELECT instance, project_path, skill, model, `+tokenSumColumns+`, count(*)
-		FROM run_usage WHERE instance <> '' GROUP BY instance, project_path, skill, model`)
+		FROM `+splitUsageSQL+` WHERE instance <> '' GROUP BY instance, project_path, skill, model`)
 	if err != nil {
 		return MetricsTotals{}, err
 	}
