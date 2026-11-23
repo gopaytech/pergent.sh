@@ -613,6 +613,53 @@ paths:
             text/plain:
               schema: {type: string}
         '500': {$ref: '#/components/responses/PlainTextError'}
+  /runs/{id}/reviewers/{n}:
+    get:
+      operationId: getRunReviewerResult
+      tags: [Job callbacks]
+      summary: Download a multi review reviewer's result
+      description: |
+        Called by a multi review's judge Job, with the judge run's live
+        result token, to read reviewer `n`'s result: the newest attempt of
+        that reviewer that has a stored result and is done, or failed with
+        its result kept. The token is not spent. Any auth failure (no token,
+        a wrong or expired token, a run with no stored token yet, or an
+        unknown run) is the same 401, so the answer never shows whether a
+        run exists. 404 goes only to the run's own judge Job, for a reviewer
+        with no result or an `n` that is not 1 to 5: the judge reads 404 as
+        "no result", so an auth failure is never a 404.
+      x-pergent-access: none
+      security:
+        - runResultToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The judge run's id.
+          schema: {type: string}
+        - name: n
+          in: path
+          required: true
+          description: The reviewer's number, 1 to 5.
+          schema: {type: integer, minimum: 1, maximum: 5}
+      responses:
+        '200':
+          description: The reviewer's agent result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/result.Result'
+        '401':
+          description: No token, a wrong or expired token, a run with no stored token yet, or an unknown run.
+          content:
+            text/plain:
+              schema: {type: string}
+        '404':
+          description: The run's own judge asked for a reviewer with no result, or for a number that is not 1 to 5.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
   /healthz:
     get:
       operationId: getHealth
