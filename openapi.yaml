@@ -2037,7 +2037,9 @@ paths:
         saved it and is not checked); `reviewer <k> starts with the same
         model as reviewer <j>` (the first entries of reviewer 1, the chain in
         effect, and of each reviewer, by provider and model ignoring case; a
-        removed entry is left out; backups may repeat); and, only when the
+        removed entry is left out; backups may repeat), only when the save
+        changed reviewer k or j (reviewer 1 does not change here: a pair the
+        save left alone gets only the warning); and, only when the
         save adds a reviewer, the review image: `a second reviewer needs a
         review image with pergent <version> or later; jobs.image is <tag>`,
         or `no review image supports multi review yet` while no pergent

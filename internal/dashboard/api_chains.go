@@ -42,9 +42,11 @@ func (d *Dashboard) reviewerImageRefusal() string {
 	return d.imageRefusal(msgNoReviewerImage, "a second reviewer")
 }
 
-// imageRefusal is reviewerImageRefusal with the words of a save: none while
-// no pergent release has the floor set, else what needs the image. Chain B
-// has its own words until its routes go.
+// imageRefusal is the 400's message when jobs.image is too old for a save;
+// "" when it is not. none is the message while the floor is unset (no
+// pergent release has the feature yet). what names the thing that needs the
+// image, as in "<what> needs a review image with pergent <floor> or later".
+// Chain B calls it with its own words until its routes go.
 func (d *Dashboard) imageRefusal(none, what string) string {
 	if ok, _ := config.PanelImage(d.cfg.Jobs.Image); ok {
 		return ""

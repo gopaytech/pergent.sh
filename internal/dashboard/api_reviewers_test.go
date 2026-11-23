@@ -44,9 +44,9 @@ func newReviewersEnv(t *testing.T) *reviewersEnv {
 	return re
 }
 
-// g and tm are an entry's "source/id".
-func g(m store.LLMModel) string { return "global/" + m.ID }
-func tm(m TeamModelView) string { return "team/" + m.ID }
+// globalRef and teamRef are an entry's "source/id".
+func globalRef(m store.LLMModel) string { return "global/" + m.ID }
+func teamRef(m TeamModelView) string    { return "team/" + m.ID }
 
 // reviewersBody is a PUT .../reviewers body: judge, then reviewers 2.. as
 // "source/id" lists.
@@ -58,8 +58,8 @@ func reviewersBody(judge []string, reviewers ...[]string) map[string]any {
 	return map[string]any{"reviewers": rs, "judge": entryBody(judge...)["entries"]}
 }
 
-// refs are the refs of "source/id" texts.
-func refs(texts ...string) []store.EntryRef {
+// refsOfTexts are the refs of "source/id" texts.
+func refsOfTexts(texts ...string) []store.EntryRef {
 	out := make([]store.EntryRef, 0, len(texts))
 	for _, s := range texts {
 		v := entryBody(s)["entries"].([]map[string]string)[0]
@@ -72,9 +72,9 @@ func refs(texts ...string) []store.EntryRef {
 // check of the API.
 func (re *reviewersEnv) storeReviewers(byAdmin bool, judge []string, extra ...[]string) {
 	re.t.Helper()
-	s := store.ReviewersSave{Instance: "main", Project: reviewersProject, Judge: refs(judge...), SavedByAdmin: byAdmin}
+	s := store.ReviewersSave{Instance: "main", Project: reviewersProject, Judge: refsOfTexts(judge...), SavedByAdmin: byAdmin}
 	for _, e := range extra {
-		s.Extra = append(s.Extra, refs(e...))
+		s.Extra = append(s.Extra, refsOfTexts(e...))
 	}
 	if _, err := re.st.SaveReviewers(ctx, s, re.clock.now()); err != nil {
 		re.t.Fatal(err)
@@ -129,7 +129,7 @@ func numbersAndRefs(v ReviewersView) []string {
 func TestReviewersRefusedWithoutFloor(t *testing.T) {
 	re := newReviewersEnv(t)
 	setPanelFloor(t, re.env, "", reviewerImageOK)
-	rec := re.sendJSON(re.admin, "PUT", reviewersURL(reviewersProject), reviewersBody([]string{g(re.shared)}, []string{g(re.shared)}))
+	rec := re.sendJSON(re.admin, "PUT", reviewersURL(reviewersProject), reviewersBody([]string{globalRef(re.shared)}, []string{globalRef(re.shared)}))
 	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgNoReviewerYet {
 		t.Errorf("PUT = %d %s", rec.Code, rec.Body)
 	}
@@ -144,13 +144,13 @@ func TestReviewersRefusedWithoutFloor(t *testing.T) {
 func TestReviewersSavedWithFloor(t *testing.T) {
 	re := newReviewersEnv(t)
 	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
-	body := reviewersBody([]string{g(re.shared)}, []string{g(re.shared), tm(re.own)}, []string{g(re.private)}, []string{tm(re.own2)})
+	body := reviewersBody([]string{globalRef(re.shared)}, []string{globalRef(re.shared), teamRef(re.own)}, []string{globalRef(re.private)}, []string{teamRef(re.own2)})
 	v := decode[ReviewersView](t, re.sendJSON(re.admin, "PUT", reviewersURL(reviewersProject), body), "PUT", http.StatusOK)
-	want := []string{"2: " + g(re.shared) + " " + tm(re.own), "3: " + g(re.private), "4: " + tm(re.own2)}
+	want := []string{"2: " + globalRef(re.shared) + " " + teamRef(re.own), "3: " + globalRef(re.private), "4: " + teamRef(re.own2)}
 	if got := numbersAndRefs(v); !slices.Equal(got, want) || v.ReadOnly || v.AddRefusal != "" || len(v.Warnings) != 0 {
 		t.Errorf("PUT = %+v (%q); want %q", v, got, want)
 	}
-	if v.Judge == nil || !slices.Equal(chainRefs(*v.Judge), []string{g(re.shared)}) {
+	if v.Judge == nil || !slices.Equal(chainRefs(*v.Judge), []string{globalRef(re.shared)}) {
 		t.Errorf("judge = %+v", v.Judge)
 	}
 	for _, r := range v.Reviewers {
@@ -179,7 +179,7 @@ func TestReviewersSavedWithFloor(t *testing.T) {
 func TestReviewersImageTooOld(t *testing.T) {
 	re := newReviewersEnv(t)
 	setPanelFloor(t, re.env, reviewerFloor, "ghcr.io/x/pergent:v8.0.0")
-	rec := re.sendJSON(re.admin, "PUT", reviewersURL(reviewersProject), reviewersBody([]string{g(re.shared)}, []string{g(re.shared)}))
+	rec := re.sendJSON(re.admin, "PUT", reviewersURL(reviewersProject), reviewersBody([]string{globalRef(re.shared)}, []string{globalRef(re.shared)}))
 	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgReviewerNeeds+"v8.0.0" {
 		t.Errorf("PUT = %d %s", rec.Code, rec.Body)
 	}
@@ -191,12 +191,12 @@ func TestReviewersImageTooOld(t *testing.T) {
 func TestReviewersRemoveNeedsNoImage(t *testing.T) {
 	re := newReviewersEnv(t)
 	setPanelFloor(t, re.env, "", reviewerImageOK)
-	re.storeReviewers(true, []string{tm(re.own)}, []string{g(re.shared)}, []string{tm(re.own2)})
+	re.storeReviewers(true, []string{teamRef(re.own)}, []string{globalRef(re.shared)}, []string{teamRef(re.own2)})
 	url := reviewersURL(reviewersProject)
-	decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{tm(re.own)}, []string{tm(re.own2)}, []string{g(re.shared)})),
+	decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{teamRef(re.own)}, []string{teamRef(re.own2)}, []string{globalRef(re.shared)})),
 		"edit", http.StatusOK)
-	v := decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{tm(re.own)}, []string{tm(re.own2)})), "remove", http.StatusOK)
-	if got := numbersAndRefs(v); !slices.Equal(got, []string{"2: " + tm(re.own2)}) {
+	v := decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{teamRef(re.own)}, []string{teamRef(re.own2)})), "remove", http.StatusOK)
+	if got := numbersAndRefs(v); !slices.Equal(got, []string{"2: " + teamRef(re.own2)}) {
 		t.Errorf("after the remove = %q", got)
 	}
 	v = decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody(nil)), "remove all", http.StatusOK)
@@ -214,7 +214,7 @@ func TestReviewersRemoveNeedsNoImage(t *testing.T) {
 func TestReviewersRights(t *testing.T) {
 	re := newReviewersEnv(t)
 	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
-	url, body := reviewersURL(reviewersProject), reviewersBody([]string{tm(re.own)}, []string{g(re.shared)})
+	url, body := reviewersURL(reviewersProject), reviewersBody([]string{teamRef(re.own)}, []string{globalRef(re.shared)})
 
 	rec := re.sendJSON(re.viewer, "PUT", url, body)
 	if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgRepoChainWrite {
@@ -248,8 +248,8 @@ func TestReviewersForeignEntry(t *testing.T) {
 	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	foreign := re.addTeamModel(re.otherMaintainer, re.widgets, "theirs", teamKeyTwo)
 	for name, body := range map[string]map[string]any{
-		"reviewer": reviewersBody([]string{tm(re.own)}, []string{tm(foreign)}),
-		"judge":    reviewersBody([]string{tm(foreign)}, []string{tm(re.own)}),
+		"reviewer": reviewersBody([]string{teamRef(re.own)}, []string{teamRef(foreign)}),
+		"judge":    reviewersBody([]string{teamRef(foreign)}, []string{teamRef(re.own)}),
 	} {
 		rec := re.sendJSON(re.maintainer, "PUT", reviewersURL(reviewersProject), body)
 		if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgForeignTeamEntry {
@@ -271,9 +271,9 @@ func TestReviewersSameFirstModel(t *testing.T) {
 		body map[string]any
 		want string
 	}{
-		"as reviewer 1": {reviewersBody([]string{tm(re.own)}, []string{g(re.shared)}, []string{tm(loud)}),
+		"as reviewer 1": {reviewersBody([]string{teamRef(re.own)}, []string{globalRef(re.shared)}, []string{teamRef(loud)}),
 			"reviewer 3 starts with the same model as reviewer 1"},
-		"as reviewer 2": {reviewersBody([]string{tm(re.own)}, []string{g(re.shared)}, []string{g(re.shared), tm(re.own)}),
+		"as reviewer 2": {reviewersBody([]string{teamRef(re.own)}, []string{globalRef(re.shared)}, []string{globalRef(re.shared), teamRef(re.own)}),
 			"reviewer 3 starts with the same model as reviewer 2"},
 	} {
 		rec := re.sendJSON(re.admin, "PUT", url, tc.body)
@@ -283,7 +283,7 @@ func TestReviewersSameFirstModel(t *testing.T) {
 	}
 	re.wantNothingStored("after the refusals")
 	decode[ReviewersView](t, re.sendJSON(re.admin, "PUT", url,
-		reviewersBody([]string{tm(re.own)}, []string{g(re.shared), tm(loud)}, []string{tm(re.own), g(re.one), g(re.shared)})), "backups", http.StatusOK)
+		reviewersBody([]string{teamRef(re.own)}, []string{globalRef(re.shared), teamRef(loud)}, []string{teamRef(re.own), globalRef(re.one), globalRef(re.shared)})), "backups", http.StatusOK)
 }
 
 // The counts and empty chains are refused with their own texts, before any
@@ -291,19 +291,19 @@ func TestReviewersSameFirstModel(t *testing.T) {
 func TestReviewersCountsAndEmpties(t *testing.T) {
 	re := newReviewersEnv(t)
 	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
-	j := []string{g(re.shared)}
+	j := []string{globalRef(re.shared)}
 	five := [][]string{{"global/a"}, {"global/b"}, {"global/c"}, {"global/d"}, {"global/e"}}
 	for name, tc := range map[string]struct {
 		body any
 		want string
 	}{
 		"6 reviewers":       {reviewersBody(j, five...), "at most 5 reviewers"},
-		"empty reviewer":    {reviewersBody(j, []string{g(re.shared)}, []string{}), "a reviewer needs an entry; remove it instead"},
-		"no judge":          {reviewersBody(nil, []string{g(re.shared)}), "2 or more reviewers need a judge"},
+		"empty reviewer":    {reviewersBody(j, []string{globalRef(re.shared)}, []string{}), "a reviewer needs an entry; remove it instead"},
+		"no judge":          {reviewersBody(nil, []string{globalRef(re.shared)}), "2 or more reviewers need a judge"},
 		"judge alone":       {reviewersBody(j), "a judge needs 2 or more reviewers"},
 		"reviewer too long": {reviewersBody(j, []string{"global/a", "global/b", "global/c", "global/d", "global/e", "global/f"}), msgChainTooLong},
-		"judge too long":    {reviewersBody([]string{"global/a", "global/b", "global/c", "global/d", "global/e", "global/f"}, []string{g(re.shared)}), msgChainTooLong},
-		"entry twice":       {reviewersBody(j, []string{g(re.shared), g(re.shared)}), msgEntryTwice},
+		"judge too long":    {reviewersBody([]string{"global/a", "global/b", "global/c", "global/d", "global/e", "global/f"}, []string{globalRef(re.shared)}), msgChainTooLong},
+		"entry twice":       {reviewersBody(j, []string{globalRef(re.shared), globalRef(re.shared)}), msgEntryTwice},
 		"no reviewers key":  {map[string]any{"judge": []any{}}, msgBadReviewersBody},
 		"unknown key":       {map[string]any{"reviewers": []any{}, "judge": []any{}, "x": 1}, msgBadReviewersBody},
 		"bad source":        {reviewersBody(j, []string{"other/a"}), msgBadReviewersBody},
@@ -322,17 +322,45 @@ func TestReviewersWarnings(t *testing.T) {
 	re := newReviewersEnv(t)
 	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	url := reviewersURL(reviewersProject)
-	decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{tm(re.own2)}, []string{tm(re.own)}, []string{g(re.shared)})),
+	decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{teamRef(re.own2)}, []string{teamRef(re.own)}, []string{globalRef(re.shared)})),
 		"PUT", http.StatusOK)
 	wantCode(t, re.send(re.maintainer, "DELETE", teamURL(re.payments, "/models/"+re.own2.ID), ""), "delete own2", http.StatusNoContent)
 	v := getJSON[ReviewersView](re.env, re.viewer, url)
 	if v.Judge == nil || len(v.Judge.Entries) != 0 || !slices.Equal(v.Warnings, []string{warnNoJudge}) || len(v.Reviewers) != 2 {
 		t.Errorf("after the judge's entry went = %+v", v)
 	}
-	decode[ChainView](t, re.sendJSON(re.maintainer, "PUT", repoChainURL(reviewersProject), entryBody(tm(re.own))), "chain A", http.StatusOK)
+	decode[ChainView](t, re.sendJSON(re.maintainer, "PUT", repoChainURL(reviewersProject), entryBody(teamRef(re.own))), "chain A", http.StatusOK)
 	v = getJSON[ReviewersView](re.env, re.viewer, url)
 	if want := []string{warnNoJudge, "Reviewer 2 starts with the same model as reviewer 1, so it runs on its next entry"}; !slices.Equal(v.Warnings, want) {
 		t.Errorf("warnings = %q; want %q", v.Warnings, want)
+	}
+}
+
+// A same first model that this save did not touch only warns: reviewer 3
+// matches reviewer 1 after chain A changed, and a save of the judge alone
+// passes. A save that changes reviewer 3 to another entry of that model is
+// refused.
+func TestReviewersSameFirstModelUnchangedPairWarns(t *testing.T) {
+	re := newReviewersEnv(t)
+	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
+	url := reviewersURL(reviewersProject)
+	re.storeReviewers(false, []string{teamRef(re.own2)}, []string{globalRef(re.shared)}, []string{teamRef(re.own)})
+	decode[ChainView](t, re.sendJSON(re.maintainer, "PUT", repoChainURL(reviewersProject), entryBody(teamRef(re.own))), "chain A", http.StatusOK)
+	warn := "Reviewer 3 starts with the same model as reviewer 1, so it runs on its next entry"
+
+	v := decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url,
+		reviewersBody([]string{globalRef(re.shared)}, []string{globalRef(re.shared)}, []string{teamRef(re.own)})), "judge only", http.StatusOK)
+	if !slices.Equal(v.Warnings, []string{warn}) || v.Judge == nil || !slices.Equal(chainRefs(*v.Judge), []string{globalRef(re.shared)}) {
+		t.Errorf("after the judge save = %+v; want the warning %q", v, warn)
+	}
+	copyOfOwn := decode[TeamModelView](t, re.sendJSON(re.maintainer, "POST", teamURL(re.payments, "/models"),
+		map[string]any{"name": "own-copy", "provider": "OpenAI", "model": "GPT-Own", "apiKey": teamKeyOne}), "POST team model", http.StatusCreated)
+	rec := re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{globalRef(re.shared)}, []string{globalRef(re.shared)}, []string{teamRef(copyOfOwn)}))
+	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != "reviewer 3 starts with the same model as reviewer 1" {
+		t.Errorf("a changed reviewer 3 = %d %s", rec.Code, rec.Body)
+	}
+	if extra, _, _ := re.stored(); len(extra) != 2 || !slices.Equal(extra[1], []string{teamRef(re.own)}) {
+		t.Errorf("stored = %v; want reviewer 3 unchanged", extra)
 	}
 }
 
@@ -341,8 +369,8 @@ func TestReviewersWarnings(t *testing.T) {
 func TestReviewersAuditPerSlot(t *testing.T) {
 	re := newReviewersEnv(t)
 	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
-	re.storeReviewers(false, []string{tm(re.own2)}, []string{g(re.shared)}, []string{tm(re.own)})
-	decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", reviewersURL(reviewersProject), reviewersBody([]string{tm(re.own2)}, []string{tm(re.own)})),
+	re.storeReviewers(false, []string{teamRef(re.own2)}, []string{globalRef(re.shared)}, []string{teamRef(re.own)})
+	decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", reviewersURL(reviewersProject), reviewersBody([]string{teamRef(re.own2)}, []string{teamRef(re.own)})),
 		"remove reviewer 2", http.StatusOK)
 	if got, want := auditDetails(re.env, reviewersAuditName), []string{"reviewer=2 entries=own", "reviewer=3 entries=(none)"}; !slices.Equal(got, want) {
 		t.Errorf("%s = %q; want %q", reviewersAuditName, got, want)
@@ -359,14 +387,14 @@ func TestReviewersAuditPerSlot(t *testing.T) {
 func TestReviewersMaintainerRemovesBeforeAdminReviewer(t *testing.T) {
 	re := newReviewersEnv(t)
 	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
-	re.storeReviewers(true, []string{tm(re.own)}, []string{g(re.shared)}, []string{g(re.private)})
+	re.storeReviewers(true, []string{teamRef(re.own)}, []string{globalRef(re.shared)}, []string{globalRef(re.private)})
 	url := reviewersURL(reviewersProject)
-	rec := re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{tm(re.own)}, []string{g(re.shared)}, []string{g(re.private), tm(re.own2)}))
+	rec := re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{teamRef(re.own)}, []string{globalRef(re.shared)}, []string{globalRef(re.private), teamRef(re.own2)}))
 	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgNotTeamsMayUse {
 		t.Errorf("a changed reviewer 3 = %d %s", rec.Code, rec.Body)
 	}
-	v := decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{tm(re.own)}, []string{g(re.private)})), "remove", http.StatusOK)
-	if got := numbersAndRefs(v); !slices.Equal(got, []string{"2: " + g(re.private)}) || !v.Reviewers[0].Chain.SavedByAdmin {
+	v := decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{teamRef(re.own)}, []string{globalRef(re.private)})), "remove", http.StatusOK)
+	if got := numbersAndRefs(v); !slices.Equal(got, []string{"2: " + globalRef(re.private)}) || !v.Reviewers[0].Chain.SavedByAdmin {
 		t.Errorf("after the remove = %+v", v)
 	}
 	r, err := re.st.Reviewers(ctx, "main", reviewersProject)
@@ -392,7 +420,7 @@ func TestRepositoryViewMultiReview(t *testing.T) {
 		}
 	}
 	want("none", multi(), map[string]any{"on": false, "reviewers": float64(1), "judge": ""})
-	re.storeReviewers(true, []string{tm(re.own), g(re.shared)}, []string{g(re.shared)}, []string{g(re.private)})
+	re.storeReviewers(true, []string{teamRef(re.own), globalRef(re.shared)}, []string{globalRef(re.shared)}, []string{globalRef(re.private)})
 	want("2 extra", multi(), map[string]any{"on": true, "reviewers": float64(3), "judge": "own"})
 	wantCode(t, re.send(re.maintainer, "DELETE", teamURL(re.payments, "/models/"+re.own.ID), ""), "delete own", http.StatusNoContent)
 	want("judge renumbered", multi(), map[string]any{"on": true, "reviewers": float64(3), "judge": "openai/gpt-shared"})
@@ -404,8 +432,10 @@ func TestReviewersNoKeyInResponses(t *testing.T) {
 	re := newReviewersEnv(t)
 	setPanelFloor(t, re.env, reviewerFloor, reviewerImageOK)
 	url := reviewersURL(reviewersProject)
-	re.sendJSON(re.admin, "PUT", url, reviewersBody([]string{g(re.private)}, []string{g(re.shared), tm(re.own)}, []string{g(re.private)}))
-	re.sendJSON(re.maintainer, "PUT", url, reviewersBody([]string{g(re.private)}, []string{tm(re.own2)}, []string{g(re.private)}))
+	decode[ReviewersView](t, re.sendJSON(re.admin, "PUT", url,
+		reviewersBody([]string{globalRef(re.private)}, []string{globalRef(re.shared), teamRef(re.own)}, []string{globalRef(re.private)})), "PUT as the admin", http.StatusOK)
+	decode[ReviewersView](t, re.sendJSON(re.maintainer, "PUT", url,
+		reviewersBody([]string{globalRef(re.private)}, []string{teamRef(re.own2)}, []string{globalRef(re.private)})), "PUT as the maintainer", http.StatusOK)
 	re.markEntry(store.EntryRef{Source: store.SourceTeam, ID: re.own2.ID}, store.ClassAuth, nil)
 	until := re.clock.now().Add(time.Hour)
 	re.markEntry(store.EntryRef{Source: store.SourceGlobal, ID: re.shared.ID}, store.ClassQuota, &until)
