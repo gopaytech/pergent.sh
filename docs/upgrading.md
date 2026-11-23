@@ -5,7 +5,7 @@
 - **The dashboard no longer has a Code graph switch.** The code graph is experimental, so a repository turns it on with `PUT /api/repositories/{instance}/{project}/graph` only: [Code graph](concepts/code-graph.md). A repository that has it on keeps it on.
 - **Review panels stay off.** Multi review (several reviewer models and a judge) will replace them.
 
-**Model limits.** An admin can cap the monthly tokens of one global model, for everyone or for one team, and a team's maintainers can cap their own team models: [Model and team limits](concepts/token-quota.md#model-and-team-limits). The admin **Models** page and the team page show them in a later change; this release has the API.
+**Model limits.** An admin can cap the monthly tokens of one global model, for everyone or for one team, and a team's maintainers can cap their own team models: [Model and team limits](concepts/token-quota.md#model-and-team-limits). The **Models** list on the admin **Settings** page and the team page show and set them, every chain tags an entry at its limit, and **Waiting for a start** says `No model in the chain has room this month.` for a change a limit holds, whose **Start review** only admins get.
 
 - **Migration `0051_model_limits.sql`** runs at startup. It adds the table `model_limits`, the NULL columns `run_usage.owner_team_id` and `run_usage_models.owner_team_id`, and one index on `run_usage_models (run_id)`, and drops nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them.
 - **Nothing changes by default.** No limit is set after the upgrade.
