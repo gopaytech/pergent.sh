@@ -525,6 +525,14 @@ describe("ReviewDetail buttons", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("this change is not open");
   });
 
+  it("shows an admin's refusal at a team's own limit as text", async () => {
+    const text = "every model of the chain is at the team's own limit: a maintainer of Payments can raise it on the team page";
+    fakeApi({ ...base(allCan), ["POST " + rerunUrl]: { status: 409, body: { error: text } } });
+    renderAppAt();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run review" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(text);
+  });
+
   it("offers Dismiss per finding by its severity", async () => {
     fakeApi(base({ ...allCan, dismissBlocking: false }));
     renderAppAt();

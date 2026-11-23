@@ -164,6 +164,43 @@ describe("Token quota: waiting changes", () => {
     reason: "quota_used_up",
   };
   const untrusted: WaitingView = { ...held, number: 14, head: "c".repeat(40), author: "stranger", reason: "untrusted_author" };
+  const limited: WaitingView = { ...held, number: 13, head: "b".repeat(40), reason: "limit_used_up" };
+  const teamLimitText = "every model of the chain is at the team's own limit: a maintainer of Payments can raise it on the team page";
+
+  it("says no model has room on a limit-held change, and offers Start to admins only", async () => {
+    const fake = fakeApi({
+      ...pageRoutes({ ...repoDetail(repoPayments), waiting: [limited] }),
+      "POST /api/reviews/main/acme/payments/13/start": { status: 202, body: { status: "queued" } },
+    });
+    const first = renderApp("/repos/main/acme/payments");
+    const box = await screen.findByRole("region", { name: "Waiting for a start" });
+    expect(box).toHaveTextContent("No model in the chain has room this month.");
+    expect(box).not.toHaveTextContent("Monthly token quota used up.");
+    await userEvent.click(within(box).getByRole("button", { name: "Start review of !13" }));
+    expect(fake.find("POST", "/api/reviews/main/acme/payments/13/start")[0].body).toEqual({ head: "b".repeat(40) });
+    first.unmount();
+
+    fakeApi({
+      "GET /api/me": { body: viewer },
+      "GET /api/repositories/main/acme/payments": { body: { ...repoDetail(repoPayments, "maintainer"), waiting: [limited] } },
+      "GET /api/reviews?project=acme%2Fpayments&days=90": { body: noReviews },
+    });
+    renderApp("/repos/main/acme/payments");
+    const seen = await screen.findByRole("region", { name: "Waiting for a start" });
+    expect(seen).toHaveTextContent("No model in the chain has room this month.");
+    expect(within(seen).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("shows an admin why a Start was refused at a team's own limit", async () => {
+    fakeApi({
+      ...pageRoutes({ ...repoDetail(repoPayments), waiting: [limited] }),
+      "POST /api/reviews/main/acme/payments/13/start": { status: 409, body: { error: teamLimitText } },
+    });
+    renderApp("/repos/main/acme/payments");
+    const box = await screen.findByRole("region", { name: "Waiting for a start" });
+    await userEvent.click(within(box).getByRole("button", { name: "Start review of !13" }));
+    expect(await within(box).findByRole("alert")).toHaveTextContent(teamLimitText);
+  });
 
   it("offers Start on a quota-held change to admins only", async () => {
     const fake = fakeApi({

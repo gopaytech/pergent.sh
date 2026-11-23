@@ -1637,7 +1637,8 @@ type ReviewerChain struct {
 // "key_rejected" (an auth mark), "removed", "not_allowed" (a global entry
 // teams may not use), "not_owner" (a team entry of a team that doesn't own
 // the repository), "key_unusable", "model_limit" (its model limit is used up
-// this month) or "team_limit" (the owner team's limit on it is). Class and Until are its mark's, "" and
+// this month) or "team_limit" (the owner team's limit on it is; the global
+// chain reads the model limits only). Class and Until are its mark's, "" and
 // null with none; CanClear is whether the session may clear it. Fixed is set
 // on the config file's entries, which stay at the front of the global chain.
 // Never a base URL or a key.

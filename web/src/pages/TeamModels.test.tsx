@@ -14,6 +14,7 @@ import {
   maintainer,
   myTeams,
   ssoAdmin,
+  teamLimitsPayments,
   teamModelQwen,
   teamModelsPayments,
   viewer,
@@ -27,6 +28,7 @@ const routes = (me = maintainer, models: TeamModelsView = teamModelsPayments, ch
   "GET /api/me/teams": { body: myTeams },
   "GET /api/teams/2/models": { body: models },
   "GET /api/teams/2/chain": { body: chain },
+  "GET /api/teams/2/limits": { body: teamLimitsPayments },
 });
 
 // What a viewer of Payments is sent: no base URL, no edit, a read-only chain.

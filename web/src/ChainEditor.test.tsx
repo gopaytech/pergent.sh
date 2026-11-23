@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChainEntryView, ChainView } from "./api";
 import ChainEditor, { entryStateText } from "./ChainEditor";
 import MarkBanner from "./MarkBanner";
-import { chainGlobal, choice, entryConfig, entryOpus, entrySonnet, entryTeamQwen } from "./test/fixtures";
+import { chainGlobal, chainTeam, choice, entryConfig, entryOpus, entrySonnet, entryTeamQwen } from "./test/fixtures";
 
 const rows = () => within(screen.getByRole("list", { name: "Model chain" })).queryAllByRole("listitem");
 const rowOf = (name: string) => rows().find((r) => within(r).queryByText(name)) as HTMLElement;
@@ -113,6 +113,16 @@ describe("ChainEditor", () => {
     expect(entryStateText({ ...entryTeamQwen, state: "key_unusable" })).toBe("key can't be read");
     expect(entryStateText({ ...entryTeamQwen, state: "model_limit" })).toBe("model limit used up");
     expect(entryStateText({ ...entryTeamQwen, state: "team_limit" })).toBe("team limit used up");
+  });
+
+  it("tags an entry a limit stops this month", () => {
+    const entries: ChainEntryView[] = [
+      { ...entrySonnet, position: 1, state: "model_limit" },
+      { ...entryTeamQwen, position: 2, state: "team_limit" },
+    ];
+    setup({ ...chainTeam, readOnly: true, entries, choices: [] });
+    expect(rowOf("Claude Sonnet")).toHaveTextContent("model limit used up");
+    expect(within(rowOf("qwen3.5")).getByText("team limit used up")).toHaveClass("warn-text");
   });
 
   it("offers Clear mark only where the session may clear it, and calls back with the entry", async () => {

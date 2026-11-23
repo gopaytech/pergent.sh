@@ -13,6 +13,13 @@ describe("paths", () => {
     expect(paths.apiRepo("main", "acme/payments")).toBe("/api/repositories/main/acme/payments");
     expect(paths.apiRun("a/b")).toBe("/api/runs/a%2Fb");
   });
+
+  it("builds the limit routes, the config file's entries included", () => {
+    expect(paths.apiAdminModelLimit("config-1")).toBe("/api/admin/models/config-1/limit");
+    expect(paths.apiAdminModelTeamLimit("m/x", 2)).toBe("/api/admin/models/m%2Fx/team-limits/2");
+    expect(paths.apiTeamLimits(2)).toBe("/api/teams/2/limits");
+    expect(paths.apiTeamModelLimit(2, "t-qwen")).toBe("/api/teams/2/models/t-qwen/limit");
+  });
 });
 
 describe("safeHref", () => {

@@ -8,6 +8,7 @@ import { useWrite } from "../layout/write";
 import MarkBanner, { markText } from "../MarkBanner";
 import { AddModelForm, EditModelForm } from "../ModelForms";
 import { ErrorBox, Loading, NotFound, secretText } from "../ui";
+import TeamLimits from "./TeamLimits";
 
 // TeamModels is a team's page in the user area: the team's own models and
 // keys, and its chain. Every member sees them (never a key, and a viewer no
@@ -43,6 +44,7 @@ export default function TeamModels() {
           <TeamModelRow key={m.id} team={v.team.id} m={m} canEdit={v.canEdit} />
         ))}
       </section>
+      <TeamLimits team={v.team.id} role={v.role} canEdit={v.canEdit} />
       <TeamChain team={v.team.id} />
       {v.canEdit && <AddTeamModel team={v.team.id} />}
     </div>
@@ -55,6 +57,7 @@ function useTeamChanged(team: number) {
   const client = useQueryClient();
   return () => {
     client.invalidateQueries({ queryKey: ["team-models", team] });
+    client.invalidateQueries({ queryKey: ["team-limits", team] });
     client.invalidateQueries({ queryKey: ["team-chain", team] });
     client.invalidateQueries({ queryKey: ["repo-chain"] });
     client.invalidateQueries({ queryKey: ["repo-reviewers"] });

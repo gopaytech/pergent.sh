@@ -29,8 +29,9 @@ export type TrustMode = "follow_visibility" | "on" | "off";
 export type TrustedAuthor = { id?: number; username: string };
 
 // WaitingView is a change whose review waits for someone with write access to
-// start it. reason is "untrusted_author", "trust_check_failed" or
-// "quota_used_up" (the monthly token quota held it; only an admin starts it).
+// start it. reason is "untrusted_author", "trust_check_failed",
+// "quota_used_up" (the monthly token quota held it; only an admin starts it) or
+// "limit_used_up" (held the same way, and a model limit or a team limit took part).
 export type WaitingView = {
   number: number;
   // head is the commit that waits; Start review sends it back.
@@ -39,7 +40,7 @@ export type WaitingView = {
   author: string;
   webUrl: string;
   since: string;
-  reason: "untrusted_author" | "trust_check_failed" | "quota_used_up";
+  reason: "untrusted_author" | "trust_check_failed" | "quota_used_up" | "limit_used_up";
 };
 
 // Me is the signed-in account, from GET /api/me: a local admin ("password")
@@ -943,7 +944,17 @@ export type ModelAdminView = {
   // Payments", "main/acme/payments").
   usedIn: string[];
   mark: MarkView | null;
+  // limit is the model limit, tokens per UTC month on every instance and
+  // repository (null: none), and used the entry's tokens this month.
+  limit: number | null;
+  used: number;
+  // teamLimits are each team's limit on the entry, by team name.
+  teamLimits: TeamLimitView[];
 };
+
+// TeamLimitView is a team's limit on a global entry, and that team's tokens
+// on it this month.
+export type TeamLimitView = { teamId: number; team: string; limit: number; used: number };
 
 // ModelsAdminView is the list of models. canSetDefault is false while the
 // config file has an llm: block (adding, changing and removing still work).
@@ -966,7 +977,9 @@ export type MarkClass = "quota" | "billing" | "auth";
 // until has passed; reviews then use the entry again.
 export type MarkView = { class: MarkClass; until: string | null; setAt: string; live: boolean };
 
-// EntryState is what reviews do with a chain entry now.
+// EntryState is what reviews do with a chain entry now. model_limit and
+// team_limit: its model limit, or the owner team's limit on it, is used up
+// this month.
 export type EntryState =
   | "ready"
   | "exhausted"
@@ -1324,6 +1337,20 @@ export type TeamModelView = {
 // add, change and remove the entries (a maintainer of the team, or an admin).
 export type TeamModelsView = { team: TeamRef; role: Role; canEdit: boolean; models: TeamModelView[] };
 
+// TeamLimitsView is GET /api/teams/{id}/limits, for the team's maintainers
+// and admins: the team's own entries with their limits (null: none), and the
+// global entries an admin limited for the team. A global entry's model limit
+// is only its state (modelLimit), because its numbers count other teams.
+export type TeamLimitsView = { team: TeamRef; models: TeamModelLimitView[]; global: TeamGlobalLimitView[] };
+export type TeamModelLimitView = { id: string; name: string; limit: number | null; used: number };
+export type TeamGlobalLimitView = {
+  id: string;
+  name: string;
+  limit: number;
+  used: number;
+  modelLimit: "none" | "room_left" | "used_up";
+};
+
 // AddUserBody is the body of POST /api/admin/users: an email, and the teams to
 // put the account on, each with its role (viewer when left out).
 export type AddUserBody = { email: string; teams?: { teamId: number; role?: MemberRole }[] };
@@ -1583,7 +1610,13 @@ export const paths = {
   apiTeamModel: (id: number, model: string) => `/api/teams/${seg(String(id))}/models/${seg(model)}`,
   apiTeamModelMark: (id: number, model: string) => `/api/teams/${seg(String(id))}/models/${seg(model)}/mark`,
   apiTeamChain: (id: number) => `/api/teams/${seg(String(id))}/chain`,
+  // A team's limits (GET), and the limit of one of its own entries: PUT {monthlyTokens}, DELETE for none.
+  apiTeamLimits: (id: number) => `/api/teams/${seg(String(id))}/limits`,
+  apiTeamModelLimit: (id: number, model: string) => `/api/teams/${seg(String(id))}/models/${seg(model)}/limit`,
   apiAdminModelMark: (id: string) => `/api/admin/models/${seg(id)}/mark`,
+  // A global entry's model limit, and a team's limit on it: PUT {monthlyTokens}, DELETE for none.
+  apiAdminModelLimit: (id: string) => `/api/admin/models/${seg(id)}/limit`,
+  apiAdminModelTeamLimit: (id: string, team: number) => `/api/admin/models/${seg(id)}/team-limits/${seg(String(team))}`,
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
   apiRepoReadiness: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/readiness`,
   apiRepoReadinessScan: (instance: string, project: string) =>

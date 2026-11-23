@@ -503,6 +503,12 @@ func (d *Dashboard) writeTeamChain(w http.ResponseWriter, r *http.Request, se Se
 		d.failed(w, r, "reading the team's chain", err)
 		return
 	}
+	// The team's repositories are what its chain, or the global one it
+	// shows, runs for: its limits apply.
+	if err := d.chainViewLimits(ctx, &c.in, t.ID); err != nil {
+		d.failed(w, r, "reading the model limits", err)
+		return
+	}
 	teams, err := d.teamNames(ctx)
 	if err != nil {
 		d.failed(w, r, "listing teams", err)
