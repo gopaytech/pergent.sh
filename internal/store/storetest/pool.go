@@ -148,9 +148,10 @@ func (st *state) reap() {
 }
 
 // retire marks as dirty what must not stay on the server: the templates,
-// builds and free copies of other migration hashes than hash, the free copies
-// of hash over maxFree, and the copies of binaries that are not running any
-// more (their owner lock is free). A copy whose owner lock is held stays. It
+// builds and free copies of other migration hashes than hash that no running
+// binary uses (their hash lock is free), the free copies of hash over
+// maxFree, and the copies of binaries that are not running any more (their
+// owner lock is free). A copy whose owner lock is held stays. It
 // returns the new dirty names, for the caller to drop. The caller holds the
 // build lock on conn, so no build runs meanwhile.
 func (st *state) retire(ctx context.Context, conn *pgxpool.Conn, hash string) ([]string, error) {
@@ -165,23 +166,47 @@ func (st *state) retire(ctx context.Context, conn *pgxpool.Conn, hash string) ([
 	if err != nil {
 		return nil, err
 	}
+	inUse := map[string]bool{}
+	gone := func(h string) (bool, error) {
+		if h == hash {
+			return false, nil
+		}
+		used, ok := inUse[h]
+		if !ok {
+			var err error
+			if used, err = hashInUse(ctx, conn, h); err != nil {
+				return false, err
+			}
+			inUse[h] = used
+		}
+		return !used, nil
+	}
 	var stale []string
 	free := 0
 	for _, name := range names {
 		switch {
-		case strings.HasPrefix(name, "pergent_tmpl_"):
-			if strings.TrimPrefix(name, "pergent_tmpl_") != hash {
-				stale = append(stale, name)
+		case strings.HasPrefix(name, "pergent_tmpl_"), strings.HasPrefix(name, "pergent_build_"):
+			_, h, _ := strings.Cut(strings.TrimPrefix(name, "pergent_"), "_")
+			old, err := gone(h)
+			if err != nil {
+				return nil, err
 			}
-		case strings.HasPrefix(name, "pergent_build_"):
-			if strings.TrimPrefix(name, "pergent_build_") != hash {
+			if old {
 				stale = append(stale, name)
 			}
 		case strings.HasPrefix(name, prefixFree):
 			h, _, _ := strings.Cut(strings.TrimPrefix(name, prefixFree), "_")
-			if h != hash {
-				stale = append(stale, name)
-			} else if free++; free > maxFree {
+			if h == hash {
+				if free++; free > maxFree {
+					stale = append(stale, name)
+				}
+				continue
+			}
+			old, err := gone(h)
+			if err != nil {
+				return nil, err
+			}
+			if old {
 				stale = append(stale, name)
 			}
 		default:
@@ -205,6 +230,21 @@ func (st *state) retire(ctx context.Context, conn *pgxpool.Conn, hash string) ([
 		}
 	}
 	return out, nil
+}
+
+// hashInUse reports whether a running binary holds the hash lock of the
+// migration hash h. The lock is free when this session can take it alone.
+func hashInUse(ctx context.Context, conn *pgxpool.Conn, h string) (bool, error) {
+	var free bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1, $2)`, hashLockClass, hashKey(h)).Scan(&free); err != nil {
+		return false, err
+	}
+	if free {
+		if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1, $2)`, hashLockClass, hashKey(h)); err != nil {
+			return false, err
+		}
+	}
+	return !free, nil
 }
 
 // deadOwner reports whether the copy name, in use by a binary, has an owner
