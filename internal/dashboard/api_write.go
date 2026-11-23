@@ -538,14 +538,6 @@ func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 // (scanNow), .../past-dismissals/stop (stopUsing) and .../settings/reset; any
 // other is 404.
 func (d *Dashboard) repositoryPost(w http.ResponseWriter, r *http.Request) {
-	if strings.HasSuffix(r.PathValue("rest"), "/panel-chain/reset") {
-		d.resetRepoPanelChain(w, r)
-		return
-	}
-	if strings.HasSuffix(r.PathValue("rest"), "/panel-chain/off") {
-		d.offRepoPanelChain(w, r)
-		return
-	}
 	if strings.HasSuffix(r.PathValue("rest"), "/chain/reset") {
 		d.resetRepoChain(w, r)
 		return
@@ -572,10 +564,6 @@ func (d *Dashboard) repositoryPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(r.PathValue("rest"), "/graph") {
 		d.putGraph(w, r)
-		return
-	}
-	if strings.HasSuffix(r.PathValue("rest"), "/panel-chain") {
-		d.putRepoPanelChain(w, r)
 		return
 	}
 	if strings.HasSuffix(r.PathValue("rest"), "/reviewers") {

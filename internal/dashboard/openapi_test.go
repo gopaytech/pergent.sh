@@ -859,7 +859,6 @@ var openAPISchemas = map[string]schemaType{
 	"RepositoryView":          outputSchema(RepositoryView{}),
 	"Last7View":               outputSchema(Last7View{}),
 	"RepositoryDetailView":    outputSchema(RepositoryDetailView{}),
-	"PanelView":               outputSchema(PanelView{}),
 	"MultiReviewView":         outputSchema(MultiReviewView{}),
 	"WaitingView":             outputSchema(WaitingView{}),
 	"QuotaView":               outputSchema(QuotaView{}),

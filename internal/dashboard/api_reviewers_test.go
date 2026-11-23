@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -20,6 +21,26 @@ const (
 	reviewersProject   = "acme/gadgets"
 	reviewersAuditName = "reviewers_changed"
 )
+
+// setPanelFloor sets the first pergent with multi review and the review
+// image, the floor going back to its default after the test.
+func setPanelFloor(t *testing.T, e *env, floor, image string) {
+	t.Helper()
+	old := config.PanelMinVersion
+	config.PanelMinVersion = floor
+	t.Cleanup(func() { config.PanelMinVersion = old })
+	e.cfg.Jobs.Image = image
+}
+
+// gadgetsOwnedByPayments adds main/acme/gadgets as a dashboard repository
+// that Payments owns.
+func (te *teamsEnv) gadgetsOwnedByPayments() {
+	te.t.Helper()
+	te.dashboardRepo("main", "acme/gadgets", nil)
+	te.editTeam(te.payments, func(tm *store.Team) {
+		tm.Repos = append(tm.Repos, store.TeamRepo{Instance: "main", Project: "acme/gadgets", Owner: true})
+	})
+}
 
 func reviewersURL(project string) string { return "/api/repositories/main/" + project + "/reviewers" }
 

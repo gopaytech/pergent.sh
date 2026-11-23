@@ -3150,126 +3150,6 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
-  /api/repositories/{instance}/{project}/panel-chain:
-    get:
-      operationId: getRepositoryPanelChain
-      tags: [Repositories]
-      summary: A repository's chain B
-      description: |
-        Chain B is the review panel's second chain. Anyone who sees the
-        repository, as for its model chain. `mode` is `inherit`, `custom` (its
-        own) or `off` (no entries, `source` `repository`: no panel whatever its
-        owner team's or the global chain B). Read-only unless the session is an
-        admin or a maintainer of the owner team. Never a key.
-      x-pergent-access: session
-      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
-      security:
-        - sessionCookie: []
-      parameters:
-        - $ref: '#/components/parameters/InstanceName'
-        - $ref: '#/components/parameters/ProjectPath'
-      responses:
-        '200':
-          description: The chain B in effect.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ChainView'}
-        '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '500': {$ref: '#/components/responses/InternalError'}
-    put:
-      operationId: putRepositoryPanelChain
-      tags: [Repositories]
-      summary: Give a repository its own chain B
-      description: |
-        The rights and the entries of `PUT .../chain`, for chain B; the mode
-        becomes `custom`. Then the review image is checked: 400 `chain B needs
-        a review image with pergent <version> or later; jobs.image is <tag>`
-        (`<tag> (not a version)` for a tag that is not a version, `not a
-        version` for an image with no tag), and while no pergent
-        release has a review panel `no review image supports a review panel
-        yet`. Audited as `panel_chain_changed` (`scope=repo entries=<names>`).
-      x-pergent-access: session
-      x-pergent-pattern: PUT /api/repositories/{instance}/{rest...}
-      security:
-        - sessionCookie: []
-          csrfToken: []
-      parameters:
-        - $ref: '#/components/parameters/InstanceName'
-        - $ref: '#/components/parameters/ProjectPath'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: '#/components/schemas/ChainRequest'}
-      responses:
-        '200':
-          description: The chain B saved.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ChainView'}
-        '400': {$ref: '#/components/responses/BadRequest'}
-        '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '500': {$ref: '#/components/responses/InternalError'}
-  /api/repositories/{instance}/{project}/panel-chain/reset:
-    post:
-      operationId: resetRepositoryPanelChain
-      tags: [Repositories]
-      summary: Drop a repository's own chain B
-      description: |
-        Who may save its chain B. The mode becomes `inherit`, from `custom` or
-        `off`: its owner team's chain B, else the global one. No image check.
-        Audited as `panel_chain_changed` (`scope=repo mode=inherit`).
-      x-pergent-access: session
-      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
-      security:
-        - sessionCookie: []
-          csrfToken: []
-      parameters:
-        - $ref: '#/components/parameters/InstanceName'
-        - $ref: '#/components/parameters/ProjectPath'
-      responses:
-        '200':
-          description: The chain B in effect now.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ChainView'}
-        '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '500': {$ref: '#/components/responses/InternalError'}
-  /api/repositories/{instance}/{project}/panel-chain/off:
-    post:
-      operationId: offRepositoryPanelChain
-      tags: [Repositories]
-      summary: Turn a repository's review panel off
-      description: |
-        Who may save its chain B. Its own chain B goes and the mode becomes
-        `off`: no panel, whatever its owner team's or the global chain B. No
-        image check, so it always works, on a repository the config file
-        switches on too (it keeps a chain B with no entries, which means off).
-        Audited as `panel_chain_changed` (`scope=repo mode=off`).
-      x-pergent-access: session
-      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
-      security:
-        - sessionCookie: []
-          csrfToken: []
-      parameters:
-        - $ref: '#/components/parameters/InstanceName'
-        - $ref: '#/components/parameters/ProjectPath'
-      responses:
-        '200':
-          description: The chain B view, mode `off`.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ChainView'}
-        '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '500': {$ref: '#/components/responses/InternalError'}
   /api/teams/{id}/chain:
     get:
       operationId: getTeamChain
@@ -3318,61 +3198,6 @@ paths:
       responses:
         '200':
           description: The chain saved.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ChainView'}
-        '400': {$ref: '#/components/responses/BadRequest'}
-        '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '500': {$ref: '#/components/responses/InternalError'}
-  /api/teams/{id}/panel-chain:
-    get:
-      operationId: getTeamPanelChain
-      tags: [Organization]
-      summary: A team's chain B
-      description: |
-        As `GET /api/teams/{id}/chain`, for chain B, the review panel's second
-        chain. While the team has none its repositories use the global chain
-        B, which is shown (`source` `global`, empty when there is none).
-      x-pergent-access: session
-      security:
-        - sessionCookie: []
-      parameters:
-        - $ref: '#/components/parameters/NumericId'
-      responses:
-        '200':
-          description: The chain B.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ChainView'}
-        '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '500': {$ref: '#/components/responses/InternalError'}
-    put:
-      operationId: putTeamPanelChain
-      tags: [Organization]
-      summary: Save a team's chain B
-      description: |
-        The rights and the entries of `PUT /api/teams/{id}/chain`, for chain
-        B. Then the review image is checked, as for a repository's chain B
-        (400). No entries is no chain B, which needs no image check. Audited
-        as `panel_chain_changed` (`scope=team team=<name> entries=<names>`).
-      x-pergent-access: session
-      security:
-        - sessionCookie: []
-          csrfToken: []
-      parameters:
-        - $ref: '#/components/parameters/NumericId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: '#/components/schemas/ChainRequest'}
-      responses:
-        '200':
-          description: The chain B saved.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ChainView'}
@@ -3882,57 +3707,6 @@ paths:
       responses:
         '200':
           description: The chain saved.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ChainView'}
-        '400': {$ref: '#/components/responses/BadRequest'}
-        '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '500': {$ref: '#/components/responses/InternalError'}
-  /api/admin/panel-chain:
-    get:
-      operationId: getGlobalPanelChain
-      tags: [Instances and settings]
-      summary: The global chain B
-      description: |
-        Admins only. The global chain B, the review panel's second chain, as
-        stored: no config file entries and no default entry. Empty when none
-        is stored: then a repository with no own and no team chain B has no
-        panel.
-      x-pergent-access: admin
-      security:
-        - sessionCookie: []
-      responses:
-        '200':
-          description: The chain B.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ChainView'}
-        '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '500': {$ref: '#/components/responses/InternalError'}
-    put:
-      operationId: putGlobalPanelChain
-      tags: [Instances and settings]
-      summary: Save the global chain B
-      description: |
-        Admins only. Global entries only, at most 5, as the global chain; the
-        default does not move. Then the review image is checked, as for a
-        repository's chain B (400). No entries is no chain B, which needs no
-        image check. Audited as `panel_chain_changed` (`scope=global
-        entries=<names>`).
-      x-pergent-access: admin
-      security:
-        - sessionCookie: []
-          csrfToken: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: '#/components/schemas/ChainRequest'}
-      responses:
-        '200':
-          description: The chain B saved.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ChainView'}
@@ -6740,10 +6514,6 @@ components:
         savedByAdmin:
           type: boolean
           description: An admin saved the chain shown. A repository chain an admin saved may name global entries teams may not use; one a team maintainer saves may not.
-        mode:
-          type: string
-          enum: [inherit, custom, 'off']
-          description: A repository's chain B mode, on `GET .../panel-chain` and its writes only. `off` has no entries and `source` `repository`.
         entries:
           type: array
           maxItems: 5
@@ -7345,7 +7115,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, panel, multiReview, quota, graph]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -7379,7 +7149,6 @@ components:
           description: |
             `provider / model` of position 1 of the model chain in effect (`GET .../chain`).
             Empty when the chain is empty or that entry was removed. Never the base URL or the key.
-        panel: {$ref: '#/components/schemas/PanelView'}
         multiReview: {$ref: '#/components/schemas/MultiReviewView'}
         quota:
           description: This month's tokens against the repository's and its instance's quotas. Null for anyone but an admin, and when the usage could not be read.
@@ -7403,24 +7172,6 @@ components:
         judge:
           type: string
           description: The name of the judge chain's first entry. Empty with no judge, an empty judge chain or a removed entry.
-    PanelView:
-      description: A repository's review panel. Never a model, a base URL or a key.
-      type: object
-      required: ['on', mode]
-      properties:
-        'on':
-          type: boolean
-          description: A chain B is in effect for the repository (its own, its owner team's or the global one).
-        mode:
-          type: string
-          enum: [inherit, custom, 'off']
-          description: Its chain B mode. `off` is no panel, whatever its owner team's or the global chain B.
-        a:
-          type: string
-          description: The name of the entry at position 1 of chain A in effect, while `on`. Left out otherwise, or when that entry was removed.
-        b:
-          type: string
-          description: The name of the entry at position 1 of chain B in effect, while `on`. Left out otherwise, or when that entry was removed.
     GraphView:
       description: |
         A repository's Code graph switch and the stored graph's status, never its contents. With the switch off

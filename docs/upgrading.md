@@ -6,6 +6,9 @@
 
 - **Review panels stay off.** Multi review (several reviewer models and a judge) will replace them.
 
+- **The `/panel-chain` routes are gone.** `GET` and `PUT /api/admin/panel-chain`, `GET` and `PUT /api/teams/{id}/panel-chain`, and `GET` and `PUT /api/repositories/{instance}/{project}/panel-chain` with its `/reset` and `/off`, now answer 404. The repository view has no `panel` key. The audit action `panel_chain_changed` is no longer written.
+- **New: `GET` and `PUT /api/repositories/{instance}/{project}/reviewers`** (reviewers 2 to 5 and the judge). A change is audited as `reviewers_changed`. Multi review is experimental. It is refused (400) until a review image supports it, so no review changes yet.
+
 ## Upgrading to 0.18.0
 
 **The default review image is pergent v0.11.0** (`jobs.image` `ghcr.io/gopaytech/pergent:v0.11.0`, was v0.10.0). It is the first pergent release that reads path rules, reports `provider_error` for a model fallback, gives the model CI results and uses the code graph. A config that sets its own `jobs.image` keeps the image it names, and gets none of these until it names v0.11.0 or newer.
