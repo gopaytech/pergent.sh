@@ -217,7 +217,7 @@ pergent.sh can't check this for you. A review that can't connect fails, and its 
 
 ## Reviewers 2 to 5 and the judge
 
-A repository's model chain is **reviewer 1**. Reviewers 2 to 5 and a judge are more chains, for [multi review](multi-review.md). It is experimental, and reviews do not use it yet. They are on the repository's **Reviewers** card and follow the same rights as the model chain.
+A repository's model chain is **reviewer 1**. Reviewers 2 to 5 and a judge are more chains, for [multi review](multi-review.md). It is experimental, and it needs pergent v0.12.0 or newer in `jobs.image`, the default. They are on the repository's **Reviewers** card and follow the same rights as the model chain.
 
 ## Rolling back
 

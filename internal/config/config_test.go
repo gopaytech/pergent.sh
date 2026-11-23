@@ -1921,11 +1921,14 @@ func setPanelMin(t *testing.T, v string) {
 	t.Cleanup(func() { PanelMinVersion = old })
 }
 
-// The shipped default is empty, so it refuses every image, the default review
-// image included.
+// The shipped floor is pergent v0.12.0, the first release with
+// agent --multi-review: the default review image passes, older ones don't.
 func TestPanelImageShippedDefault(t *testing.T) {
-	if PanelMinVersion != "" {
-		t.Fatalf("PanelMinVersion = %q, want empty", PanelMinVersion)
+	if PanelMinVersion != "v0.12.0" {
+		t.Fatalf("PanelMinVersion = %q, want v0.12.0", PanelMinVersion)
+	}
+	if ok, reason := PanelImage(defaultImage); !ok {
+		t.Errorf("the default image %s refused: %s", defaultImage, reason)
 	}
 	for _, image := range []string{"ghcr.io/gopaytech/pergent:v0.11.0", "ghcr.io/gopaytech/pergent:v0.10.0"} {
 		if ok, _ := PanelImage(image); ok {
