@@ -2,10 +2,13 @@ package storetest
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -130,4 +133,89 @@ func TestWithDatabase(t *testing.T) {
 			t.Errorf("withDatabase(%q) = %q, %v; want %q", c.base, got, err, c.want)
 		}
 	}
+}
+
+// A new template retires what an older migration hash left: its template,
+// build and free copies, and the copies of binaries that stopped. A copy
+// whose owner still runs stays.
+func TestTemplateRetiresOldHash(t *testing.T) {
+	open(t) // sets shared up
+	st := shared
+	old := "0123456789abcdef"
+	if old == st.tmpl.hash() {
+		t.Fatal("the old hash is the current hash")
+	}
+	live, dead := int32(0x7ffffff0), int32(0x7ffffff1)
+	lock, err := pgx.Connect(ctx, st.base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close(ctx)
+	if _, err := lock.Exec(ctx, `SELECT pg_advisory_lock($1, $2)`, lockClass, live); err != nil {
+		t.Fatal(err)
+	}
+	liveCopy := fmt.Sprintf("%s%08x_live", prefixUsed, live)
+	gone := []string{
+		"pergent_tmpl_" + old,
+		"pergent_build_" + old,
+		prefixFree + old + "_a",
+		prefixFree + old + "_b",
+		fmt.Sprintf("%s%08x_dead", prefixUsed, dead),
+	}
+	for _, name := range append([]string{liveCopy}, gone...) {
+		st.drop(ctx, name)
+		if _, err := st.admin.Exec(ctx, "CREATE DATABASE "+ident(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { st.drop(context.Background(), liveCopy) })
+	if _, err := st.admin.Exec(ctx, "ALTER DATABASE "+ident(gone[0])+" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false"); err != nil {
+		t.Fatal(err)
+	}
+	before := databases(t, prefixDirty)
+
+	if _, err := loadTemplate(ctx, st, st.tmpl.name, store.OpenInSchema); err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	all := databases(t, "pergent_")
+	for _, name := range gone {
+		if slices.Contains(all, name) {
+			t.Errorf("%s is still there", name)
+		}
+	}
+	if !slices.Contains(all, liveCopy) {
+		t.Errorf("%s of a running owner was retired", liveCopy)
+	}
+	// The worker drops the retired databases, the old template too.
+	var retired []string
+	for _, d := range databases(t, prefixDirty) {
+		if !slices.Contains(before, d) {
+			retired = append(retired, d)
+		}
+	}
+	if len(retired) < len(gone) {
+		t.Fatalf("retired = %v, want at least %d", retired, len(gone))
+	}
+	deadline := time.Now().Add(3 * time.Minute)
+	for _, d := range retired {
+		for slices.Contains(databases(t, prefixDirty), d) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s was never dropped", d)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
+func databases(t *testing.T, prefix string) []string {
+	t.Helper()
+	rows, err := shared.admin.Query(ctx, `SELECT datname FROM pg_database WHERE starts_with(datname, $1)`, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return names
 }

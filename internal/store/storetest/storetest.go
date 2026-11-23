@@ -207,8 +207,28 @@ func loadTemplate[S Store](ctx context.Context, st *state, name string, open Ope
 	}
 	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1, 0)`, lockClass) //nolint:errcheck // the session ends at exit
 
+	tmpl, err = findOrBuild(ctx, st, conn, name, open)
+	if err != nil {
+		return tmpl, err
+	}
+	// The disk of the test server is small: what older migrations left
+	// goes now, under the same lock.
+	retired, err := st.retire(ctx, conn, tmpl.hash())
+	if err != nil {
+		return tmpl, fmt.Errorf("retire: %w", err)
+	}
+	for _, d := range retired {
+		st.dropLater(d)
+	}
+	return tmpl, nil
+}
+
+// findOrBuild returns the template name, and builds it first when it is not
+// there. The caller holds the build lock on conn.
+func findOrBuild[S Store](ctx context.Context, st *state, conn *pgxpool.Conn, name string, open OpenFunc[S]) (template, error) {
+	tmpl := template{name: name}
 	var comment *string
-	err = conn.QueryRow(ctx, `SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1`, name).Scan(&comment)
+	err := conn.QueryRow(ctx, `SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1`, name).Scan(&comment)
 	if err == nil {
 		if comment == nil {
 			return tmpl, fmt.Errorf("template %s has no fingerprint", name)

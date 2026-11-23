@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // The names of the databases of this package. Each ends in random hex.
@@ -21,9 +22,10 @@ const (
 	prefixDirty = "pergent_d_" // copies to drop
 )
 
-// maxFree is the most free copies one template keeps. A copy over it is
-// dropped.
-const maxFree = 64
+// maxFree is the most free copies the template keeps. A copy over it is
+// dropped. It is a little above the most copies a full run of all packages
+// uses at one time, so the pool holds a few hundred MB at most.
+const maxFree = 24
 
 // template is a migrated template database.
 type template struct {
@@ -128,61 +130,107 @@ func (st *state) dropLater(name string) {
 }
 
 // reap runs in the background for the life of the binary. It drops the
-// copies that stopped binaries left behind, then the copies that tests left
-// dirty.
+// dirty copies, the ones there now and then the ones tests leave.
 func (st *state) reap() {
 	ctx := context.Background()
-	for _, name := range st.orphans(ctx) {
-		st.drop(ctx, name)
+	rows, err := st.admin.Query(ctx, `SELECT datname FROM pg_database WHERE starts_with(datname, $1)`, prefixDirty)
+	if err == nil {
+		names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err == nil {
+			for _, name := range names {
+				st.drop(ctx, name)
+			}
+		}
 	}
 	for name := range st.drops {
 		st.drop(ctx, name)
 	}
 }
 
-// orphans lists the dirty copies and the copies of binaries that are not
-// running any more: their owner lock is free.
-func (st *state) orphans(ctx context.Context) []string {
-	conn, err := st.admin.Acquire(ctx)
-	if err != nil {
-		return nil
-	}
-	defer conn.Release()
+// retire marks as dirty what must not stay on the server: the templates,
+// builds and free copies of other migration hashes than hash, the free copies
+// of hash over maxFree, and the copies of binaries that are not running any
+// more (their owner lock is free). A copy whose owner lock is held stays. It
+// returns the new dirty names, for the caller to drop. The caller holds the
+// build lock on conn, so no build runs meanwhile.
+func (st *state) retire(ctx context.Context, conn *pgxpool.Conn, hash string) ([]string, error) {
 	rows, err := conn.Query(ctx, `SELECT datname FROM pg_database
-		WHERE starts_with(datname, $1) OR starts_with(datname, $2)`, prefixUsed, prefixDirty)
+		WHERE starts_with(datname, 'pergent_tmpl_') OR starts_with(datname, 'pergent_build_')
+			OR starts_with(datname, $1) OR starts_with(datname, $2)
+		ORDER BY datname`, prefixFree, prefixUsed)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return nil
+		return nil, err
+	}
+	var stale []string
+	free := 0
+	for _, name := range names {
+		switch {
+		case strings.HasPrefix(name, "pergent_tmpl_"):
+			if strings.TrimPrefix(name, "pergent_tmpl_") != hash {
+				stale = append(stale, name)
+			}
+		case strings.HasPrefix(name, "pergent_build_"):
+			if strings.TrimPrefix(name, "pergent_build_") != hash {
+				stale = append(stale, name)
+			}
+		case strings.HasPrefix(name, prefixFree):
+			h, _, _ := strings.Cut(strings.TrimPrefix(name, prefixFree), "_")
+			if h != hash {
+				stale = append(stale, name)
+			} else if free++; free > maxFree {
+				stale = append(stale, name)
+			}
+		default:
+			dead, err := st.deadOwner(ctx, conn, name)
+			if err != nil {
+				return nil, err
+			}
+			if dead {
+				stale = append(stale, name)
+			}
+		}
 	}
 	var out []string
-	for _, name := range names {
-		if strings.HasPrefix(name, prefixDirty) {
-			out = append(out, name)
-			continue
-		}
-		id, _, _ := strings.Cut(strings.TrimPrefix(name, prefixUsed), "_")
-		owner, err := strconv.ParseInt(id, 16, 32)
-		if err != nil || int32(owner) == st.owner {
-			continue
-		}
-		var free bool
-		if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1, $2)`, lockClass, int32(owner)).Scan(&free); err != nil {
-			return out
-		}
-		if free {
-			if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1, $2)`, lockClass, int32(owner)); err != nil {
-				return out
-			}
-			out = append(out, name)
+	for _, name := range stale {
+		dirty := prefixDirty + hex.EncodeToString(randomBytes(8))
+		st.endSessions(ctx, name)
+		// A rename fails when another binary claimed the copy first: it
+		// stays theirs.
+		if _, err := conn.Exec(ctx, "ALTER DATABASE "+ident(name)+" RENAME TO "+ident(dirty)); err == nil {
+			out = append(out, dirty)
 		}
 	}
-	return out
+	return out, nil
 }
 
+// deadOwner reports whether the copy name, in use by a binary, has an owner
+// that is not running any more: its owner lock is free.
+func (st *state) deadOwner(ctx context.Context, conn *pgxpool.Conn, name string) (bool, error) {
+	id, _, _ := strings.Cut(strings.TrimPrefix(name, prefixUsed), "_")
+	owner, err := strconv.ParseInt(id, 16, 32)
+	if err != nil || int32(owner) == st.owner {
+		return false, nil
+	}
+	var free bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1, $2)`, lockClass, int32(owner)).Scan(&free); err != nil {
+		return false, err
+	}
+	if free {
+		if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1, $2)`, lockClass, int32(owner)); err != nil {
+			return false, err
+		}
+	}
+	return free, nil
+}
+
+// drop drops the database name. A retired template must stop being a
+// template first.
 func (st *state) drop(ctx context.Context, name string) {
+	_, _ = st.admin.Exec(ctx, "ALTER DATABASE "+ident(name)+" WITH IS_TEMPLATE false")
 	_, _ = st.admin.Exec(ctx, "DROP DATABASE IF EXISTS "+ident(name)+" WITH (FORCE)")
 }
 
