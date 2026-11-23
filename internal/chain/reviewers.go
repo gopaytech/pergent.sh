@@ -20,8 +20,9 @@ type Reviewers struct {
 }
 
 // LoadReviewers reads chain A as Load does, and the repository's stored
-// reviewers 2 to 5 and judge (store.Reviewers) with the same entries, marks
-// and owner team. An API review has none: Extra and Judge are empty.
+// reviewers 2 to 5 and judge (store.Reviewers) with the same entries, marks,
+// owner team and limits used up. An API review has none: Extra and Judge are
+// empty.
 func LoadReviewers(ctx context.Context, st *store.Store, reg *instances.Registry, now time.Time, run store.Run, repo settings.Effective) (Reviewers, error) {
 	one, err := Load(ctx, st, reg, now, run, repo)
 	if err != nil {
@@ -44,11 +45,14 @@ func LoadReviewers(ctx context.Context, st *store.Store, reg *instances.Registry
 	return r, nil
 }
 
-// blank is base's entries, marks, owner team and now, with no chain, no
-// tried entry, no avoided model and no instance quota. Its maps are copies,
-// so a caller that edits one Input changes no other.
+// blank is base's entries, marks, owner team, limits used up and now, with
+// no chain, no tried entry, no avoided model and no instance quota. The
+// limits are per entry and owner team, so every chain of the review reads
+// the ones LoadSet read for chain A. Its maps are copies, so a caller that
+// edits one Input changes no other.
 func blank(base Input) Input {
-	return Input{Entries: maps.Clone(base.Entries), Marks: maps.Clone(base.Marks), OwnerTeam: base.OwnerTeam, Now: base.Now}
+	return Input{Entries: maps.Clone(base.Entries), Marks: maps.Clone(base.Marks), OwnerTeam: base.OwnerTeam,
+		ModelLimitUsedUp: maps.Clone(base.ModelLimitUsedUp), TeamLimitUsedUp: maps.Clone(base.TeamLimitUsedUp), Now: base.Now}
 }
 
 // withChain is in with the stored chain c of a repository. A chain with no
@@ -76,7 +80,7 @@ func Freeze(in Input) store.FrozenChain {
 	return fc
 }
 
-// FromFrozen is base (entries, marks, owner team, now) with fc's chain:
+// FromFrozen is base (entries, marks, owner team, limits, now) with fc's chain:
 // its refs, scope and saved_by_admin. A ref no longer in base.Entries is
 // skipped as removed. Tried, Avoid and InstanceQuotaUsedUp start empty: the
 // caller sets them.

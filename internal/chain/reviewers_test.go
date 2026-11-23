@@ -206,3 +206,27 @@ func TestFromFrozenDropsTried(t *testing.T) {
 		t.Fatalf("decision = %+v", d)
 	}
 }
+
+// Every chain of a review reads the limits LoadSet read for chain A: a
+// reviewer chain skips an entry at its model or team limit, on copies of the
+// maps.
+func TestFromFrozenKeepsLimits(t *testing.T) {
+	base := input(store.ScopeRepo, g("a"), g("b"), g("c"))
+	base.ModelLimitUsedUp = map[store.EntryRef]bool{g("a"): true}
+	base.TeamLimitUsedUp = map[store.EntryRef]bool{g("b"): true}
+	in := FromFrozen(Freeze(base), base)
+	d := Resolve(in)
+	if d.Ref != g("c") || d.FirstSkip != ReasonModelLimit || len(d.Skips) != 2 || d.Skips[1].Reason != ReasonTeamLimit {
+		t.Fatalf("decision = %+v", d)
+	}
+	in.ModelLimitUsedUp[g("c")] = true
+	in.TeamLimitUsedUp[g("c")] = true
+	if base.ModelLimitUsedUp[g("c")] || base.TeamLimitUsedUp[g("c")] {
+		t.Error("an edit of the reviewer chain's limits changed base's")
+	}
+	only := blank(base)
+	only.Refs = []store.EntryRef{g("a")}
+	if d := Resolve(only); !d.Hold || !d.Limited {
+		t.Fatalf("a reviewer chain at its limit: %+v; want a hold", d)
+	}
+}
