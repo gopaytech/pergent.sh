@@ -77,6 +77,8 @@ func (st *state) claim(ctx context.Context) (string, error) {
 // when the reset cannot make it equal to a fresh copy.
 func (st *state) release(name string) {
 	ctx := context.Background()
+	// A session the test left open could hold a lock the reset waits for.
+	st.endSessions(ctx, name)
 	clean := st.reset(ctx, name) == nil
 	target := prefixDirty + hex.EncodeToString(randomBytes(8))
 	if clean {
@@ -101,16 +103,19 @@ func (st *state) release(name string) {
 func (st *state) rename(ctx context.Context, from, to string) error {
 	var err error
 	for range 50 {
-		if _, err = st.admin.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()`, from); err != nil {
-			return err
-		}
+		st.endSessions(ctx, from)
 		if _, err = st.admin.Exec(ctx, "ALTER DATABASE "+ident(from)+" RENAME TO "+ident(to)); err == nil {
 			return nil
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	return err
+}
+
+// endSessions ends the sessions connected to the database name.
+func (st *state) endSessions(ctx context.Context, name string) {
+	_, _ = st.admin.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+		WHERE datname = $1 AND pid <> pg_backend_pid()`, name)
 }
 
 // dropLater queues a database for the background worker to drop. When the
@@ -250,6 +255,8 @@ func connect(ctx context.Context, dbURL string) (*pgx.Conn, error) {
 		return nil, err
 	}
 	cfg.RuntimeParams["search_path"] = "pg_catalog"
+	// A reset that waits on a lock fails, and the copy is dropped.
+	cfg.RuntimeParams["lock_timeout"] = "10s"
 	return pgx.ConnectConfig(ctx, cfg)
 }
 
