@@ -1098,7 +1098,7 @@ func TestUserIsBot(t *testing.T) {
 		name    string
 		body    map[string]any
 		want    bool
-		unknown bool // ErrBotUnknown: it can't be told from a bot
+		unknown bool // ErrBotUnknown: it can't say whether the user is a bot
 	}{
 		{"a bot", map[string]any{"id": 12, "username": "project_7_bot", "bot": true}, true, false},
 		{"a person", map[string]any{"id": 12, "username": "dev", "bot": false}, false, false},

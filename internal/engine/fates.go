@@ -205,7 +205,7 @@ func (e *Engine) fateJob(ctx, bctx context.Context, job store.FateJob, log *slog
 		case err != nil:
 			return err
 		case untold != nil && byBot:
-			log.Info("the change's author can't be told from a bot; leaving it out as a bot's", "error", e.redact(untold.Error()))
+			log.Info("pergent.sh can't say whether the change's author is a bot; leaving it out as a bot's", "error", e.redact(untold.Error()))
 		case untold != nil:
 			log.Info("couldn't tell whether a bot opened the change; counting it as a person's", "error", e.redact(untold.Error()))
 		}

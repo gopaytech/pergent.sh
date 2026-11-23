@@ -94,9 +94,9 @@ const (
 	whyUntrusted = "author not trusted"
 )
 
-// whyBotUnknown drops the command of an author the platform can't tell from a
-// bot ("dropped: " + why), as a bot's is dropped.
-const whyBotUnknown = "the author can't be told from a bot"
+// whyBotUnknown drops the command of an author when the platform can't say
+// whether the author is a bot ("dropped: " + why), as a bot's is dropped.
+const whyBotUnknown = "pergent.sh can't say whether the author is a bot"
 
 // replyOnlyAuthorAndMaintainers is the gate's refusal reply. term is what the
 // platform calls a change (changeTerm).
@@ -444,9 +444,9 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 		return dropped("the repository is not switched on"), nil
 	}
 	// GitLab project, group and service-account bots are no person whatever
-	// their comments say: asked of the platform. An author its answer can't
-	// tell from a bot is dropped as a bot is; when it can't be asked, the
-	// command is tried again, never acted on.
+	// their comments say: asked of the platform. When its answer can't say
+	// whether the author is a bot, the command is dropped as a bot's is; when
+	// the request fails, the command is tried again, never acted on.
 	switch bot, err := plat.Forge.IsBot(ctx, cmd.AuthorID); {
 	case errors.Is(err, forge.ErrBotUnknown):
 		return dropped(whyBotUnknown), nil

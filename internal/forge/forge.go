@@ -385,8 +385,8 @@ var (
 	// support for (GitLab has no linked repositories).
 	ErrUnsupported = errors.New("forge: not supported on this platform")
 	// ErrBotUnknown is matched by IsBot's error when the platform answered
-	// but its answer can't tell the user from a bot (a user with no ID, a
-	// user with no bot attribute whose username is not a bot's). It is an
+	// but its answer can't say whether the user is a bot (a user with no ID,
+	// a user with no bot attribute whose username is not a bot's). It is an
 	// answer, not a failure to try again, and the user is never a person.
-	ErrBotUnknown = errors.New("forge: the user can't be told from a bot")
+	ErrBotUnknown = errors.New("forge: pergent.sh can't say whether the user is a bot")
 )

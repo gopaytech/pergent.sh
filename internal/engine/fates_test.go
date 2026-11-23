@@ -483,7 +483,7 @@ func TestFateAuthorIsBot(t *testing.T) {
 		{name: "a request error: a person's", change: forge.Change{AuthorID: 5}, forge: botForge{err: boom}, untold: true, wantCalls: 1},
 		// The platform answered, and the answer is that it can't tell: left
 		// out as a bot's, never a person's.
-		{name: "can't be told from a bot: left out", change: forge.Change{AuthorID: 5}, forge: botForge{err: forge.ErrBotUnknown}, want: true, untold: true, wantCalls: 1},
+		{name: "can't say whether a bot: left out", change: forge.Change{AuthorID: 5}, forge: botForge{err: forge.ErrBotUnknown}, want: true, untold: true, wantCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := tc.forge
@@ -903,7 +903,7 @@ func TestWorkFatesBotAuthor(t *testing.T) {
 		}, false},
 		// When GitLab answers but the answer can't tell a bot (no bot
 		// attribute, a person's username), the change is left out.
-		{"can't be told from a bot", func(env *testEnv) {
+		{"can't say whether a bot", func(env *testEnv) {
 			env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusOK, map[string]any{"id": 55, "username": "dev"})
 		}, true},
 		{"a token bot's username", func(env *testEnv) {

@@ -811,7 +811,8 @@ func (c *Client) UserIsBot(ctx context.Context, userID int64) (bool, error) {
 
 // botUsername matches the usernames GitLab gives its bot users:
 // project_<id>_bot… and group_<id>_bot… for access tokens, service_account_…
-// for service accounts.
+// for service accounts. Keep it in step with gitlabBotName in
+// internal/webhook/commands.go, which reads the webhook's username.
 var botUsername = regexp.MustCompile(`(?i)^((project|group)_[0-9]+_bot|service_account_)`)
 
 // UserByUsername returns the user whose username is username, ignoring case

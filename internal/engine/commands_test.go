@@ -770,10 +770,11 @@ func TestCommandOfABotIsDropped(t *testing.T) {
 	}
 }
 
-// An author pergent.sh can't tell from a bot (no user ID, or GitLab sends no
-// bot attribute and the username is not a token bot's) is dropped as a bot
-// is: a 👎, no reply, no run and no access lookup. It is not tried again.
-func TestCommandOfAnAuthorThatCantBeToldFromABotIsDropped(t *testing.T) {
+// When pergent.sh can't say whether the author is a bot (no user ID, or
+// GitLab sends no bot attribute and the username is not a token bot's), the
+// command is dropped as a bot's is: a 👎, no reply, no run and no access
+// lookup. It is not tried again.
+func TestCommandWhenBotStatusIsUnknownIsDropped(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		userID int64
@@ -792,12 +793,12 @@ func TestCommandOfAnAuthorThatCantBeToldFromABotIsDropped(t *testing.T) {
 			f.wantReactions(1, c, eyes, down)
 			f.wantReplies(1)
 			if n := len(f.queued()); n != 0 {
-				t.Errorf("%d runs queued by an author that can't be told from a bot", n)
+				t.Errorf("%d runs queued when pergent.sh can't say whether the author is a bot", n)
 			}
 			if n := len(f.GitLab.Requests(http.MethodGet, membersPath(tc.userID))); n != 0 {
 				t.Errorf("the author's access was looked up %d times", n)
 			}
-			if !strings.Contains(f.Logs(), "dropped: the author can't be told from a bot") {
+			if !strings.Contains(f.Logs(), "dropped: pergent.sh can't say whether the author is a bot") {
 				t.Errorf("no log line gives the reason:\n%s", f.Logs())
 			}
 

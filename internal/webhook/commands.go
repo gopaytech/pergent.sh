@@ -15,7 +15,9 @@ import (
 // gitlabBotName matches the usernames GitLab gives its project and group
 // access tokens (project_<id>_bot, project_<id>_bot_<hex>, group_<id>_bot…)
 // and service accounts: automation, never a person. The engine also asks
-// GitLab whether the author is a bot (a user's bot flag) before it acts.
+// GitLab whether the author is a bot (a user's bot flag) before it acts. Keep
+// it in step with botUsername in internal/gitlab/client.go, which reads the
+// username of GitLab's answer when it has no bot flag.
 var gitlabBotName = regexp.MustCompile(`^((project|group)_\d+_bot(_[0-9a-f]+)?|service_account_.*)$`)
 
 // maxReasonRunes is how much of a dismissal's reason is kept.
