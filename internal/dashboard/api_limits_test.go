@@ -207,3 +207,32 @@ func TestTeamLimitsView(t *testing.T) {
 	}
 	wantCode(t, te.get(te.otherMaintainer, teamURL(te.payments, "/limits")), "another team's maintainer", http.StatusNotFound)
 }
+
+// The admin list: each global entry's model limit and its tokens this month,
+// and each team's limit on it with that team's tokens, by team name.
+func TestModelListShowsLimits(t *testing.T) {
+	te := newTeamsEnv(t)
+	g := te.addModel("openai", "gpt-5", "", llmKeyThree)
+	plain := te.addModel("openai", "gpt-6", "", llmKeyThree)
+	wantCode(t, te.send(te.admin, "PUT", modelLimitURL(g.ID), `{"monthlyTokens":1000}`), "model limit", http.StatusNoContent)
+	wantCode(t, te.send(te.admin, "PUT", teamLimitURL(g.ID, te.widgets), `{"monthlyTokens":50}`), "Widgets", http.StatusNoContent)
+	wantCode(t, te.send(te.admin, "PUT", teamLimitURL(g.ID, te.payments), `{"monthlyTokens":400}`), "Payments", http.StatusNoContent)
+	used := te.usageRun(runFix{project: "acme/payments", number: 50, head: head('5')}, usageSkill("code-review", "no_blocking_issues", 120, 30))
+	te.exec(`UPDATE runs SET model_source = 'global', model_entry_id = $2 WHERE id = $1::uuid`, used, g.ID)
+
+	v := decode[ModelsAdminView](t, te.get(te.admin, modelsURL), "GET models", http.StatusOK)
+	got := modelNamed(t, v, g.ID)
+	if got.Limit == nil || *got.Limit != 1000 || got.Used != 150 {
+		t.Errorf("limit, used = %v, %d; want 1000, 150", got.Limit, got.Used)
+	}
+	want := []TeamLimitView{
+		{TeamID: te.payments, Team: "Payments", Limit: 400, Used: 150},
+		{TeamID: te.widgets, Team: "Widgets", Limit: 50, Used: 0},
+	}
+	if !slices.Equal(got.TeamLimits, want) {
+		t.Errorf("teamLimits = %+v; want %+v", got.TeamLimits, want)
+	}
+	if p := modelNamed(t, v, plain.ID); p.Limit != nil || p.Used != 0 || p.TeamLimits == nil || len(p.TeamLimits) != 0 {
+		t.Errorf("an entry with no limit = %+v; want null, 0 and []", p)
+	}
+}

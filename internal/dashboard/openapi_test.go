@@ -834,6 +834,7 @@ func inputSchema(v any) schemaType  { return schemaType{Type: reflect.TypeOf(v),
 // "readiness.Checklist".
 var openAPISchemas = map[string]schemaType{
 	"meView":                  outputSchema(meView{}),
+	"TeamLimitView":           outputSchema(TeamLimitView{}),
 	"signInOptionsView":       outputSchema(signInOptionsView{}),
 	"OverviewView":            outputSchema(OverviewView{}),
 	"SetupView":               outputSchema(SetupView{}),

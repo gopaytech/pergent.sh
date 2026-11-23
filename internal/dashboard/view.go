@@ -1553,19 +1553,33 @@ type ModelsAdminView struct {
 // sent. Repositories are those whose old model setting names the entry;
 // UsedIn labels every chain that names it ("global chain", "team <name>",
 // "<instance>/<project>"). Mark is null unless the provider marked it.
+// Limit is its model limit (null: none) and Used its tokens this month on
+// every instance; TeamLimits each team's limit on it, by team name.
 type ModelAdminView struct {
-	ID           string        `json:"id"`
-	Name         string        `json:"name"`
-	Provider     string        `json:"provider"`
-	Model        string        `json:"model"`
-	BaseURL      string        `json:"baseURL"`
-	Source       string        `json:"source"`
-	Default      bool          `json:"default"`
-	TeamsMayUse  bool          `json:"teamsMayUse"`
-	Key          SecretView    `json:"key"`
-	Repositories []RepoRefView `json:"repositories"`
-	UsedIn       []string      `json:"usedIn"`
-	Mark         *MarkView     `json:"mark"`
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Provider     string          `json:"provider"`
+	Model        string          `json:"model"`
+	BaseURL      string          `json:"baseURL"`
+	Source       string          `json:"source"`
+	Default      bool            `json:"default"`
+	TeamsMayUse  bool            `json:"teamsMayUse"`
+	Key          SecretView      `json:"key"`
+	Repositories []RepoRefView   `json:"repositories"`
+	UsedIn       []string        `json:"usedIn"`
+	Mark         *MarkView       `json:"mark"`
+	Limit        *int64          `json:"limit"`
+	Used         int64           `json:"used"`
+	TeamLimits   []TeamLimitView `json:"teamLimits"`
+}
+
+// TeamLimitView is a team's limit on a global entry and that team's tokens on
+// it this month.
+type TeamLimitView struct {
+	TeamID int64  `json:"teamId"`
+	Team   string `json:"team"`
+	Limit  int64  `json:"limit"`
+	Used   int64  `json:"used"`
 }
 
 // MarkView is what the provider said about an entry: Class "quota" or

@@ -6785,7 +6785,7 @@ components:
     ModelAdminView:
       description: One entry of the list of models.
       type: object
-      required: [id, name, provider, model, baseURL, source, default, teamsMayUse, key, repositories, usedIn, mark]
+      required: [id, name, provider, model, baseURL, source, default, teamsMayUse, key, repositories, usedIn, mark, limit, used, teamLimits]
       properties:
         id:
           type: string
@@ -6818,6 +6818,30 @@ components:
           type: array
           items: {$ref: '#/components/schemas/RepoRefView'}
           description: The repositories that name the entry.
+        limit:
+          type: [integer, 'null']
+          format: int64
+          description: The model limit, tokens per UTC month on every instance and repository; null for none.
+        used:
+          type: integer
+          format: int64
+          description: The entry's tokens this month, every review and API review included.
+        teamLimits:
+          type: array
+          items: {$ref: '#/components/schemas/TeamLimitView'}
+          description: Each team's limit on the entry, by team name.
+    TeamLimitView:
+      description: A team's limit on a global entry.
+      type: object
+      required: [teamId, team, limit, used]
+      properties:
+        teamId: {type: integer, format: int64}
+        team: {type: string}
+        limit: {type: integer, format: int64}
+        used:
+          type: integer
+          format: int64
+          description: The tokens of the repositories the team owns on the entry this month.
     RepoRefView:
       description: A repository, by instance and project.
       type: object

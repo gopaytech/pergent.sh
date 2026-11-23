@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -82,6 +83,9 @@ type modelLists struct {
 	users  map[string][]RepoRefView
 	usedIn map[store.EntryRef][]string
 	marks  map[store.EntryRef]store.Mark
+	teams  map[int64]string
+	limits []store.ModelLimit
+	usage  quota.EntryUsage
 }
 
 func (d *Dashboard) modelLists(ctx context.Context) (l modelLists, following int, err error) {
@@ -92,10 +96,17 @@ func (d *Dashboard) modelLists(ctx context.Context) (l modelLists, following int
 	if err != nil {
 		return modelLists{}, 0, err
 	}
+	l.teams = teams
 	if l.usedIn, err = d.usedIn(ctx, teams); err != nil {
 		return modelLists{}, 0, err
 	}
 	if l.marks, err = d.marksByRef(ctx); err != nil {
+		return modelLists{}, 0, err
+	}
+	if l.limits, err = d.Store.ModelLimits(ctx); err != nil {
+		return modelLists{}, 0, err
+	}
+	if l.usage, err = quota.ReadEntryUsage(ctx, d.Store, d.now()); err != nil {
 		return modelLists{}, 0, err
 	}
 	return l, following, nil
@@ -107,6 +118,14 @@ func (d *Dashboard) globalView(v ModelAdminView, l modelLists) ModelAdminView {
 	v.Repositories, v.UsedIn = nonNilRefs(l.users[v.ID]), nonNilStrings(l.usedIn[ref])
 	mk, ok := l.marks[ref]
 	v.Mark = d.markView(mk, ok)
+	v.Limit, v.Used, v.TeamLimits = limitOf(l.limits, ref, 0), l.usage.Used(ref, 0), []TeamLimitView{}
+	for _, lim := range l.limits {
+		if lim.Ref == ref && lim.TeamID != 0 {
+			v.TeamLimits = append(v.TeamLimits, TeamLimitView{TeamID: lim.TeamID, Team: l.teams[lim.TeamID],
+				Limit: lim.MonthlyTokens, Used: l.usage.Used(ref, lim.TeamID)})
+		}
+	}
+	slices.SortFunc(v.TeamLimits, func(a, b TeamLimitView) int { return strings.Compare(strings.ToLower(a.Team), strings.ToLower(b.Team)) })
 	return v
 }
 
