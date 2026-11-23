@@ -363,8 +363,8 @@ func TestRoutesPanelOnlyWhenSet(t *testing.T) {
 
 type reviewersStub struct{}
 
-func (reviewersStub) ReviewerResult(context.Context, string, string, int) ([]byte, bool, error) {
-	return []byte("{}"), true, nil
+func (reviewersStub) ReviewerResultAuth(context.Context, string, string, int) ([]byte, bool, bool, error) {
+	return []byte("{}"), true, true, nil
 }
 
 // The reviewer route is on the public mux only when Reviewers is set.

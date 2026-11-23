@@ -9,19 +9,28 @@ import (
 
 // ReviewerResults is the part of the store the reviewer route needs.
 type ReviewerResults interface {
-	// ReviewerResult is the result of reviewer n of run runID's review for
-	// the run's live result token (store.ReviewerResult): its newest attempt
-	// that is done, or failed with its result kept.
-	ReviewerResult(ctx context.Context, runID, token string, n int) ([]byte, bool, error)
+	// ReviewerResultAuth is the result of reviewer n of run runID's review
+	// for the run's live result token (store.ReviewerResultAuth): its newest
+	// attempt that is done, or failed with its result kept. authed is false
+	// when the token is not the live token of a running run; found is true
+	// only when authed is true and the reviewer has a result.
+	ReviewerResultAuth(ctx context.Context, runID, token string, n int) (body []byte, authed, found bool, err error)
 }
 
 // ReviewersHandler serves GET /runs/{id}/reviewers/{n}: the judge Job of a
 // multi review reads reviewer n's result with its own result token. The
 // store checks that the token is the live token of run id, and it reads only
-// the members of that run's own review. Every refusal is the same 404 (a bad
-// token, n that is not 1 to 5, an unknown run, a reviewer with no result),
-// so the answer never tells whether a run or a result exists. The token is
-// not spent. The body and the token are never logged.
+// the members of that run's own review. The answers:
+//   - 401: no token, a wrong or expired token, a run with no stored token
+//     yet, or an unknown run. All look the same, so the answer never shows
+//     whether a run exists;
+//   - 404: only to the run's own judge Job, for a reviewer that has no
+//     result (or n that is not 1 to 5, as the other routes answer a bad
+//     path value);
+//   - 200: the result.
+//
+// The judge Job fetches 404 as "no result", so an auth failure must never
+// be a 404. The token is not spent. The body and the token are never logged.
 type ReviewersHandler struct {
 	Reviewers ReviewerResults
 	Log       *slog.Logger
@@ -30,19 +39,29 @@ type ReviewersHandler struct {
 func (h *ReviewersHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	token, ok := bearer(r.Header.Get("Authorization"))
-	n, err := strconv.Atoi(r.PathValue("n"))
-	// Only the plain digits 1 to 5: no sign, no leading zero.
-	if !ok || err != nil || n < 1 || n > 5 || strconv.Itoa(n) != r.PathValue("n") {
-		http.NotFound(w, r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	body, found, err := h.Reviewers.ReviewerResult(r.Context(), id, token, n)
+	raw := r.PathValue("n")
+	n, err := strconv.Atoi(raw)
+	// Only the plain digits 1 to 5: no sign, no leading zero. The token is
+	// still checked, so a wrong token is a 401 for any n.
+	valid := err == nil && n >= 1 && n <= 5 && strconv.Itoa(n) == raw
+	if !valid {
+		n = 0
+	}
+	body, authed, found, err := h.Reviewers.ReviewerResultAuth(r.Context(), id, token, n)
 	if err != nil {
 		logOr(h.Log).Error("reviewers: serving a reviewer result failed", "run", id, "reviewer", n, "error", err.Error())
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if !found {
+	if !authed {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !valid || !found {
 		http.NotFound(w, r)
 		return
 	}

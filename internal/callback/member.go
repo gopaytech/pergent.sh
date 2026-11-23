@@ -72,7 +72,7 @@ func (h *MemberHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	// The token is checked first, on the raw body, and with it that the
 	// member is the run's: its Job's URL names the run the member belongs
-	// to (StoreMemberResult). Every refusal takes the same steps there.
+	// to (StoreReviewMemberResult). Every refusal takes the same steps there.
 	outcome, err := h.Members.StoreReviewMemberResult(ctx, runID, id, token, body, now)
 	switch {
 	case errors.Is(err, store.ErrInvalidResult):

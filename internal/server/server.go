@@ -82,7 +82,7 @@ type Deps struct {
 //   - POST /webhooks/github/{instance}: GitHub pull_request, issue_comment and
 //     pull_request_review_comment webhooks;
 //   - POST /runs/{id}/result: a review Job's result;
-//   - POST /runs/{id}/members/{member}/result: a panel member Job's result;
+//   - POST /runs/{id}/members/{member}/result: a reviewer Job's result;
 //   - POST /skill-fetches/{id}/result: the skills a fetch Job read, when
 //     SkillFetches is set;
 //   - POST /readiness-scans/{id}/result: what a readiness scan Job found,
@@ -91,6 +91,9 @@ type Deps struct {
 //     /runs/{id}/graph: a review Job's code graph, when Graphs is set;
 //   - GET /runs/{id}/panel/{role}: a panel member's result for the merge
 //     Job, when Panel is set;
+//   - GET /runs/{id}/reviewers/{n}: reviewer n's result for the judge Job of a
+//     multi review, when Reviewers is set (401 for a bad token, 404 for no
+//     result);
 //   - GET /healthz: 200 "ok";
 //   - /v1/: the review API (reviewapi.Handler), when ReviewAPI is set and
 //     dashboard.url is configured;

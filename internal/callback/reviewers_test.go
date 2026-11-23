@@ -11,21 +11,24 @@ import (
 	"testing"
 )
 
+// fakeReviewers knows runs by their stored token: "" is a run whose Job has
+// no stored token yet. An unknown run is authed for nothing.
 type fakeReviewers struct {
-	token   string
+	tokens  map[string]string // run -> its live result token
 	results map[string][]byte // by run + "/" + reviewer
 	err     error
 }
 
-func (f *fakeReviewers) ReviewerResult(_ context.Context, runID, token string, n int) ([]byte, bool, error) {
+func (f *fakeReviewers) ReviewerResultAuth(_ context.Context, runID, token string, n int) ([]byte, bool, bool, error) {
 	if f.err != nil {
-		return nil, false, f.err
+		return nil, false, false, f.err
+	}
+	want, known := f.tokens[runID]
+	if !known || want == "" || token != want {
+		return nil, false, false, nil
 	}
 	b, ok := f.results[runID+"/"+strconv.Itoa(n)]
-	if token != f.token || !ok {
-		return nil, false, nil
-	}
-	return b, true, nil
+	return b, true, ok, nil
 }
 
 func reviewersMux(f *fakeReviewers, log *slog.Logger) *http.ServeMux {
@@ -35,7 +38,10 @@ func reviewersMux(f *fakeReviewers, log *slog.Logger) *http.ServeMux {
 }
 
 func TestReviewersHandler(t *testing.T) {
-	f := &fakeReviewers{token: "tok", results: map[string][]byte{}}
+	f := &fakeReviewers{
+		tokens:  map[string]string{"r1": "tok", "r0": "", "r2": "tok2"},
+		results: map[string][]byte{},
+	}
 	for n := 1; n <= 5; n++ {
 		f.results["r1/"+strconv.Itoa(n)] = []byte(`{"n":` + strconv.Itoa(n) + `}`)
 	}
@@ -47,17 +53,26 @@ func TestReviewersHandler(t *testing.T) {
 			t.Errorf("reviewer %d = %d %q %v", n, rec.Code, rec.Body.String(), rec.Header())
 		}
 	}
+	// An auth failure is a 401, never a 404: the judge reads 404 as "no result".
 	for name, c := range map[string]struct{ path, token string }{
-		"no token":    {"/runs/r1/reviewers/1", ""},
-		"bad token":   {"/runs/r1/reviewers/1", "other"},
-		"zero":        {"/runs/r1/reviewers/0", "tok"},
-		"six":         {"/runs/r1/reviewers/6", "tok"},
-		"letter":      {"/runs/r1/reviewers/x", "tok"},
-		"signed":      {"/runs/r1/reviewers/+1", "tok"},
-		"padded":      {"/runs/r1/reviewers/01", "tok"},
-		"unknown run": {"/runs/zz/reviewers/1", "tok"},
+		"no token":            {"/runs/r1/reviewers/1", ""},
+		"bad token":           {"/runs/r1/reviewers/1", "other"},
+		"a reviewer's token":  {"/runs/r1/reviewers/1", "member-token"},
+		"another run's token": {"/runs/r1/reviewers/1", "tok2"},
+		"run with no token":   {"/runs/r0/reviewers/1", "tok"},
+		"unknown run":         {"/runs/zz/reviewers/1", "tok"},
+		"bad token, bad n":    {"/runs/r1/reviewers/9", "other"},
 	} {
-		if rec := do(mux, http.MethodGet, c.path, c.token, nil); rec.Code != http.StatusNotFound {
+		if rec := do(mux, http.MethodGet, c.path, c.token, nil); rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s = %d; want 401", name, rec.Code)
+		}
+	}
+	// A 404 only to the authenticated judge run.
+	for name, path := range map[string]string{
+		"zero": "/runs/r1/reviewers/0", "six": "/runs/r1/reviewers/6", "letter": "/runs/r1/reviewers/x",
+		"signed": "/runs/r1/reviewers/+1", "padded": "/runs/r1/reviewers/01",
+	} {
+		if rec := do(mux, http.MethodGet, path, "tok", nil); rec.Code != http.StatusNotFound {
 			t.Errorf("%s = %d; want 404", name, rec.Code)
 		}
 	}
@@ -75,7 +90,7 @@ func TestReviewersHandler(t *testing.T) {
 func TestReviewersHandlerNeverLogs(t *testing.T) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
-	f := &fakeReviewers{token: "secret-token", err: errors.New("db down"), results: map[string][]byte{"r1/1": []byte("SECRETBODY")}}
+	f := &fakeReviewers{tokens: map[string]string{"r1": "secret-token"}, err: errors.New("db down"), results: map[string][]byte{"r1/1": []byte("SECRETBODY")}}
 	rec := do(reviewersMux(f, log), http.MethodGet, "/runs/r1/reviewers/1", "secret-token", nil)
 	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "db down") {
 		t.Errorf("error = %d %q", rec.Code, rec.Body.String())

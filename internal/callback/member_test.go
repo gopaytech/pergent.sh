@@ -35,9 +35,9 @@ type fakeMembers struct {
 	replaced []store.Failure
 	reported []store.Failure
 	replErr  error
-	usage    map[string][]store.SkillUsage // RecordMemberUsage calls, by member
+	usage    map[string][]store.SkillUsage // RecordReviewMemberUsage calls, by member
 	usageErr error
-	// usageGate, when set, holds RecordMemberUsage until it is closed.
+	// usageGate, when set, holds RecordReviewMemberUsage until it is closed.
 	usageGate chan struct{}
 }
 
