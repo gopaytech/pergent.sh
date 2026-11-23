@@ -6,6 +6,7 @@ import (
 )
 
 func TestReportFailureStoresStepAndDetail(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaaa", "tok")
 	reason := "the clone failed (checkout exited with code 128)"
@@ -29,6 +30,7 @@ func TestReportFailureStoresStepAndDetail(t *testing.T) {
 }
 
 func TestSetRunPod(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaaa", "tok")
 	if err := s.SetRunPod(ctx, id, "pergent-review-abc-xyz"); err != nil {
@@ -40,6 +42,7 @@ func TestSetRunPod(t *testing.T) {
 }
 
 func TestAdvanceCheckoutSeenOnlyRaises(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaaa", "tok")
 	if r := getRun(t, s, id); r.CheckoutSeen != 0 {
@@ -56,6 +59,7 @@ func TestAdvanceCheckoutSeenOnlyRaises(t *testing.T) {
 }
 
 func TestRunDiagnosticsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaaa", "tok")
 	if _, found, err := s.RunDiagnostics(ctx, id); err != nil || found {
@@ -91,6 +95,7 @@ func TestRunDiagnosticsRoundTrip(t *testing.T) {
 }
 
 func TestPruneRunLogsPrunesDiagnostics(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	oldID := enqueue(t, s, mr1, "aaaa")
 	newID := enqueue(t, s, MRKey{Instance: mr1.Instance, ProjectID: 7, IID: 4}, "bbbb")
@@ -131,6 +136,7 @@ func TestPruneRunLogsPrunesDiagnostics(t *testing.T) {
 }
 
 func TestCountFailedRunsAtStep(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	fail := func(iid int64, project, step string, at time.Time) {

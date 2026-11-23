@@ -72,6 +72,7 @@ func (a *apiE2E) reReview(t *testing.T) (first, second string) {
 // A later review of a subject is given its newest completed review and what
 // people dismissed on the subject, as a merge request's re-review is.
 func TestAPIReReviewGetsPreviousAndDismissals(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	_, second := a.reReview(t)
@@ -113,6 +114,7 @@ func TestAPIReReviewGetsPreviousAndDismissals(t *testing.T) {
 
 // The first review of a subject has neither.
 func TestAPIFirstReviewHasNoPrevious(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	id := a.ask(t, "route:1", twoFiles())
@@ -132,6 +134,7 @@ func TestAPIFirstReviewHasNoPrevious(t *testing.T) {
 // A finding a later review repeats is marked dismissed, and no longer
 // blocks.
 func TestAPIReReviewMarksDismissed(t *testing.T) {
+	t.Parallel()
 	a := newAPIE2E(t)
 	env := a.env
 	_, second := a.reReview(t)
@@ -163,6 +166,7 @@ func TestAPIReReviewMarksDismissed(t *testing.T) {
 // A review queued before its client's budget was used up fails at the start,
 // with no Job, and its callback says why.
 func TestBudgetUsedUpAtDispatch(t *testing.T) {
+	t.Parallel()
 	rc := newReceiver(t, nil)
 	a := newCallbackE2E(t, rc.srv.URL+"/hook")
 	env := a.env

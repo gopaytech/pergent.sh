@@ -91,6 +91,7 @@ func (e *env) addAudit(entry store.AuditEntry) {
 // they were added and have not signed in (invited), whether they sign in and
 // wait for a team, and their teams; the old platform accounts are not there.
 func TestUsersListed(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	alice := e.alice()
@@ -137,6 +138,7 @@ func TestUsersListed(t *testing.T) {
 // A removed account's sessions end with it: its next request is 401, and an
 // SSO account that signs in again is made again, on no team.
 func TestDeleteAccountEndsSessions(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	op := e.signInOperator()
 	alice := e.userOnMain(false, "acme/widgets")
@@ -179,6 +181,7 @@ func TestDeleteAccountEndsSessions(t *testing.T) {
 // Every admin has every power: an SSO admin removes a local admin, and
 // another account, at once. An account that is no admin removes nobody.
 func TestSSOAdminMayDeleteLocalAdmin(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
 	e.addPasswordAccount("second", operatorPassword, false)
@@ -198,6 +201,7 @@ func TestSSOAdminMayDeleteLocalAdmin(t *testing.T) {
 // An old platform account is not on the Users page, so deleting it is as
 // good as deleting nothing: 404, and the row stays.
 func TestPlatformAccountCannotBeDeleted(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	old := e.platformAccount("main", 20, "bob")
@@ -211,6 +215,7 @@ func TestPlatformAccountCannotBeDeleted(t *testing.T) {
 
 // An admin can't remove their own account, an SSO admin or a local one.
 func TestAdminCantDeleteSelf(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	local := e.signInOperator()
 	e.addPasswordAccount("second", operatorPassword, false)
@@ -229,6 +234,7 @@ func TestAdminCantDeleteSelf(t *testing.T) {
 
 // The last local admin can't be removed, not even by an SSO admin: 409.
 func TestLastLocalAdminCantBeRemoved(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
 	c := e.userOnMain(true)
@@ -250,6 +256,7 @@ func TestLastLocalAdminCantBeRemoved(t *testing.T) {
 // They can't change their own role, so one admin always stays to change the
 // others'; a local admin is always an admin.
 func TestAdminCantRemoveOwnRole(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
 	c := e.userOnMain(true)
@@ -293,6 +300,7 @@ func TestAdminCantRemoveOwnRole(t *testing.T) {
 // and must be changed; a bad or taken username is refused. An SSO admin may
 // too.
 func TestCreatePasswordAccount(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	op := e.signInOperator()
 
@@ -331,6 +339,7 @@ func TestCreatePasswordAccount(t *testing.T) {
 
 // Teams are created, listed, changed and removed, each change audited.
 func TestTeamCRUD(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	bob := e.sso("bob@example.com")
@@ -408,6 +417,7 @@ func TestTeamCRUD(t *testing.T) {
 // maintainer: a local admin, an old platform account, an unknown ID, a bad or
 // missing role is 400, and the team stays as it was.
 func TestTeamMembersMustBeSSO(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	bob := e.sso("bob@example.com")
@@ -434,6 +444,7 @@ func TestTeamMembersMustBeSSO(t *testing.T) {
 // A member's role on a team is theirs alone: changing it changes what that
 // person may do, and the audit says whose role changed.
 func TestTeamMemberRoleChange(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	bob := e.sso("bob@example.com")
@@ -465,6 +476,7 @@ func TestTeamMemberRoleChange(t *testing.T) {
 // the account when the team row is updated, which is just before the members
 // are stored.)
 func TestTeamMemberRemovedMeanwhile(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	bob := e.sso("bob@example.com")
@@ -486,6 +498,7 @@ func TestTeamMemberRemovedMeanwhile(t *testing.T) {
 
 // Every write here needs the session's CSRF token: 403 with code "csrf".
 func TestOrgWritesNeedCSRF(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	rec := e.doJSON("POST", "/api/teams", []*http.Cookie{c}, nil, map[string]string{"name": "devs"})
@@ -502,6 +515,7 @@ func TestOrgWritesNeedCSRF(t *testing.T) {
 // sign-ins and passwords too. Pages are 100, newest first, with next the
 // before of the page after (0 at the end).
 func TestAuditPages(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addPasswordAccount("root", operatorPassword, false)
 	c := e.userOnMain(true)
@@ -549,6 +563,7 @@ func TestAuditPages(t *testing.T) {
 // team_updated names the members added and removed and a role changed, by
 // username (the email of an SSO account).
 func TestTeamUpdatedDetailNamesChanges(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	bob := e.sso("bob@example.com")
@@ -571,6 +586,7 @@ func TestTeamUpdatedDetailNamesChanges(t *testing.T) {
 
 // No audit entry holds a generated password.
 func TestAuditNoSecrets(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	bob := e.sso("bob@example.com")
@@ -601,6 +617,7 @@ func TestAuditNoSecrets(t *testing.T) {
 // leave one entry naming the actor and the repository. An SSO account is named
 // by its full email.
 func TestWritesAudited(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
 	c := e.userOnMain(true)
@@ -635,6 +652,7 @@ func TestWritesAudited(t *testing.T) {
 
 // A viewer (no admin) gets 404 on every route here, and nothing changes.
 func TestDeveloperGets404OnOrgRoutes(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
 	c := e.userOnMain(false, "acme/widgets")
@@ -672,6 +690,7 @@ func TestDeveloperGets404OnOrgRoutes(t *testing.T) {
 // there makes nothing. An account that signed in without being added is marked
 // added (200), and keeps its role and teams.
 func TestAddUserByEmail(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	devs := e.team("devs", nil, store.TeamRepo{Instance: "main"})
@@ -766,6 +785,7 @@ func TestAddUserByEmail(t *testing.T) {
 // admin made (Added stays set), and the teams the admin gave it are still its
 // own, so the repository shows and the waiting page does not.
 func TestAddedUserKeepsAccessOnFirstSignIn(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useOIDC(f, nil)
@@ -818,6 +838,7 @@ func TestAddedUserKeepsAccessOnFirstSignIn(t *testing.T) {
 // An admin who signs in with SSO lands in the admin area, anyone else on the
 // user pages.
 func TestOIDCSignInLandsByRole(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useOIDC(f, nil)
@@ -836,6 +857,7 @@ func TestOIDCSignInLandsByRole(t *testing.T) {
 // repository's own list leaves a team's other repositories and its
 // whole-instance cover alone.
 func TestRepositoryTeamsMatchTheTeamsPage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInOperator()
 	payments := e.team("payments", nil, store.TeamRepo{Instance: "main", Project: "acme/payments"})
@@ -929,6 +951,7 @@ func TestRepositoryTeamsMatchTheTeamsPage(t *testing.T) {
 // maintainer of the repository get 404, as for any admin route, and nothing
 // changes.
 func TestRepositoryTeamsAreForAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	viewer := e.sessionFor(e.sso("viewer@example.com"))
 	maintainer := e.sessionFor(e.sso("maintainer@example.com"))

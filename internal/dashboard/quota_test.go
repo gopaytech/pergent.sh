@@ -24,6 +24,7 @@ func quotaEnv(t *testing.T) *env {
 // A maintainer's re-run on a used-up quota is refused with the reason; nothing
 // is queued and the engine isn't woken.
 func TestMaintainerRerunRefusedOnUsedUpQuota(t *testing.T) {
+	t.Parallel()
 	e := quotaEnv(t)
 	e.buttonBlockingReview()
 	c := e.signInRole(store.RoleMaintainer)
@@ -46,6 +47,7 @@ func TestMaintainerRerunRefusedOnUsedUpQuota(t *testing.T) {
 
 // An admin's re-run goes past the quota. Its tokens count like any other.
 func TestAdminRerunPastQuota(t *testing.T) {
+	t.Parallel()
 	e := quotaEnv(t)
 	e.buttonBlockingReview()
 	c := e.signInRole(store.RoleAdmin)
@@ -67,6 +69,7 @@ func TestAdminRerunPastQuota(t *testing.T) {
 // A maintainer's start of a change a quota holds is refused; the change stays
 // waiting.
 func TestMaintainerStartRefusedOnUsedUpQuota(t *testing.T) {
+	t.Parallel()
 	e := quotaEnv(t)
 	id := e.waitingChange(head('1'), store.WaitQuota)
 	c := e.signInRole(store.RoleMaintainer)
@@ -87,6 +90,7 @@ func TestMaintainerStartRefusedOnUsedUpQuota(t *testing.T) {
 
 // An admin's start of a quota-held change goes ahead.
 func TestAdminStartPastQuota(t *testing.T) {
+	t.Parallel()
 	e := quotaEnv(t)
 	id := e.waitingChange(head('1'), store.WaitQuota)
 	c := e.signInRole(store.RoleAdmin)
@@ -106,6 +110,7 @@ func TestAdminStartPastQuota(t *testing.T) {
 
 // A viewer starts nothing, quota or not.
 func TestViewerCannotStart(t *testing.T) {
+	t.Parallel()
 	e := quotaEnv(t)
 	e.waitingChange(head('1'), store.WaitQuota)
 	c := e.signInRole(store.RoleViewer)
@@ -114,6 +119,7 @@ func TestViewerCannotStart(t *testing.T) {
 
 // Room under the quota: a maintainer's re-run queues, marked as checked.
 func TestMaintainerRerunWithRoomQueuesChecked(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[0].MonthlyTokenQuota = ptr(int64(11)) })
 	e.usageRun(runFix{project: buttonProject, number: 99, head: head('9')}, usageSkill("code-review", "no_blocking_issues", 6, 4))
 	e.buttonBlockingReview()
@@ -130,6 +136,7 @@ func TestMaintainerRerunWithRoomQueuesChecked(t *testing.T) {
 // else, a fraction, a string, a number too big for a float to hold exactly,
 // is 400 and changes nothing.
 func TestQuotaSettingBounds(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
@@ -184,6 +191,7 @@ func TestQuotaSettingBounds(t *testing.T) {
 // A quota is an admin's to say and to see: a maintainer can't change it, the
 // settings and the page leave it out for them.
 func TestQuotaSettingIsForAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.MonthlyTokenQuota = ptr(int64(42)) })
 	c := e.signInRole(store.RoleMaintainer)
@@ -218,6 +226,7 @@ func TestQuotaSettingIsForAdmins(t *testing.T) {
 
 // A maintainer's reset leaves the quota; an admin's clears it.
 func TestQuotaResetByAdminOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.MonthlyTokenQuota = ptr(int64(42)) })
 	maintainer := e.signInRole(store.RoleMaintainer)
@@ -236,6 +245,7 @@ func TestQuotaResetByAdminOnly(t *testing.T) {
 // An admin's page shows this month's tokens against both quotas. A quota that
 // isn't set is a null limit.
 func TestDetailShowsQuotaToAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[0].MonthlyTokenQuota = ptr(int64(100)) })
 	e.usageRun(runFix{project: "acme/widgets", number: 1, head: head('1')}, usageSkill("code-review", "no_blocking_issues", 50, 30))
 	e.usageRun(runFix{project: "acme/other", number: 2, head: head('2')}, usageSkill("code-review", "no_blocking_issues", 25, 15))
@@ -262,6 +272,7 @@ func TestDetailShowsQuotaToAdmins(t *testing.T) {
 
 // A page whose usage can't be read still opens, with a null quota.
 func TestDetailQuotaReadFailureIsNull(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
 	e.exec(`ALTER TABLE run_usage RENAME TO run_usage_gone`)
@@ -303,6 +314,7 @@ func (e *env) instanceView(c *http.Cookie, name string) InstanceAdminView {
 // An admin sets a dashboard instance's quota, and the list shows it with this
 // month's tokens. A config instance's is in the config file.
 func TestInstanceTokenQuota(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	boss := e.labInstance()
 	e.usageRun(runFix{instance: "lab", project: "acme/lab", number: 1, head: head('1')}, usageSkill("code-review", "no_blocking_issues", 6, 4))
@@ -360,6 +372,7 @@ func TestInstanceTokenQuota(t *testing.T) {
 
 // A config instance shows its quota from the config file and its tokens.
 func TestConfigInstanceShowsQuota(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, func(cfg *config.Config) { cfg.GitLab[0].MonthlyTokenQuota = ptr(int64(500)) })
 	e.usageRun(runFix{project: "acme/widgets", number: 1, head: head('1')}, usageSkill("code-review", "no_blocking_issues", 6, 4))
 	v := e.instanceView(e.sessionFor(e.ssoAdmin("boss@example.com")), "main")
@@ -402,6 +415,7 @@ func TestJudgeCI(t *testing.T) {
 // team's own limit is refused with the team's name; a maintainer's gets the
 // quota's refusal. The change stays waiting.
 func TestStartAtTeamOwnLimit(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t) // Widgets owns main/acme/widgets, the button repository
 	m := te.addTeamModel(te.otherMaintainer, te.widgets, "wid-a", teamKeyOne)
 	ref := store.EntryRef{Source: store.SourceTeam, ID: m.ID}

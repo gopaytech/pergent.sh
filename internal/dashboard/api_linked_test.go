@@ -448,6 +448,7 @@ func (e *env) storedLinks() ([]store.Link, *bool) {
 }
 
 func TestPutLinkedRepos(t *testing.T) {
+	t.Parallel()
 	e := ghLinkEnv(t)
 	admin := e.userOnGH(true)
 
@@ -565,6 +566,7 @@ func TestPutLinkedRepos(t *testing.T) {
 // nothing, their other settings still work, and their reset leaves both. An
 // admin's reset clears them.
 func TestLinkedReposNeedAdmin(t *testing.T) {
+	t.Parallel()
 	e := ghLinkEnv(t)
 	e.dashboardRepo("gh", "acme/gadgets", func(r *store.DashboardRepo) {
 		on := true
@@ -635,6 +637,7 @@ func TestLinkedReposNeedAdmin(t *testing.T) {
 // defaults must not lose it), repositories follow it, and a list of links is
 // not a default.
 func TestDefaultsLinkedReposEnabled(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.userOnMain(true, "acme/widgets")
 
@@ -686,6 +689,7 @@ func TestDefaultsLinkedReposEnabled(t *testing.T) {
 // The list says whether each repository can be linked and why not, in plain
 // words, and reads each repository at most once.
 func TestLinkableSaysWhy(t *testing.T) {
+	t.Parallel()
 	e := ghLinkEnv(t)
 	e.dashboardRepo("gh", "acme/gadgets", func(r *store.DashboardRepo) {
 		r.LinkedRepos = []store.Link{{Target: "acme/lib", CanBlock: true}}
@@ -743,6 +747,7 @@ func TestLinkableSaysWhy(t *testing.T) {
 }
 
 func TestLinkableLimits(t *testing.T) {
+	t.Parallel()
 	e := ghLinkEnv(t)
 	var names []string
 	for i := range 230 {
@@ -780,6 +785,7 @@ func TestLinkableLimits(t *testing.T) {
 }
 
 func TestLinkableBadRequests(t *testing.T) {
+	t.Parallel()
 	e := ghLinkEnv(t)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	admin := e.userOnGH(true)
@@ -803,6 +809,7 @@ func TestLinkableBadRequests(t *testing.T) {
 
 // Only an admin has the list: it names repositories the App reaches.
 func TestLinkableNeedsAdmin(t *testing.T) {
+	t.Parallel()
 	e := ghLinkEnv(t)
 	const target = "/api/admin/linkable?instance=gh&repo=acme/gadgets"
 	e.aliceOn("gh", store.RoleMaintainer)

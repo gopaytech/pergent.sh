@@ -47,6 +47,7 @@ const ciJobsBody = `{"ciJobs":{"wait":"45m","jobs":[` +
 // not a viewer. A repository the config lists shows the config's value and
 // refuses a change.
 func TestCIJobsSettingReadWrite(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.aliceOn("main", store.RoleMaintainer)
@@ -155,6 +156,7 @@ func TestCIJobsSettingReadWrite(t *testing.T) {
 
 // A maintainer's reset clears the CI jobs, which are theirs to change.
 func TestResetClearsCIJobs(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) {
 		r.CIJobs = &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{{Name: "test", Read: "log"}}}
@@ -169,6 +171,7 @@ func TestResetClearsCIJobs(t *testing.T) {
 // The names the platform shows come back sorted as given; a platform with no
 // CI reader, a repository not synced, and a viewer are each handled.
 func TestCIJobNames(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	rd := &ciSource{fakeSource: newFakeSource(), names: []string{"build", "test (1.22)"}}
 	e.sources.Set("gh", rd)
@@ -219,6 +222,7 @@ func TestCIJobNames(t *testing.T) {
 // A run shows the snapshot of its CI jobs and when it stops waiting, and no
 // text of any job.
 func TestRunViewCIJobs(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	id := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeCI,
 		reason: "CI blocks approval: test failed", status: "failed"})

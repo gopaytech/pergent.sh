@@ -11,6 +11,7 @@ import (
 // A re-run of a head whose review was published queues a new run: the
 // published one is superseded and, being finished and posted, cleaned up.
 func TestEnqueueRerunSameHead(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	old := published(t, s, mr1, "aaa", "main")
 	base := old
@@ -34,6 +35,7 @@ func TestEnqueueRerunSameHead(t *testing.T) {
 
 // A run from a push has the push trigger, every skill and no base run.
 func TestEnqueueRunDefaults(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	r := getRun(t, s, enqueue(t, s, mr1, "aaa"))
 	if r.Trigger != TriggerPush || r.SkillSubset != nil || r.BaseRunID != nil {
@@ -43,6 +45,7 @@ func TestEnqueueRunDefaults(t *testing.T) {
 
 // An empty skill list means every skill, like nil.
 func TestEnqueueRerunEmptySubsetIsAllSkills(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	published(t, s, mr1, "aaa", "main")
 	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, []string{}, nil, false, false)
@@ -58,6 +61,7 @@ func TestEnqueueRerunEmptySubsetIsAllSkills(t *testing.T) {
 // nothing changes. The run is a re-run, which even a full review (replace)
 // doesn't supersede: only a push's run can be replaced.
 func TestEnqueueRerunDeduplicates(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	queued, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, false, false)
 	if err != nil || !created {
@@ -90,6 +94,7 @@ func TestEnqueueRerunDeduplicates(t *testing.T) {
 // isn't from a push, alone. Without replace (a re-run of the failed skills,
 // including its whole-review path) no live run is replaced.
 func TestEnqueueRerunReplacesIncrementalRun(t *testing.T) {
+	t.Parallel()
 	const (
 		claimed = RunState("claimed") // running, but not yet dispatched
 	)
@@ -172,6 +177,7 @@ func TestEnqueueRerunReplacesIncrementalRun(t *testing.T) {
 // SetIncremental marks a run being dispatched as incremental on a base run, or
 // clears that; any other run is an error.
 func TestSetIncremental(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	base := published(t, s, mr1, "aaa", "main")
 	id := enqueue(t, s, mr1, "bbb")
@@ -217,6 +223,7 @@ func TestSetIncremental(t *testing.T) {
 // NewerRunOfHead is true for a run of the same merge request, head and target
 // created after the run and not superseded.
 func TestNewerRunOfHead(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	old := dispatched(t, s, mr1, "aaa", "tok")
 	if newer, err := s.NewerRunOfHead(ctx, getRun(t, s, old)); err != nil || newer {
@@ -260,6 +267,7 @@ func TestNewerRunOfHead(t *testing.T) {
 // A review reported and not yet published is in flight: a re-run neither
 // replaces it nor queues a second one.
 func TestEnqueueRerunDeduplicatesReported(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	rep := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
 	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, false, false)
@@ -278,6 +286,7 @@ func TestEnqueueRerunDeduplicatesReported(t *testing.T) {
 // A review that failed to publish is finished: a re-run supersedes it, marked
 // cleaned up, and queues a new run.
 func TestEnqueueRerunSupersedesPublishFailed(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	old := published(t, s, mr1, "aaa", "main")
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'publish_failed' WHERE id = $1`, old); err != nil {
@@ -298,6 +307,7 @@ func TestEnqueueRerunSupersedesPublishFailed(t *testing.T) {
 // A re-run of another head or target supersedes the live runs of the
 // merge request like a push does; other merge requests are left alone.
 func TestEnqueueRerunSupersedesOtherLiveRuns(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	live := enqueue(t, s, mr1, "bbb")
 	other := enqueue(t, s, mr2, "bbb")
@@ -322,6 +332,7 @@ func TestEnqueueRerunSupersedesOtherLiveRuns(t *testing.T) {
 }
 
 func TestCountReruns(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	other := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 3} // another repository
 	// rerun asks for a re-run and then publishes it, so the next one is
@@ -386,6 +397,7 @@ func TestCountReruns(t *testing.T) {
 
 // Two re-runs asked for at once queue one run.
 func TestEnqueueRerunConcurrent(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	published(t, s, mr1, "aaa", "main")
 	const callers = 6
@@ -419,6 +431,7 @@ func TestEnqueueRerunConcurrent(t *testing.T) {
 }
 
 func TestStoreMergedResult(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "aaa", `{"status":"completed","n":1}`)
 
@@ -446,6 +459,7 @@ func TestStoreMergedResult(t *testing.T) {
 }
 
 func TestMakeFullRerun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	old := published(t, s, mr1, "aaa", "main")
 	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerunFailed, []string{"gone"}, &old, false, false)
@@ -467,6 +481,7 @@ func TestMakeFullRerun(t *testing.T) {
 // Only a run being dispatched is turned into a full re-run or has its subset
 // narrowed; a reported, published or superseded run is left as it is.
 func TestRerunEditsNeedARunBeingDispatched(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	old := published(t, s, mr1, "aaa", "main")
 	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerunFailed, []string{"a", "b"}, &old, false, false)
@@ -510,6 +525,7 @@ func TestRerunEditsNeedARunBeingDispatched(t *testing.T) {
 // published before and waiting to be decided again; a first review still
 // waiting to be published, and superseded ones, are not it.
 func TestLatestDecidedRun(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if _, found, err := s.LatestDecidedRun(ctx, mr1); err != nil || found {
 		t.Fatalf("LatestDecidedRun with no run = %v, %v", found, err)
@@ -553,6 +569,7 @@ func TestLatestDecidedRun(t *testing.T) {
 // that never started) has a NULL quiet_reviews. It reads as off through every
 // path that scans a run.
 func TestRunQuietNullReadsOff(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	queued := enqueue(t, s, mr1, "aaa")
 	if r, found, err := s.Run(ctx, queued); err != nil || !found || r.Quiet {
@@ -572,6 +589,7 @@ func TestRunQuietNullReadsOff(t *testing.T) {
 // SetRunQuiet records whether a run being dispatched (queued or running) is
 // quiet, and reads back each way; any other run is an error.
 func TestSetRunQuiet(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "aaa")
 
@@ -619,6 +637,7 @@ func TestSetRunQuiet(t *testing.T) {
 // A run that never had SetRunLayout called has a NULL comment_layout. It
 // reads as nil (the default layout) through every path that scans a run.
 func TestRunLayoutNullReadsNil(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	queued := enqueue(t, s, mr1, "aaa")
 	if r, found, err := s.Run(ctx, queued); err != nil || !found || r.CommentLayout != nil {
@@ -639,6 +658,7 @@ func TestRunLayoutNullReadsNil(t *testing.T) {
 // running), in order, and reads back through every path that scans a run; an
 // empty list clears it; any other run is an error.
 func TestSetRunLayout(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "aaa")
 	a := []string{"summary:open", "findings:collapsed", "checks:open"}
@@ -695,6 +715,7 @@ func TestSetRunLayout(t *testing.T) {
 // A run that never had SetRunLinks called has a NULL linked_repos. It reads as
 // nil (no links) through every path that scans a run.
 func TestRunLinksNullReadsNil(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	queued := enqueue(t, s, mr1, "aaa")
 	if r, found, err := s.Run(ctx, queued); err != nil || !found || r.LinkedRepos != nil {
@@ -715,6 +736,7 @@ func TestRunLinksNullReadsNil(t *testing.T) {
 // running), in order, and reads back through every path that scans a run; an
 // empty list clears it; any other run is an error.
 func TestSetRunLinks(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	id := enqueue(t, s, mr1, "aaa")
 	a := []Link{

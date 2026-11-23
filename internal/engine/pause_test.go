@@ -21,6 +21,7 @@ func pause(t *testing.T, env *testEnv, project string, enabled bool) {
 // project row stays with its dismissals and commands; a later reconcile asks
 // the platform nothing. Resume sets the same row up again and queues a scan.
 func TestReconcilePausedDashboardRepo(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Scans = true
 	serveProject(env, testProjectID, testProjectPath)
@@ -95,6 +96,7 @@ func TestReconcilePausedDashboardRepo(t *testing.T) {
 // Remove after a pause: the kept row and its dismissals go, with no platform
 // call (the hook and token are gone already).
 func TestReconcileRemovedAfterPause(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	serveProject(env, 9, "acme/gadgets")
@@ -128,6 +130,7 @@ func TestReconcileRemovedAfterPause(t *testing.T) {
 
 // A paused GitHub repository keeps its row as it is.
 func TestReconcilePausedGitHubRepoKeepsRow(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
 	env.Engine.Config.Repositories = env.Engine.Config.Repositories[:1]
@@ -154,6 +157,7 @@ func TestReconcilePausedGitHubRepoKeepsRow(t *testing.T) {
 
 // The config takes over a paused dashboard row: the row is deleted.
 func TestReconcileDropsPausedDashboardRowOfConfigRepo(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: "ACME/Widgets", CreatedBy: "alice"})
@@ -174,6 +178,7 @@ func TestReconcileDropsPausedDashboardRowOfConfigRepo(t *testing.T) {
 
 // Scan now on a paused repository is "not switched on".
 func TestRequestScanPausedRepo(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: "acme/gadgets", CreatedBy: "alice"})
 	pause(t, env, "acme/gadgets", false)

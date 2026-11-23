@@ -32,6 +32,7 @@ func checkCookie(t *testing.T, c *http.Cookie, name string) {
 }
 
 func TestIdleSessionExpires(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.aliceSession()
 	signedIn := e.clock.now()
@@ -106,6 +107,7 @@ func wantCSRFCode(t *testing.T, rec *httptest.ResponseRecorder) {
 }
 
 func TestCSRFRequiredOnWrites(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.aliceOn("main", store.RoleViewer)
 	c := e.aliceSession()
@@ -176,6 +178,7 @@ func TestCSRFRequiredOnWrites(t *testing.T) {
 }
 
 func TestUnauthenticatedAPI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	for _, cs := range [][]*http.Cookie{
 		nil,
@@ -192,6 +195,7 @@ func TestUnauthenticatedAPI(t *testing.T) {
 // A local admin's sessions: 7 days at most, 8 hours idle. (The SSO maximum of
 // 24 hours is in the store's TestPruneSessionsSSOMaximum.)
 func TestPruneSessions(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	old := e.signInOperator()
 	idle := e.signInPassword("root", operatorPassword)

@@ -44,6 +44,7 @@ const gadgetsSettings = "/api/repositories/main/acme/gadgets/settings"
 // A name is resolved to its ID when it is saved; an entry with an ID is kept
 // as sent; an unknown name saves nothing.
 func TestTrustedAuthorsSave(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) {
 		r.TrustedAuthors = []store.TrustedAuthor{{ID: 9, Username: "old-name"}}
@@ -89,6 +90,7 @@ func TestTrustedAuthorsSave(t *testing.T) {
 // The repository's mode is on, off or null (the instance's), and the
 // settings show the resolved mode.
 func TestTrustedAuthorsOnlySetting(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
@@ -114,6 +116,7 @@ func TestTrustedAuthorsOnlySetting(t *testing.T) {
 
 // An admin sets a dashboard instance's mode; a config instance is read-only.
 func TestInstanceTrustMode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	if err := e.st.CreateInstance(ctx, store.InstanceRow{Name: "lab", Platform: "gitlab", URL: "https://lab.example.com"}, nil, e.clock.now()); err != nil {
 		t.Fatal(err)
@@ -168,6 +171,7 @@ func (e *env) waitingChange(h, reason string) string {
 
 // The repository page lists the changes waiting for a start.
 func TestWaitingList(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.waitingChange(head('1'), store.WaitCheckFailed)
 	c := e.signInRole(store.RoleViewer)
@@ -192,6 +196,7 @@ func TestWaitingList(t *testing.T) {
 // Start review: a maintainer starts a waiting change; a viewer can't; a
 // change that isn't waiting is 409.
 func TestStartButton(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	id := e.waitingChange(head('1'), store.WaitUntrusted)
 	viewer := e.signInRole(store.RoleViewer)
@@ -226,6 +231,7 @@ func TestStartButton(t *testing.T) {
 // Who is trusted is an admin's to say: a maintainer can't change it, and a
 // maintainer's reset leaves it as it is.
 func TestTrustSettingsAreAdmins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	off := "off"
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) {

@@ -1075,6 +1075,7 @@ func (e *env) sessionCount() int {
 // A person on an allowed domain signs in: an account is made (a plain user
 // with nothing), a session begins that says how, and the browser lands on /.
 func TestOIDCSignIn(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useOIDC(f, nil)
@@ -1130,6 +1131,7 @@ func TestOIDCSignIn(t *testing.T) {
 // An admin added the email first: it signs in whatever the allowlist says,
 // and stays Added.
 func TestOIDCSignInOfAnAddedEmail(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useOIDC(f, nil)
@@ -1149,6 +1151,7 @@ func TestOIDCSignInOfAnAddedEmail(t *testing.T) {
 
 // The session the browser arrived with is ended, never adopted.
 func TestOIDCSignInEndsTheBrowsersEarlierSession(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useOIDC(f, nil)
@@ -1168,6 +1171,7 @@ func TestOIDCSignInEndsTheBrowsersEarlierSession(t *testing.T) {
 // Nobody off the allowlist gets an account, a session or a hint of why: the
 // sign-in page says to ask an admin.
 func TestRefusedCreatesNoAccount(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useOIDC(f, func(s *store.SignInSettings) {
@@ -1203,6 +1207,7 @@ func TestRefusedCreatesNoAccount(t *testing.T) {
 
 // A refused sign-in does not end the session the browser arrived with.
 func TestRefusedSignInKeepsTheEarlierSession(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	e.useOIDC(f, nil)
@@ -1218,6 +1223,7 @@ func TestRefusedSignInKeepsTheEarlierSession(t *testing.T) {
 
 // An SSO session ends 24 hours after sign-in however much it is used.
 func TestSSOSessionEndsAt24HoursThroughRequire(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	sso := e.sessionFor(e.ssoAdmin("root@example.com"))
 	for hours := 5; hours <= 20; hours += 5 {
@@ -1237,6 +1243,7 @@ func TestSSOSessionEndsAt24HoursThroughRequire(t *testing.T) {
 
 // A local admin keeps today's limits: 7 days at most, 8 hours idle.
 func TestLocalAdminSessionLastsBeyond24Hours(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin := e.operator()
 	for hours := 7; hours <= 168; hours += 7 { // used every 7 hours: never idle
@@ -1252,6 +1259,7 @@ func TestLocalAdminSessionLastsBeyond24Hours(t *testing.T) {
 }
 
 func TestPruneSessionsEndsSSOAt24Hours(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	sso := e.sessionFor(e.sso("carol@example.com"))
 	admin := e.operator()
@@ -1288,6 +1296,7 @@ func oidcBody(f *fakeIssuer, edit func(m map[string]any)) map[string]any {
 }
 
 func TestSignInSettingsRoundTripThroughTheAPI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	f := newFakeIssuer(t)
@@ -1337,6 +1346,7 @@ func TestSignInSettingsRoundTripThroughTheAPI(t *testing.T) {
 }
 
 func TestSignInSettingsAreHttpsOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	f := newFakeIssuer(t)
@@ -1376,6 +1386,7 @@ func TestSignInSettingsAreHttpsOnly(t *testing.T) {
 
 // The client secret goes in and never comes out.
 func TestClientSecretIsWriteOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	f := newFakeIssuer(t)
@@ -1435,6 +1446,7 @@ func TestClientSecretIsWriteOnly(t *testing.T) {
 // A new issuer needs the secret entered again, and a stored secret is never
 // kept for it, not even after a detour through another mode.
 func TestIssuerChangeNeedsSecretAgain(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	f, g := newFakeIssuer(t), newFakeIssuer(t)
@@ -1478,6 +1490,7 @@ func TestIssuerChangeNeedsSecretAgain(t *testing.T) {
 // Changing the mode or the issuer ends every SSO session; a local admin's
 // stays; changing something else ends nothing.
 func TestIssuerChangeEndsSSOSessions(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	f, g := newFakeIssuer(t), newFakeIssuer(t)
@@ -1654,6 +1667,7 @@ func TestConfigSignInWinsOverTheDashboard(t *testing.T) {
 }
 
 func TestSignInRoutesAreForAdminsOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	f := newFakeIssuer(t)
 	alice := e.aliceSession()
@@ -1678,6 +1692,7 @@ func TestSignInRoutesAreForAdminsOnly(t *testing.T) {
 }
 
 func TestTestButtonThroughTheAPI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	f := newFakeIssuer(t)

@@ -19,6 +19,7 @@ func fingerprints(list []InlineThread) []string {
 }
 
 func TestInlineThreadsRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 
 	if got, err := s.InlineThreads(ctx, mr1); err != nil || len(got) != 0 {
@@ -144,6 +145,7 @@ func TestInlineThreadsRoundTrip(t *testing.T) {
 }
 
 func TestInlineThreadsUniqueThreadID(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.PutInlineThread(ctx, inlineThread("f1", "PRRT_one", 101)); err != nil {
 		t.Fatal(err)
@@ -163,6 +165,7 @@ func TestInlineThreadsUniqueThreadID(t *testing.T) {
 }
 
 func TestDeleteProjectDeletesInlineThreads(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	inst := mr1.Instance
 	if err := s.UpsertProject(ctx, Project{Instance: inst, ProjectID: mr1.ProjectID, Path: "acme/widgets"}); err != nil {
@@ -189,6 +192,7 @@ func TestDeleteProjectDeletesInlineThreads(t *testing.T) {
 }
 
 func TestNoteInlineThreadLeftOut(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	th := inlineThread("f1", "PRRT_one", 101)
 	if err := s.PutInlineThread(ctx, th); err != nil {
@@ -215,6 +219,7 @@ func TestNoteInlineThreadLeftOut(t *testing.T) {
 }
 
 func TestClearInlineThreadLeftOut(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	th := inlineThread("f1", "PRRT_one", 101)
 	if err := s.PutInlineThread(ctx, th); err != nil {

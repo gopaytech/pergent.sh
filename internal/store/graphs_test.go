@@ -9,6 +9,7 @@ import (
 // The Code graph switch is off on a new row, ignores the case of the path,
 // survives settings writes, and says when nothing changed.
 func TestDashboardRepoGraphSwitch(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice"}); err != nil {
 		t.Fatal(err)
@@ -49,6 +50,7 @@ func TestDashboardRepoGraphSwitch(t *testing.T) {
 
 // A head check is taken once per gap, and makes the row.
 func TestTakeGraphCheck(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 	gap := 10 * time.Minute
@@ -76,6 +78,7 @@ func TestTakeGraphCheck(t *testing.T) {
 // place, a running one is left alone; claims respect the cap; only the
 // build's token stores it; a failure keeps the stored graph.
 func TestGraphBuildLifecycle(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 	if ok, _ := s.QueueGraphBuild(ctx, "main", "acme/widgets", "main", "aaa", now); ok {
@@ -192,6 +195,7 @@ func TestGraphBuildLifecycle(t *testing.T) {
 
 // DeleteRepoGraph returns the running build's Job, so it can be stopped.
 func TestDeleteRepoGraphReturnsJob(t *testing.T) {
+	t.Parallel()
 	s := newStore(t)
 	now := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 	if _, err := s.TakeGraphCheck(ctx, "main", "acme/widgets", now, time.Minute); err != nil {

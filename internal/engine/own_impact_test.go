@@ -117,6 +117,7 @@ func TestImpactFailureNamesTheLinks(t *testing.T) {
 // A review of the skill named impact and another, with the feature off: asked
 // again, "impact" is a skill to re-run, not the linked repositories' check.
 func TestOwnImpactSkillIsReRunLikeAnyOther(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.AddSkill("a", "---\nname: a\n---\nCheck a.\n")
 	env.AddSkill("impact", "---\nname: impact\n---\nCheck impact.\n")
@@ -149,6 +150,7 @@ func TestOwnImpactSkillIsReRunLikeAnyOther(t *testing.T) {
 // While linked repositories are on, a skill named impact is refused: it never
 // runs where its result could read as the check's.
 func TestSkillNamedImpactIsRefusedWhileLinked(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	env.AddSkill("impact", "---\nname: impact\n---\nCheck impact.\n")
 	env.SetDefaultSkills("impact")
@@ -174,6 +176,7 @@ func TestSkillNamedImpactIsRefusedWhileLinked(t *testing.T) {
 
 // With the feature off the same skill runs as it always did.
 func TestSkillNamedImpactRunsWithTheFeatureOff(t *testing.T) {
+	t.Parallel()
 	env, gh := linkedGitHub(t)
 	off := false
 	repos := env.Engine.Config.Repositories

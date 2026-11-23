@@ -54,6 +54,7 @@ func project(t *testing.T, env *testEnv, id int64) (store.Project, bool) {
 }
 
 func TestReconcileCreatesHookAndToken(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	if err := env.Store.DeleteProject(env.ctx, testInstance, testProjectID); err != nil {
 		t.Fatal(err)
@@ -113,6 +114,7 @@ func TestReconcileCreatesHookAndToken(t *testing.T) {
 }
 
 func TestReconcileKeepsFreshToken(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t) // the seeded token expires in 30 days
 	serveProject(env, testProjectID, testProjectPath)
 	env.GitLab.Reply(http.MethodGet, "/projects/7/hooks", http.StatusOK, []map[string]any{{"id": 11, "url": testHookURL}})
@@ -136,6 +138,7 @@ func TestReconcileKeepsFreshToken(t *testing.T) {
 }
 
 func TestReconcileRotatesExpiringToken(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.SeedProject(func(p *store.Project) { p.DeployTokenExpiresAt = env.Now().Add(6 * 24 * time.Hour) })
 	serveProject(env, testProjectID, testProjectPath)
@@ -167,6 +170,7 @@ func TestReconcileRotatesExpiringToken(t *testing.T) {
 // A fresh token sealed with another key (PERGENT_SH_SECRET_KEY changed) is
 // useless to the dispatcher: it is replaced at once, not at expiry.
 func TestReconcileReplacesTokenSealedWithAnotherKey(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	other, err := secretbox.New("ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=")
 	if err != nil {
@@ -208,6 +212,7 @@ func TestReconcileReplacesTokenSealedWithAnotherKey(t *testing.T) {
 
 // A token that can't be created leaves the old one in place.
 func TestReconcileTokenCreationFailureKeepsOldToken(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.SeedProject(func(p *store.Project) { p.DeployTokenExpiresAt = env.Now().Add(24 * time.Hour) })
 	serveProject(env, testProjectID, testProjectPath)
@@ -226,6 +231,7 @@ func TestReconcileTokenCreationFailureKeepsOldToken(t *testing.T) {
 }
 
 func TestReconcileRemovesUnconfigured(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	env.SeedProject(func(p *store.Project) {
@@ -252,6 +258,7 @@ func TestReconcileRemovesUnconfigured(t *testing.T) {
 
 // A removal GitLab refuses keeps the row, so it is tried again.
 func TestReconcileRemovalFailureKeepsRow(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	env.SeedProject(func(p *store.Project) {
@@ -271,6 +278,7 @@ func TestReconcileRemovalFailureKeepsRow(t *testing.T) {
 // One repository's failure is logged and joined; the others are reconciled,
 // and a configured project that couldn't be looked up is never removed.
 func TestReconcileOneRepoFailureDoesNotStopOthers(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories = []config.Repository{
 		{GitLab: testInstance, Project: testProjectPath, FailureStatus: config.FailureStatusFailed},
@@ -300,6 +308,7 @@ func TestReconcileOneRepoFailureDoesNotStopOthers(t *testing.T) {
 // A project deleted and recreated under a configured path is a new project:
 // the old row is cleaned up and the new one set up.
 func TestReconcileReplacesRecreatedProject(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t) // project 7 at acme/widgets, hook 11, token 12
 	serveProject(env, 9, testProjectPath)
 	env.GitLab.Reply(http.MethodDelete, "/projects/7/hooks/11", http.StatusNotFound, `{"message":"404 Project Not Found"}`)
@@ -318,6 +327,7 @@ func TestReconcileReplacesRecreatedProject(t *testing.T) {
 // A project of an instance removed from the config can't be reached: its row
 // is dropped with one warning, not reported as an error every hour.
 func TestReconcileForgetsProjectOfRemovedInstance(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	env.SeedProject(func(p *store.Project) {
@@ -359,6 +369,7 @@ func warnedSingleApproval(logs, path string) bool {
 // Reconcile warns when one approval is enough to merge a GitLab project's
 // default branch: the approve bot's approval alone would unlock it.
 func TestReconcileWarnsSingleApprovalGitLab(t *testing.T) {
+	t.Parallel()
 	rule := func(required int, branches ...string) map[string]any {
 		pbs := []any{}
 		for _, b := range branches {
@@ -411,6 +422,7 @@ func TestReconcileWarnsSingleApprovalGitLab(t *testing.T) {
 
 // When GitLab won't say (403), reconcile logs it at info once and goes on.
 func TestReconcileSingleApprovalCheckRefusedGitLab(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	env.GitLab.Reply(http.MethodGet, "/projects/7/approval_rules", http.StatusForbidden, `{"message":"403 Forbidden"}`)
@@ -490,6 +502,7 @@ func setDashboardSkills(t *testing.T, env *testEnv, instance, project string, sk
 // Config wins: a dashboard row for a repository that is also in config is
 // deleted, with an info log; other dashboard rows stay.
 func TestReconcileDropsDashboardRowOfConfigRepo(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	serveProject(env, 9, "acme/gadgets")
@@ -517,6 +530,7 @@ func TestReconcileDropsDashboardRowOfConfigRepo(t *testing.T) {
 // A repository switched on in the dashboard is reconciled like a config one,
 // and switching it off removes its webhook and deploy token.
 func TestReconcileDashboardRepo(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	serveProject(env, 9, "acme/gadgets")
@@ -550,6 +564,7 @@ func TestReconcileDashboardRepo(t *testing.T) {
 // one on sets up that one, switching it off tears down that one, and no
 // other repository's platform is asked anything.
 func TestReconcileReposTouchesOnlyThose(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 	serveProject(env, 9, "acme/gadgets")

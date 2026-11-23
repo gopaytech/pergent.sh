@@ -80,6 +80,7 @@ func legacyConn(t *testing.T, env *testEnv) *pgx.Conn {
 // deleted, its run queued again with dispatched_at kept. A multi review is
 // left alone. One start logs one warning.
 func TestRecoverLegacyPanelsWarnsOnce(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := time.Now()
 	id := env.Enqueue(3, sha('a'))
@@ -125,6 +126,7 @@ func TestRecoverLegacyPanelsWarnsOnce(t *testing.T) {
 // starts no Job for it, and its run keeps waiting for the recovery at the
 // next start (RecoverLegacyPanels). Another run is dispatched as before.
 func TestDispatchIgnoresLegacyPanelMembers(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	now := time.Now()
 	id := env.Enqueue(3, sha('a'))

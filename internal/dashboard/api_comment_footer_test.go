@@ -36,6 +36,7 @@ func TestCheckFooterNote(t *testing.T) {
 }
 
 func TestCommentFooterAPI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	admin, user := e.sessionFor(e.ssoAdmin("boss@example.com")), e.sessionFor(e.sso("waiting@example.com"))
 	const path = "/api/admin/comment-footer"

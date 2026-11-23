@@ -54,7 +54,7 @@ func newStore(t *testing.T) *store.Store {
 func newStoreDB(t *testing.T) (*store.Store, *pgxpool.Pool) {
 	t.Helper()
 	dbURL := storetest.URL(t, store.OpenInSchema)
-	st, err := store.OpenInSchema(ctx, dbURL, storetest.Schema)
+	st, err := store.OpenInSchema(ctx, storetest.PoolURL(dbURL), storetest.Schema)
 	if err != nil {
 		t.Fatalf("OpenInSchema: %v", err)
 	}
@@ -63,6 +63,7 @@ func newStoreDB(t *testing.T) (*store.Store, *pgxpool.Pool) {
 		t.Fatal(err)
 	}
 	pcfg.ConnConfig.RuntimeParams["search_path"] = storetest.Schema
+	pcfg.MaxConns = 2
 	db, err := pgxpool.NewWithConfig(ctx, pcfg)
 	if err != nil {
 		t.Fatal(err)

@@ -205,6 +205,7 @@ func useLibrary(env *testEnv, defaults ...string) {
 // A repository a reconcile pass sets up and that has never been scanned
 // gets one scan, by switch-on; the next pass queues none.
 func TestSwitchOnQueuesOneScan(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	serveProject(env, testProjectID, testProjectPath)
 
@@ -230,6 +231,7 @@ func TestSwitchOnQueuesOneScan(t *testing.T) {
 // Without the dashboard, nothing queues a scan: not reconcile, not the
 // upgrade sweep, not a request.
 func TestNoScansWithoutDashboard(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	serveGitLabSettings(env)
 	serveProject(env, testProjectID, testProjectPath)
@@ -255,6 +257,7 @@ func TestNoScansWithoutDashboard(t *testing.T) {
 // After the upgrade, every repository switched on that was never scanned is
 // queued once by "upgrade", oldest first; a restart queues none.
 func TestStartupScansUnscanned(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	// No Job is wanted here: a claimed scan fails at once.
 	env.Engine.ScanImage = ""
@@ -303,6 +306,7 @@ func TestStartupScansUnscanned(t *testing.T) {
 // At most 2 scan Jobs run at once, whatever reviews are running: a full
 // jobs.max_running holds no scan back.
 func TestScanCapIsTwo(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	serveScanRepo(env, 9, "acme/gadgets", sha('d'))
 	serveScanRepo(env, 10, "acme/tools", sha('e'))
@@ -371,6 +375,7 @@ func TestScanNeedsNoLLM(t *testing.T) {
 // token (R1), and a Job that can't be created fails the scan with the
 // settings kept.
 func TestScanPodPartStoredFirst(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	sc := queueScan(t, env, testInstance, testProjectPath, "alice")
 	var (
@@ -411,6 +416,7 @@ func TestScanPodPartStoredFirst(t *testing.T) {
 // With no scan image (or no Launcher) a scan can never get to its Job, so it
 // fails at once with that reason and spends no platform call on settings.
 func TestScanNoImageMakesNoPlatformCall(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		setup func(*Engine)
@@ -442,6 +448,7 @@ func TestScanNoImageMakesNoPlatformCall(t *testing.T) {
 // A scan Job evicted for its disk fails the scan as too large to clone, at
 // the next sweep; the settings stay.
 func TestScanEvictedKeepsSettings(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	sc := queueScan(t, env, testInstance, testProjectPath, "alice")
 	env.Engine.launchScans(env.ctx)
@@ -475,6 +482,7 @@ func TestScanEvictedKeepsSettings(t *testing.T) {
 // A sweep fails a running scan past its deadline, and one whose pod part
 // never got to its Job (a restart).
 func TestScanSweepDeadline(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	launched := queueScan(t, env, testInstance, testProjectPath, "alice")
 	env.Engine.launchScans(env.ctx)
@@ -505,6 +513,7 @@ func TestScanSweepDeadline(t *testing.T) {
 // A result is taken once, with its token; the wrong token takes nothing; a
 // result for another commit fails the scan as unusable.
 func TestCompleteScanOneTime(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	useLibrary(env, "go")
 	sc := queueScan(t, env, testInstance, testProjectPath, "alice")
@@ -630,6 +639,7 @@ func TestCompleteScanUntrustedText(t *testing.T) {
 
 // A done scan raises the 3 items it finds and a clean one clears them.
 func TestScanAttention(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	useLibrary(env, "ruby")
 	scanWith(t, env, testInstance, testProjectPath, gapResult(sha('c')))
@@ -665,6 +675,7 @@ func TestScanAttention(t *testing.T) {
 // An unknown size changes nothing: an earlier inputs_over_budget stays when
 // a skill's size can't be added up.
 func TestScanBudgetUnknownKeepsItem(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	useLibrary(env, "go")
 	scanWith(t, env, testInstance, testProjectPath, gapResult(sha('c')))
@@ -683,6 +694,7 @@ func TestScanBudgetUnknownKeepsItem(t *testing.T) {
 // Saving skills that match re-judges the last scan with no Job and no
 // platform call.
 func TestRecheckAfterSkillsChange(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	useLibrary(env, "ruby")
 	scanWith(t, env, testInstance, testProjectPath, cleanResult(sha('c')))
@@ -720,6 +732,7 @@ func TestRecheckAfterSkillsChange(t *testing.T) {
 // A recheck of the default list (project "") re-judges only the
 // repositories that follow it.
 func TestRecheckDefaults(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	useLibrary(env, "ruby")
 	serveScanRepo(env, 9, "acme/gadgets", sha('d'))
@@ -755,6 +768,7 @@ func TestRecheckDefaults(t *testing.T) {
 // repository with a done scan, its own list or the default one, against the
 // skill's size now, with no platform call.
 func TestRecheckAll(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	useLibrary(env, "ruby")
 	serveScanRepo(env, 9, "acme/gadgets", sha('d'))
@@ -794,6 +808,7 @@ func TestRecheckAll(t *testing.T) {
 // The config file's skills change only with a restart: at startup every
 // config-file repository with a done scan is re-judged.
 func TestStartupRechecksConfigRepos(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	useLibrary(env, "ruby")
 	scanWith(t, env, testInstance, testProjectPath, cleanResult(sha('c')))
@@ -816,6 +831,7 @@ func TestStartupRechecksConfigRepos(t *testing.T) {
 // Switching a repository off drops its scans and the 3 items; a result that
 // comes late is refused.
 func TestSwitchOffDropsScans(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	useLibrary(env, "ruby")
 	serveScanRepo(env, 9, "acme/gadgets", sha('d'))
@@ -855,6 +871,7 @@ func TestSwitchOffDropsScans(t *testing.T) {
 
 // A failed scan changes no item.
 func TestFailedScanKeepsItems(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	useLibrary(env, "go")
 	scanWith(t, env, testInstance, testProjectPath, gapResult(sha('c')))
@@ -874,6 +891,7 @@ func TestFailedScanKeepsItems(t *testing.T) {
 // A failed scan after a done one keeps the done scan's file result, so a
 // skills save still clears the items it raised.
 func TestRecheckAfterFailedScan(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	useLibrary(env, "ruby")
 	scanWith(t, env, testInstance, testProjectPath, cleanResult(sha('c')))
@@ -901,6 +919,7 @@ func TestRecheckAfterFailedScan(t *testing.T) {
 // Scan now queues a scan and wakes the loop; a second while it is queued is
 // busy, and one within 5 minutes of the last is too soon.
 func TestRequestScan(t *testing.T) {
+	t.Parallel()
 	env := newScanEnv(t)
 	sc, err := env.Engine.RequestScan(env.ctx, testInstance, testProjectPath, "alice")
 	if err != nil || sc.StartedBy != "alice" || sc.State != store.ScanQueued {

@@ -61,6 +61,7 @@ func auditDetails(e *env, action string) []string {
 // change is refused, and every change is audited with the name, provider and
 // model.
 func TestModelsAdminLifecycle(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 
@@ -133,6 +134,7 @@ func TestModelsAdminLifecycle(t *testing.T) {
 // No response, log line or audit entry holds a key entered for a model, the
 // one a change replaced included.
 func TestModelsNeverReturnAKey(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	one := decode[ModelAdminView](t, e.sendJSON(c, "POST", modelsURL,
@@ -175,6 +177,7 @@ func TestModelsNeverReturnAKey(t *testing.T) {
 // Only admins see or change the list: anyone else gets what an unknown path
 // gets, whatever the method.
 func TestModelsRoutesAreAdminsOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	m := e.addModel("anthropic", "m", "", llmKeyOne)
 	unknown := e.get(e.userOnMain(false, "acme/widgets"), "/api/admin/no-such-route")
@@ -209,6 +212,7 @@ func TestModelsRoutesAreAdminsOnly(t *testing.T) {
 // The default is moved from and to: the list says how many repositories
 // follow it and which name each entry.
 func TestSetDefaultReportsFollowers(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	one := e.addModel("anthropic", "claude-sonnet-4", "", llmKeyOne)
@@ -246,6 +250,7 @@ func TestSetDefaultReportsFollowers(t *testing.T) {
 // A settings reset, by an admin too, leaves the model chain: it has its own
 // reset.
 func TestResetKeepsModelChain(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	m := e.addModel("openai", "gpt-x", "", llmKeyOne)
 	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.ModelID = &m.ID })
@@ -263,6 +268,7 @@ func TestResetKeepsModelChain(t *testing.T) {
 // Anyone who sees a repository sees the name of its model, never the base URL
 // or key.
 func TestViewerSeesModelNameNotBaseURL(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.addModel("anthropic", "claude-sonnet-4", "", llmKeyOne)
 	m := e.addModel("openai", "gpt-x", modelBaseURL, llmKeyTwo)

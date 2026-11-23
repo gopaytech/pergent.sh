@@ -74,6 +74,7 @@ func TestAdminModelLimit(t *testing.T) {
 // The number is a whole number from 1 to 10^15, written as a JSON number;
 // anything else is 400 with the range and changes nothing.
 func TestModelLimitBounds(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.operator()
 	m := e.addModel("openai", "gpt-5", "", llmKeyThree)
@@ -96,6 +97,7 @@ func TestModelLimitBounds(t *testing.T) {
 // An admin sets a team's limit on a global entry, teams may use it or not;
 // an unknown team is 404; the route is not found for anyone else.
 func TestAdminTeamLimit(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	m := te.addModel("openai", "gpt-5", "", llmKeyThree)
 	name := modelNamed(t, decode[ModelsAdminView](t, te.get(te.admin, modelsURL), "GET models", http.StatusOK), m.ID).Name
@@ -122,6 +124,7 @@ func TestAdminTeamLimit(t *testing.T) {
 // viewer and another team's maintainer get 403, anyone else 404; another
 // team's entry is 400; a global entry is the admins' (403).
 func TestTeamModelLimitAccess(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	own := te.addTeamModel(te.maintainer, te.payments, "pay-a", teamKeyOne)
 	other := te.addTeamModel(te.otherMaintainer, te.widgets, "wid-a", teamKeyTwo)
@@ -168,6 +171,7 @@ func TestTeamModelLimitAccess(t *testing.T) {
 // global entry with an admin's limit for the team. A global entry's model
 // limit shows only whether it has room: its numbers count other teams.
 func TestTeamLimitsView(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	own := te.addTeamModel(te.maintainer, te.payments, "pay-a", teamKeyOne)
 	g := te.addModel("openai", "gpt-5", "", llmKeyThree)
@@ -211,6 +215,7 @@ func TestTeamLimitsView(t *testing.T) {
 // The admin list: each global entry's model limit and its tokens this month,
 // and each team's limit on it with that team's tokens, by team name.
 func TestModelListShowsLimits(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	g := te.addModel("openai", "gpt-5", "", llmKeyThree)
 	plain := te.addModel("openai", "gpt-6", "", llmKeyThree)
@@ -251,6 +256,7 @@ func entryStates(v ChainView) map[string]string {
 // chain, and the global chain it shows while it has none, with that team's
 // limits too.
 func TestChainViewsShowLimits(t *testing.T) {
+	t.Parallel()
 	te := newTeamsEnv(t)
 	shared, private := te.sharedAndPrivate()
 	own := te.addTeamModel(te.maintainer, te.payments, "pay-a", teamKeyOne)

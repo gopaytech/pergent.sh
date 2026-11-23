@@ -47,6 +47,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -115,7 +116,7 @@ var (
 func Open[S Store](t testing.TB, open OpenFunc[S]) S {
 	t.Helper()
 	dbURL := URL(t, open)
-	s, err := open(context.Background(), dbURL, Schema)
+	s, err := open(context.Background(), PoolURL(dbURL), Schema)
 	if err != nil {
 		t.Fatalf("storetest: open: %v", err)
 	}
@@ -363,6 +364,26 @@ func migrationsDir() (string, error) {
 		if filepath.Dir(d) == d {
 			return "", errors.New("no go.mod above the working directory")
 		}
+	}
+}
+
+// PoolMaxConns is the most connections a test's store pool opens. Tests run
+// in parallel, and several packages at once, so pools stay small to keep the
+// server under its max_connections. It is what pgxpool picks on a 4-CPU CI
+// runner anyway.
+const PoolMaxConns = 4
+
+// PoolURL is dbURL with the pool size set to PoolMaxConns. Only pgxpool reads
+// that setting: give pgx.Connect the URL from URL as it is.
+func PoolURL(dbURL string) string {
+	param := "pool_max_conns=" + strconv.Itoa(PoolMaxConns)
+	switch {
+	case !strings.HasPrefix(dbURL, "postgres://") && !strings.HasPrefix(dbURL, "postgresql://"):
+		return dbURL + " " + param
+	case strings.Contains(dbURL, "?"):
+		return dbURL + "&" + param
+	default:
+		return dbURL + "?" + param
 	}
 }
 

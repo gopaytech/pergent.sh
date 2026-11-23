@@ -43,6 +43,7 @@ func teaching(t *testing.T, e *env, c *http.Cookie) []PastDismissalView {
 // nothing older than 90 days, all of them whatever their number, and the
 // own-change rule left out: alice sees a blocking dismissal of her own.
 func TestPastDismissalsList(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	now := e.clock.now()
@@ -100,6 +101,7 @@ func TestPastDismissalsList(t *testing.T) {
 }
 
 func TestPastDismissalsNeedsMaintainer(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	e.pastDismissal(1, "fp1", "suggestion", "reason", "bob (gitlab main)", e.clock.now().Add(-time.Hour))
@@ -146,6 +148,7 @@ func (e *env) dismissalsOnChange(number int64) []store.Dismissal {
 // The list and Stop using work on a repository the config file sets up, which
 // the settings can't change from here.
 func TestPastDismissalsConfigRepo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	e.pastDismissal(1, "fp1", "suggestion", "reason", "bob (gitlab main)", e.clock.now().Add(-time.Hour))
@@ -164,6 +167,7 @@ func TestPastDismissalsConfigRepo(t *testing.T) {
 // A repository with nothing dismissed has nothing that teaches, and there is
 // nothing to stop.
 func TestPastDismissalsNothingDismissed(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	c := e.signInRole(store.RoleMaintainer)
 	rec := e.get(c, pastURL(buttonProject))
@@ -185,6 +189,7 @@ func TestPastDismissalsNothingDismissed(t *testing.T) {
 // nothing else: the dismissals stay on their changes, no review is decided
 // again and the platform isn't asked.
 func TestStopUsing(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	runID := e.buttonBlockingReview()
 	now := e.clock.now()
@@ -234,6 +239,7 @@ func TestStopUsing(t *testing.T) {
 }
 
 func TestStopUsingTwice(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	e.pastDismissal(1, "fp1", "suggestion", "reason", "bob (gitlab main)", e.clock.now().Add(-time.Hour))
@@ -256,6 +262,7 @@ func TestStopUsingTwice(t *testing.T) {
 }
 
 func TestStopUsingBadRequest(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	c := e.signInRole(store.RoleMaintainer)
@@ -271,6 +278,7 @@ func TestStopUsingBadRequest(t *testing.T) {
 // under: a repository deleted and made again on the platform has a new ID, and
 // what was dismissed under the old one is another project's.
 func TestPastDismissalsProjectID(t *testing.T) {
+	t.Parallel()
 	const oldID = 999
 	setup := func() *env {
 		e := newEnv(t, nil)
@@ -353,6 +361,7 @@ func TestPastDismissalsTextIsRedactedAndCut(t *testing.T) {
 // A fingerprint with spaces around it is the fingerprint, as for the buttons
 // on a review.
 func TestStopUsingTrimsTheFingerprint(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
 	e.pastDismissal(1, "fp1", "suggestion", "reason", "bob (gitlab main)", e.clock.now().Add(-time.Hour))

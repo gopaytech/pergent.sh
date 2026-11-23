@@ -241,6 +241,7 @@ const commitA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 // problems of those that can't be installed are recorded. An unknown ref
 // fails the fetch with the reader's not-found message.
 func TestFetchInstanceReadsRef(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	rp := &repo{refs: map[string]string{"release/v1": commitA}, files: map[string]map[string]string{commitA: {
 		"README.md":              "not a skill: outside the folder",
@@ -363,6 +364,7 @@ func newMem(files map[string]string) *memReader {
 // refused as too large by the platform), gets a problem and its text is not
 // kept.
 func TestFetchMarksSecretAndOversize(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	const secret = "glpat-held-SECRET"
 	mem := newMem(map[string]string{
@@ -407,6 +409,7 @@ func TestFetchMarksSecretAndOversize(t *testing.T) {
 // With the held secrets unknown, nothing is offered: the fetch fails, and
 // its message names no secret.
 func TestFetchSecretsErrorFailsClosed(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	f := fetcher(st, map[string]forge.SourceReader{"lab": newMem(map[string]string{"a.md": "A."})})
 	f.Secrets = func(context.Context) ([]string, error) {
@@ -421,6 +424,7 @@ func TestFetchSecretsErrorFailsClosed(t *testing.T) {
 // A folder of more skills than the library holds, or of more text than a
 // fetch keeps, fails the fetch.
 func TestFetchLimits(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	many := map[string]string{}
 	for i := range MaxFetchFiles + 1 {
@@ -444,6 +448,7 @@ func TestFetchLimits(t *testing.T) {
 
 // At most two reads run at once; the others wait their turn.
 func TestFetchAtMostTwoAtOnce(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	mem := newMem(map[string]string{"a.md": "A."})
 	mem.gate = make(chan struct{})
@@ -470,6 +475,7 @@ func TestFetchAtMostTwoAtOnce(t *testing.T) {
 }
 
 func TestStartRefusals(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	f := fetcher(st, map[string]forge.SourceReader{"lab": newMem(nil)})
 	ok := Request{Instance: "lab", Repo: "acme/skills", Ref: "main", Purpose: store.FetchInstall}
@@ -554,6 +560,7 @@ func TestValidateURL(t *testing.T) {
 // The sweep fails a fetch still running past FetchTimeout and a minute, and
 // deletes those past their expiry.
 func TestSweepFailsStaleAndPrunes(t *testing.T) {
+	t.Parallel()
 	st := newStore(t)
 	add := func(created time.Time) string {
 		id, err := st.CreateSkillFetch(ctx, store.SkillFetch{Kind: store.SourceKindInstance, Instance: "lab", Repo: "acme/skills",
