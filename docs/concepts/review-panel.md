@@ -33,7 +33,7 @@ Sometimes chain B is in effect but model B can not start. The review then runs o
 | --- | --- |
 | `the review image does not support it` | The review image is too old for `--panel`. |
 | `no entry of chain B can be used` | No entry of chain B has a key that works (for example all are marked or removed). |
-| `the token quota stopped model B` | The repository quota is used up, or the instance quota is used up and only global entries are left in chain B. |
+| `the token quota stopped model B` | The repository quota is used up, or the instance quota is used up and only global entries are left in chain B, or a model or team limit stops every entry of chain B. |
 | `model B is the model A runs on` | Every usable entry of chain B is the model A runs on. |
 | `chain B could not be read` | A database error while loading chain B. The review still runs, on A alone. |
 | `pergent.sh's own image is not set` | `PERGENT_SH_IMAGE` is empty. Job P needs it to fetch the members' results. The chart sets it. |
