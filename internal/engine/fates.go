@@ -200,9 +200,13 @@ func (e *Engine) fateJob(ctx, bctx context.Context, job store.FateJob, log *slog
 	byBot := false
 	if known {
 		var untold error
-		if byBot, untold, err = fateAuthorIsBot(bctx, plat.Forge, change); err != nil {
+		byBot, untold, err = fateAuthorIsBot(bctx, plat.Forge, change)
+		switch {
+		case err != nil:
 			return err
-		} else if untold != nil {
+		case untold != nil && byBot:
+			log.Info("pergent.sh can't say whether the change's author is a bot; leaving it out as a bot's", "error", e.redact(untold.Error()))
+		case untold != nil:
 			log.Info("couldn't tell whether a bot opened the change; counting it as a person's", "error", e.redact(untold.Error()))
 		}
 	}
@@ -327,8 +331,10 @@ func fatesInput(runs []store.Run, ds []store.Dismissal) fates.Input {
 }
 
 // fateAuthorIsBot tells whether a bot opened the change: GitHub says so in the
-// change itself, GitLab is asked (GitHub's IsBot is always false). When it
-// can't be told, untold says why and the change counts as a person's, except
+// change itself, GitLab is asked (GitHub's IsBot is always false). When the
+// platform answers that it can't tell (forge.ErrBotUnknown), untold says so
+// and the change is left out as a bot's, never counted as a person's. When it
+// can't be asked, untold says why and the change counts as a person's, except
 // when the budget ran out: merged fates are final, so that is err and the job
 // is tried again. The budget is checked, not the error's cause, as the clients
 // flatten it.
@@ -340,6 +346,8 @@ func fateAuthorIsBot(bctx context.Context, f forge.Forge, change forge.Change) (
 	switch {
 	case askErr == nil:
 		return bot, nil, nil
+	case errors.Is(askErr, forge.ErrBotUnknown):
+		return true, askErr, nil
 	case bctx.Err() != nil:
 		return false, nil, fmt.Errorf("tell whether a bot opened the change: %w", askErr)
 	}

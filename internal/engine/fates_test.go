@@ -472,7 +472,7 @@ func TestFateAuthorIsBot(t *testing.T) {
 		change    forge.Change
 		forge     botForge
 		want      bool
-		untold    bool // IsBot failed, and the change counts as a person's
+		untold    bool // IsBot gave no yes or no
 		wantErr   bool
 		wantCalls int
 	}{
@@ -480,7 +480,10 @@ func TestFateAuthorIsBot(t *testing.T) {
 		{name: "GitHub person: IsBot is false", change: forge.Change{AuthorID: 5}, wantCalls: 1},
 		{name: "GitLab bot", change: forge.Change{AuthorID: 5}, forge: botForge{bot: true}, want: true, wantCalls: 1},
 		{name: "GitLab person", change: forge.Change{AuthorID: 5}, wantCalls: 1},
-		{name: "can't be told: a person's", change: forge.Change{AuthorID: 5}, forge: botForge{err: boom}, untold: true, wantCalls: 1},
+		{name: "a request error: a person's", change: forge.Change{AuthorID: 5}, forge: botForge{err: boom}, untold: true, wantCalls: 1},
+		// The platform answered, and the answer is that it can't tell: left
+		// out as a bot's, never a person's.
+		{name: "can't say whether a bot: left out", change: forge.Change{AuthorID: 5}, forge: botForge{err: forge.ErrBotUnknown}, want: true, untold: true, wantCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := tc.forge
@@ -506,6 +509,11 @@ func TestFateAuthorIsBotDeadline(t *testing.T) {
 	f = &botForge{err: errors.New("request failed")}
 	if _, _, err := fateAuthorIsBot(bctx, f, forge.Change{AuthorID: 5}); err == nil {
 		t.Error("a flattened IsBot failure after the budget ran out was taken for a person's")
+	}
+	// "Can't tell" is the platform's answer, not a failure: left out.
+	f = &botForge{err: forge.ErrBotUnknown}
+	if bot, _, err := fateAuthorIsBot(bctx, f, forge.Change{AuthorID: 5}); err != nil || !bot {
+		t.Errorf("can't tell after the budget ran out = %v, %v; want left out as a bot's", bot, err)
 	}
 }
 
@@ -889,10 +897,18 @@ func TestWorkFatesBotAuthor(t *testing.T) {
 			env.Engine.Platforms.Set(testInstance, Platform{Kind: config.PlatformGitHub, Forge: &fakeChangeForge{
 				change: forge.Change{Number: 1, State: forge.StateMerged, AuthorID: 5}}})
 		}, false},
-		// When it can't be told, the change counts as a person's.
+		// When GitLab can't be asked, the change counts as a person's.
 		{"unknown", func(env *testEnv) {
 			env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusForbidden, `{"message":"403 Forbidden"}`)
 		}, false},
+		// When GitLab answers but the answer can't tell a bot (no bot
+		// attribute, a person's username), the change is left out.
+		{"can't say whether a bot", func(env *testEnv) {
+			env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusOK, map[string]any{"id": 55, "username": "dev"})
+		}, true},
+		{"a token bot's username", func(env *testEnv) {
+			env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusOK, map[string]any{"id": 55, "username": "project_7_bot_ab12"})
+		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newTestEnv(t)

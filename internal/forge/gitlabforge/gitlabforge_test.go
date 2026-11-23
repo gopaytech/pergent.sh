@@ -713,17 +713,32 @@ func TestIsBot(t *testing.T) {
 			t.Errorf("request = %+v", r)
 		}
 	}
-	// No ID: not looked up.
+	// No ID: not looked up, and no telling.
 	f := newFake(t)
-	if got, err := f.forge().IsBot(context.Background(), 0); err != nil || got {
-		t.Errorf("no ID = %v, %v", got, err)
+	if got, err := f.forge().IsBot(context.Background(), 0); !errors.Is(err, forge.ErrBotUnknown) || got {
+		t.Errorf("no ID = %v, %v; want false, ErrBotUnknown", got, err)
 	}
 	if n := len(f.requests()); n != 0 {
 		t.Errorf("%d requests for no ID", n)
 	}
+	// No bot attribute: the username tells a token bot, nothing tells a person.
+	for _, tc := range []struct {
+		username string
+		bot      bool
+	}{{"project_7_bot_0a1b", true}, {"dev", false}} {
+		f = newFake(t)
+		f.on(http.MethodGet, "/users/12", http.StatusOK, map[string]any{"id": 12, "username": tc.username})
+		got, err := f.forge().IsBot(context.Background(), 12)
+		if tc.bot && (err != nil || !got) {
+			t.Errorf("%s: %v, %v; want a bot", tc.username, got, err)
+		}
+		if !tc.bot && (!errors.Is(err, forge.ErrBotUnknown) || got) {
+			t.Errorf("%s: %v, %v; want false, ErrBotUnknown", tc.username, got, err)
+		}
+	}
 	// A user GitLab can't find or read is an error, never a person.
 	f = newFake(t)
-	if _, err := f.forge().IsBot(context.Background(), 12); !errors.Is(err, forge.ErrNotFound) {
+	if _, err := f.forge().IsBot(context.Background(), 12); !errors.Is(err, forge.ErrNotFound) || errors.Is(err, forge.ErrBotUnknown) {
 		t.Errorf("unknown user: err = %v, want ErrNotFound", err)
 	}
 }

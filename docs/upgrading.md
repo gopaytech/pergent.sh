@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **On a GitLab instance that does not send `bot`, no one's comment runs a command.** If `GET /api/v4/users/<id>` has no `"bot"` key, upgrade GitLab first. **When pergent.sh can't say whether the author is a bot, the author is no longer counted as a person.** pergent.sh asks GitLab (`GET /users/:id`) whether a commenter or a change's author is a bot. A user with no user ID, and a user whose answer has no `bot` flag, used to count as a person. Now, with no `bot` flag, a username that matches a GitLab bot pattern (`project_<id>_bot…`, `group_<id>_bot…`, `service_account_…`) is a bot. For any other username, and for a user with no user ID, pergent.sh can't say whether the author is a bot. Such an author's commands are dropped with 👎 and no reply, and their changes are left out of [Skill results](concepts/skill-results.md). On an instance that sends `bot`, the only change is for an author with no user ID: their commands are now dropped too.
 - **The dashboard no longer has a Code graph switch.** The code graph is experimental, so a repository turns it on with `PUT /api/repositories/{instance}/{project}/graph` only: [Code graph](concepts/code-graph.md). A repository that has it on keeps it on.
 - **Review panels stay off.** Multi review (several reviewer models and a judge) will replace them.
 
