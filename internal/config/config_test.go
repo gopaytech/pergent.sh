@@ -1921,14 +1921,16 @@ func setPanelMin(t *testing.T, v string) {
 	t.Cleanup(func() { PanelMinVersion = old })
 }
 
-// The shipped floor accepts the default review image and refuses the release
-// before it.
+// The shipped default is empty, so it refuses every image, the default review
+// image included.
 func TestPanelImageShippedDefault(t *testing.T) {
-	if ok, reason := PanelImage("ghcr.io/gopaytech/pergent:v0.11.0"); !ok {
-		t.Errorf("v0.11.0 refused: %s", reason)
+	if PanelMinVersion != "" {
+		t.Fatalf("PanelMinVersion = %q, want empty", PanelMinVersion)
 	}
-	if ok, _ := PanelImage("ghcr.io/gopaytech/pergent:v0.10.0"); ok {
-		t.Error("v0.10.0 accepted")
+	for _, image := range []string{"ghcr.io/gopaytech/pergent:v0.11.0", "ghcr.io/gopaytech/pergent:v0.10.0"} {
+		if ok, _ := PanelImage(image); ok {
+			t.Errorf("%s accepted", image)
+		}
 	}
 }
 
