@@ -37,8 +37,10 @@ const (
 
 // JudgeParams is what a judge Job needs beyond a review Job's checkout.
 type JudgeParams struct {
-	BaseURL   string // <callback>/runs/<run>/reviewers
-	Reviewers []int  // every reviewer of the frozen set, in order (D2)
+	BaseURL string // <callback>/runs/<run>/reviewers
+	// Reviewers is every reviewer of the frozen set, in order (D2). It must be
+	// 1..k: pergent numbers a reviewer by its flag position, not by file name.
+	Reviewers []int
 	NoJudge   bool   // --no-judge: no model runs and no key is held
 	Image     string // pergent.sh's own image, for get-reviewers
 	// MRDismissals is the merge request's dismissals, JSON

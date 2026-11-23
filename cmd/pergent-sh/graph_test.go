@@ -617,19 +617,138 @@ func TestGetReviewersArgs(t *testing.T) {
 	}
 }
 
-// With no token, or no server, get-reviewers still exits 0 and writes nothing.
-func TestRunGetReviewersNeverFails(t *testing.T) {
+// run is get-reviewers against one server answer per reviewer number.
+func runReviewers(t *testing.T, handler http.HandlerFunc, nums []int, token string) (code int, dir, stderr string) {
+	t.Helper()
 	noRetryWait(t)
-	o := getReviewersOptions{baseURL: "http://127.0.0.1:1/runs/r/reviewers", reviewers: []int{1, 2}, dir: t.TempDir()}
-	t.Setenv("PERGENT_RESULT_TOKEN", "")
-	if code := runGetReviewers(context.Background(), o, io.Discard); code != 0 {
-		t.Errorf("exit = %d with no token", code)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	dir = t.TempDir()
+	o := getReviewersOptions{baseURL: srv.URL + "/runs/r1/reviewers", reviewers: nums, dir: dir}
+	t.Setenv("PERGENT_RESULT_TOKEN", token)
+	var buf bytes.Buffer
+	code = runGetReviewers(context.Background(), o, &buf)
+	return code, dir, buf.String()
+}
+
+func filesIn(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, _ := os.ReadDir(dir)
+	var got []string
+	for _, e := range entries {
+		got = append(got, e.Name())
 	}
+	return got
+}
+
+// Only a 404 is "no result". Every other failure exits 1, writes no file for
+// that reviewer, and never prints the token.
+func TestGetReviewersFailures(t *testing.T) {
+	const token = "secret-run-token"
+	status := func(code int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) }
+	}
+	for _, tc := range []struct {
+		name     string
+		handler  http.HandlerFunc
+		token    string
+		wantCode int
+	}{
+		{"404", status(http.StatusNotFound), token, 0},
+		{"500", status(http.StatusInternalServerError), token, 1},
+		{"401", status(http.StatusUnauthorized), token, 1},
+		{"403", status(http.StatusForbidden), token, 1},
+		{"redirect", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://127.0.0.1:1/elsewhere", http.StatusFound)
+		}, token, 1},
+		{"too large", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, strings.Repeat("x", 100))
+		}, token, 1},
+		{"empty", status(http.StatusOK), token, 1},
+		{"no token", status(http.StatusOK), "", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := maxPanelGet
+			maxPanelGet = 10
+			t.Cleanup(func() { maxPanelGet = old })
+			code, dir, stderr := runReviewers(t, tc.handler, []int{1}, tc.token)
+			if code != tc.wantCode {
+				t.Errorf("exit = %d, want %d; stderr: %s", code, tc.wantCode, stderr)
+			}
+			if got := filesIn(t, dir); len(got) != 0 {
+				t.Errorf("files written: %v", got)
+			}
+			if strings.Contains(stderr, token) {
+				t.Error("the token is in stderr")
+			}
+			if tc.wantCode != 0 && stderr == "" {
+				t.Error("a failure printed nothing")
+			}
+		})
+	}
+}
+
+// A server that does not answer in time fails the command.
+func TestGetReviewersTimeout(t *testing.T) {
+	old := getReviewersTimeout
+	getReviewersTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { getReviewersTimeout = old })
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	code, dir, stderr := runReviewers(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}, []int{1}, "secret-run-token")
+	if code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+	if got := filesIn(t, dir); len(got) != 0 {
+		t.Errorf("files written: %v", got)
+	}
+	if strings.Contains(stderr, "secret-run-token") {
+		t.Error("the token is in stderr")
+	}
+}
+
+// A 500 retries 3 times, then fails.
+func TestGetReviewersServerErrorIsTried(t *testing.T) {
+	rs := &reviewerServer{statuses: map[string]int{"1": http.StatusInternalServerError}}
+	srv := rs.start(t)
+	noRetryWait(t)
 	t.Setenv("PERGENT_RESULT_TOKEN", "tok")
-	if code := runGetReviewers(context.Background(), o, io.Discard); code != 0 {
-		t.Errorf("exit = %d with no server", code)
+	o := getReviewersOptions{baseURL: srv.URL + "/runs/r1/reviewers", reviewers: []int{1}, dir: t.TempDir()}
+	if code := runGetReviewers(context.Background(), o, io.Discard); code != 1 {
+		t.Errorf("exit = %d", code)
 	}
-	if entries, _ := os.ReadDir(o.dir); len(entries) != 0 {
-		t.Errorf("files written: %v", entries)
+	if rs.tries["1"] != panelTries {
+		t.Errorf("tries = %d, want %d", rs.tries["1"], panelTries)
+	}
+}
+
+// 200 and 404 exits 0 with one file. 200, 404 and 500 exits 1, and the files
+// of the reviewers that did answer stay (the Job fails anyway).
+func TestGetReviewersMixed(t *testing.T) {
+	handler := func(statuses map[string]int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			n := strings.TrimPrefix(r.URL.Path, "/runs/r1/reviewers/")
+			code := http.StatusOK
+			if c, ok := statuses[n]; ok {
+				code = c
+			}
+			w.WriteHeader(code)
+			if code == http.StatusOK {
+				_, _ = io.WriteString(w, `{"reviewer":`+n+`}`)
+			}
+		}
+	}
+	code, dir, _ := runReviewers(t, handler(map[string]int{"2": 404}), []int{1, 2}, "tok")
+	if code != 0 || !slices.Equal(filesIn(t, dir), []string{"reviewer-1.json"}) {
+		t.Errorf("200+404: exit = %d, files = %v", code, filesIn(t, dir))
+	}
+	code, _, _ = runReviewers(t, handler(map[string]int{"2": 404, "3": 500}), []int{1, 2, 3}, "tok")
+	if code != 1 {
+		t.Errorf("200+404+500: exit = %d, want 1", code)
 	}
 }

@@ -211,7 +211,7 @@ func TestBuildJudgeJob(t *testing.T) {
 	if p.Inputs.Previous == nil || p.Inputs.CIResults == nil || len(p.LinkedClones) != 1 || p.Timeout != 25*time.Minute || !p.SkipSkillVerify {
 		t.Error("BuildJob changed the caller's params")
 	}
-	// pergent's --timeout is the judge's, whatever the review's was.
+	// Model B's env is never set on a judge Job.
 	if _, ok := envValue(pergent.Env, "PERGENT_PANEL_B_MODEL"); ok {
 		t.Error("model B is set")
 	}

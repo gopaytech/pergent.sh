@@ -144,7 +144,8 @@ type JobParams struct {
 	ReviewMemberID, Reviewer string
 	// Judge makes the Job a multi review's judge (pergent agent
 	// --multi-review): its init container fetches the reviewer results, and
-	// LLM is the judge's model. Nil leaves the Job a review.
+	// LLM is the judge's model. Nil leaves the Job a review. Never set it
+	// together with Panel.
 	Judge *JudgeParams
 }
 
