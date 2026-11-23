@@ -492,8 +492,13 @@ func TestReviewNoResultIsWasted(t *testing.T) {
 	if len(m.NoResult) != 1 || m.NoResult[0].Reviews != 1 {
 		t.Errorf("no result = %+v; want the review once", m.NoResult)
 	}
-	if len(m.Tokens) != 1 || m.Tokens[0].Tokens.In != 150 {
-		t.Errorf("tokens = %+v; want the reviewers' 150 kept", m.Tokens)
+	// The tokens are kept, each reviewer's on its own model (Ruling P62).
+	byModel := map[string]int64{}
+	for _, tt := range m.Tokens {
+		byModel[tt.Model] += tt.Tokens.In
+	}
+	if len(byModel) != 2 || byModel["m1"] != 100 || byModel["m2"] != 50 {
+		t.Errorf("tokens = %+v; want the reviewers' 150 kept, 100 on m1 and 50 on m2", m.Tokens)
 	}
 }
 
@@ -539,4 +544,131 @@ func usageOf(t *testing.T, s *Store, id, skill string) (usageRow, bool) {
 		return usageRow{}, false
 	}
 	return u, true
+}
+
+// Ruling P62: reviewer 1 runs on a team entry, reviewers 2 and 3 and the
+// judge on global entries. run_usage books all 4 Jobs on reviewer 1's team
+// source and model, so the counts by source and by model read
+// run_usage_by_model: the instance quota sees only the global Jobs, and each
+// view counts each Job on its own source and model. A plain review on a
+// global entry counts as before.
+func TestMultiReviewUsageSplitBySource(t *testing.T) {
+	s := newStore(t)
+	id, ms := multiReviewWithEntries(t, s, mr1, "a1", 3)
+	// The split run is on reviewer 1's entry: team 4's.
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET model_source = 'team', model_team_id = 4, model_entry_id = 'e1',
+		model_entry_name = 'team-1', provider = 'p1', model = 'm1' WHERE id = $1::uuid`, id); err != nil {
+		t.Fatal(err)
+	}
+	entries := []RunEntry{
+		{Source: SourceTeam, ID: "e1", Name: "team-1", TeamID: 4, Position: 1, Length: 1},
+		{Source: SourceGlobal, ID: "e2", Name: "main-2", Position: 1, Length: 1},
+		{Source: SourceGlobal, ID: "e3", Name: "main-3", Position: 1, Length: 1},
+	}
+	tokens := []SkillUsage{{Skill: "security", In: 100, Out: 10}, {Skill: "security", In: 50, Out: 5}, {Skill: "security", In: 30, Out: 3}}
+	for i, m := range ms {
+		k := strconv.Itoa(i + 1)
+		if err := s.SetReviewMemberEntry(ctx, m.ID, entries[i], "p"+k, "m"+k); err != nil {
+			t.Fatal(err)
+		}
+		doneReviewer(t, s, m.ID, `{"status":"completed"}`)
+		if err := s.RecordReviewMemberUsage(ctx, m.ID, []SkillUsage{tokens[i]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	judge := RunEntry{Source: SourceGlobal, ID: "jg", Name: "judge-main", Position: 1, Length: 1}
+	judgeRun(t, s, id, JudgeRow{Reviewers: []int{1, 2, 3}, Provider: "pj", Model: "judge-m", Entry: judge})
+	if err := s.RecordJudgeUsage(ctx, id, []SkillUsage{{Skill: "security", Verdict: "no_blocking_issues", In: 20, Out: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	// A plain review on a global entry, model "plain-m".
+	plain := enqueue(t, s, mr2, "b1")
+	if err := s.SetRunEntry(ctx, plain, RunEntry{Source: SourceGlobal, ID: "g", Name: "plain", Position: 1, Length: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET provider = 'pp', model = 'plain-m' WHERE id = $1::uuid`, plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordUsage(ctx, plain, []SkillUsage{{Skill: "security", Verdict: "no_blocking_issues", In: 7, Out: 1}}); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		team   = 110          // reviewer 1
+		global = 55 + 33 + 22 // reviewers 2 and 3, the judge
+		plainT = 8
+	)
+	since := t0.Add(-24 * time.Hour)
+	if n, err := s.InstanceGlobalTokensSince(ctx, mr1.Instance, since); err != nil || n != global+plainT {
+		t.Errorf("InstanceGlobalTokensSince = %d, %v; want %d", n, err, global+plainT)
+	}
+	if g, tm, err := s.UsageBySource(ctx, mr1.Instance, mr1.ProjectID, since); err != nil || g != global+plainT || tm != team {
+		t.Errorf("UsageBySource = %d global, %d team, %v; want %d and %d", g, tm, err, global+plainT, team)
+	}
+	repos, err := s.UsageByRepository(ctx, since)
+	if err != nil || len(repos) != 1 {
+		t.Fatalf("UsageByRepository = %+v, %v", repos, err)
+	}
+	if r := repos[0]; r.GlobalTokens != global+plainT || r.TeamTokens != team || r.Tokens.In+r.Tokens.Out != team+global+plainT || r.Reviews != 2 {
+		t.Errorf("UsageByRepository = %+v; want %d global, %d team, 2 reviews", r, global+plainT, team)
+	}
+	models, err := s.UsageByModel(ctx, mr1.Instance, mr1.ProjectID, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotModels := map[string]int64{}
+	for _, m := range models {
+		gotModels[m.Provider+"/"+m.Name] += m.Tokens.In + m.Tokens.Out
+	}
+	wantModels := map[string]int64{"p1/m1": 110, "p2/m2": 55, "p3/m3": 33, "pj/judge-m": 22, "pp/plain-m": 8}
+	if len(gotModels) != len(wantModels) {
+		t.Errorf("UsageByModel = %v; want %v", gotModels, wantModels)
+	}
+	for k, v := range wantModels {
+		if gotModels[k] != v {
+			t.Errorf("UsageByModel[%s] = %d; want %d (all: %v)", k, gotModels[k], v, gotModels)
+		}
+	}
+	mt, err := s.MetricsTotals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotMetric := map[string]int64{}
+	for _, tt := range mt.Tokens {
+		gotMetric[tt.Model] += tt.Tokens.In + tt.Tokens.Out
+	}
+	wantMetric := map[string]int64{"m1": 110, "m2": 55, "m3": 33, "judge-m": 22, "plain-m": 8}
+	if len(gotMetric) != len(wantMetric) {
+		t.Errorf("MetricsTotals tokens by model = %v; want %v", gotMetric, wantMetric)
+	}
+	for k, v := range wantMetric {
+		if gotMetric[k] != v {
+			t.Errorf("MetricsTotals tokens[%s] = %d; want %d (all: %v)", k, gotMetric[k], v, gotMetric)
+		}
+	}
+	// The total the repository quota reads is not split, and holds every Job.
+	if n, err := s.TokensSince(ctx, mr1.Instance, mr1.ProjectID, since); err != nil || n != team+global+plainT {
+		t.Errorf("TokensSince = %d, %v; want %d", n, err, team+global+plainT)
+	}
+}
+
+// The cache counts of 2 reviewers on one run_usage row: both sides known add
+// up (2 + 5 = 7), one side known is kept, and neither side known stays
+// unknown (usageInsertSQL).
+func TestRecordReviewMemberUsageCacheMerge(t *testing.T) {
+	s := newStore(t)
+	id, ms := multiReviewWithEntries(t, s, mr1, "a1", 2)
+	two, five := int64(2), int64(5)
+	if err := s.RecordReviewMemberUsage(ctx, ms[0].ID, []SkillUsage{{Skill: "both", CacheRead: &two}, {Skill: "one", CacheRead: &two}, {Skill: "none"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordReviewMemberUsage(ctx, ms[1].ID, []SkillUsage{{Skill: "both", CacheRead: &five}, {Skill: "one"}, {Skill: "none"}}); err != nil {
+		t.Fatal(err)
+	}
+	for skill, want := range map[string]*int64{"both": ptrTo(int64(7)), "one": ptrTo(int64(2)), "none": nil} {
+		u, ok := usageOf(t, s, id, skill)
+		if !ok || (u.cache == nil) != (want == nil) || (want != nil && *u.cache != *want) {
+			t.Errorf("%s cache_read = %v, %v; want %v", skill, u.cache, ok, want)
+		}
+	}
 }

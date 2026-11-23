@@ -74,10 +74,11 @@ func (s *Store) ReleaseQuotaNote(ctx context.Context, mr MRKey) error {
 
 // InstanceGlobalTokensSince returns the tokens (in plus out) the reviews of
 // instance used on global keys from since on, by reported_at: the instance
-// quota counts only those. A team's key is the team's spend.
+// quota counts only those. A team's key is the team's spend. A multi review
+// counts each reviewer and the judge on its own source (splitUsageSQL).
 func (s *Store) InstanceGlobalTokensSince(ctx context.Context, instance string, since time.Time) (int64, error) {
 	var n int64
-	err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(tokens_in), 0)::bigint + COALESCE(sum(tokens_out), 0)::bigint FROM run_usage
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(tokens_in), 0)::bigint + COALESCE(sum(tokens_out), 0)::bigint FROM `+splitUsageSQL+`
 		WHERE instance = $1 AND source = 'global' AND reported_at >= $2`, instance, since).Scan(&n)
 	return n, err
 }

@@ -18,6 +18,7 @@ import (
 
 	"github.com/gopaytech/pergent/graph"
 
+	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/codegraph"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 )
@@ -40,12 +41,14 @@ import (
 // judge Job (kube.BuildJob with a judge). It downloads reviewer n's result
 // from <base-url>/<n> to <dir>/reviewer-<n>.json for each n of --reviewers
 // (numbers 1 to 5), with the same code and token as get-graph, all at the
-// same time. Only a 404 means "this reviewer has no result": it writes no
-// file and the command goes on. Every other failure (a 5xx, 401, 403, a
-// redirect, a result over the limit or an empty one, a network error, the
-// time budget, a missing token) exits 1, so the judge Job fails and never
-// runs on part of the results. A lost reviewer's blocking findings must not
-// turn into a pass.
+// same time. Only a 404 that the reviewers route marks as its own (the header
+// callback.NoResultHeader: callback.NoResultValue) means "this reviewer has
+// no result": it writes no file and the command goes on. Every other failure
+// (a 404 with no mark from a pergent.sh with no such route or from a proxy,
+// a 5xx, 401, 403, a redirect, a result over the limit or an empty one, a
+// network error, the time budget, a missing token) exits 1, so the judge Job
+// fails and never runs on part of the results. A lost reviewer's blocking
+// findings must not turn into a pass.
 
 type postGraphOptions struct{ work, out, resultURL string }
 
@@ -271,8 +274,9 @@ func getGraph(ctx context.Context, o getGraphOptions, token string, client *http
 }
 
 // runGetReviewers is the get-reviewers command. It exits 0 when every
-// reviewer's result was downloaded or answered 404, and 1 for any other
-// failure, so the judge Job fails instead of merging part of the results.
+// reviewer's result was downloaded or answered a marked 404, and 1 for any
+// other failure, so the judge Job fails instead of merging part of the
+// results.
 func runGetReviewers(ctx context.Context, o getReviewersOptions, stderr io.Writer) int {
 	token := os.Getenv("PERGENT_RESULT_TOKEN")
 	if token == "" {
@@ -289,7 +293,7 @@ func runGetReviewers(ctx context.Context, o getReviewersOptions, stderr io.Write
 // getReviewers downloads each reviewer's result to <dir>/reviewer-<n>.json,
 // whole or not at all (fetchResults). Every outcome is one log line
 // per reviewer, in the order given. It reports false when any reviewer failed
-// with anything but a 404.
+// with anything but a marked 404.
 func getReviewers(ctx context.Context, o getReviewersOptions, token string, client *http.Client, stderr io.Writer) bool {
 	base := strings.TrimRight(o.baseURL, "/")
 	var fetches []resultFetch
@@ -323,8 +327,9 @@ type resultFetch struct{ label, url, out string }
 // not use up the others' tries. A failure other than a 404, a 401, a 403, a
 // redirect or a result over the limit is tried again, up to resultTries
 // times. Every outcome is one log line per result, in the order given. It
-// returns each result's error; a 404 is a notFoundError. nonEmpty makes an
-// empty 200 a failure.
+// returns each result's error; a marked 404 is a notFoundError, and a 404
+// with no mark is a failure that is tried again. nonEmpty makes an empty 200
+// a failure.
 func fetchResults(ctx context.Context, budget time.Duration, token string, client *http.Client, stderr io.Writer, fetches []resultFetch, notFound, tooLarge string, nonEmpty bool) []error {
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
@@ -332,7 +337,7 @@ func fetchResults(ctx context.Context, budget time.Duration, token string, clien
 	var wg sync.WaitGroup
 	for i, f := range fetches {
 		d := download{url: f.url, out: f.out, token: token, max: maxResultGet, mode: 0o644,
-			notFound: notFound, tooLarge: tooLarge, nonEmpty: nonEmpty}
+			notFound: notFound, tooLarge: tooLarge, nonEmpty: nonEmpty, markedNotFound: true}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -358,6 +363,10 @@ type download struct {
 	mode               os.FileMode
 	notFound, tooLarge string // the messages of a 404 and of a file over max
 	nonEmpty           bool   // an empty 200 is a failure
+	// markedNotFound makes only a 404 with callback.NoResultHeader a
+	// notFoundError. A 404 with no mark is an old pergent.sh or a proxy, not
+	// the route's answer, so it is a failure.
+	markedNotFound bool
 }
 
 // finalError is a failure that another try would not change.
@@ -405,6 +414,10 @@ func (d download) get(ctx context.Context, client *http.Client) error {
 	}
 	defer resp.Body.Close()
 	switch {
+	case resp.StatusCode == http.StatusNotFound && d.markedNotFound &&
+		resp.Header.Get(callback.NoResultHeader) != callback.NoResultValue:
+		// Another try may reach a pergent.sh that has the route.
+		return errors.New("pergent.sh answered 404 with no no-result mark")
 	case resp.StatusCode == http.StatusNotFound:
 		return notFoundError{finalError{d.notFound}}
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden,

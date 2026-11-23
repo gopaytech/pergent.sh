@@ -19,6 +19,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/quota"
+	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -185,13 +186,12 @@ func mustJudgeRun(t *testing.T, e *e2e, id string) store.Run {
 // can hold model text) as "its review failed".
 func TestSkippedWords(t *testing.T) {
 	for in, want := range map[string]string{
-		skipQuota:                            skipQuota,
-		skipSame:                             skipSame,
-		skipNone:                             skipNone,
-		"out of quota":                       "out of quota",
-		reasonMemberRefused + "key rejected": "key rejected",
-		"the model gpt-x said no":            skipReviewFailed,
-		"":                                   skipReviewFailed,
+		skipQuota:                 skipQuota,
+		skipSame:                  skipSame,
+		skipNone:                  skipNone,
+		"out of quota":            "out of quota",
+		"the model gpt-x said no": skipReviewFailed,
+		"":                        skipReviewFailed,
 	} {
 		if got := skippedWords(in); got != want {
 			t.Errorf("skippedWords(%q) = %q; want %q", in, got, want)
@@ -540,5 +540,106 @@ func TestPublishHidesFailedReviewerModel(t *testing.T) {
 				t.Errorf("comment lacks reviewer 2's skip line in fixed words:\n%s", comment)
 			}
 		})
+	}
+}
+
+// dropReviewer is a judge body whose multi_review block marks reviewer n as
+// not usable, or leaves it out when leaveOut is true.
+func dropReviewer(t *testing.T, body []byte, n int, leaveOut bool) []byte {
+	t.Helper()
+	return editResult(t, body, func(m map[string]any) {
+		mr := m["multi_review"].(map[string]any)
+		var kept []any
+		for _, r := range mr["reviewers"].([]any) {
+			r := r.(map[string]any)
+			if int(r["number"].(float64)) == n {
+				if leaveOut {
+					continue
+				}
+				r["usable"] = false
+			}
+			kept = append(kept, r)
+		}
+		mr["reviewers"] = kept
+	})
+}
+
+// Ruling P61: the judge says reviewer 2 is not usable (or leaves it out)
+// while the store has reviewer 2 done with a result. The judge Job ran on
+// part of the results, for example after a fetch reached an old pergent.sh
+// with no reviewers route. The run takes the judge retry path (--no-judge),
+// and the same answer again is published as failed: never success, never
+// an approval.
+func TestE2EJudgeDroppedReviewerNeverPasses(t *testing.T) {
+	for _, leaveOut := range []bool{false, true} {
+		t.Run(map[bool]string{false: "not usable", true: "left out"}[leaveOut], func(t *testing.T) {
+			e := newThreeReviewers(t)
+			env := e.env
+			head := sha('a')
+			id, _ := releasedReview(t, e, head)
+			if m := memberOf(t, env, id, 2); m.State != store.MemberDone || m.Result == nil {
+				t.Fatalf("reviewer 2 = %s, result %v; want done with a result", m.State, m.Result != nil)
+			}
+			dropped := dropReviewer(t, withMultiReview(t, clean(t, head), 3), 2, leaveOut)
+			dispatch(t, env)
+			judgeJob(t, env, id)
+			e.postJudge(t, id, dropped)
+			env.GitLab.Reset()
+			publish(t, env)
+			wantFellBack(t, env, id, store.OutcomeJudgeFailed)
+			wantNothingPosted(t, env)
+
+			dispatch(t, env)
+			next := e.nextJudge(t, id)
+			wantNoJudge(t, env, next, noJudgeFailed)
+			e.postJudge(t, next, dropped)
+			publish(t, env)
+			wantFailedNeverPass(t, env, next, head)
+			if body := createdComment(t, env, 1); !strings.Contains(body, droppedReviewerReason(2)) {
+				t.Errorf("the comment lacks why the result can't be used:\n%s", body)
+			}
+		})
+	}
+}
+
+// droppedReviewer flags only a reviewer whose newest attempt is done with a
+// result. A reviewer that failed (with or without its result kept), was
+// skipped, or was used by the judge is not flagged.
+func TestDroppedReviewer(t *testing.T) {
+	res := []byte(`{}`)
+	ms := []store.ReviewMember{
+		{Reviewer: 1, State: store.MemberDone, Result: res},
+		{Reviewer: 2, State: store.MemberFailed}, // an older attempt
+		{Reviewer: 2, State: store.MemberDone, Result: res},
+		{Reviewer: 3, State: store.MemberFailed, Result: res},
+		{Reviewer: 4, State: store.MemberSkipped},
+		{Reviewer: 5, State: store.MemberDone, Result: res},
+		{Reviewer: 5, State: store.MemberFailed}, // the newest attempt failed
+	}
+	all := []int{1, 2, 3, 4, 5}
+	mr := func(rs ...result.MultiReviewer) *result.MultiReview { return &result.MultiReview{Reviewers: rs} }
+	u := func(n int, ok bool) result.MultiReviewer { return result.MultiReviewer{Number: n, Usable: ok} }
+	for _, tc := range []struct {
+		name    string
+		mr      *result.MultiReview
+		want    int
+		dropped bool
+	}{
+		{"all used", mr(u(1, true), u(2, true), u(3, true), u(4, true), u(5, true)), 0, false},
+		{"failed and skipped not usable", mr(u(1, true), u(2, true), u(3, false), u(4, false), u(5, false)), 0, false},
+		{"done reviewer not usable", mr(u(1, true), u(2, false), u(3, true)), 2, true},
+		{"done reviewer left out", mr(u(2, true), u(3, true)), 1, true},
+		{"listed twice, once not usable", mr(u(1, true), u(2, true), u(2, false)), 2, true},
+		{"no reviewers", mr(), 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if n, dropped := droppedReviewer(ms, all, tc.mr); n != tc.want || dropped != tc.dropped {
+				t.Errorf("droppedReviewer = %d, %v; want %d, %v", n, dropped, tc.want, tc.dropped)
+			}
+		})
+	}
+	// Only the judge row's reviewers count.
+	if n, dropped := droppedReviewer(ms, []int{3, 4}, mr()); dropped {
+		t.Errorf("droppedReviewer = %d, true for reviewers with no done attempt", n)
 	}
 }

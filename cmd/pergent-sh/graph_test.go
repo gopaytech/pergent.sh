@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/codegraph"
 )
 
@@ -252,6 +253,15 @@ func noRetryWait(t *testing.T) {
 	t.Cleanup(func() { resultRetryWait = old })
 }
 
+// writeStatus writes status. A 404 carries the reviewers route's no-result
+// mark, as the real route answers.
+func writeStatus(w http.ResponseWriter, status int) {
+	if status == http.StatusNotFound {
+		w.Header().Set(callback.NoResultHeader, callback.NoResultValue)
+	}
+	w.WriteHeader(status)
+}
+
 // seqServer serves /runs/r1/reviewers/<n> with the statuses given per
 // number, one per try (the last one repeats), and counts the tries.
 type seqServer struct {
@@ -275,7 +285,7 @@ func (ss *seqServer) start(t *testing.T) *httptest.Server {
 		}
 		status := list[min(ss.tries[n], len(list)-1)]
 		ss.tries[n]++
-		w.WriteHeader(status)
+		writeStatus(w, status)
 		if status == http.StatusOK {
 			_, _ = io.WriteString(w, testMemberResult)
 		}
@@ -466,7 +476,7 @@ func (rs *reviewerServer) start(t *testing.T) *httptest.Server {
 		if s, ok := rs.statuses[n]; ok {
 			status = s
 		}
-		w.WriteHeader(status)
+		writeStatus(w, status)
 		if status == http.StatusOK {
 			_, _ = io.WriteString(w, `{"reviewer":`+n+`}`+"\n")
 		}
@@ -566,12 +576,12 @@ func filesIn(t *testing.T, dir string) []string {
 	return got
 }
 
-// Only a 404 is "no result". Every other failure exits 1, writes no file for
-// that reviewer, and never prints the token.
+// Only a marked 404 is "no result". Every other failure, a 404 with no mark
+// too, exits 1, writes no file for that reviewer, and never prints the token.
 func TestGetReviewersFailures(t *testing.T) {
 	const token = "secret-run-token"
 	status := func(code int) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) }
+		return func(w http.ResponseWriter, r *http.Request) { writeStatus(w, code) }
 	}
 	for _, tc := range []struct {
 		name     string
@@ -580,6 +590,12 @@ func TestGetReviewersFailures(t *testing.T) {
 		wantCode int
 	}{
 		{"404", status(http.StatusNotFound), token, 0},
+		// An old pergent.sh with no route, or a proxy: Go's own 404.
+		{"404 with no mark", http.NotFound, token, 1},
+		{"404 with another mark", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(callback.NoResultHeader, "maybe")
+			w.WriteHeader(http.StatusNotFound)
+		}, token, 1},
 		{"500", status(http.StatusInternalServerError), token, 1},
 		{"401", status(http.StatusUnauthorized), token, 1},
 		{"403", status(http.StatusForbidden), token, 1},
@@ -652,6 +668,35 @@ func TestGetReviewersServerErrorIsTried(t *testing.T) {
 	}
 }
 
+// The mixed-version case: reviewer 2 reaches a pergent.sh with no reviewers
+// route and gets Go's plain 404 on every try. That is not "no result", so
+// the command exits 1 and the judge never runs on reviewers 1 and 3 alone.
+// The 404 is tried again, since another try may reach a new pod.
+func TestGetReviewersUnmarkedNotFoundFails(t *testing.T) {
+	noRetryWait(t)
+	var tries atomic.Int32
+	code, dir, stderr := runReviewers(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/2") {
+			tries.Add(1)
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, testMemberResult)
+	}, []int{1, 2, 3}, "tok")
+	if code != 1 {
+		t.Errorf("exit = %d, want 1; stderr: %s", code, stderr)
+	}
+	if n := tries.Load(); n != resultTries {
+		t.Errorf("tries = %d, want %d", n, resultTries)
+	}
+	if !strings.Contains(stderr, "reviewer 2: not downloaded: pergent.sh answered 404 with no no-result mark") {
+		t.Errorf("stderr = %q", stderr)
+	}
+	if got := filesIn(t, dir); slices.Contains(got, "reviewer-2.json") {
+		t.Errorf("files = %v", got)
+	}
+}
+
 // 200 and 404 exits 0 with one file. 200, 404 and 500 exits 1, and the files
 // of the reviewers that did answer stay (the Job fails anyway).
 func TestGetReviewersMixed(t *testing.T) {
@@ -662,7 +707,7 @@ func TestGetReviewersMixed(t *testing.T) {
 			if c, ok := statuses[n]; ok {
 				code = c
 			}
-			w.WriteHeader(code)
+			writeStatus(w, code)
 			if code == http.StatusOK {
 				_, _ = io.WriteString(w, `{"reviewer":`+n+`}`)
 			}

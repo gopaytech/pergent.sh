@@ -137,9 +137,11 @@ func (e *Engine) judgeRefused(ctx context.Context, run store.Run, j store.JudgeR
 }
 
 // retryJudge acts on a reported judge run with no usable result (no result,
-// a result whose status is not completed, or one that fails its checks)
-// whose review_judges row has no_judge false: EnqueueJudgeRetry. handled is
-// false otherwise, and the run is published as it is.
+// a result whose status is not completed, one that fails its checks, or one
+// that did not use a reviewer that has a result: droppedReviewer) whose
+// review_judges row has no_judge false: EnqueueJudgeRetry. handled is false
+// otherwise, and the run is published as it is: the publish fails a result
+// that is still not usable, and never posts it as a pass.
 //
 // The retry closes the run as fell_back with reason judge_failed and queues
 // the review's next attempt, whose judge runs --no-judge (resolveJudge): the
@@ -151,7 +153,14 @@ func (e *Engine) retryJudge(ctx context.Context, run store.Run, log *slog.Logger
 	if err != nil {
 		return false, fmt.Errorf("read the multi review's judge: %w", err)
 	}
-	if !found || j.NoJudge || judgeResultUsable(run) {
+	if !found || j.NoJudge {
+		return false, nil
+	}
+	usable, err := e.judgeResultUsable(ctx, run, j)
+	if err != nil {
+		return false, err
+	}
+	if usable {
 		return false, nil
 	}
 	next, created, err := e.Store.EnqueueJudgeRetry(ctx, run)
@@ -168,15 +177,28 @@ func (e *Engine) retryJudge(ctx context.Context, run store.Run, log *slog.Logger
 	return true, nil
 }
 
-// judgeResultUsable reports whether the judge run has a result the publish
-// can take: stored, completed, and passing the checks its handler made
-// (callback.CheckStored).
-func judgeResultUsable(run store.Run) bool {
+// judgeResultUsable reports whether the judge run, which judged with j, has
+// a result the publish can take: stored, completed, passing the checks its
+// handler made (callback.CheckStored), and using every reviewer that has a
+// result (droppedReviewer). A result with no multi_review block is left to
+// the publish, which fails it.
+func (e *Engine) judgeResultUsable(ctx context.Context, run store.Run, j store.JudgeRow) (bool, error) {
 	if run.Result == nil {
-		return false
+		return false, nil
 	}
 	res, _, ok := callback.CheckStored(run.Result, run)
-	return ok && res.Status == "completed"
+	if !ok || res.Status != "completed" {
+		return false, nil
+	}
+	if res.MultiReview == nil {
+		return true, nil
+	}
+	ms, err := e.Store.ReviewMembers(ctx, run.ID)
+	if err != nil {
+		return false, fmt.Errorf("read the multi review's reviewers: %w", err)
+	}
+	_, dropped := droppedReviewer(ms, j.Reviewers, res.MultiReview)
+	return !dropped, nil
 }
 
 // markOnly marks the entry the provider refused, with no next attempt: the

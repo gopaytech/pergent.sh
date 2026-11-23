@@ -915,22 +915,32 @@ func (s *Store) ReleaseMultiReview(ctx context.Context, root string, now time.Ti
 	return false, true, tx.Commit(ctx)
 }
 
-// frozenEntryName is the name, in the frozen chain, of the entry an attempt
-// ran on (position is 1-based; 0 when it never started, so the chain's first
-// entry). The name its dispatch recorded is the fallback, for an entry with
-// no frozen name.
-func frozenEntryName(chain []byte, position int, recorded string) string {
-	var c FrozenChain
-	if chain != nil && json.Unmarshal(chain, &c) == nil && len(c.Entries) > 0 {
-		i := 0
-		if position >= 1 && position <= len(c.Entries) {
-			i = position - 1
-		}
-		if c.Entries[i].Name != "" {
-			return c.Entries[i].Name
-		}
+// EntryName is the name, in its frozen chain, of the entry attempt m ran on
+// (Entry.Position, 1-based); the name its dispatch recorded when the frozen
+// chain has none there; the chain's first entry when it never started. The
+// MR comment, the failure text and the run page all name an attempt by it,
+// so they never differ.
+func (m ReviewMember) EntryName() string {
+	if p := m.Entry.Position; p >= 1 && p <= len(m.Chain.Entries) && m.Chain.Entries[p-1].Name != "" {
+		return m.Chain.Entries[p-1].Name
 	}
-	return recorded
+	if m.Entry.Name != "" {
+		return m.Entry.Name
+	}
+	if len(m.Chain.Entries) > 0 {
+		return m.Chain.Entries[0].Name
+	}
+	return ""
+}
+
+// frozenEntryName is EntryName of an attempt read as raw columns: its frozen
+// chain's JSON, its position and the name its dispatch recorded.
+func frozenEntryName(chain []byte, position int, recorded string) string {
+	m := ReviewMember{Entry: RunEntry{Position: position, Name: recorded}}
+	if chain != nil {
+		_ = json.Unmarshal(chain, &m.Chain) // a bad chain names by the recorded name
+	}
+	return m.EntryName()
 }
 
 // WaitForReviewMembers puts the claimed run id, which has no Job yet, back
@@ -1064,28 +1074,16 @@ func (s *Store) AdvanceReviewMemberCheckoutSeen(ctx context.Context, id string, 
 	return err
 }
 
-// ReviewerResult is the result reviewer n (1 to 5) gives the judge run runID:
-// that of the newest attempt of reviewer n of runID's review that is done,
-// or failed with its result kept (never fell_back), when token is run
+// ReviewerResultAuth is the result reviewer n (1 to 5) gives the judge run
+// runID: that of the newest attempt of reviewer n of runID's review that is
+// done, or failed with its result kept (never fell_back), when token is run
 // runID's live result token: the run is running and the token, checked
 // against the stored SHA-256 in constant time, has not expired. The token is
-// not spent. Every refusal (a bad token, an unknown run, a reviewer with no
-// such attempt) is (nil, false, nil).
-func (s *Store) ReviewerResult(ctx context.Context, runID, token string, reviewer int) ([]byte, bool, error) {
-	return s.ReviewerResultAt(ctx, runID, token, reviewer, time.Now())
-}
-
-// ReviewerResultAt is ReviewerResult with the token's expiry checked at now.
-func (s *Store) ReviewerResultAt(ctx context.Context, runID, token string, reviewer int, now time.Time) ([]byte, bool, error) {
-	body, _, found, err := s.ReviewerResultAuthAt(ctx, runID, token, reviewer, now)
-	return body, found, err
-}
-
-// ReviewerResultAuth is ReviewerResult that also tells a refused token from
-// a reviewer with no result. authed is false for a bad or missing token, a
-// run with no stored token yet, an expired token, a run that is not
-// running, an unknown run, and a reviewer number outside 1 to 5. found is
-// true only when authed is true and the reviewer has a result.
+// not spent. It tells a refused token from a reviewer with no result: authed
+// is false for a bad or missing token, a run with no stored token yet, an
+// expired token, a run that is not running, an unknown run, and a reviewer
+// number outside 1 to 5. found is true only when authed is true and the
+// reviewer has a result.
 func (s *Store) ReviewerResultAuth(ctx context.Context, runID, token string, reviewer int) (body []byte, authed, found bool, err error) {
 	return s.ReviewerResultAuthAt(ctx, runID, token, reviewer, time.Now())
 }

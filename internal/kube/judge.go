@@ -129,8 +129,10 @@ func mrDismissalsData(jp *JudgeParams) string {
 }
 
 // reviewersContainer is the judge Job's reviewers init container:
-// pergent.sh's own image, the result token alone, the reviewers volume alone. It
-// always exits 0; a reviewer with no result gets no file.
+// pergent.sh's own image, the result token alone, the reviewers volume alone.
+// A reviewer with no result (the route's marked 404) gets no file. On any
+// other failure it exits 1, so the judge does not run on part of the
+// results.
 func reviewersContainer(p JobParams) corev1.Container {
 	nums := make([]string, len(p.Judge.Reviewers))
 	for i, n := range p.Judge.Reviewers {
