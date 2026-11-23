@@ -467,3 +467,31 @@ func TestGeneratedHeaderPastSniff(t *testing.T) {
 		t.Errorf("all = %+v, source files %d; want 1 and 1 (line11.go)", f, got.SourceFiles)
 	}
 }
+
+// The scan counts, per built-in rule, the files its globs match that a review
+// reads: a binary or generated file is not counted. Each rule counts on its
+// own, so a file can count for several rules. A rule with no file is left
+// out, and the order is pergent's.
+func TestScanTreeBuiltInRules(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"main.go":                  "package main\n",
+		"pkg/a.go":                 "package pkg\n",
+		"gen/x.go":                 header + "package gen\n",
+		"logo.go":                  "\x00binary",
+		"deploy/app.yaml":          "a: 1\n",
+		".github/workflows/ci.yml": "on: push\n",
+		"web/package.json":         "{}\n",
+		"README.md":                "# hi\n",
+	})
+	got := scan(t, root, JobInput{Version: 1})
+	want := []BuiltInFit{{Name: "package_json", Files: 1}, {Name: "json", Files: 1}, {Name: "github_workflows", Files: 1},
+		{Name: "github_config", Files: 1}, {Name: "yaml", Files: 2}, {Name: "go", Files: 2}}
+	if fmt.Sprint(got.BuiltInRules) != fmt.Sprint(want) {
+		t.Errorf("built-in rules = %+v\nwant %+v", got.BuiltInRules, want)
+	}
+
+	if got := scan(t, tree(t, map[string]string{"README.md": "x"}), JobInput{Version: 1}); got.BuiltInRules != nil {
+		t.Errorf("no matching file: built-in rules = %+v; want none", got.BuiltInRules)
+	}
+}

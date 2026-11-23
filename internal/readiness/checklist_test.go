@@ -660,3 +660,23 @@ func TestChecklistCIAccessItems(t *testing.T) {
 		t.Errorf("ci_actions passed = %+v; want no advice", a)
 	}
 }
+
+// Suggested built-in rules are the ones whose globs match files and that the
+// repository has not chosen, most files first, then by name.
+func TestChecklistSuggestedBuiltInRules(t *testing.T) {
+	t.Parallel()
+	in := goodInput()
+	in.BuiltInRules = []string{"sql"}
+	in.Job.BuiltInRules = []BuiltInFit{{Name: "go", Files: 4}, {Name: "yaml", Files: 9}, {Name: "json", Files: 0},
+		{Name: "ts_js", Files: 9}, {Name: "sql", Files: 20}}
+	got := BuildChecklist(in).SuggestedBuiltInRules
+	want := []BuiltInFit{{Name: "ts_js", Files: 9}, {Name: "yaml", Files: 9}, {Name: "go", Files: 4}}
+	if !slices.Equal(got, want) {
+		t.Errorf("SuggestedBuiltInRules = %+v, want %+v (chosen and no-file rules are not suggested)", got, want)
+	}
+
+	in.Job = nil
+	if got := BuildChecklist(in).SuggestedBuiltInRules; got != nil {
+		t.Errorf("no file result: SuggestedBuiltInRules = %+v, want none", got)
+	}
+}
