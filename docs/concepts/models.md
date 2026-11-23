@@ -158,7 +158,7 @@ Each entry of a chain shows its state:
 | `team no longer owns this repository` | A team entry in the chain of a repository its team doesn't own now |
 | `key can't be read` | No key, or `PERGENT_SH_SECRET_KEY` changed. Enter the key again. |
 | `model limit used up` | Its model limit is used up this month ([Model and team limits](token-quota.md#model-and-team-limits)) |
-| `team limit used up` | The owner team's limit on it is used up this month; on a team's chain, that team's |
+| `team limit used up` | The owner team's limit on it is used up this month. On a team's chain, it is that team's limit. |
 
 ### Review API
 
