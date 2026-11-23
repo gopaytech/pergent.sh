@@ -435,14 +435,15 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	// (the resolver holds when nothing else is left). A run asked for is
 	// held by neither, but still runs on a team's entry when one is left
 	// under a used-up instance quota: that is why it was let start (owner
-	// ruling 2026-11-20).
+	// ruling 2026-11-20). The resolver also stops entries at their model or
+	// team limit, and holds when only quotas and limits are left.
 	askedFor := run.QuotaChecked || run.Trigger == store.TriggerStart
 	repoUsedUp, instanceUsedUp, err := quota.Check(ctx, e.Store, e.now(), run.MR.Instance, run.MR.ProjectID, repo)
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("read the token quota: %w", err))
 	}
 	if repoUsedUp && !askedFor && d.stage == stageReview {
-		return d.holdForQuota(ctx, plat)
+		return d.holdForQuota(ctx, plat, false)
 	}
 	// The model is picked from the chain in effect, read now, so an edit made
 	// meanwhile is what runs. It falls back only on what the provider said
@@ -475,7 +476,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		e.warnEvery("no-llm", msgNoLLM)
 		return d.postpone(ctx, e.now().Add(waitDelay))
 	case dec.Hold:
-		return d.holdForQuota(ctx, plat)
+		return d.holdForQuota(ctx, plat, dec.Limited)
 	case dec.Exhausted:
 		return d.failExhausted(ctx, dec)
 	}

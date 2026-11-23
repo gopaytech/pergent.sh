@@ -61,10 +61,36 @@ Usage is counted from the 1st, so the quota has room again with nothing to reset
 
 Admins only. The repository page shows `Tokens this month: <used> of <quota>` with a bar for a repository with a quota, and the instance's line under it when the instance has one. The instance's line, here and on **Integrations**, counts global keys only, as its quota does. **Integrations** shows the same on each instance with a quota. The bar is **amber from 80%** and **red when used up**. A repository or instance with no quota shows its usage without a bar. The [Usage](usage.md) pages show rolling days and have no quota column.
 
+## Model and team limits
+
+A quota caps a repository or an instance. A **limit** caps one model entry. Limits are optional: with none set, nothing changes.
+
+| Limit | Set by | Counts | When it is used up |
+| --- | --- | --- | --- |
+| Model limit | An admin, on a global entry (the config file's entries too) | Every token on the entry, on every instance and repository, API reviews included | Reviews skip the entry |
+| Team limit on a global entry | An admin, whether teams may use the entry or not | Tokens on the entry in the repositories the team owns | Those repositories skip the entry |
+| Team limit on a team entry | The team's maintainers, or an admin | Tokens on the team's entry | Reviews skip the entry |
+
+- Each limit is its own number, from 1 to 1,000,000,000,000,000. An entry is skipped when any limit on it is used up. A team limit may be larger than the model limit: then the model limit stops the entry first.
+- **The owner team** is the one models use ([Models](models.md#the-owner-team)). Each usage row keeps the owner team it had when the review finished, so a repository that moves to another team leaves its earlier tokens with the old team. A repository with no owner team, and an API review, has no team limit.
+- Usage is the same measure as the quotas: input plus output tokens of reviews that finished in the current UTC month, dropped attempts included, on the entry that spent them. A review panel counts each Job on its own entry. A known gap: Job P's tokens count on no entry when its result has no split per model.
+- **The check** runs where the chain picks an entry, after the quotas. A review skips an entry at its limit and runs on the next one. A chain of 1 entry ignores marks, not limits: at its limit it is held.
+- **When only the quotas and the limits stop the entries a review has not tried yet**, it is held as for a used-up quota: the same pending status and note, which name no limit and no number. The API gives the change waiting for a start the reason `limit_used_up` (`quota_used_up` when only quotas stopped it). When a mark or an unusable key is part of it, the review fails with `all models exhausted:`, such as `all models exhausted: main (out of quota), backup (team limit used up)`.
+- **A request by hand** (`@<bot> review`, a maintainer's **Re-run** or **Start review**) asks the chain the same way, and is refused with `the monthly token quota is used up` when the quotas and the limits leave no entry with room.
+- **An admin's Start review or Re-run** runs on the first entry with room. When none has room, it goes past the model limits and the team limits on global entries, and runs on the first global entry with no mark. It does not go past a team's own limit on its team entry, which is the team's money: when nothing else is left, the button answers 409 `every model of the chain is at the team's own limit: a maintainer of <team> can raise it on the team page`.
+- **A review asked for with room left** goes past the admin limits in the same way if they run out before it is dispatched. If only a team's own limit is left by then, it fails with `all models exhausted:`.
+- **API reviews** count toward the model limit and no team limit. An API review skips an entry at its model limit, and one with no entry left, or whose pinned model is at its limit, fails with `all models exhausted:`.
+- **Chain B** skips an entry at its limit. When no entry of chain B is left, the panel is off for that review with `the token quota stopped model B`, and the review runs on chain A alone. Job P's judge does not check limits: it ends a review that has started.
+- A limit lowered below its usage stops the entry at the next dispatch. A limit raised or removed has room at once, but a held change waits for its next push, a command or an admin's start.
+- **In the upgrade month**, team limits count only the reviews that finish after the upgrade, because older usage rows have no owner team. Model limits count the whole month.
+- **When the usage can't be read** at dispatch, the dispatch is tried again with the usual backoff, and then the review fails. No review starts unchecked. A limit can be overshot, as a quota can.
+- Setting and removing a limit is audited as `model_limit_set` and `model_limit_cleared`, with the entry's name, the team (or `all teams`) and the number, such as `main for Payments: monthly_tokens=5000000`.
+- The routes are in [HTTP routes](../reference/http-routes.md). There is no config-file key for limits.
+
 ## Good to know
 
 - **The quota can be overshot.** A review's size is known only after it runs, so the check doesn't predict it. A review that starts with a little room left can take the month past the quota, and reviews started together before any of them reports can all start. A review that was asked for with room left runs even if the quota is used up before it is dispatched. A review already running when the quota runs out finishes and is published as usual.
 - **A known limit of the instance quota with a review panel.** The instance quota counts tokens by the source of the entry the run was started on (`global` or `team`). It does not look at the entry of each Job. Member B's tokens, and all of Job P's, count under the run's source, even when B or a judge used a key of the other source. So the instance quota can count some tokens as global when a team key paid, or as team when a global key paid. The repository quota counts every token on any key, so it is not affected. This is not fixed in this release.
 - **A known gap.** The quota counts the tokens recorded in [Usage](usage.md). A Job with no result (timeout, out of memory, deleted) and a superseded review count as zero.
 - **When the usage can't be read** (a database error) at dispatch, the dispatch is tried again with the usual backoff, and then the review fails as any dispatch does. No review starts unchecked, and none passes.
-- **Rolling back removes the quota.** The previous release has no quotas and ignores them. During a rolling upgrade its replicas start reviews without the check. A held change is not picked up by the previous release by itself, but its **Start review** and a writer's `review` command can start one. See [Upgrading](../upgrading.md).
+- **Rolling back removes the quota and the limits.** The previous release has no quotas or limits and ignores them. During a rolling upgrade its replicas start reviews without the check. A held change is not picked up by the previous release by itself, but its **Start review** and a writer's `review` command can start one. See [Upgrading](../upgrading.md).

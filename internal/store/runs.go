@@ -50,6 +50,11 @@ const (
 	WaitCheckFailed = "trust_check_failed"
 	// WaitQuota: the repository's monthly token quota is used up.
 	WaitQuota = "quota_used_up"
+	// WaitLimit: the monthly token quotas and limits stop every entry of the
+	// run's chain, and a model limit or a team limit is one of them. It is
+	// held, noted and started as WaitQuota is; only the dashboard tells them
+	// apart.
+	WaitLimit = "limit_used_up"
 	// WaitCIPending: the CI jobs the repository chose are still running;
 	// Run.CIDeadline is when the run stops waiting for them.
 	WaitCIPending = "ci_pending"

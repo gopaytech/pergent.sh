@@ -126,6 +126,21 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 			return d.fail(ctx, reasonClientModel)
 		}
 	}
+	if d.stage == stageReview && client.ModelID != "" {
+		// A pinned model is a chain of 1 (chainA): its model limit stops it,
+		// and an API review is never held, so it fails. The entry is kept so
+		// the run records it and its tokens count toward that limit.
+		in, err := d.chainA(ctx, settings.Effective{})
+		if err != nil {
+			return d.retry(ctx, fmt.Errorf("read the model chain: %w", err))
+		}
+		dec := chain.Resolve(in)
+		if dec.Hold {
+			d.log.Warn("the model chosen for this API client is at its model limit", "model_id", client.ModelID)
+			return d.fail(ctx, chain.FailureText(dec))
+		}
+		d.entry, d.scope = dec, in.Scope
+	}
 	// There is no fallback within the review, nor for a member: the run's
 	// inputs are gone once its Job has them, and a member that fails leaves
 	// Job P the other.

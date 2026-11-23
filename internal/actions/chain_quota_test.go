@@ -13,10 +13,22 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
-// teamChainModels is a registry over st where a team owns main/acme/web and
-// its chain is a global entry teams may use, then (with teamEntry) the
-// team's own entry with its key.
+// teamChainModels is the registry of newChainModels.
 func teamChainModels(t *testing.T, st *store.Store, teamEntry bool) *instances.Registry {
+	t.Helper()
+	return newChainModels(t, st, teamEntry).reg
+}
+
+// chainModels is a registry over st where team Payments owns main/acme/web
+// and its chain is the global entry "global" (teams may use it), then, with
+// teamEntry, the team's own "team-a"; and the team and refs.
+type chainModels struct {
+	reg         *instances.Registry
+	team        int64
+	global, own store.EntryRef // own is zero without the team entry
+}
+
+func newChainModels(t *testing.T, st *store.Store, teamEntry bool) chainModels {
 	t.Helper()
 	k := make([]byte, 32)
 	if _, err := rand.Read(k); err != nil {
@@ -41,14 +53,16 @@ func teamChainModels(t *testing.T, st *store.Store, teamEntry bool) *instances.R
 	if err != nil {
 		t.Fatal(err)
 	}
-	refs := []store.EntryRef{{Source: store.SourceGlobal, ID: g.ID}}
+	out := chainModels{team: team.ID, global: store.EntryRef{Source: store.SourceGlobal, ID: g.ID}}
+	refs := []store.EntryRef{out.global}
 	if teamEntry {
 		m, err := st.CreateTeamModel(ctx, store.TeamModel{TeamID: team.ID, Name: "team-a", Provider: "openai", Model: "gpt-a",
 			APIKeySealed: box.Seal([]byte("key-team-a"))}, quotaNow)
 		if err != nil {
 			t.Fatal(err)
 		}
-		refs = append(refs, store.EntryRef{Source: store.SourceTeam, ID: m.ID})
+		out.own = store.EntryRef{Source: store.SourceTeam, ID: m.ID}
+		refs = append(refs, out.own)
 	}
 	if err := st.SaveChain(ctx, store.Chain{Scope: store.ScopeTeam, TeamID: team.ID, Entries: refs}, quotaNow); err != nil {
 		t.Fatal(err)
@@ -57,7 +71,8 @@ func teamChainModels(t *testing.T, st *store.Store, teamEntry bool) *instances.R
 	if err := reg.LoadLLM(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return reg
+	out.reg = reg
+	return out
 }
 
 // instanceQuotaRepo is main/acme/web with its instance's quota of 10 tokens

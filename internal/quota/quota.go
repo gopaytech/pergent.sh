@@ -2,7 +2,8 @@
 // quota is used up. The month is the calendar month in UTC, and what counts
 // is the tokens (in plus out) the reviews reported in it: every token for a
 // repository, only those spent on global keys for an instance (a team pays
-// for its own).
+// for its own). For model limits it also answers which entries a model limit
+// or a team limit stops (limits.go).
 package quota
 
 import (

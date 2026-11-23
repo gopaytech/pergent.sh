@@ -15,12 +15,23 @@ import (
 // its flag: the previous release makes starts without it. ok is false when the
 // run was in another state or unknown; a malformed id is an error.
 func (s *Store) HoldForQuota(ctx context.Context, id string) (ok bool, err error) {
+	return s.holdFor(ctx, id, WaitQuota)
+}
+
+// HoldForLimit is HoldForQuota with the reason WaitLimit: a model limit or a
+// team limit took part.
+func (s *Store) HoldForLimit(ctx context.Context, id string) (ok bool, err error) {
+	return s.holdFor(ctx, id, WaitLimit)
+}
+
+// holdFor is HoldForQuota's hold, with reason.
+func (s *Store) holdFor(ctx context.Context, id, reason string) (bool, error) {
 	if !validUUID(id) {
 		return false, fmt.Errorf("store: run %q not found", id)
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'waiting', skip_reason = $2
 		WHERE id = $1::uuid AND state IN ('queued', 'running') AND dispatched_at IS NULL AND NOT quota_checked
-		  AND trigger <> 'start'`, id, WaitQuota)
+		  AND trigger <> 'start'`, id, reason)
 	if err != nil {
 		return false, err
 	}
