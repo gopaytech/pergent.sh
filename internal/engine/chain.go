@@ -126,6 +126,6 @@ func (d *dispatcher) runningText() string {
 // a run somebody asked for: they let the review start, not a second model.
 func (d *dispatcher) resolveB(in chain.Input, instanceUsedUp bool) chain.Decision {
 	in.InstanceQuotaUsedUp = instanceUsedUp
-	in.Avoid = chain.SameModel{Provider: d.provider, Model: d.model}
+	in.Avoid = []chain.SameModel{{Provider: d.provider, Model: d.model}}
 	return chain.Resolve(in)
 }

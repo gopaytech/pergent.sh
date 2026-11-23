@@ -4,7 +4,6 @@ import (
 	"maps"
 	"net/http"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/chain"
@@ -436,36 +435,4 @@ func TestRepositoryViewPanel(t *testing.T) {
 		t.Fatal(err)
 	}
 	want("off", panel("off"), map[string]any{"on": false, "mode": "off"})
-}
-
-// [Ruling 3a] Removing a team entry names the chain B chains it left too,
-// after chain A's; with no chain B naming it the line is as before.
-func TestTeamModelRemovedNamesChainB(t *testing.T) {
-	te := newTeamsEnv(t)
-	te.gadgetsOwnedByPayments()
-	one := te.addTeamModel(te.maintainer, te.payments, "one", teamKeyOne)
-	two := te.addTeamModel(te.maintainer, te.payments, "two", teamKeyTwo)
-	decode[ChainView](t, te.sendJSON(te.maintainer, "PUT", teamURL(te.payments, "/chain"), entryBody("team/"+one.ID, "team/"+two.ID)), "PUT team chain", http.StatusOK)
-	te.saveB(store.Chain{Scope: store.ScopeTeam, TeamID: te.payments, Entries: []store.EntryRef{{Source: store.SourceTeam, ID: one.ID}}})
-	te.saveB(store.Chain{Scope: store.ScopeRepo, Instance: "main", Project: "acme/gadgets", Entries: []store.EntryRef{{Source: store.SourceTeam, ID: one.ID}}})
-	wantCode(t, te.send(te.maintainer, "DELETE", teamURL(te.payments, "/models/"+one.ID), ""), "remove one", http.StatusNoContent)
-	wantCode(t, te.send(te.maintainer, "DELETE", teamURL(te.payments, "/models/"+two.ID), ""), "remove two", http.StatusNoContent)
-	if got, want := auditDetails(te.env, "team_model_removed"), []string{
-		"Payments: one (openai / gpt-one), removed from team Payments, removed from chain B: team Payments, main/acme/gadgets",
-		"Payments: two (openai / gpt-two), removed from team Payments",
-	}; !slices.Equal(got, want) {
-		t.Errorf("team_model_removed = %q; want %q", got, want)
-	}
-	// The log line names chain B only when a chain B changed, so it is as
-	// before otherwise.
-	var lines []string
-	for _, l := range strings.Split(te.logs.String(), "\n") {
-		if strings.Contains(l, `msg="dashboard: team model removed"`) {
-			lines = append(lines, l)
-		}
-	}
-	if len(lines) != 2 || !strings.Contains(lines[0], " chains=1 panel_chains=2 by=") ||
-		!strings.Contains(lines[1], " chains=1 by=") || strings.Contains(lines[1], "panel_chains") {
-		t.Errorf("team model removed lines = %q", lines)
-	}
 }

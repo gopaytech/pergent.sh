@@ -6984,8 +6984,12 @@ components:
           description: The run's outcome; `fell_back` for a dropped attempt, empty while it runs.
         reason:
           type: string
-          enum: ['', quota, billing, auth]
-          description: Why a dropped attempt fell back; empty otherwise.
+          enum: ['', quota, billing, auth, judge_failed]
+          description: |
+            Why a dropped attempt fell back: the class the provider refused
+            its entry on (quota, billing, auth), or `judge_failed` for a
+            multi review's judge run that crashed or gave no usable answer
+            (its next attempt runs with no judge). Empty otherwise.
     APILimitsView:
       description: The caps on a client's requests.
       type: object
