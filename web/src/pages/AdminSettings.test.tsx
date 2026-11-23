@@ -19,6 +19,8 @@ import {
   operator,
   ruleSets,
   ssoAdmin,
+  teamEmpty,
+  teamPayments,
   viewer,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
@@ -1106,8 +1108,11 @@ describe("AdminSettings models", () => {
     renderApp("/admin/settings");
     const row = await entry("anthropic/claude-sonnet");
     expect(row).toHaveTextContent("from the config file");
-    // Only its limit can be changed here.
-    expect(within(row).getAllByRole("button").map((e) => e.getAttribute("aria-label"))).toEqual(["Save the model limit of anthropic/claude-sonnet"]);
+    // Only its limits can be changed here: the model limit and the team limits (the fold button has no label).
+    expect(within(row).getAllByRole("button").map((e) => e.getAttribute("aria-label") ?? e.textContent)).toEqual([
+      "Save the model limit of anthropic/claude-sonnet",
+      "Team limits (0)",
+    ]);
     expect(within(row).queryByRole("switch")).not.toBeInTheDocument();
     // The config's llm: block is the default, but entries can still be
     // added, changed and removed.
@@ -1152,6 +1157,82 @@ describe("AdminSettings models", () => {
     fakeApi({ ...routes(operator), "GET /api/admin/models": { status: 500, body: { error: "boom" } } });
     renderApp("/admin/settings");
     expect(await screen.findByText("boom")).toBeInTheDocument();
+  });
+});
+
+describe("AdminSettings team limits", () => {
+  const opusLimited: ModelAdminView = { ...modelOpus, limit: 5000, used: 4200, teamLimits: [{ teamId: 2, team: "Payments", limit: 400, used: 350 }] };
+  const page = (extra: Parameters<typeof fakeApi>[0] = {}) =>
+    fakeApi({
+      ...routes(operator),
+      "GET /api/admin/models": { body: { ...models, models: [modelSonnet, opusLimited] } },
+      "GET /api/teams": { body: [teamPayments, teamEmpty] },
+      ...extra,
+    });
+  // open unfolds the team limits of the entry name and returns the list.
+  const open = async (name: string) => {
+    const row = await screen.findByRole("group", { name });
+    await userEvent.click(within(row).getByRole("button", { name: /^Team limits/ }));
+    return within(row).getByRole("group", { name: `Team limits on ${name}` });
+  };
+
+  it("folds the team limits until opened, then lists each with its team's tokens", async () => {
+    const fake = page();
+    renderApp("/admin/settings");
+    const row = await screen.findByRole("group", { name: "Claude Opus" });
+    const toggle = within(row).getByRole("button", { name: "Team limits (1)" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(row).queryByRole("group", { name: "Team limits on Claude Opus" })).not.toBeInTheDocument();
+    // The teams are read only when the list is opened.
+    expect(fake.find("GET", "/api/teams")).toHaveLength(0);
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const payments = within(within(row).getByRole("group", { name: "Team limits on Claude Opus" })).getByRole("group", { name: "Team Payments" });
+    expect(payments).toHaveTextContent("Tokens this month: 350 of 400");
+    expect(within(payments).getByRole("meter", { name: "Tokens of Payments on Claude Opus this month" })).toHaveClass("warn");
+    expect(within(payments).getByLabelText("Limit of Payments on Claude Opus")).toHaveValue("400");
+    expect(within(await screen.findByRole("group", { name: "Claude Sonnet" })).getByRole("button", { name: "Team limits (0)" })).toBeInTheDocument();
+  });
+
+  it("changes and removes a team's limit with the admin routes", async () => {
+    const fake = page({
+      "PUT /api/admin/models/m-opus/team-limits/2": { status: 204 },
+      "DELETE /api/admin/models/m-opus/team-limits/2": { status: 204 },
+    });
+    renderApp("/admin/settings");
+    const payments = within(await open("Claude Opus")).getByRole("group", { name: "Team Payments" });
+    const input = within(payments).getByLabelText("Limit of Payments on Claude Opus");
+    await userEvent.clear(input);
+    await userEvent.type(input, "800");
+    await userEvent.click(within(payments).getByRole("button", { name: "Save the limit of Payments on Claude Opus" }));
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/models/m-opus/team-limits/2")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/admin/models/m-opus/team-limits/2")[0].body).toEqual({ monthlyTokens: 800 });
+    await userEvent.click(within(payments).getByRole("button", { name: "Remove the limit of Payments on Claude Opus" }));
+    await vi.waitFor(() => expect(fake.find("DELETE", "/api/admin/models/m-opus/team-limits/2")).toHaveLength(1));
+  });
+
+  it("adds a limit for a team that has none, and offers no team twice", async () => {
+    const fake = page({ "PUT /api/admin/models/m-opus/team-limits/3": { status: 204 } });
+    renderApp("/admin/settings");
+    const list = await open("Claude Opus");
+    const pick = await within(list).findByRole("combobox", { name: "Team to limit on Claude Opus" });
+    // Payments has a limit on it already: only Platform is offered.
+    expect(within(pick).getAllByRole("option").map((o) => o.textContent)).toEqual(["Pick a team", "Platform"]);
+    const add = within(list).getByRole("button", { name: "Add a team limit on Claude Opus" });
+    await userEvent.click(add);
+    expect(within(list).getByText("Pick a team and type its limit: a whole number from 1 to 1000000000000000.")).toBeInTheDocument();
+    expect(fake.find("PUT", "/api/admin/models/m-opus/team-limits/3")).toHaveLength(0);
+    await userEvent.selectOptions(pick, "Platform");
+    await userEvent.type(within(list).getByLabelText("New team limit on Claude Opus"), "300");
+    await userEvent.click(add);
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/models/m-opus/team-limits/3")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/admin/models/m-opus/team-limits/3")[0].body).toEqual({ monthlyTokens: 300 });
+  });
+
+  it("shows the error when the teams can't be read", async () => {
+    page({ "GET /api/teams": { status: 500, body: { error: "boom" } } });
+    renderApp("/admin/settings");
+    expect(await within(await open("Claude Opus")).findByRole("alert")).toHaveTextContent("boom");
   });
 });
 

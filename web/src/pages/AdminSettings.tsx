@@ -14,6 +14,8 @@ import {
   type RuleSet,
   type ModelAdminView,
   type ModelsAdminView,
+  type TeamLimitView,
+  type TeamView,
 } from "../api";
 import ChainEditor from "../ChainEditor";
 import LimitField from "../LimitField";
@@ -23,7 +25,7 @@ import { useWrite } from "../layout/write";
 import RuleSetPicker from "../RuleSetPicker";
 import MarkBanner, { markText } from "../MarkBanner";
 import { AddModelForm, EditModelForm } from "../ModelForms";
-import { QuotaLine } from "../quota";
+import { QuotaLine, parseQuota, quotaMax } from "../quota";
 import { ErrorBox, Loading, Switch, bytesText, noFill, secretText } from "../ui";
 
 // AdminSettings holds what an admin sets for the whole of pergent.sh: the
@@ -812,6 +814,7 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
         path={paths.apiAdminModelLimit(m.id)}
         onSaved={limitsChanged}
       />
+      <ModelTeamLimits m={m} onChanged={limitsChanged} />
       {m.mark?.live && (
         <div className="row">
           <span className="grow meta warn-text">Marked: {markText(m.mark)}</span>
@@ -863,6 +866,126 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
       {remove.isError && <ErrorBox error={remove.error} />}
       {forTeams.isError && <ErrorBox error={forTeams.error} />}
       {clear.isError && <ErrorBox error={clear.error} />}
+    </div>
+  );
+}
+
+const addLimitProblem = `Pick a team and type its limit: a whole number from 1 to ${quotaMax}.`;
+
+// ModelTeamLimits is each team's limit on a global entry, folded until opened:
+// the limit and that team's tokens on the entry this month, changed or
+// removed in place, and a form to add one for a team with none.
+function ModelTeamLimits({ m, onChanged }: { m: ModelAdminView; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button type="button" className="btn small" aria-expanded={open} onClick={() => setOpen(!open)}>
+        Team limits ({m.teamLimits.length})
+      </button>
+      {open && (
+        <div className="stack" role="group" aria-label={`Team limits on ${m.name}`}>
+          {m.teamLimits.length === 0 && <div className="meta">No team has a limit on it.</div>}
+          {m.teamLimits.map((t) => (
+            <TeamLimitRow key={t.teamId} m={m} t={t} onChanged={onChanged} />
+          ))}
+          <AddTeamLimit m={m} onAdded={onChanged} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeamLimitRow({ m, t, onChanged }: { m: ModelAdminView; t: TeamLimitView; onChanged: () => void }) {
+  const write = useWrite();
+  const remove = useMutation({
+    mutationFn: () => write<void>("DELETE", paths.apiAdminModelTeamLimit(m.id, t.teamId)),
+    onSuccess: () => onChanged(),
+  });
+  return (
+    <div role="group" aria-label={`Team ${t.team}`}>
+      <div className="row">
+        <b className="grow">{t.team}</b>
+        <button
+          type="button"
+          className="btn small"
+          aria-label={`Remove the limit of ${t.team} on ${m.name}`}
+          disabled={remove.isPending}
+          onClick={() => remove.mutate()}
+        >
+          Remove
+        </button>
+      </div>
+      <QuotaLine ariaLabel={`Tokens of ${t.team} on ${m.name} this month`} use={{ used: t.used, limit: t.limit }} />
+      <LimitField
+        key={t.limit}
+        label={`Limit of ${t.team} on ${m.name}`}
+        saveLabel={`Save the limit of ${t.team} on ${m.name}`}
+        limit={t.limit}
+        path={paths.apiAdminModelTeamLimit(m.id, t.teamId)}
+        onSaved={onChanged}
+      />
+      {remove.isError && <ErrorBox error={remove.error} />}
+    </div>
+  );
+}
+
+// AddTeamLimit gives a team with no limit on the entry one. The teams are
+// read when the list is opened.
+function AddTeamLimit({ m, onAdded }: { m: ModelAdminView; onAdded: () => void }) {
+  const write = useWrite();
+  const teams = useQuery({ queryKey: ["teams"], queryFn: () => api.get<TeamView[]>("/api/teams") });
+  const [team, setTeam] = useState("");
+  const [text, setText] = useState("");
+  const [problem, setProblem] = useState("");
+  const add = useMutation({
+    mutationFn: ({ id, n }: { id: number; n: number }) => write<void>("PUT", paths.apiAdminModelTeamLimit(m.id, id), { monthlyTokens: n }),
+    onSuccess: () => {
+      setTeam("");
+      setText("");
+      onAdded();
+    },
+  });
+  if (teams.isPending) return <Loading />;
+  if (teams.isError) return <ErrorBox error={teams.error} />;
+  const limited = new Set(m.teamLimits.map((t) => t.teamId));
+  const free = teams.data.filter((t) => !limited.has(t.id));
+  if (free.length === 0) {
+    return <div className="meta">{teams.data.length === 0 ? "No team yet." : "Every team has a limit on it."}</div>;
+  }
+  const submit = () => {
+    const n = parseQuota(text);
+    if (team === "" || n === null || n === undefined) {
+      setProblem(addLimitProblem);
+      return;
+    }
+    setProblem("");
+    add.mutate({ id: Number(team), n });
+  };
+  return (
+    <div>
+      <div className="search">
+        <select aria-label={`Team to limit on ${m.name}`} value={team} onChange={(e) => setTeam(e.target.value)}>
+          <option value="">Pick a team</option>
+          {free.map((t) => (
+            <option key={t.id} value={String(t.id)}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+        <input
+          type="text"
+          inputMode="numeric"
+          aria-label={`New team limit on ${m.name}`}
+          placeholder="tokens per month"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <button type="button" className="btn small" aria-label={`Add a team limit on ${m.name}`} disabled={add.isPending} onClick={submit}>
+          Add
+        </button>
+      </div>
+      {problem && <div className="meta problem">{problem}</div>}
+      {add.isError && <ErrorBox error={add.error} />}
     </div>
   );
 }
