@@ -112,6 +112,10 @@ export default function RepositoryDetail() {
 // panelText is the panel line: on with the first entry of each chain, or off.
 const panelText = (p: PanelView) => (p.on ? `Panel: on (A: ${p.a ?? "none"}, B: ${p.b ?? "none"})` : "Panel: off");
 
+// heldForTokens says a change waits because the tokens ran out: a quota, or
+// a model or team limit with it. Only an admin starts one.
+const heldForTokens = (w: WaitingView) => w.reason === "quota_used_up" || w.reason === "limit_used_up";
+
 // Waiting is the changes whose review waits for someone to start it: authors
 // the repository doesn't trust (a maintainer or an admin starts those) and
 // changes held by a used-up token quota (only an admin starts those).
@@ -165,8 +169,9 @@ function Waiting({
             {w.title && <span className="meta"> · {w.title}</span>}
             {w.reason === "trust_check_failed" && <div className="meta">Couldn't check the author's access.</div>}
             {w.reason === "quota_used_up" && <div className="meta">Monthly token quota used up.</div>}
+            {w.reason === "limit_used_up" && <div className="meta">No model in the chain has room this month.</div>}
           </div>
-          {!paused && (role === "admin" || (role === "maintainer" && w.reason !== "quota_used_up")) && (
+          {!paused && (role === "admin" || (role === "maintainer" && !heldForTokens(w))) && (
             <button
               type="button"
               className="btn small"
