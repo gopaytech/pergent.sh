@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -464,7 +465,7 @@ func (d *dispatcher) failMember(ctx context.Context, f store.Failure) error {
 }
 
 // memberInputsMatch reports whether the fitted inputs of a reviewer, or of
-// Job P, are what its run recorded when it was dispatched: the rules, the
+// the judge, are what its run recorded when it was dispatched: the rules, the
 // skills (where each came from and its content's hash), whether it is
 // incremental and since which run, and the linked repositories. A reviewer
 // whose skills changed stops here, before its Job, as its result would fail
@@ -763,4 +764,196 @@ func (e *Engine) memberEntryLeft(ctx context.Context, run store.Run, m store.Rev
 		return false, err
 	}
 	return dec.Runs(), nil
+}
+
+// reasonNoJudgeImage fails a multi review whose judge Job can't fetch its
+// reviewers' results: pergent.sh's own image is not set.
+const reasonNoJudgeImage = "a multi review needs pergent.sh's own image (PERGENT_SH_IMAGE, set by the chart) for its judge"
+
+// Why a judge Job runs --no-judge (review_judges.no_judge_reason).
+const (
+	noJudgeChain    = "no judge chain"
+	noJudgeFailed   = "the judge Job failed"
+	noJudgeRepo     = "the repository's token quota is used up"
+	noJudgeInstance = "the instance's token quota is used up"
+	noJudgeEntry    = "no judge entry can be used"
+)
+
+// judgePlan is what the judge Job runs with: every reviewer of the frozen
+// set, in number order (one with no stored result gets no file); the judge
+// entry, or no judge and why.
+type judgePlan struct {
+	reviewers []int
+	entry     chain.Decision // the judge's entry; zero with noJudge
+	noJudge   bool
+	why       string
+}
+
+// key is the only LLM key the judge Job holds: the judge entry's, "" with
+// no judge.
+func (p judgePlan) key() string {
+	if p.noJudge {
+		return ""
+	}
+	return p.entry.Entry.Key
+}
+
+// resolveJudge reads the frozen judge chain (JudgeChainOf) with the
+// registry now, skipping the entries earlier attempts of this judge fell
+// back from (judgedBefore). No judge when: the copy has no entries ("no
+// judge chain"); an earlier attempt of the review closed with reason
+// judge_failed ("the judge Job failed"); the repository quota is used up;
+// or the chain resolves to no entry (marks, keys, the instance quota on
+// global entries). d.entry is the judge (OPENCODE_*); with no judge it is
+// empty: no LLM and no key (D4).
+//
+// The judge ends a review that has started, so no model or team limit stops
+// it (Ruling L7), and it never holds: a quota gives --no-judge. It may run
+// on a reviewer's model. The reviewers are those of d.members.
+func (d *dispatcher) resolveJudge(ctx context.Context, repo settings.Effective, repoUsedUp, instanceUsedUp bool) error {
+	plan := judgePlan{reviewers: reviewerNumbers(d.members)}
+	fc, found, err := d.e.Store.JudgeChainOf(ctx, d.run.ID)
+	if err != nil {
+		return fmt.Errorf("read the frozen judge chain: %w", err)
+	}
+	tried, failedBefore, err := d.judgedBefore(ctx)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !found || len(fc.Entries) == 0:
+		plan.why = noJudgeChain
+	case failedBefore:
+		plan.why = noJudgeFailed
+	case repoUsedUp:
+		plan.why = noJudgeRepo
+	default:
+		base, err := d.e.chainFor(ctx, d.run, repo)
+		if err != nil {
+			return err
+		}
+		in := chain.FromFrozen(fc, base)
+		in.Tried = tried
+		in.IgnoreLimits()
+		in.InstanceQuotaUsedUp = instanceUsedUp
+		d.scope = in.Scope
+		dec := chain.Resolve(in)
+		if dec.Runs() {
+			plan.entry = dec
+		} else {
+			plan.why = judgeSkipWords(dec)
+		}
+	}
+	plan.noJudge = plan.why != ""
+	d.judge, d.entry = plan, plan.entry
+	d.attempt = len(tried) + 1
+	d.log.Info("multi review judge", "judge", plan.entry.Entry.Name, "reviewers", plan.reviewers, "no_judge", plan.why)
+	return nil
+}
+
+// judgeSkipWords is why a judge chain that resolves to no entry (dec) does
+// not judge: the instance quota when only it stopped the entries an earlier
+// attempt did not try, else no judge entry can be used.
+func judgeSkipWords(dec chain.Decision) string {
+	quota := false
+	for _, s := range dec.Skips {
+		switch s.Reason {
+		case chain.ReasonInstanceQuota:
+			quota = true
+		case chain.ReasonTried:
+		default:
+			return noJudgeEntry
+		}
+	}
+	if quota {
+		return noJudgeInstance
+	}
+	return noJudgeEntry
+}
+
+// reviewerNumbers is every reviewer number of the members ms (the off row
+// left out), each once, in number order: the frozen set, a skipped or
+// failed reviewer too (D2).
+func reviewerNumbers(ms []store.ReviewMember) []int {
+	var out []int
+	for _, m := range ms {
+		if m.State != store.MemberOff && !slices.Contains(out, m.Reviewer) {
+			out = append(out, m.Reviewer)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// judgedBefore reads the earlier attempts of the review: tried is the judge
+// entries the provider refused on an attempt that fell back from its judge
+// (a judge row with an entry, closed as fell_back for a class). The judge
+// does not run on them again, even once their mark ends. failed is whether
+// an attempt closed with reason judge_failed (EnqueueJudgeRetry): the next
+// judge Job runs --no-judge.
+func (d *dispatcher) judgedBefore(ctx context.Context) (tried map[store.EntryRef]bool, failed bool, err error) {
+	if d.run.AttemptOf == nil {
+		return nil, false, nil
+	}
+	as, err := d.e.Store.Attempts(ctx, *d.run.AttemptOf)
+	if err != nil {
+		return nil, false, fmt.Errorf("read the review's attempts: %w", err)
+	}
+	for _, a := range as {
+		if a.ID == d.run.ID || a.Outcome != store.OutcomeFellBack {
+			continue
+		}
+		if a.OutcomeReason == store.OutcomeJudgeFailed {
+			failed = true
+			continue
+		}
+		j, found, err := d.e.Store.JudgeOf(ctx, a.ID)
+		if err != nil {
+			return nil, false, fmt.Errorf("read the judge of an earlier attempt: %w", err)
+		}
+		if !found || j.NoJudge || j.Entry.ID == "" {
+			continue
+		}
+		if tried == nil {
+			tried = map[store.EntryRef]bool{}
+		}
+		tried[store.EntryRef{Source: j.Entry.Source, ID: j.Entry.ID}] = true
+	}
+	return tried, failed, nil
+}
+
+// recordJudge records what the judge Job judges with (review_judges),
+// replacing what an earlier try of this run recorded.
+func (d *dispatcher) recordJudge(ctx context.Context) error {
+	p := d.judge
+	j := store.JudgeRow{Reviewers: p.reviewers, NoJudge: p.noJudge, NoJudgeReason: p.why}
+	if !p.noJudge {
+		j.Provider, j.Model, j.Entry = p.entry.Entry.LLM.Provider, p.entry.Entry.LLM.Model, runEntry(p.entry)
+	}
+	if err := d.e.Store.SetJudge(ctx, d.run.ID, j); err != nil {
+		return fmt.Errorf("record the multi review's judge: %w", err)
+	}
+	return nil
+}
+
+// mrDismissalsJSON is the --mr-dismissals file (D11): one
+// {"fingerprint","severity"} per stored dismissal with a fingerprint, in
+// store order, no actor or reason; [] for none.
+func mrDismissalsJSON(ds []store.Dismissal) []byte {
+	type dismissal struct {
+		Fingerprint string `json:"fingerprint"`
+		Severity    string `json:"severity"`
+	}
+	out := make([]dismissal, 0, len(ds))
+	for _, d := range ds {
+		if d.Fingerprint != "" {
+			out = append(out, dismissal{Fingerprint: d.Fingerprint, Severity: d.Severity})
+		}
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		// Two strings per entry always encode.
+		return []byte("[]")
+	}
+	return b
 }

@@ -2,9 +2,11 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -448,16 +450,21 @@ type panelComment struct {
 }
 
 // panelComment reads run's review panel. A run whose review has a member
-// other than off is a panel's merge (Job P): each role is named by its judge
-// entry (panel_judges), else by its last member's entry. A review with only
-// an off row ran "A only" when that row is the run's own (PanelOffReason): a
-// row an earlier, failed launch left is not. A review with neither has
-// nothing, and its comment is today's.
+// other than off, and whose result is a panel's merge (its panel field), is
+// Job P: each role is named by its judge entry (panel_judges), else by its
+// last member's entry. A legacy panel's run that RecoverLegacyPanels queued
+// again ran as one review: its result has no panel field, and its comment is
+// today's. A review with only an off row ran "A only" when that row is the
+// run's own (PanelOffReason): a row an earlier, failed launch left is not. A
+// review with neither has nothing, and its comment is today's.
 func (e *Engine) panelComment(ctx context.Context, run store.Run) (panelComment, error) {
 	var pc panelComment
 	ms, err := e.Store.PanelMembers(ctx, run.ID)
 	if err != nil {
 		return pc, fmt.Errorf("read the review's panel members: %w", err)
+	}
+	if len(ms) > 0 && !panelMergeResult(run.Result) {
+		ms = slices.DeleteFunc(ms, func(m store.PanelMember) bool { return m.State != store.MemberOff })
 	}
 	last := map[string]store.PanelMember{}
 	off := false
@@ -506,6 +513,15 @@ func (e *Engine) panelComment(ctx context.Context, run store.Run) (panelComment,
 	}
 	pc.names = &render.PanelNames{A: name("a", "model A"), B: name("b", "model B")}
 	return pc, nil
+}
+
+// panelMergeResult reports whether the stored result is a review panel's
+// merge: pergent sets its panel field only with --panel.
+func panelMergeResult(stored []byte) bool {
+	var r struct {
+		Panel json.RawMessage `json:"panel"`
+	}
+	return json.Unmarshal(stored, &r) == nil && len(r.Panel) > 0 && string(r.Panel) != "null"
 }
 
 // dismissals are the dismissals of the merge request in the renderer's form.

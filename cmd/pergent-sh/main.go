@@ -402,7 +402,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
-		Store: st, Panel: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, CI: eng, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
+		Store: st, Panel: st, Reviewers: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, CI: eng, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
 		SkillFetches: fetchResults, ReadinessScans: scanResults, Graphs: graphs, ReviewAPI: api, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)

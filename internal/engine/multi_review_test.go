@@ -625,7 +625,9 @@ func TestDispatchSplitEmptyJudge(t *testing.T) {
 }
 
 // A run split once and queued again with its dispatched_at is never split
-// again: no new member and no off row.
+// again: no new member and no off row. Its reviewers are live, so it goes
+// back to wait for them (WaitForReviewMembers), keeping the split's
+// dispatched_at.
 func TestDispatchSplitOnce(t *testing.T) {
 	multiReviewFloor(t, "v0.5.0")
 	env := newTestEnv(t)
@@ -633,12 +635,14 @@ func TestDispatchSplitOnce(t *testing.T) {
 	saveExtraReviewers(t, env, [][]store.EntryRef{{b}}, []store.EntryRef{b})
 	id := dispatchMR(t, env, 3, sha('a'))
 	before := wantSplit(t, env, id, 2)
+	split := env.Run(id)
 
 	startRunOld(t, env, id)
 	dispatch(t, env)
 	r := env.Run(id)
-	if r.State == store.Waiting && r.SkipReason == store.WaitReviewers {
-		t.Fatalf("run = %s/%q; it was split again\n%s", r.State, r.SkipReason, env.Logs())
+	if r.State != store.Waiting || r.SkipReason != store.WaitReviewers || !r.DispatchedAt.Equal(split.DispatchedAt) || r.JobName != "" {
+		t.Fatalf("run = %s/%q dispatched %v job %q; want back to wait, dispatched at the split (%v)\n%s",
+			r.State, r.SkipReason, r.DispatchedAt, r.JobName, split.DispatchedAt, env.Logs())
 	}
 	ms := reviewMembers(t, env, id)
 	if len(ms) != len(before) {
