@@ -1315,8 +1315,9 @@ paths:
     get:
       operationId: getRunMemberLog
       tags: [Overview and reviews]
-      summary: The redacted tail of a review panel member's Job log
-      description: As `GET /api/runs/{id}/log`, with the same rights, for a member the run's `panel` lists.
+      summary: The redacted tail of a multi review reviewer attempt's Job log
+      description: As `GET /api/runs/{id}/log`, with the same rights, for a reviewer attempt the run's
+        `multiReview` lists.
         A member of another review is not found.
       x-pergent-access: session
       security:
@@ -1333,7 +1334,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404':
-          description: No such run or member of its panel, or no log was kept.
+          description: No such run or reviewer attempt of its multi review, or no log was kept.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ErrorBody'}
@@ -1342,9 +1343,9 @@ paths:
     get:
       operationId: getRunMemberDiagnostics
       tags: [Overview and reviews]
-      summary: What was kept of a failed review panel member's Job
-      description: As `GET /api/runs/{id}/diagnostics`, with the same rights, for a member the run's `panel`
-        lists. An admin of the run's repository gets the clone log as it was and the pod's state; anyone else
+      summary: What was kept of a failed multi review reviewer attempt's Job
+      description: As `GET /api/runs/{id}/diagnostics`, with the same rights, for a reviewer attempt the run's
+        `multiReview` lists. An admin of the run's repository gets the clone log as it was and the pod's state; anyone else
         gets the masked clone log and no podState. A member of another review is not found.
       x-pergent-access: session
       security:
@@ -1361,7 +1362,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404':
-          description: No such run or member of its panel, or nothing was kept.
+          description: No such run or reviewer attempt of its multi review, or nothing was kept.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ErrorBody'}
@@ -5089,7 +5090,7 @@ components:
       name: member
       in: path
       required: true
-      description: The id of a member attempt of the run's review panel, as its `panel` lists it.
+      description: The id of a reviewer attempt of the run's multi review, as its `multiReview` lists it.
       schema:
         type: string
         format: uuid
@@ -7741,103 +7742,122 @@ components:
           oneOf:
           - $ref: '#/components/schemas/KubernetesView'
           - type: 'null'
-        panel:
-          description: The review panel of a panel review. The key is left out for any other run, never null.
+        multiReview:
+          description: The multi review of a run that was split, or of a later attempt of its judge. The key is
+            left out for any other run, never null.
           oneOf:
-          - $ref: '#/components/schemas/RunPanelView'
+          - $ref: '#/components/schemas/RunMultiReviewView'
           - type: 'null'
-    RunPanelView:
-      description: A review panel on its run's page. When it did not start, `off` says why and the lists are
-        empty. Otherwise its members, the entries Job P judged with on this run, and the tokens of each model
-        in the whole review (every member attempt and every Job P attempt), the same on each attempt's page.
-        The run's own tokens stay in `tokens`. Names are entry and model names, never a key.
+    RunMultiReviewView:
+      description: A multi review on its run's page. When it did not start, `off` says why, `reviewers` is
+        empty and `judge` is null. Otherwise one row per reviewer, the judge this run judged with, and the
+        tokens of the whole review (every reviewer attempt and every judge run), the same on each attempt's
+        page. The merged findings are the run's own result; raw reviewer findings are only in the member logs.
+        The run's own tokens stay in `tokens`. Names are entry and model names, never a key or a base URL.
       type: object
-      required: [members, judges, cost]
+      required: [reviewers, judge, total]
       properties:
         'off':
           type: string
-          description: Why the panel did not start, so the review ran on chain A alone. Left out when it started.
-        members:
+          description: Why the multi review did not start, so the review ran with reviewer 1 alone. Left out
+            when it started.
+        reviewers:
           type: array
-          items: {$ref: '#/components/schemas/PanelMemberView'}
-          description: Member a, then b, each that has an attempt.
-        judges:
-          type: array
-          items: {$ref: '#/components/schemas/PanelJudgeView'}
-          description: The roles that judged on this run, a then b.
-        cost:
-          type: array
-          items: {$ref: '#/components/schemas/ModelCostView'}
-          description: Members first (by role, then attempt), then each Job P attempt's merge by run and role.
-            The page adds them up for the review's total.
-    PanelMemberView:
-      description: Member A or B of a panel review.
+          items: {$ref: '#/components/schemas/ReviewerView'}
+          description: By reviewer number, 1 first.
+        judge:
+          description: What this run judged with; null when it recorded nothing (its reviewers still run, or
+            its judge Job was not dispatched yet).
+          oneOf:
+          - $ref: '#/components/schemas/JudgeView'
+          - type: 'null'
+        total: {$ref: '#/components/schemas/TokensView'}
+    ReviewerView:
+      description: One reviewer of a multi review. `entry`, `provider`, `model` and `state` are its final
+        attempt's; `entry` is the name in the frozen copy of its chain (the chain's first entry when it never
+        started).
       type: object
-      required: [role, attempts]
+      required: [number, entry, provider, model, state, skipped, findings, in, out, attempts]
       properties:
-        role:
+        number:
+          type: integer
+          minimum: 1
+          maximum: 5
+        entry: {type: string}
+        provider: {type: string}
+        model: {type: string}
+        state:
           type: string
-          enum: [a, b]
+          enum: [queued, running, reported, done, failed, fell_back, superseded, skipped]
+        skipped:
+          type: string
+          description: Why the reviewer has no result; empty when it has one, or while it runs.
+        findings:
+          type: integer
+          description: The findings of its result, in every skill; 0 when it has none.
+        in:
+          type: integer
+          format: int64
+          description: Input tokens of all its attempts.
+        out:
+          type: integer
+          format: int64
+          description: Output tokens of all its attempts.
         attempts:
           type: array
           items: {$ref: '#/components/schemas/MemberAttemptView'}
           description: Oldest first. A later attempt follows a provider's refusal of the one before (`fell_back`).
     MemberAttemptView:
-      description: One attempt of a panel member. Entry, provider and model are empty before it was dispatched.
+      description: One attempt of a reviewer. Provider and model are empty before it was dispatched. Its log
+        is at `/api/runs/{id}/members/{member}/log` by its `id`.
       type: object
       required: [id, entry, position, provider, model, state, failure, step]
       properties:
         id: {type: string, format: uuid}
-        entry: {type: string}
+        entry:
+          type: string
+          description: The entry's name in the frozen copy of the reviewer's chain.
         position:
           type: integer
-          description: The entry's place in chain B (or chain A for member a), from 1.
+          description: The entry's place in the reviewer's chain, from 1; 0 when it never started.
         provider: {type: string}
         model: {type: string}
         state:
           type: string
-          enum: [queued, running, reported, done, failed, fell_back, superseded]
+          enum: [queued, running, reported, done, failed, fell_back, superseded, skipped]
         failure:
           type: string
-          description: Why it failed; empty when it did not.
+          description: Why it failed or was skipped; empty when it did not.
         step:
           type: string
           description: The step it failed at; empty when none was recorded.
-    PanelJudgeView:
-      description: The entry and model one role of Job P judged with on this run.
+    JudgeView:
+      description: The judge of a multi review on this run.
       type: object
-      required: [role, entry, provider, model]
+      required: [entry, provider, model, noJudge, reason, attempts, in, out]
       properties:
-        role:
+        entry:
           type: string
-          enum: [a, b]
-        entry: {type: string}
+          description: The judge entry this run judged with; empty with `noJudge`.
         provider: {type: string}
         model: {type: string}
-    ModelCostView:
-      description: The tokens one model used in the review.
-      type: object
-      required: [part, role, run, member, entry, provider, model, in, out]
-      properties:
-        part:
+        noJudge:
+          type: boolean
+          description: True when this run judged with no model (`--no-judge`).
+        reason:
           type: string
-          enum: [member, merge]
-          description: A member's review, or Job P's merge.
-        role:
-          type: string
-          enum: [a, b]
-        run:
-          type: string
-          format: uuid
-          description: The run the tokens count on, a run of `attempts` (the members' count on the run that was split).
-        member:
-          type: string
-          description: The member attempt of a member's tokens, as `members` lists it; empty for a merge.
-        entry: {type: string}
-        provider: {type: string}
-        model: {type: string}
-        in: {type: integer, format: int64}
-        out: {type: integer, format: int64}
+          description: Why it ran with no judge; empty otherwise.
+        attempts:
+          type: integer
+          description: The judge runs of the review, the run that was split and each later attempt.
+        in:
+          type: integer
+          format: int64
+          description: Input tokens of every judge run of the review.
+        out:
+          type: integer
+          format: int64
+          description: Output tokens of every judge run of the review.
     RunSummary:
       description: One run in a review's history.
       type: object

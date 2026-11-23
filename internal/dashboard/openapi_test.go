@@ -939,11 +939,10 @@ var openAPISchemas = map[string]schemaType{
 	"ChainEntryRef":           inputSchema(entryInput{}),
 	"RunEntryView":            outputSchema(RunEntryView{}),
 	"AttemptView":             outputSchema(AttemptView{}),
-	"RunPanelView":            outputSchema(RunPanelView{}),
-	"PanelMemberView":         outputSchema(PanelMemberView{}),
+	"RunMultiReviewView":      outputSchema(RunMultiReviewView{}),
+	"ReviewerView":            outputSchema(ReviewerView{}),
 	"MemberAttemptView":       outputSchema(MemberAttemptView{}),
-	"PanelJudgeView":          outputSchema(PanelJudgeView{}),
-	"ModelCostView":           outputSchema(ModelCostView{}),
+	"JudgeView":               outputSchema(JudgeView{}),
 	"MyTeamView":              outputSchema(MyTeamView{}),
 	"TeamModelsView":          outputSchema(TeamModelsView{}),
 	"TeamModelView":           outputSchema(TeamModelView{}),
@@ -1430,6 +1429,10 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	apiSteps := []string{reviewapi.StepStarting, reviewapi.StepReview, reviewapi.StepDelivery, reviewapi.StepUnknown}
 	apiRules := []string{reviewapi.RuleDeleted, reviewapi.RuleBinary, reviewapi.RuleNoContentChanges, reviewapi.RuleLockfile, reviewapi.RuleVendored,
 		reviewapi.RuleGenerated, reviewapi.RuleOutOfScope, reviewapi.RuleExcludedBySkill, reviewapi.RuleOther}
+	// A reviewer attempt's states; every one but off, which is no attempt.
+	memberStates := []string{string(store.MemberQueued), string(store.MemberRunning), string(store.MemberReported),
+		string(store.MemberDone), string(store.MemberFailed), string(store.MemberFellBack), string(store.MemberSuperseded),
+		string(store.MemberSkipped)}
 	apiCodes := []string{reviewapi.CodeUnauthorized, reviewapi.CodeNotFound, reviewapi.CodeInvalid, reviewapi.CodeTooLarge, reviewapi.CodeRateLimited,
 		reviewapi.CodeBudgetUsedUp, reviewapi.CodeCannotReview, reviewapi.CodeNotFinished, reviewapi.CodeIdempotencyKeyReused, reviewapi.CodeInternal}
 	cases := []struct {
@@ -1446,12 +1449,8 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		{"TeamModelsView", "role", roles},
 		{"MarkView", "class", []string{store.ClassQuota, store.ClassBilling, store.ClassAuth}},
 		{"AttemptView", "reason", []string{"", store.ClassQuota, store.ClassBilling, store.ClassAuth, store.OutcomeJudgeFailed}},
-		{"MemberAttemptView", "state", []string{string(store.MemberQueued), string(store.MemberRunning), string(store.MemberReported),
-			string(store.MemberDone), string(store.MemberFailed), string(store.MemberFellBack), string(store.MemberSuperseded)}},
-		{"PanelMemberView", "role", []string{"a", "b"}},
-		{"PanelJudgeView", "role", []string{"a", "b"}},
-		{"ModelCostView", "role", []string{"a", "b"}},
-		{"ModelCostView", "part", []string{"member", "merge"}},
+		{"MemberAttemptView", "state", memberStates},
+		{"ReviewerView", "state", memberStates},
 		{"ChainEntryView", "class", []string{"", store.ClassQuota, store.ClassBilling, store.ClassAuth}},
 		{"ChainEntryView", "state", []string{stateOf(""), stateOf(store.ClassQuota), stateOf(store.ClassAuth), chain.ReasonRemoved,
 			chain.ReasonNotAllowed, chain.ReasonNotOwner, chain.ReasonKeyUnusable, chain.ReasonModelLimit, chain.ReasonTeamLimit}},

@@ -1920,202 +1920,232 @@ func TestRunRoutesHideAPIReviews(t *testing.T) {
 	}
 }
 
-// --- a review panel on its run's page ---
+// --- a multi review on its run's page ---
 
-// memberFix is one panel_members row of a test.
-type memberFix struct {
-	role, state, entry, provider, model string
-	position                            int
-	attemptOf                           string
-	failure, step                       string
-	at                                  time.Time
+// reviewerFix is one review_members row of a test: chain is the names of
+// the reviewer's frozen chain, entry the name its dispatch recorded.
+type reviewerFix struct {
+	number                   int
+	state                    string
+	chain                    []string
+	entry, provider, model   string
+	position                 int
+	attemptOf, failure, step string
+	result                   string
+	at                       time.Time
 }
 
-// addMember stores m as a member of the review whose first run is root, and
-// returns its id.
-func (e *env) addMember(root string, m memberFix) string {
+// addReviewer stores r as a member of the review whose first run is root,
+// and returns its id.
+func (e *env) addReviewer(root string, r reviewerFix) string {
 	e.t.Helper()
+	frozen := store.FrozenChain{Scope: "repo", Entries: []store.FrozenEntry{}}
+	for _, name := range r.chain {
+		frozen.Entries = append(frozen.Entries, store.FrozenEntry{Source: "global", ID: name, Name: name, Provider: "p-" + name, Model: "m-" + name})
+	}
+	chain, err := json.Marshal(frozen)
+	if err != nil {
+		e.t.Fatal(err)
+	}
 	var id string
-	if err := e.db.QueryRow(ctx, `INSERT INTO panel_members (run_id, role, attempt_of, state, provider, model, model_source,
-			model_entry_id, model_entry_name, chain_position, chain_length, failure_reason, failure_step, created_at)
-		VALUES ($1::uuid, $2, NULLIF($3, '')::uuid, $4, $5, $6, 'global', $7, $7, $8, 2, $9, $10, $11) RETURNING id::text`,
-		root, m.role, m.attemptOf, m.state, m.provider, m.model, m.entry, m.position, m.failure, m.step, m.at).Scan(&id); err != nil {
-		e.t.Fatalf("adding a panel member: %v", err)
+	if err := e.db.QueryRow(ctx, `INSERT INTO review_members (run_id, reviewer, attempt_of, state, chain, provider, model, model_source,
+			model_entry_id, model_entry_name, chain_position, chain_length, failure_reason, failure_step, result, created_at)
+		VALUES ($1::uuid, $2, NULLIF($3, '')::uuid, $4, $5::jsonb, $6, $7, 'global', $8, $8, $9, $10, $11, $12,
+			NULLIF($13, '')::jsonb, $14) RETURNING id::text`,
+		root, r.number, r.attemptOf, r.state, string(chain), r.provider, r.model, r.entry, r.position, len(r.chain),
+		r.failure, r.step, r.result, r.at).Scan(&id); err != nil {
+		e.t.Fatalf("adding a review member: %v", err)
 	}
 	return id
 }
 
-// addModelUsage stores one run_usage_models row: a member's when member is
-// set, else a merge row of run.
-func (e *env) addModelUsage(run, member, role, skill, entry, provider, model string, in, out int64) {
+// addJudge stores what judge run run judged with.
+func (e *env) addJudge(run string, j store.JudgeRow) {
 	e.t.Helper()
-	part := "merge"
-	if member != "" {
-		part = "member"
+	reviewers := make([]int32, len(j.Reviewers))
+	for i, n := range j.Reviewers {
+		reviewers[i] = int32(n)
 	}
-	e.exec(`INSERT INTO run_usage_models (run_id, member_id, part, role, skill, provider, model, entry_name, reported_at,
-			tokens_in, tokens_out)
-		VALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, now(), $9, $10)`,
-		run, member, part, role, skill, provider, model, entry, in, out)
+	e.exec(`INSERT INTO review_judges (run_id, reviewers, no_judge, no_judge_reason, provider, model, model_source,
+			model_entry_id, model_entry_name, chain_position, chain_length)
+		VALUES ($1::uuid, $2::int[], $3, $4, $5, $6, 'global', $7, $7, $8, 1)`,
+		run, reviewers, j.NoJudge, j.NoJudgeReason, j.Provider, j.Model, j.Entry.Name, j.Entry.Position)
 }
 
-// The run page of a panel review shows its members (each attempt with its
-// entry, model, state and failure), the entries Job P judged with, and the
-// tokens of each model by part and role: entry names and model names, never
-// a key.
-func TestRunPagePanel(t *testing.T) {
+// addReviewUsage stores one run_usage_by_model row: a reviewer attempt's
+// when member is set, else a judge row of run.
+func (e *env) addReviewUsage(run, member string, reviewer int, skill, entry, provider, model string, in, out int64) {
+	e.t.Helper()
+	part, number := "judge", any(nil)
+	if member != "" {
+		part, number = "reviewer", reviewer
+	}
+	e.exec(`INSERT INTO run_usage_by_model (run_id, member_id, part, reviewer, skill, provider, model, entry_name, reported_at,
+			tokens_in, tokens_out)
+		VALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, now(), $9, $10)`,
+		run, member, part, number, skill, provider, model, entry, in, out)
+}
+
+// twoFindings is a reviewer's result with 2 findings in 2 skills.
+func twoFindings(h string) string {
+	finding := func(id string) map[string]any {
+		return map[string]any{"id": id, "fingerprint": id + "-fp", "file": "api/handler.go", "line": 7, "severity": "blocking",
+			"title": "A finding", "explanation": "It breaks."}
+	}
+	return resultJSON(h, skillJSON("code-review", "has_blocking_issues", finding("f1")),
+		skillJSON("security", "has_blocking_issues", finding("f2")))
+}
+
+// The run page of a multi review shows one row per reviewer (its entry
+// name from the frozen copy, model, final state, why it has no result,
+// findings, tokens and attempts), the judge row and the total: entry and
+// model names, never a key.
+func TestRunPageMultiReview(t *testing.T) {
 	e := newEnv(t, withSecrets(t))
 	now := e.clock.now()
 	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a')),
 		outcome: OutcomeApproved, approved: true, provider: "anthropic", model: "claude-sonnet-4", at: now.Add(-time.Hour)})
-	a1 := e.addMember(run, memberFix{role: "a", state: "fell_back", entry: "sonnet", provider: "anthropic", model: "claude-sonnet-4",
-		position: 1, at: now.Add(-50 * time.Minute)})
-	b1 := e.addMember(run, memberFix{role: "b", state: "failed", entry: "gpt", provider: "openai", model: "gpt-5", position: 1,
-		failure: "the member Job ran out of memory (OOMKilled)", step: "review", at: now.Add(-49 * time.Minute)})
-	a2 := e.addMember(run, memberFix{role: "a", state: "done", entry: "qwen", provider: "alibaba", model: "qwen3", position: 2,
-		attemptOf: a1, at: now.Add(-40 * time.Minute)})
-	e.exec(`INSERT INTO panel_judges (run_id, role, provider, model, model_source, model_entry_id, model_entry_name, chain_length)
-		VALUES ($1::uuid, 'b', 'openai', 'gpt-5', 'global', 'gpt', 'gpt', 1), ($1::uuid, 'a', 'alibaba', 'qwen3', 'global', 'qwen', 'qwen', 2)`, run)
-	e.addModelUsage(run, a2, "a", "code-review", "qwen", "alibaba", "qwen3", 100, 10)
-	e.addModelUsage(run, a2, "a", "security", "qwen", "alibaba", "qwen3", 50, 5)
-	e.addModelUsage(run, b1, "b", "code-review", "gpt", "openai", "gpt-5", 20, 2)
-	e.addModelUsage(run, "", "a", "code-review", "qwen", "alibaba", "qwen3", 30, 3)
-	e.addModelUsage(run, "", "b", "code-review", "gpt", "openai", "gpt-5", 7, 1)
+	r1a := e.addReviewer(run, reviewerFix{number: 1, state: "fell_back", chain: []string{"sonnet", "qwen"}, entry: "sonnet",
+		provider: "anthropic", model: "claude-sonnet-4", position: 1, at: now.Add(-50 * time.Minute)})
+	r2 := e.addReviewer(run, reviewerFix{number: 2, state: "failed", chain: []string{"gpt"}, entry: "gpt", provider: "openai",
+		model: "gpt-5", position: 1, failure: "the reviewer Job ran out of memory (OOMKilled)", step: "review",
+		at: now.Add(-50 * time.Minute)})
+	r3 := e.addReviewer(run, reviewerFix{number: 3, state: "skipped", chain: []string{"haiku"},
+		failure: "the entry is out of quota", at: now.Add(-50 * time.Minute)})
+	// The dispatch recorded an older name; the page names the frozen copy's.
+	r1b := e.addReviewer(run, reviewerFix{number: 1, state: "done", chain: []string{"sonnet", "qwen"}, entry: "qwen-old",
+		provider: "alibaba", model: "qwen3", position: 2, attemptOf: r1a, result: twoFindings(head('a')),
+		at: now.Add(-40 * time.Minute)})
+	e.addJudge(run, store.JudgeRow{Reviewers: []int{1, 2, 3}, Provider: "anthropic", Model: "claude-opus-4",
+		Entry: store.RunEntry{Name: "opus", Position: 1}})
+	e.addReviewUsage(run, r1a, 1, "code-review", "sonnet", "anthropic", "claude-sonnet-4", 5, 1)
+	e.addReviewUsage(run, r1b, 1, "code-review", "qwen", "alibaba", "qwen3", 100, 10)
+	e.addReviewUsage(run, r1b, 1, "security", "qwen", "alibaba", "qwen3", 50, 5)
+	e.addReviewUsage(run, r2, 2, "code-review", "gpt", "openai", "gpt-5", 20, 2)
+	e.addReviewUsage(run, "", 0, "code-review", "opus", "anthropic", "claude-opus-4", 30, 3)
 	// Another review's tokens are not this one's.
 	other := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
-	e.addModelUsage(other, "", "a", "code-review", "qwen", "alibaba", "qwen3", 999, 99)
+	e.addReviewUsage(other, "", 0, "code-review", "opus", "anthropic", "claude-opus-4", 999, 99)
 
 	c := e.userOnMain(false, "acme/widgets")
 	v := getJSON[RunDetailView](e, c, "/api/runs/"+run)
-	if v.Panel == nil {
-		t.Fatal("no panel on a panel review's run")
+	if v.MultiReview == nil {
+		t.Fatal("no multi review on a multi review's run")
 	}
-	want := RunPanelView{
-		Members: []PanelMemberView{
-			{Role: "a", Attempts: []MemberAttemptView{
-				{ID: a1, Entry: "sonnet", Position: 1, Provider: "anthropic", Model: "claude-sonnet-4", State: "fell_back"},
-				{ID: a2, Entry: "qwen", Position: 2, Provider: "alibaba", Model: "qwen3", State: "done"},
-			}},
-			{Role: "b", Attempts: []MemberAttemptView{
-				{ID: b1, Entry: "gpt", Position: 1, Provider: "openai", Model: "gpt-5", State: "failed",
-					Failure: "the member Job ran out of memory (OOMKilled)", Step: "review"},
-			}},
+	want := RunMultiReviewView{
+		Reviewers: []ReviewerView{
+			{Number: 1, Entry: "qwen", Provider: "alibaba", Model: "qwen3", State: "done", Findings: 2, In: 155, Out: 16,
+				Attempts: []MemberAttemptView{
+					{ID: r1a, Entry: "sonnet", Position: 1, Provider: "anthropic", Model: "claude-sonnet-4", State: "fell_back"},
+					{ID: r1b, Entry: "qwen", Position: 2, Provider: "alibaba", Model: "qwen3", State: "done"},
+				}},
+			{Number: 2, Entry: "gpt", Provider: "openai", Model: "gpt-5", State: "failed",
+				Skipped: "the reviewer Job ran out of memory (OOMKilled)", In: 20, Out: 2,
+				Attempts: []MemberAttemptView{
+					{ID: r2, Entry: "gpt", Position: 1, Provider: "openai", Model: "gpt-5", State: "failed",
+						Failure: "the reviewer Job ran out of memory (OOMKilled)", Step: "review"},
+				}},
+			{Number: 3, Entry: "haiku", State: "skipped", Skipped: "the entry is out of quota",
+				Attempts: []MemberAttemptView{
+					{ID: r3, Entry: "haiku", State: "skipped", Failure: "the entry is out of quota"},
+				}},
 		},
-		Judges: []PanelJudgeView{
-			{Role: "a", Entry: "qwen", Provider: "alibaba", Model: "qwen3"},
-			{Role: "b", Entry: "gpt", Provider: "openai", Model: "gpt-5"},
-		},
-		Cost: []ModelCostView{
-			{Part: "member", Role: "a", Run: run, Member: a2, Entry: "qwen", Provider: "alibaba", Model: "qwen3", In: 150, Out: 15},
-			{Part: "member", Role: "b", Run: run, Member: b1, Entry: "gpt", Provider: "openai", Model: "gpt-5", In: 20, Out: 2},
-			{Part: "merge", Role: "a", Run: run, Entry: "qwen", Provider: "alibaba", Model: "qwen3", In: 30, Out: 3},
-			{Part: "merge", Role: "b", Run: run, Entry: "gpt", Provider: "openai", Model: "gpt-5", In: 7, Out: 1},
-		},
+		Judge: &JudgeView{Entry: "opus", Provider: "anthropic", Model: "claude-opus-4", Attempts: 1, In: 30, Out: 3},
+		Total: TokensView{In: 205, Out: 21},
 	}
-	if !reflect.DeepEqual(*v.Panel, want) {
-		t.Errorf("panel = %+v\nwant %+v", *v.Panel, want)
+	if !reflect.DeepEqual(*v.MultiReview, want) {
+		t.Errorf("multi review = %+v\nwant %+v", *v.MultiReview, want)
 	}
 	raw := rawKeys(e, c, "/api/runs/"+run)
-	var panel map[string]json.RawMessage
-	if err := json.Unmarshal(raw["panel"], &panel); err != nil {
+	var mr map[string]json.RawMessage
+	if err := json.Unmarshal(raw["multiReview"], &mr); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := panel["off"]; ok {
-		t.Errorf("a panel that ran has an off key: %s", raw["panel"])
+	if _, ok := mr["off"]; ok {
+		t.Errorf("a multi review that ran has an off key: %s", raw["multiReview"])
+	}
+	if _, ok := raw["panel"]; ok {
+		t.Error("the run page still has a panel key")
 	}
 	body := e.get(c, "/api/runs/"+run).Body.String()
-	for _, s := range []string{llmKey, "SECRET"} {
+	for _, s := range []string{llmKey, "SECRET", "llm.example.com"} {
 		if strings.Contains(body, s) {
 			t.Errorf("the run page shows %q: %s", s, body)
 		}
 	}
 }
 
-// After Job P fell back, every attempt's page shows the review's whole
-// cost: the members' tokens (they count on the run that was split) and the
-// merge of each Job P attempt, each with the run or member it counts on.
-// Another review's tokens are not in it, and each run's own tokens stay its
-// own.
-func TestRunPagePanelCostAfterJudgeRetry(t *testing.T) {
+// After the judge Job failed, the next attempt runs with no judge. Each
+// attempt's page shows its own judge row, the review's judge runs and the
+// review's whole cost; each run's own tokens stay its own.
+func TestRunPageMultiReviewJudgeRetry(t *testing.T) {
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	split := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), state: store.Superseded, outcome: OutcomeFellBack,
-		reason: store.ClassQuota, at: now.Add(-2 * time.Hour)})
+		reason: store.OutcomeJudgeFailed, at: now.Add(-2 * time.Hour)})
 	retry := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a')),
 		outcome: OutcomeApproved, approved: true, at: now.Add(-30 * time.Minute)})
 	e.exec(`UPDATE runs SET attempt_of = $2::uuid WHERE id = $1::uuid`, retry, split)
-	a := e.addMember(split, memberFix{role: "a", state: "done", entry: "sonnet", provider: "anthropic", model: "claude-sonnet-4",
-		position: 1, at: now.Add(-100 * time.Minute)})
-	b := e.addMember(split, memberFix{role: "b", state: "done", entry: "gpt", provider: "openai", model: "gpt-5",
-		position: 1, at: now.Add(-99 * time.Minute)})
-	e.addModelUsage(split, a, "a", "code-review", "sonnet", "anthropic", "claude-sonnet-4", 100, 10)
-	e.addModelUsage(split, b, "b", "code-review", "gpt", "openai", "gpt-5", 50, 5)
-	e.addModelUsage(split, "", "a", "code-review", "sonnet", "anthropic", "claude-sonnet-4", 30, 3)
-	e.addModelUsage(retry, "", "a", "code-review", "qwen", "alibaba", "qwen3", 20, 2)
+	r1 := e.addReviewer(split, reviewerFix{number: 1, state: "done", chain: []string{"sonnet"}, entry: "sonnet", provider: "anthropic",
+		model: "claude-sonnet-4", position: 1, result: cleanResult(head('a')), at: now.Add(-100 * time.Minute)})
+	e.addJudge(split, store.JudgeRow{Reviewers: []int{1}, Provider: "anthropic", Model: "claude-opus-4", Entry: store.RunEntry{Name: "opus", Position: 1}})
+	e.addJudge(retry, store.JudgeRow{Reviewers: []int{1}, NoJudge: true, NoJudgeReason: "the judge failed twice"})
+	e.addReviewUsage(split, r1, 1, "code-review", "sonnet", "anthropic", "claude-sonnet-4", 100, 10)
+	e.addReviewUsage(split, "", 0, "code-review", "opus", "anthropic", "claude-opus-4", 30, 3)
 	if err := e.st.RecordUsage(ctx, retry, []store.SkillUsage{usageSkill("code-review", "no_blocking_issues", 20, 2)}, nil); err != nil {
 		t.Fatal(err)
 	}
-	other := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
-	om := e.addMember(other, memberFix{role: "a", state: "done", entry: "sonnet", position: 1, at: now})
-	e.addModelUsage(other, om, "a", "code-review", "sonnet", "anthropic", "claude-sonnet-4", 999, 99)
-	e.addModelUsage(other, "", "a", "code-review", "sonnet", "anthropic", "claude-sonnet-4", 999, 99)
 
-	want := []ModelCostView{
-		{Part: "member", Role: "a", Run: split, Member: a, Entry: "sonnet", Provider: "anthropic", Model: "claude-sonnet-4", In: 100, Out: 10},
-		{Part: "member", Role: "b", Run: split, Member: b, Entry: "gpt", Provider: "openai", Model: "gpt-5", In: 50, Out: 5},
-		{Part: "merge", Role: "a", Run: split, Entry: "sonnet", Provider: "anthropic", Model: "claude-sonnet-4", In: 30, Out: 3},
-		{Part: "merge", Role: "a", Run: retry, Entry: "qwen", Provider: "alibaba", Model: "qwen3", In: 20, Out: 2},
-	}
 	c := e.userOnMain(false, "acme/widgets")
-	for _, id := range []string{retry, split} {
+	judges := map[string]JudgeView{
+		split: {Entry: "opus", Provider: "anthropic", Model: "claude-opus-4", Attempts: 2, In: 30, Out: 3},
+		retry: {NoJudge: true, Reason: "the judge failed twice", Attempts: 2, In: 30, Out: 3},
+	}
+	for id, judge := range judges {
 		v := getJSON[RunDetailView](e, c, "/api/runs/"+id)
-		if v.Panel == nil || !reflect.DeepEqual(v.Panel.Cost, want) {
-			t.Errorf("run %s cost = %+v\nwant %+v", id, v.Panel, want)
+		if v.MultiReview == nil || v.MultiReview.Judge == nil || *v.MultiReview.Judge != judge {
+			t.Errorf("run %s judge = %+v; want %+v", id, v.MultiReview, judge)
 			continue
 		}
-		var in, out int64
-		for _, x := range v.Panel.Cost {
-			in, out = in+x.In, out+x.Out
-		}
-		if in != 200 || out != 20 {
-			t.Errorf("run %s total = %d in, %d out; want 200, 20", id, in, out)
+		if v.MultiReview.Total != (TokensView{In: 130, Out: 13}) || len(v.MultiReview.Reviewers) != 1 {
+			t.Errorf("run %s multi review = %+v", id, v.MultiReview)
 		}
 	}
-	// The run's own tokens are still its own.
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+retry); v.Tokens != (TokensView{In: 20, Out: 2}) {
 		t.Errorf("retry tokens = %+v; want its own, 20 and 2", v.Tokens)
 	}
 }
 
-// A review whose panel could not start says why, with no members, judges or
-// cost. An off row an earlier claim left is not this run's.
-func TestRunPagePanelOff(t *testing.T) {
+// A review whose multi review could not start says why (Ruling P42: the
+// reason is its review_members off row), with no rows, no judge and no
+// tokens. An off row an earlier claim left is not this run's.
+func TestRunPageMultiReviewOff(t *testing.T) {
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a')),
 		outcome: OutcomeApproved, approved: true})
 	e.exec(`UPDATE runs SET claimed_at = $2 WHERE id = $1::uuid`, run, now.Add(-time.Hour))
-	e.exec(`INSERT INTO panel_members (run_id, role, state, failure_reason, claimed_at) VALUES ($1::uuid, 'b', 'off', $2, $3)`,
-		run, "chain B has no usable entry", now.Add(-time.Hour))
+	e.exec(`INSERT INTO review_members (run_id, reviewer, state, failure_reason, claimed_at) VALUES ($1::uuid, 1, 'off', $2, $3)`,
+		run, "the review image is too old for more than one reviewer", now.Add(-time.Hour))
 	stale := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
 	e.exec(`UPDATE runs SET claimed_at = $2 WHERE id = $1::uuid`, stale, now.Add(-time.Hour))
-	e.exec(`INSERT INTO panel_members (run_id, role, state, failure_reason, claimed_at) VALUES ($1::uuid, 'b', 'off', $2, $3)`,
-		stale, "the review image is too old", now.Add(-2*time.Hour))
+	e.exec(`INSERT INTO review_members (run_id, reviewer, state, failure_reason, claimed_at) VALUES ($1::uuid, 1, 'off', $2, $3)`,
+		stale, "an earlier claim", now.Add(-2*time.Hour))
 
 	c := e.userOnMain(false, "acme/widgets")
 	v := getJSON[RunDetailView](e, c, "/api/runs/"+run)
-	want := RunPanelView{Off: "chain B has no usable entry", Members: []PanelMemberView{}, Judges: []PanelJudgeView{}, Cost: []ModelCostView{}}
-	if v.Panel == nil || !reflect.DeepEqual(*v.Panel, want) {
-		t.Errorf("panel = %+v; want %+v", v.Panel, want)
+	want := RunMultiReviewView{Off: "the review image is too old for more than one reviewer", Reviewers: []ReviewerView{}}
+	if v.MultiReview == nil || !reflect.DeepEqual(*v.MultiReview, want) {
+		t.Errorf("multi review = %+v; want %+v", v.MultiReview, want)
 	}
-	if _, ok := rawKeys(e, c, "/api/runs/"+stale)["panel"]; ok {
-		t.Error("a run with a stale off row has a panel key")
+	if _, ok := rawKeys(e, c, "/api/runs/"+stale)["multiReview"]; ok {
+		t.Error("a run with a stale off row has a multiReview key")
 	}
 }
 
-// A run that is no panel review has no panel key at all, and so has an
-// attempt of a review that fell back before its panel was split.
-func TestRunPageNoPanel(t *testing.T) {
+// A run that is no multi review has no multiReview key at all, and so has
+// an attempt of a review that fell back before it was split.
+func TestRunPageNoMultiReview(t *testing.T) {
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	plain := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a'))})
@@ -2124,38 +2154,49 @@ func TestRunPageNoPanel(t *testing.T) {
 	split := e.addRun(runFix{project: "acme/widgets", number: 7, head: head('7'), result: cleanResult(head('7')),
 		outcome: OutcomeApproved, approved: true, at: now.Add(-2 * time.Hour)})
 	e.exec(`UPDATE runs SET attempt_of = $2::uuid WHERE id = $1::uuid`, split, first)
-	e.addMember(first, memberFix{role: "a", state: "done", entry: "qwen", provider: "alibaba", model: "qwen3", position: 1,
-		at: now.Add(-90 * time.Minute)})
+	e.addReviewer(first, reviewerFix{number: 1, state: "done", chain: []string{"qwen"}, entry: "qwen", provider: "alibaba",
+		model: "qwen3", position: 1, at: now.Add(-90 * time.Minute)})
 
 	c := e.userOnMain(false, "acme/widgets")
 	for _, id := range []string{plain, first} {
-		if _, ok := rawKeys(e, c, "/api/runs/"+id)["panel"]; ok {
-			t.Errorf("run %s has a panel key", id)
+		raw := rawKeys(e, c, "/api/runs/"+id)
+		for _, key := range []string{"multiReview", "panel"} {
+			if _, ok := raw[key]; ok {
+				t.Errorf("run %s has a %s key", id, key)
+			}
 		}
 	}
-	if v := getJSON[RunDetailView](e, c, "/api/runs/"+split); v.Panel == nil || len(v.Panel.Members) != 1 {
-		t.Errorf("the split run's panel = %+v", v.Panel)
+	v := getJSON[RunDetailView](e, c, "/api/runs/"+split)
+	if v.MultiReview == nil || len(v.MultiReview.Reviewers) != 1 || v.MultiReview.Judge != nil {
+		t.Errorf("the split run's multi review = %+v", v.MultiReview)
 	}
 }
 
-// A member's log and diagnostics have the gates of its run's: a session
-// that can't see the run gets 404, as for a member of another review, an
-// unknown one and one with nothing kept; the clone log is masked below admin.
-func TestMemberLogGated(t *testing.T) {
+// A reviewer attempt's log and diagnostics have the gates of its run's: a
+// session that can't see the run gets 404, as for a member of another
+// review, the off row, an unknown one and one with nothing kept; the clone
+// log is masked below admin.
+func TestReviewMemberLogGated(t *testing.T) {
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a'))})
-	member := e.addMember(run, memberFix{role: "a", state: "done", entry: "qwen", position: 1, at: now})
-	quiet := e.addMember(run, memberFix{role: "b", state: "done", entry: "gpt", position: 1, at: now})
+	member := e.addReviewer(run, reviewerFix{number: 1, state: "done", chain: []string{"qwen"}, position: 1, at: now})
+	quiet := e.addReviewer(run, reviewerFix{number: 2, state: "done", chain: []string{"gpt"}, position: 1, at: now})
 	otherRun := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
-	otherMember := e.addMember(otherRun, memberFix{role: "a", state: "done", entry: "qwen", position: 1, at: now})
+	otherMember := e.addReviewer(otherRun, reviewerFix{number: 1, state: "done", chain: []string{"qwen"}, position: 1, at: now})
+	offRun := e.addRun(runFix{project: "acme/widgets", number: 5, head: head('c'), result: cleanResult(head('c'))})
+	var off string
+	if err := e.db.QueryRow(ctx, `INSERT INTO review_members (run_id, reviewer, state, failure_reason) VALUES ($1::uuid, 1, 'off', 'off')
+		RETURNING id::text`, offRun).Scan(&off); err != nil {
+		t.Fatal(err)
+	}
 	hiddenRun := e.addRun(runFix{project: "acme/payments", projectID: 8, number: 9, head: head('9'), result: cleanResult(head('9'))})
-	hiddenMember := e.addMember(hiddenRun, memberFix{role: "a", state: "done", entry: "qwen", position: 1, at: now})
-	for _, id := range []string{member, otherMember, hiddenMember} {
-		if err := e.st.PutMemberLog(ctx, id, "member log "+id); err != nil {
+	hiddenMember := e.addReviewer(hiddenRun, reviewerFix{number: 1, state: "done", chain: []string{"qwen"}, position: 1, at: now})
+	for _, id := range []string{member, otherMember, hiddenMember, off} {
+		if err := e.st.PutReviewMemberLog(ctx, id, "member log "+id); err != nil {
 			t.Fatal(err)
 		}
-		if err := e.st.PutMemberDiagnostics(ctx, id, store.Diagnostics{CloneLog: "fatal: acme/private-lib.git",
+		if err := e.st.PutReviewMemberDiagnostics(ctx, id, store.Diagnostics{CloneLog: "fatal: acme/private-lib.git",
 			CloneLogMasked: "fatal: [linked repository]", PodState: "phase: Failed"}); err != nil {
 			t.Fatal(err)
 		}
@@ -2180,6 +2221,7 @@ func TestMemberLogGated(t *testing.T) {
 		for name, target := range map[string]string{
 			"hidden run":         memberPath(hiddenRun, hiddenMember, what),
 			"another run's":      memberPath(run, otherMember, what),
+			"the off row":        memberPath(offRun, off, what),
 			"unknown member":     memberPath(run, "00000000-0000-0000-0000-000000000000", what),
 			"malformed member":   memberPath(run, "bad", what),
 			"malformed run":      memberPath("bad", member, what),
