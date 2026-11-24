@@ -2959,6 +2959,30 @@ paths:
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/teams/{id}:
+    get:
+      operationId: getTeam
+      tags: [Organization]
+      summary: A team's page
+      description: |
+        Members of the team and admins; anyone else gets 404. The members'
+        emails are shown to an admin only. `canEdit` is true for an admin only.
+        An entry is `removed` when its repository is no longer switched on, or
+        its instance is gone or being removed.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      responses:
+        '200':
+          description: The team.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamPageView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
     put:
       operationId: updateTeam
       tags: [Organization]
@@ -8195,7 +8219,7 @@ components:
     MyTeamView:
       description: A team of the session's, with its role there.
       type: object
-      required: [id, name, role, repos]
+      required: [id, name, role, repos, memberCount, repoCount, instanceCount, ownedCount]
       properties:
         id: {type: integer, format: int64}
         name: {type: string}
@@ -8206,6 +8230,41 @@ components:
         repos:
           type: array
           items: {$ref: '#/components/schemas/TeamRepoView'}
+        memberCount: {type: integer, description: The team's members.}
+        repoCount: {type: integer, description: Entries with a project.}
+        instanceCount: {type: integer, description: Whole-instance entries.}
+        ownedCount: {type: integer, description: Entries with the owner tick.}
+    TeamPageView:
+      description: A team's page, as the session sees it.
+      type: object
+      required: [team, role, canEdit, members, repos]
+      properties:
+        team: {$ref: '#/components/schemas/TeamRef'}
+        role:
+          type: string
+          enum: [admin, maintainer, viewer]
+        canEdit:
+          type: boolean
+          description: The session may change the team (an admin only).
+        members:
+          type: array
+          items: {$ref: '#/components/schemas/TeamMemberView'}
+          description: The email of a member is empty unless the session is an admin.
+        repos:
+          type: array
+          items: {$ref: '#/components/schemas/TeamEntryView'}
+    TeamEntryView:
+      description: A repository or a whole instance the team covers.
+      type: object
+      required: [instance, project, owner, paused, removed]
+      properties:
+        instance: {type: string}
+        project: {type: string, description: Empty for a whole instance.}
+        owner: {type: boolean}
+        paused: {type: boolean}
+        removed:
+          type: boolean
+          description: The repository is no longer switched on, or the instance is gone or being removed.
     TeamModelsView:
       description: A team's own entries.
       type: object

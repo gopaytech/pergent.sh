@@ -1304,6 +1304,34 @@ type MyTeamView struct {
 	Name  string         `json:"name"`
 	Role  string         `json:"role"`
 	Repos []TeamRepoView `json:"repos"`
+	// The counts the Teams list shows: members; entries with a project;
+	// whole-instance entries; entries with the owner tick.
+	MemberCount   int `json:"memberCount"`
+	RepoCount     int `json:"repoCount"`
+	InstanceCount int `json:"instanceCount"`
+	OwnedCount    int `json:"ownedCount"`
+}
+
+// TeamPageView is GET /api/teams/{id}: the team page's read side. Role is the
+// session's on the team; CanEdit is whether it may change the team (an admin
+// only). Members have no Email unless the session is an admin.
+type TeamPageView struct {
+	Team    TeamRef          `json:"team"`
+	Role    string           `json:"role"`
+	CanEdit bool             `json:"canEdit"`
+	Members []TeamMemberView `json:"members"`
+	Repos   []TeamEntryView  `json:"repos"`
+}
+
+// TeamEntryView is an entry of a team: a repository, or a whole instance
+// (Project ""). Paused is the repository's state. Removed: the repository is
+// no longer switched on, or the instance is gone or being removed.
+type TeamEntryView struct {
+	Instance string `json:"instance"`
+	Project  string `json:"project"`
+	Owner    bool   `json:"owner"`
+	Paused   bool   `json:"paused"`
+	Removed  bool   `json:"removed"`
 }
 
 // TeamModelsView is GET /api/teams/{id}/models: the team's own entries.

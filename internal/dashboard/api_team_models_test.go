@@ -101,9 +101,75 @@ func TestMyTeams(t *testing.T) {
 	if !slices.Contains(got[0].Repos, TeamRepoView{Instance: "main", Project: "acme/payments", Owner: true}) {
 		t.Errorf("repos = %+v", got[0].Repos)
 	}
+	if got[0].MemberCount != 2 || got[0].RepoCount != 2 || got[0].InstanceCount != 0 || got[0].OwnedCount != 1 {
+		t.Errorf("counts = %d members, %d repos, %d instances, %d owned", got[0].MemberCount, got[0].RepoCount, got[0].InstanceCount, got[0].OwnedCount)
+	}
 	got = decode[[]MyTeamView](t, te.get(te.admin, "/api/me/teams"), "admin", http.StatusOK)
 	if len(got) != 2 || got[0].Role != "admin" {
 		t.Errorf("admin's teams = %+v", got)
+	}
+}
+
+// The team page: who reads it, what a viewer is not shown, and which entries
+// are removed (no longer switched on, or an instance being removed).
+func TestTeamPage(t *testing.T) {
+	t.Parallel()
+	te := newTeamsEnv(t)
+	te.addLab(te.admin)
+	te.editTeam(te.payments, func(tm *store.Team) {
+		tm.Repos = append(tm.Repos, store.TeamRepo{Instance: "main", Project: "acme/gone"}, store.TeamRepo{Instance: "lab"})
+	})
+	te.reg.SetRemoving("lab")
+	url := teamURL(te.payments, "")
+
+	for name, c := range map[string]*http.Cookie{"other viewer": te.other, "other maintainer": te.otherMaintainer} {
+		wantCode(t, te.get(c, url), "GET as "+name, http.StatusNotFound)
+	}
+	wantCode(t, te.get(te.admin, teamURL(99999, "")), "GET unknown team", http.StatusNotFound)
+
+	v := decode[TeamPageView](t, te.get(te.viewer, url), "GET as viewer", http.StatusOK)
+	if v.Team.ID != te.payments || v.Team.Name != "Payments" || v.Role != "viewer" || v.CanEdit || len(v.Members) != 2 {
+		t.Errorf("viewer: view = %+v", v)
+	}
+	for _, m := range v.Members {
+		if m.Email != "" || m.Username == "" || m.Role == "" {
+			t.Errorf("viewer: member = %+v", m)
+		}
+	}
+	m := decode[TeamPageView](t, te.get(te.maintainer, url), "GET as maintainer", http.StatusOK)
+	if m.Role != "maintainer" || m.CanEdit {
+		t.Errorf("maintainer: role = %q, canEdit = %v", m.Role, m.CanEdit)
+	}
+	a := decode[TeamPageView](t, te.get(te.admin, url), "GET as admin", http.StatusOK)
+	if a.Role != "admin" || !a.CanEdit {
+		t.Errorf("admin: role = %q, canEdit = %v", a.Role, a.CanEdit)
+	}
+	for _, m := range a.Members {
+		if m.Email == "" {
+			t.Errorf("admin: member %q has no email", m.Username)
+		}
+	}
+	entry := func(instance, project string) (TeamEntryView, bool) {
+		for _, e := range a.Repos {
+			if e.Instance == instance && e.Project == project {
+				return e, true
+			}
+		}
+		return TeamEntryView{}, false
+	}
+	for _, c := range []struct {
+		instance, project      string
+		owner, paused, removed bool
+	}{
+		{"main", "acme/payments", true, false, false},
+		{"main", "acme/widgets", false, false, false},
+		{"main", "acme/gone", false, false, true},
+		{"lab", "", false, false, true},
+	} {
+		e, ok := entry(c.instance, c.project)
+		if !ok || e.Owner != c.owner || e.Paused != c.paused || e.Removed != c.removed {
+			t.Errorf("entry %s/%s = %+v (found %v), want owner %v, paused %v, removed %v", c.instance, c.project, e, ok, c.owner, c.paused, c.removed)
+		}
 	}
 }
 
