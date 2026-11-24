@@ -6,6 +6,7 @@ import { api, isStatus, paths, type TeamPageView, type TeamTab } from "../api";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, NotFound, Tabs } from "../ui";
 import TeamLimits from "./TeamLimits";
+import TeamMembers from "./TeamMembers";
 import TeamModelsTab from "./TeamModels";
 import TeamRepositories from "./TeamRepositories";
 import { useTeamSave } from "./teamSave";
@@ -50,7 +51,7 @@ export default function Team() {
       <Tabs<TeamTab> tabs={tabs} value={tab} onChange={(t) => setSearch(t === "repositories" ? {} : { tab: t }, { replace: true })} />
       <div role="tabpanel">
         {tab === "repositories" && <TeamRepositories view={v} />}
-        {tab === "members" && <Placeholder name="Members" />}
+        {tab === "members" && <TeamMembers view={v} />}
         {tab === "models" && <TeamModelsTab team={v.team.id} />}
         {tab === "limits" && <TeamLimits team={v.team.id} role={v.role} canEdit={maintains} />}
         {tab === "usage" && <Placeholder name="Usage" />}
