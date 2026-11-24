@@ -4,7 +4,7 @@ pergent.sh decides from what `pergent agent` reports. The result is checked agai
 
 | What happened | Comment | Commit status | Approved |
 | --- | --- | --- | --- |
-| Any skill has blocking issues that nobody dismissed (see [Commands](commands.md)) | The review | `failed` ("Blocking issues found") | No |
+| Any skill has blocking issues that nobody dismissed (see [Commands](commands.md)) | The review | `failed` ("Blocking issues found"), `neutral` with [`blocking_status: neutral`](#blocking-status) | No |
 | Any skill failed, has an unknown verdict, or is "clean" yet lists files it did not review | The review | `failure_status` ("Review failed for N of M skills") | No |
 | The Job died or sent nothing usable, the result is an error, has no skills, or has an unknown status | An error comment with the reason | `failure_status` | No |
 | The repository has no skill to review with (see [No skills, no review](skills.md#no-skills-no-review)) | None | None. The run is `skipped` and shown as "Not reviewed"; an earlier status of the same commit stays | **No**; the bot's approval of that commit is withdrawn |
@@ -26,6 +26,7 @@ The "Commit status" column is the GitLab commit status. On GitHub the same decis
 | `success` | `success` | `success` |
 | `failed` | `failed` | `failure` |
 | `failure_status` | `failed` or `success` (`failure_status: neutral`, still not approved) | `failure` or `neutral` (`failure_status: neutral`) |
+| `neutral` | `success` (still not approved) | `neutral` |
 
 A review that is running is `running` on GitLab and an `in_progress` Check Run on GitHub; a superseded run ends as `canceled` on GitLab and `cancelled` on GitHub. See [The `pergent` Check Run](../setup/github.md#the-pergent-check-run).
 
@@ -36,6 +37,26 @@ When a merge request gets a new head or a new target branch after the approve bo
 A skill whose blocking findings are all dismissed counts as clean, and the comment is written again with its **Dismissed** section (if the layout shows one); a review whose other conditions hold is then approved like a clean one. A failed, partial or missing review is never `success` and is never approved, and neither is a re-run of some skills that could not be merged with the earlier results of the others.
 
 Deciding a review again on the same head (a restored finding, a re-run, a draft that turns up) as not approved takes the approve bot's approval of that head off, as a new head does. The withdrawal is recorded first and tried again until it works. A review that fails for good, because it can't be posted after the retries (see [Pushes, edits and failures](#pushes-edits-and-failures)), takes the bot's approval of that commit off the same way: the withdrawal is recorded in the same step that gives the review up, so a crash can't lose it, and the approval sweep also withdraws the approval of any commit whose newest review is in that state, whatever was recorded. A commit whose newest review failed never keeps an approval an earlier review of it gave.
+
+## Blocking status
+
+`blocking_status` picks whether pergent's status can block a merge. It is `failed` (the default) or `neutral`. It is set in the config (`repositories[].blocking_status`), as an admin default on the admin **Settings** page, or on a repository's **Settings** tab, as **Status when a review finds blocking issues**. Only an admin changes it.
+
+| What happened | `blocking_status: failed` | `blocking_status: neutral` |
+| --- | --- | --- |
+| Clean review | `success` | `success` |
+| Blocking findings | `failed` | `neutral` |
+| A blocking [CI job](ci-jobs.md) did not pass | `failed` | `neutral` |
+| The review could not be done (failed skills, no model left, a Job error) | `failure_status` | `neutral` |
+| The review could not be posted (`publish_failed`) | `failure_status`, `failed` with blocking findings | `neutral` |
+| Superseded | `canceled` | `canceled` |
+| Waiting (CI, quota, limit) | `pending` | `pending` |
+
+- **`neutral` means the status is never red.** It covers a review that could not be done too, so `failure_status` only matters while `blocking_status` is `failed`.
+- **The description says so.** When `neutral` turns a status that would have been `failed` into `neutral`, the description ends with ` · not blocking merge`, for example `Blocking issues found · not blocking merge` or `CI blocks approval: cycode-scan failed · not blocking merge`. The description before it is cut first, so it stays within 140 characters. A status that `failure_status: neutral` made neutral keeps its text.
+- **Nothing else changes.** A blocking review, one held back by CI and one that could not be done are never approved, and an earlier approval of the same head is still withdrawn. A repository that needs pergent's approval to merge is still blocked by that rule. The comment is the same. The dashboard still shows the review as **Blocking** or **Blocked by CI**, with the status that was set. A failed blocking CI job still fails its own pipeline.
+- **Settings that can't be read give `failed`.** Only a `neutral` that pergent.sh read turns a status neutral.
+- The repository page shows `Merge gate: off (blocking status is neutral)` while it is `neutral`.
 
 ## Turning approval off
 
@@ -56,5 +77,5 @@ Turning it off also withdraws every approval the approve bot already holds in th
 - A Job whose pod can't start because its image can't be pulled (or its container config is invalid) is deleted and reported after about 5 minutes.
 - A Job whose pod the cluster refuses to create (for example, one rejected by an admission policy) is only reported when the Job reaches its deadline, as `DeadlineExceeded`: `jobs.timeout` plus at least 4 minutes, and about a minute more for the report.
 - Runs that were claimed but not launched (for example because pergent.sh crashed) are requeued at startup and after 5 minutes.
-- Publishing is retried with backoff. After 10 failed attempts the run becomes `publish_failed`: pergent.sh makes one last attempt to set the head's status to the repository's `failure_status` with the description "pergent couldn't post its review": on GitLab `failed`, or `success` with `failure_status: neutral`; on GitHub the Check Run is completed with `failure` or `neutral` and that title. A review with blocking findings is always `failed`, and so is the status when the repository's settings can't be read or the repository is gone. This is so a required check isn't left running. pergent.sh posts nothing more to the merge request; the review is never approved, and the approve bot's approval of that head, if an earlier review of it gave one, is withdrawn (recorded with the give-up itself, tried at once, and tried again by the approval sweep until it works). The failure itself is only in the logs.
+- Publishing is retried with backoff. After 10 failed attempts the run becomes `publish_failed`: pergent.sh makes one last attempt to set the head's status to the repository's `failure_status` with the description "pergent couldn't post its review": on GitLab `failed`, or `success` with `failure_status: neutral`; on GitHub the Check Run is completed with `failure` or `neutral` and that title. A review with blocking findings is always `failed`, and so is the status when the repository's settings can't be read or the repository is gone. With [`blocking_status: neutral`](#blocking-status) the status is `neutral` instead (`success` on GitLab), with the description "pergent couldn't post its review · not blocking merge", unless the settings can't be read or the repository is gone. This is so a required check isn't left running. pergent.sh posts nothing more to the merge request; the review is never approved, and the approve bot's approval of that head, if an earlier review of it gave one, is withdrawn (recorded with the give-up itself, tried at once, and tried again by the approval sweep until it works). The failure itself is only in the logs.
 - The comment pergent renders is held to 990,000 bytes on GitLab and 60,000 on GitHub, which refuses a comment over 65,536 characters; the rest of the limit is room for the note pergent.sh adds (the list of skipped files is at most 20 paths and 4000 bytes).
