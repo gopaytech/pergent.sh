@@ -9,6 +9,7 @@ import TeamLimits from "./TeamLimits";
 import TeamMembers from "./TeamMembers";
 import TeamModelsTab from "./TeamModels";
 import TeamRepositories from "./TeamRepositories";
+import TeamUsage from "./TeamUsage";
 import { useTeamSave } from "./teamSave";
 
 // Team is one team's page in the user area: its repositories, members,
@@ -54,19 +55,9 @@ export default function Team() {
         {tab === "members" && <TeamMembers view={v} />}
         {tab === "models" && <TeamModelsTab team={v.team.id} />}
         {tab === "limits" && <TeamLimits team={v.team.id} role={v.role} canEdit={maintains} />}
-        {tab === "usage" && <Placeholder name="Usage" />}
+        {tab === "usage" && <TeamUsage team={v.team.id} />}
       </div>
     </div>
-  );
-}
-
-// Placeholder holds the place of a tab that is not built yet.
-function Placeholder({ name }: { name: string }) {
-  return (
-    <section className="card" aria-label={name}>
-      <h2>{name}</h2>
-      <div className="pad meta">Not available yet.</div>
-    </section>
   );
 }
 
