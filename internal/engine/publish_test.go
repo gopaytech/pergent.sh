@@ -1592,14 +1592,15 @@ func TestPublishGiveUpRepositoryGoneIsFailed(t *testing.T) {
 }
 
 // Settings that can't be read at the give-up fail closed too: the dashboard
-// repository is set to neutral, but its defaults can no longer be read.
+// repository is set to neutral (both statuses), but its defaults can no
+// longer be read.
 func TestPublishGiveUpUnreadableSettingsIsFailed(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories = nil
 	neutral := string(config.FailureStatusNeutral)
 	if err := env.Store.UpsertDashboardRepo(env.ctx, store.DashboardRepo{
-		Instance: testInstance, Project: testProjectPath, FailureStatus: &neutral,
+		Instance: testInstance, Project: testProjectPath, FailureStatus: &neutral, BlockingStatus: &neutral,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -2730,7 +2731,7 @@ func TestOutcomeFailedRunWithoutCISnapshot(t *testing.T) {
 		if !slices.Equal(o.CI, want) {
 			t.Errorf("%s: Outcome.CI = %+v, want %+v", name, o.CI, want)
 		}
-		if d := policy.Decide(o, config.FailureStatusNeutral); d.Status != policy.StatusFailed || d.Approve {
+		if d := policy.Decide(o, config.FailureStatusNeutral, config.BlockingStatusFailed); d.Status != policy.StatusFailed || d.Approve {
 			t.Errorf("%s: decided %s, approve %v; want failed, no approval", name, d.Status, d.Approve)
 		}
 	}

@@ -1320,6 +1320,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"linkedReposEnabled":               {repo.LinkedReposEnabled, ov[settings.KeyLinkedReposEnabled]},
 		"linkedRepos":                      {linksView(repo.LinkedRepos), len(repo.LinkedRepos) > 0},
 		"failureStatus":                    {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
+		"blockingStatus":                   {string(repo.BlockingStatus), ov[settings.KeyBlockingStatus]},
 		"skills":                           {repo.Skills, ov[settings.KeySkills]},
 		"repoSkills":                       {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},
 		"jobTimeoutSeconds":                {int64(repo.JobTimeout / time.Second), ov[settings.KeyJobTimeout]},

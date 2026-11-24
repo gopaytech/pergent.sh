@@ -89,7 +89,7 @@ func TestPublishRecordsDecision(t *testing.T) {
 // reason says so. The comment keeps today's text.
 func TestErrorResultReasonNamesStep(t *testing.T) {
 	o := policy.Outcome{Result: &result.Result{Status: "error", Error: &result.Error{Code: "untrusted_instructions", Message: "untrusted instructions"}}}
-	d := policy.Decide(o, config.FailureStatusFailed)
+	d := policy.Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 
 	rd := decisionOf(o, d, false, approvalMade)
 	if rd.Outcome != store.OutcomeFailed || rd.Reason != "the review failed: untrusted instructions" {
@@ -100,7 +100,7 @@ func TestErrorResultReasonNamesStep(t *testing.T) {
 	}
 	// A failure reason the watcher stored already names its step.
 	o = policy.Outcome{FailureReason: "the clone failed (checkout exited with code 128)"}
-	if rd := decisionOf(o, policy.Decide(o, config.FailureStatusFailed), false, approvalMade); rd.Reason != o.FailureReason {
+	if rd := decisionOf(o, policy.Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed), false, approvalMade); rd.Reason != o.FailureReason {
 		t.Errorf("reason = %q, want %q", rd.Reason, o.FailureReason)
 	}
 }

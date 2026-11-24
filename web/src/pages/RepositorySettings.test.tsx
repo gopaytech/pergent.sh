@@ -294,8 +294,60 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderApp("/repos/main/acme/payments?tab=settings");
     await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("who is trusted and the token quota"));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("who is trusted, the token quota and the status settings"));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("The model chain stays as it is."));
+    confirm.mockRestore();
+  });
+});
+
+describe("RepositorySettings: the status settings", () => {
+  const payments = "/api/repositories/main/acme/payments";
+  const routes = (detail: RepositoryDetailView, me = ssoAdmin) => ({
+    ...base,
+    "GET /api/me": { body: me },
+    [`GET ${payments}`]: { body: detail },
+    [`PUT ${payments}/settings`]: { body: detail },
+  });
+  const failure = () => screen.findByRole("combobox", { name: "Status when a review can't run" });
+  const blocking = () => screen.findByRole("combobox", { name: "Status when a review finds blocking issues" });
+
+  it("lets an admin set the blocking status, and sends only that", async () => {
+    const fake = fakeApi(routes(repoDetail(repoPayments)));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    expect(await blocking()).toHaveValue("failed");
+    expect(await blocking()).toBeEnabled();
+    expect(await failure()).toBeEnabled();
+    expect(screen.queryByText("Only an admin changes this.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not used: the blocking status is neutral")).not.toBeInTheDocument();
+    await userEvent.selectOptions(await blocking(), "neutral");
+    // The failure status is not used now, but stays changeable.
+    expect(screen.getByText("Not used: the blocking status is neutral")).toBeInTheDocument();
+    expect(await failure()).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", `${payments}/settings`)[0].body).toEqual({ blockingStatus: "neutral" });
+  });
+
+  it("shows a maintainer both statuses read-only, and never sends them", async () => {
+    const detail = repoDetail(repoPayments, "maintainer");
+    detail.settings.blockingStatus = { value: "neutral", overridden: true };
+    const fake = fakeApi(routes(detail, viewer));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    expect(await blocking()).toHaveValue("neutral");
+    expect(await blocking()).toBeDisabled();
+    expect(await failure()).toBeDisabled();
+    expect(screen.getAllByText("Only an admin changes this.")).toHaveLength(2);
+    expect(screen.getByText("Not used: the blocking status is neutral")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("switch", { name: "Approve clean reviews" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", `${payments}/settings`)[0].body).toEqual({ approve: false });
+  });
+
+  it("says in a maintainer's reset confirmation that the status settings stay", async () => {
+    fakeApi(routes(repoDetail(repoPayments, "maintainer"), viewer));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("the status settings"));
     confirm.mockRestore();
   });
 });

@@ -1,6 +1,7 @@
 // Package policy decides what pergent.sh does with a review outcome: the
 // comment to post, the commit status to set and whether the approve bot
-// approves. It is a pure function of the outcome and the failure setting.
+// approves. It is a pure function of the outcome and the two status
+// settings.
 //
 // The rule that matters: a failed, partial or missing review is never
 // "success" and never approved. Anything unrecognised counts as a failure.
@@ -43,6 +44,9 @@ const (
 	descClean           = "No blocking issues"
 	descPartlySkipped   = "No blocking issues; not approved: some changed files weren't reviewed"
 	descNotApproved     = "No blocking issues; not approved: "
+	// descNotBlocking ends the description of a status that blocking_status
+	// neutral turned from failed to neutral.
+	descNotBlocking = " · not blocking merge"
 
 	reasonDraft              = "draft"
 	reasonApproveUnavailable = "the pergent approve App isn't installed on this repository or lacks Pull requests: write"
@@ -217,10 +221,14 @@ type Decision struct {
 }
 
 // Decide applies the approval policy. failure is the repository's
-// failure_status; it picks the status of every "could not review" row. The
-// comment it returns has its quick actions neutralised (NeutralizeQuickActions),
-// whatever the path that built it.
-func Decide(o Outcome, failure config.FailureStatus) Decision {
+// failure_status; it picks the status of every "could not review" row.
+// blocking is its blocking_status: neutral turns every failed status, the
+// CI block's too, into neutral, and the description says so
+// (NotBlockingMerge). Only neutral does that: anything else, "" included, is
+// failed. It never changes the approval, the kind or the comment. The
+// comment it returns has its quick actions neutralised
+// (NeutralizeQuickActions), whatever the path that built it.
+func Decide(o Outcome, failure config.FailureStatus, blocking config.BlockingStatus) Decision {
 	d := decide(o, failure)
 	// After the failure_status mapping, so neutral can't hide a CI block.
 	if blocked := ci.Blocking(o.CI); len(blocked) > 0 {
@@ -233,8 +241,24 @@ func Decide(o Outcome, failure config.FailureStatus) Decision {
 			d.Description = ciDescription(d.Description, blocked)
 		}
 	}
+	// Last, so it covers the CI block too.
+	if blocking == config.BlockingStatusNeutral && d.Status == StatusFailed {
+		d.Status, d.Description = StatusNeutral, NotBlockingMerge(d.Description)
+	}
 	d.Comment = NeutralizeQuickActions(d.Comment)
 	return d
+}
+
+// NotBlockingMerge is desc with " · not blocking merge" after it, within
+// maxDescription characters: desc is cut first (ending in "…"), so the
+// suffix is always whole. It marks a status that blocking_status neutral
+// turned from failed to neutral, so nobody reads it as a pass.
+func NotBlockingMerge(desc string) string {
+	room := maxDescription - utf8.RuneCountInString(descNotBlocking)
+	if r := []rune(desc); len(r) > room {
+		desc = string(r[:room-1]) + "…"
+	}
+	return desc + descNotBlocking
 }
 
 // NeutralizeQuickActions stops GitLab from running quick actions in a

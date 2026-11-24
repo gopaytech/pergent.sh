@@ -59,6 +59,9 @@ func TestLoadValid(t *testing.T) {
 	if got := cfg.Repositories[0].FailureStatus; got != "failed" {
 		t.Errorf("FailureStatus = %q, want failed", got)
 	}
+	if got := cfg.Repositories[0].BlockingStatus; got != BlockingStatusFailed {
+		t.Errorf("BlockingStatus = %q, want failed", got)
+	}
 	if cfg.LLM.APIKeyEnv != "OPENCODE_API_KEY" {
 		t.Errorf("LLM.APIKeyEnv = %q", cfg.LLM.APIKeyEnv)
 	}
@@ -108,6 +111,8 @@ func TestValidateRejects(t *testing.T) {
 		{"image latest", func(c *Config) { c.Jobs.Image = "ghcr.io/gopaytech/pergent:latest" }, "pinned"},
 		{"image registry port but no tag", func(c *Config) { c.Jobs.Image = "registry.example.com:5000/pergent" }, "pinned"},
 		{"bad failure_status", func(c *Config) { c.Repositories[0].FailureStatus = "maybe" }, "failure_status"},
+		{"bad blocking_status", func(c *Config) { c.Repositories[0].BlockingStatus = "maybe" }, "blocking_status"},
+		{"blocking_status success", func(c *Config) { c.Repositories[0].BlockingStatus = "success" }, "blocking_status"},
 		{"unknown instance", func(c *Config) { c.Repositories[0].GitLab = "nope" }, "unknown gitlab instance"},
 		{"duplicate repository", func(c *Config) { c.Repositories = append(c.Repositories, c.Repositories[0]) }, "duplicate repository"},
 		{"duplicate instance", func(c *Config) { c.GitLab = append(c.GitLab, c.GitLab[0]) }, "duplicate gitlab instance"},
@@ -340,7 +345,7 @@ func TestLoadGitHubMixed(t *testing.T) {
 
 	repo := cfg.Repositories[1]
 	if repo.GitHub != "gh" || repo.GitLab != "" || repo.Project != "acme/widgets" ||
-		repo.FailureStatus != FailureStatusNeutral {
+		repo.FailureStatus != FailureStatusNeutral || repo.BlockingStatus != BlockingStatusNeutral {
 		t.Errorf("github repository = %+v", repo)
 	}
 	if cfg.Repositories[0].FailureStatus != FailureStatusFailed {

@@ -1095,7 +1095,7 @@ func TestRepositoryDetail(t *testing.T) {
 		t.Errorf("repo = %+v", v.Repo)
 	}
 	settings, _ := json.Marshal(v.Settings)
-	want := `{"approve":{"value":false,"overridden":true},"builtInRules":{"value":[],"overridden":false},"checkDeleted":{"value":false,"overridden":false},"ciJobs":{"value":{"jobs":[],"wait":"30m"},"overridden":false},` +
+	want := `{"approve":{"value":false,"overridden":true},"blockingStatus":{"value":"failed","overridden":false},"builtInRules":{"value":[],"overridden":false},"checkDeleted":{"value":false,"overridden":false},"ciJobs":{"value":{"jobs":[],"wait":"30m"},"overridden":false},` +
 		`"commandsAuthorAndMaintainersOnly":{"value":true,"overridden":false},` +
 		`"commentLayout":{"value":["summary:open","findings:collapsed","dismissed:collapsed","checks:open","files:collapsed"],"overridden":false},` +
 		`"failureStatus":{"value":"failed","overridden":false},` +
@@ -1279,13 +1279,13 @@ func TestAdminSettings(t *testing.T) {
 	// render.DefaultLayout and a change there should show here.
 	layout := []string{"summary:open", "findings:collapsed", "dismissed:collapsed", "checks:open", "files:collapsed"}
 	want := AdminSettingsView{
-		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, CommentLayout: layout, FailureStatus: "failed",
+		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, CommentLayout: layout, FailureStatus: "failed", BlockingStatus: "failed",
 			JobTimeoutSeconds: 600, MaxTurns: 40,
 			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{}, RuleSets: []string{},
-			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, CommentLayout: layout, FailureStatus: "failed",
+			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, CommentLayout: layout, FailureStatus: "failed", BlockingStatus: "failed",
 				JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
 			Pinned: map[string]bool{"approve": false, "reviewDrafts": false, "inlineFindings": false, "commandsAuthorAndMaintainersOnly": false,
-				"incrementalReviews": false, "learnFromDismissals": false, "quietReviews": false, "commentLayout": false, "linkedReposEnabled": false, "failureStatus": false, "jobTimeoutSeconds": false,
+				"incrementalReviews": false, "learnFromDismissals": false, "quietReviews": false, "commentLayout": false, "linkedReposEnabled": false, "failureStatus": false, "blockingStatus": false, "jobTimeoutSeconds": false,
 				"maxTurns": false, "jobMemory": false, "rerunLimitPerMR": false, "rerunLimitPerRepo": false}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)

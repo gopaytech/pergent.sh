@@ -413,6 +413,9 @@ export type RepoSettings = {
   // overridden is false.
   commentLayout: SettingView<string[]>;
   failureStatus: SettingView<string>;
+  // blockingStatus is "failed" or "neutral": neutral never sets a failed
+  // status. Only an admin changes it and failureStatus.
+  blockingStatus: SettingView<string>;
   // skills is null for the default list, otherwise the library skills.
   skills: SettingView<string[] | null>;
   // repoSkills are the detected repository skills turned on.
@@ -721,7 +724,9 @@ export type SettingsUpdate = Partial<{
   linkedReposEnabled: boolean | null;
   linkedRepos: Link[] | null;
   commentLayout: string[] | null;
+  // Admins only, both: the server refuses a maintainer's save that carries either.
   failureStatus: string | null;
+  blockingStatus: string | null;
   skills: string[] | null;
   repoSkills: string[] | null;
   jobTimeoutSeconds: number | null;
@@ -922,6 +927,7 @@ export type DefaultValues = {
   // layout until one is saved.
   commentLayout: string[];
   failureStatus: string;
+  blockingStatus: string;
   jobTimeoutSeconds: number;
   maxTurns: number;
   jobMemory: string;

@@ -281,8 +281,8 @@ func TestReconcileOneRepoFailureDoesNotStopOthers(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories = []config.Repository{
-		{GitLab: testInstance, Project: testProjectPath, FailureStatus: config.FailureStatusFailed},
-		{GitLab: testInstance, Project: "acme/gadgets", FailureStatus: config.FailureStatusFailed},
+		{GitLab: testInstance, Project: testProjectPath, FailureStatus: config.FailureStatusFailed, BlockingStatus: config.BlockingStatusFailed},
+		{GitLab: testInstance, Project: "acme/gadgets", FailureStatus: config.FailureStatusFailed, BlockingStatus: config.BlockingStatusFailed},
 	}
 	env.GitLab.Reply(http.MethodGet, "/projects/acme%2Fwidgets", http.StatusForbidden, `{"message":"403 Forbidden"}`)
 	serveProject(env, 9, "acme/gadgets")

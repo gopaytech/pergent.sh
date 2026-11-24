@@ -25,6 +25,7 @@ import RuleSetPicker from "../RuleSetPicker";
 import MarkBanner, { markText } from "../MarkBanner";
 import { AddModelForm, EditModelForm } from "../ModelForms";
 import { QuotaLine, parseQuota, quotaMax } from "../quota";
+import { blockingHelp, blockingLabel, failureHelp, failureLabel, notUsedNote } from "../statusSettings";
 import { ErrorBox, Loading, Switch, bytesText, noFill, secretText } from "../ui";
 
 // AdminSettings holds what an admin sets for the whole of pergent.sh: the
@@ -148,6 +149,7 @@ function Defaults({ v }: { v: DefaultsView }) {
   // null is the built-in layout, which is all the config gives.
   const [layout, setLayout] = useState<string[] | null>(pinnedLayout(v));
   const [failureStatus, setFailureStatus] = useState(v.failureStatus);
+  const [blockingStatus, setBlockingStatus] = useState(v.blockingStatus);
   const [timeout, setTimeoutText] = useState(String(v.jobTimeoutSeconds));
   const [steps, setSteps] = useState(String(v.maxTurns));
   const [memory, setMemory] = useState(v.jobMemory);
@@ -209,6 +211,7 @@ function Defaults({ v }: { v: DefaultsView }) {
       linkedReposEnabled: orNull(linked, cfg.linkedReposEnabled),
       commentLayout: layout === null || layout.join() === cfg.commentLayout.join() ? null : layout,
       failureStatus: orNull(failureStatus, cfg.failureStatus),
+      blockingStatus: orNull(blockingStatus, cfg.blockingStatus),
       jobTimeoutSeconds: orNull(Number(t), cfg.jobTimeoutSeconds),
       maxTurns: orNull(Number(s), cfg.maxTurns),
       jobMemory: memory.trim() === "" ? null : orNull(memory.trim(), cfg.jobMemory),
@@ -386,11 +389,32 @@ function Defaults({ v }: { v: DefaultsView }) {
       </div>
       <div className="set">
         <div>
-          <div className="name">Status when a review fails</div>
+          <div className="name">{blockingLabel}</div>
           <div className="help">
-            "neutral" won't block merging when a review can't be done. On GitLab the status is success; the review is still not approved.
+            {blockingHelp}
             <FromConfig
-              field="Status when a review fails"
+              field={blockingLabel}
+              pinned={pinned("blockingStatus")}
+              shown={statusText(cfg.blockingStatus)}
+              disabled={save.isPending}
+              onUse={() => setBlockingStatus(cfg.blockingStatus)}
+            />
+          </div>
+        </div>
+        <div>
+          <select aria-label={blockingLabel} value={blockingStatus} disabled={save.isPending} onChange={(e) => setBlockingStatus(e.target.value)}>
+            <option value="failed">failed (blocks merge)</option>
+            <option value="neutral">neutral</option>
+          </select>
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">{failureLabel}</div>
+          <div className="help">
+            {failureHelp}
+            <FromConfig
+              field={failureLabel}
               pinned={pinned("failureStatus")}
               shown={statusText(cfg.failureStatus)}
               disabled={save.isPending}
@@ -399,15 +423,11 @@ function Defaults({ v }: { v: DefaultsView }) {
           </div>
         </div>
         <div>
-          <select
-            aria-label="Status when a review fails"
-            value={failureStatus}
-            disabled={save.isPending}
-            onChange={(e) => setFailureStatus(e.target.value)}
-          >
+          <select aria-label={failureLabel} value={failureStatus} disabled={save.isPending} onChange={(e) => setFailureStatus(e.target.value)}>
             <option value="failed">failed (blocks merge)</option>
             <option value="neutral">neutral</option>
           </select>
+          {blockingStatus === "neutral" && <div className="meta">{notUsedNote}</div>}
         </div>
       </div>
       <div className="set">

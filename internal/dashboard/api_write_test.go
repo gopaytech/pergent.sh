@@ -391,6 +391,12 @@ func TestSettingsValidation(t *testing.T) {
 		{`{"failureStatus":"neutral"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "neutral" }},
 		{`{"failureStatus":"success"}`, false, nil},
 		{`{"failureStatus":"failed"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "failed" }},
+		{`{"blockingStatus":"neutral"}`, true, func(r store.DashboardRepo) bool { return r.BlockingStatus != nil && *r.BlockingStatus == "neutral" }},
+		{`{"blockingStatus":"success"}`, false, nil},
+		{`{"blockingStatus":true}`, false, nil},
+		{`{"blockingStatus":"failed"}`, true, func(r store.DashboardRepo) bool { return r.BlockingStatus != nil && *r.BlockingStatus == "failed" }},
+		{`{"blockingStatus":null}`, true, func(r store.DashboardRepo) bool { return r.BlockingStatus == nil }},
+		{`{"blockingStatus":"neutral"}`, true, func(r store.DashboardRepo) bool { return r.BlockingStatus != nil && *r.BlockingStatus == "neutral" }},
 		{`{"skills":["style"]}`, true, func(r store.DashboardRepo) bool { return slices.Equal(r.Skills, []string{"style"}) }},
 		{`{"skills":["style","nope"]}`, false, nil},
 		{`{"skills":[]}`, false, nil},
@@ -481,7 +487,7 @@ func TestSettingsValidation(t *testing.T) {
 	rec = e.send(c, "POST", target+"/reset", "")
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
-	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
+	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.BlockingStatus != nil || r.Skills != nil ||
 		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.QuietReviews != nil || r.CheckDeleted != nil || r.CommentLayout != nil || r.LinkedReposEnabled != nil || r.LinkedRepos != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
 		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
@@ -568,6 +574,67 @@ func TestCapsNeedAdmin(t *testing.T) {
 	wantCode(t, e.send(admin, "POST", target+"/reset", ""), "admin reset", http.StatusOK)
 	if r, _ = e.storedRepo("main", "acme/gadgets"); r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil {
 		t.Errorf("after an admin's reset row = %+v; want the caps cleared", r)
+	}
+}
+
+// Only admins change the two status settings: a maintainer's PUT naming
+// either (even to null, even beside a setting they may change) is 403 and
+// changes nothing, and their reset leaves both. An admin sets them, the audit
+// detail names each with its new value, and an admin's reset clears them.
+func TestStatusSettingsNeedAdmin(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) {
+		neutral := "neutral"
+		r.FailureStatus, r.BlockingStatus = &neutral, &neutral
+	})
+	target := "/api/repositories/main/acme/gadgets/settings"
+	e.aliceOn("main", store.RoleMaintainer)
+	maintainer := e.aliceSession()
+
+	for _, body := range []string{`{"failureStatus":"failed"}`, `{"blockingStatus":"failed"}`, `{"blockingStatus":null}`, `{"failureStatus":null}`,
+		`{"approve":false,"blockingStatus":"failed"}`} {
+		before, _ := e.storedRepo("main", "acme/gadgets")
+		rec := e.send(maintainer, "PUT", target, body)
+		wantCode(t, rec, "maintainer PUT "+body, http.StatusForbidden)
+		if want := "only an admin changes the status settings"; errorOf(t, rec) != want {
+			t.Errorf("maintainer PUT %s: error = %q", body, errorOf(t, rec))
+		}
+		if after, _ := e.storedRepo("main", "acme/gadgets"); !after.UpdatedAt.Equal(before.UpdatedAt) {
+			t.Errorf("maintainer PUT %s changed the row", body)
+		}
+	}
+	// The maintainer still sees both values.
+	v := getJSON[RepositoryDetailView](e, maintainer, "/api/repositories/main/acme/gadgets")
+	if s := v.Settings["blockingStatus"]; s.Value != "neutral" || !s.Overridden {
+		t.Errorf("maintainer's blockingStatus = %+v", s)
+	}
+	wantCode(t, e.send(maintainer, "PUT", target, `{"approve":false}`), "maintainer PUT approve", http.StatusOK)
+	wantCode(t, e.send(maintainer, "POST", target+"/reset", ""), "maintainer reset", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.Approve != nil || r.FailureStatus == nil || *r.FailureStatus != "neutral" ||
+		r.BlockingStatus == nil || *r.BlockingStatus != "neutral" {
+		t.Errorf("after a maintainer's reset row = %+v; want approve cleared, both statuses kept", r)
+	}
+
+	admin := e.userOnMain(true) // the same alice, made an admin
+	wantCode(t, e.send(admin, "PUT", target, `{"blockingStatus":"failed","failureStatus":null}`), "admin PUT statuses", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.BlockingStatus == nil || *r.BlockingStatus != "failed" || r.FailureStatus != nil {
+		t.Errorf("after an admin's PUT row = %+v", r)
+	}
+	var detail string
+	for _, a := range e.auditEntries() {
+		if a.Action == "settings_updated" {
+			detail = a.Detail
+			break
+		}
+	}
+	if want := "blockingStatus=failed, failureStatus=default"; detail != want {
+		t.Errorf("audit detail = %q, want %q", detail, want)
+	}
+	wantCode(t, e.send(admin, "PUT", target, `{"blockingStatus":"neutral"}`), "admin PUT neutral", http.StatusOK)
+	wantCode(t, e.send(admin, "POST", target+"/reset", ""), "admin reset", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.BlockingStatus != nil || r.FailureStatus != nil {
+		t.Errorf("after an admin's reset row = %+v; want both statuses cleared", r)
 	}
 }
 
@@ -1031,6 +1098,56 @@ func TestParseDefaultsMaxTurns(t *testing.T) {
 	}
 	if got := changedDefaults(b, b); len(got) != 0 {
 		t.Errorf("changedDefaults of equal defaults = %q", got)
+	}
+}
+
+// blockingStatus is "failed", "neutral" or null in a repository's settings
+// and in the defaults; both status keys are the admins', and the audit names
+// each with its new value. No database here.
+func TestParseBlockingStatus(t *testing.T) {
+	d := &Dashboard{}
+	for _, tc := range []struct {
+		body string
+		want *string
+		msg  string
+	}{
+		{`{"blockingStatus":"neutral"}`, ptr("neutral"), ""},
+		{`{"blockingStatus":"failed"}`, ptr("failed"), ""},
+		{`{"blockingStatus":null}`, nil, ""},
+		{`{"blockingStatus":"success"}`, nil, `blockingStatus must be "failed", "neutral" or null`},
+		{`{"blockingStatus":1}`, nil, `blockingStatus must be "failed", "neutral" or null`},
+	} {
+		edit, keys, msg := d.parseSettings(httptest.NewRequest("PUT", "/x", strings.NewReader(tc.body)))
+		if msg != tc.msg {
+			t.Errorf("settings %s: msg = %q, want %q", tc.body, msg, tc.msg)
+		}
+		if msg == "" {
+			row := store.DashboardRepo{BlockingStatus: ptr("x")}
+			edit(&row)
+			if !samePtr(row.BlockingStatus, tc.want) || !slices.Equal(keys, []string{"blockingStatus"}) {
+				t.Errorf("settings %s: BlockingStatus = %v, keys %q", tc.body, row.BlockingStatus, keys)
+			}
+		}
+		next, _, msg := d.parseDefaults(httptest.NewRequest("PUT", "/x", strings.NewReader(tc.body)), nil, nil)
+		if msg != tc.msg || msg == "" && !samePtr(next.BlockingStatus, tc.want) {
+			t.Errorf("defaults %s: %v, %q", tc.body, next.BlockingStatus, msg)
+		}
+	}
+	for key, want := range map[string]bool{"failureStatus": true, "blockingStatus": true, "approve": false, "rerunLimitPerMR": false} {
+		if isStatusKey(key) != want {
+			t.Errorf("isStatusKey(%q) = %v", key, !want)
+		}
+	}
+	got := changedDefaults(store.RepoDefaults{}, store.RepoDefaults{BlockingStatus: ptr("neutral"), FailureStatus: ptr("neutral")})
+	if !slices.Equal(got, []string{"failureStatus=neutral", "blockingStatus=neutral"}) {
+		t.Errorf("changedDefaults = %q", got)
+	}
+	got = changedDefaults(store.RepoDefaults{BlockingStatus: ptr("neutral")}, store.RepoDefaults{})
+	if !slices.Equal(got, []string{"blockingStatus=default"}) {
+		t.Errorf("changedDefaults back to the default = %q", got)
+	}
+	if got := statusDetail("blockingStatus", nil); got != "blockingStatus=default" {
+		t.Errorf("statusDetail = %q", got)
 	}
 }
 

@@ -63,7 +63,7 @@ const (
 	msgWriteFailed    = "could not save the change, please try again"
 	msgUserLookup     = "could not look the user up on the platform, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, checkDeleted, commentLayout, ciJobs, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, monthlyTokenQuota, ruleSets, builtInRules"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, checkDeleted, commentLayout, ciJobs, linkedReposEnabled, linkedRepos, failureStatus, blockingStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, monthlyTokenQuota, ruleSets, builtInRules"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsAdminCaps = "only admins can change its re-run caps"
 	msgNeedsRole      = "only maintainers of this repository and admins can change its settings"
@@ -680,6 +680,12 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, msgNeedsAdminQuota)
 		return
 	}
+	// So are the two status settings: they decide whether pergent's status
+	// can block a merge.
+	if slices.ContainsFunc(keys, isStatusKey) && session(r).Role(repo.Instance, repo.Project) < RoleAdmin {
+		writeError(w, http.StatusForbidden, msgNeedsAdminStatus)
+		return
+	}
 	// ci.Validate needs the platform (GitHub's report needs an artifact).
 	if slices.Contains(keys, "ciJobs") {
 		var probe store.DashboardRepo
@@ -731,14 +737,39 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 			row.TrustedAuthors = resolved
 		}
 	}
-	// The audit detail names the quota a change gives, not only the key.
+	// The audit detail names the quota and the statuses a change gives, not
+	// only the key.
 	details := slices.Clone(keys)
-	if i := slices.Index(details, "monthlyTokenQuota"); i >= 0 {
-		var probe store.DashboardRepo
-		edit(&probe)
-		details[i] = "monthlyTokenQuota=" + quotaText(probe.MonthlyTokenQuota)
+	var probe store.DashboardRepo
+	edit(&probe)
+	for i, key := range details {
+		switch key {
+		case "monthlyTokenQuota":
+			details[i] = "monthlyTokenQuota=" + quotaText(probe.MonthlyTokenQuota)
+		case "failureStatus":
+			details[i] = statusDetail(key, probe.FailureStatus)
+		case "blockingStatus":
+			details[i] = statusDetail(key, probe.BlockingStatus)
+		}
 	}
 	d.updateSettings(w, r, repo, edit, "settings changed", "settings_updated", strings.Join(details, ", "))
+}
+
+// msgNeedsAdminStatus answers a non-admin's change of failureStatus or
+// blockingStatus.
+const msgNeedsAdminStatus = "only an admin changes the status settings"
+
+// isStatusKey reports whether key is one of the status settings,
+// failureStatus and blockingStatus, which only an admin changes.
+func isStatusKey(key string) bool { return key == "failureStatus" || key == "blockingStatus" }
+
+// statusDetail is a status setting's audit text: the key and its new value,
+// "default" for null.
+func statusDetail(key string, v *string) string {
+	if v == nil {
+		return key + "=default"
+	}
+	return key + "=" + *v
 }
 
 // isTrustKey reports whether key is one of the trusted-authors settings,
@@ -835,13 +866,13 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// A maintainer's reset leaves the caps, the links, who is trusted and the
-	// token quota, which only an admin changes. The model chain has its own
-	// reset (POST .../chain/reset).
+	// A maintainer's reset leaves the caps, the links, who is trusted, the
+	// token quota and the two status settings, which only an admin changes.
+	// The model chain has its own reset (POST .../chain/reset).
 	admin := session(r).Role(repo.Instance, repo.Project) >= RoleAdmin
 	detail := ""
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
-		row.Approve, row.ReviewDrafts, row.InlineFindings, row.FailureStatus = nil, nil, nil, nil
+		row.Approve, row.ReviewDrafts, row.InlineFindings = nil, nil, nil
 		row.CommandsAuthorAndMaintainersOnly, row.IncrementalReviews, row.LearnFromDismissals, row.QuietReviews = nil, nil, nil, nil
 		row.CheckDeleted = nil
 		row.CommentLayout = nil
@@ -853,6 +884,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 			row.LinkedReposEnabled, row.LinkedRepos = nil, nil
 			row.TrustedAuthorsOnly, row.TrustedAuthors = nil, nil
 			row.MonthlyTokenQuota = nil
+			row.FailureStatus, row.BlockingStatus = nil, nil
 		}
 	}, "settings reset", "settings_reset", detail)
 }
@@ -943,6 +975,8 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 			edit, msg = linkedReposSetting(raw, null)
 		case "failureStatus":
 			edit, msg = failureStatusSetting(raw, null)
+		case "blockingStatus":
+			edit, msg = blockingStatusSetting(raw, null)
 		case "skills":
 			edit, msg = skillsSetting(raw, null)
 		case "repoSkills":
@@ -1049,6 +1083,20 @@ func failureStatusSetting(raw json.RawMessage, null bool) (func(*store.Dashboard
 		v = &s
 	}
 	return func(row *store.DashboardRepo) { row.FailureStatus = v }, ""
+}
+
+// blockingStatusSetting takes "failed", "neutral" or null (the default).
+func blockingStatusSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	var v *string
+	if !null {
+		var s string
+		if json.Unmarshal(raw, &s) != nil ||
+			(s != string(config.BlockingStatusFailed) && s != string(config.BlockingStatusNeutral)) {
+			return nil, `blockingStatus must be "failed", "neutral" or null`
+		}
+		v = &s
+	}
+	return func(row *store.DashboardRepo) { row.BlockingStatus = v }, ""
 }
 
 // skillsSetting takes null (the default list) or a non-empty list of

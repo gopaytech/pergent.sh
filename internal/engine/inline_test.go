@@ -1789,7 +1789,7 @@ func TestInlineViewShapesTheComment(t *testing.T) {
 	v := h.sync(o)
 	o.Mention = "pergent-review"
 	o.InlineOn, o.Inline, o.FindingNotes = v.On, v.Inline, v.Notes
-	d := policy.Decide(o, config.FailureStatusFailed)
+	d := policy.Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	for _, want := range []string{
 		"> 1 finding posted as inline comments on the diff.",
 		"#### Not on the diff (1)",

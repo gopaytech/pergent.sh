@@ -66,7 +66,7 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 	return eff
 }
 
-var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyInlineFindings, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyMaxTurns, KeyJobMemory,
+var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyInlineFindings, KeyFailureStatus, KeyBlockingStatus, KeySkills, KeyJobTimeout, KeyMaxTurns, KeyJobMemory,
 	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews, KeyCheckDeleted, KeyCommentLayout, KeyLinkedReposEnabled, KeyMonthlyTokenQuota, KeyCIJobs}
 
 // wantOverridden checks exactly the given keys are overridden.
@@ -119,6 +119,9 @@ func wantDefaults(t *testing.T, eff Effective, except ...string) {
 	if !skip(KeyFailureStatus) && eff.FailureStatus != config.FailureStatusFailed {
 		t.Errorf("FailureStatus = %q, want the default failed", eff.FailureStatus)
 	}
+	if !skip(KeyBlockingStatus) && eff.BlockingStatus != config.BlockingStatusFailed {
+		t.Errorf("BlockingStatus = %q, want the default failed", eff.BlockingStatus)
+	}
 	if !skip(KeySkills) && eff.Skills != nil {
 		t.Errorf("Skills = %v, want nil (the default list)", eff.Skills)
 	}
@@ -148,6 +151,7 @@ func TestResolverConfigKeys(t *testing.T) {
 		GitHub: "gh", Project: "Acme/Payments",
 		Approve: ptr(false), ReviewDrafts: ptr(false), InlineFindings: ptr(false),
 		FailureStatus:   config.FailureStatusNeutral,
+		BlockingStatus:  config.BlockingStatusNeutral,
 		Skills:          []string{"security"},
 		RepoSkills:      []string{"team"},
 		JobTimeout:      ptr(20 * time.Minute),
@@ -182,6 +186,9 @@ func TestResolverConfigKeys(t *testing.T) {
 	}
 	if eff.MonthlyTokenQuota == nil || *eff.MonthlyTokenQuota != 5000 {
 		t.Errorf("MonthlyTokenQuota = %v, want 5000", eff.MonthlyTokenQuota)
+	}
+	if eff.BlockingStatus != config.BlockingStatusNeutral {
+		t.Errorf("BlockingStatus = %q, want neutral", eff.BlockingStatus)
 	}
 	wantOverridden(t, eff, allKeys...)
 
@@ -242,7 +249,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments", Approve: ptr(false), CreatedBy: "alice"})
 	upsert(t, st, store.DashboardRepo{
 		Instance: "gh", Project: "Acme/Gadgets",
-		Approve: ptr(true), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"),
+		Approve: ptr(true), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"), BlockingStatus: ptr("neutral"),
 		Skills: []string{"security"}, RepoSkills: []string{"team"}, JobTimeoutSeconds: ptr(1200), MaxTurns: ptr(120), JobMemory: ptr("6Gi"),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true), CheckDeleted: ptr(true),
 		CommentLayout:      []string{"findings:open", "files:collapsed"},
@@ -286,6 +293,9 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	if full.MonthlyTokenQuota == nil || *full.MonthlyTokenQuota != 5000 {
 		t.Errorf("MonthlyTokenQuota = %v, want 5000", full.MonthlyTokenQuota)
 	}
+	if full.BlockingStatus != config.BlockingStatusNeutral {
+		t.Errorf("BlockingStatus = %q, want neutral", full.BlockingStatus)
+	}
 	wantOverridden(t, full, allKeys...)
 
 	if _, ok, err := r.Get(ctx, "gone", "acme/old"); ok || err != nil {
@@ -324,6 +334,7 @@ func TestDefaults(t *testing.T) {
 	cfg := &config.Config{Jobs: config.Jobs{Timeout: 7 * time.Minute}}
 	got := (&Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}).Defaults(config.PlatformGitLab, "main")
 	if !got.Approve || !got.ReviewDrafts || !got.InlineFindings || !got.CommandsAuthorAndMaintainersOnly || !got.IncrementalReviews || !got.LearnFromDismissals || got.FailureStatus != config.FailureStatusFailed ||
+		got.BlockingStatus != config.BlockingStatusFailed ||
 		got.JobTimeout != 7*time.Minute || !got.JobMemory.IsZero() || got.Skills != nil || got.Instance != "main" {
 		t.Errorf("Defaults = %+v", got)
 	}
@@ -358,7 +369,7 @@ func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
 	cfg.Jobs.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
 	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
 	if err := st.PutRepoDefaults(ctx, store.RepoDefaults{
-		Approve: ptr(false), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"),
+		Approve: ptr(false), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"), BlockingStatus: ptr("neutral"),
 		JobTimeoutSeconds: ptr(1200), JobMemory: ptr("2Gi"),
 		RerunLimitPerMR: ptr(30), RerunLimitPerRepo: ptr(200), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
 	}); err != nil {
@@ -372,7 +383,7 @@ func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
 	eff := get(t, r, "main", "acme/payments")
 	if eff.Approve || eff.ReviewDrafts || eff.InlineFindings || eff.CommandsAuthorAndMaintainersOnly || eff.IncrementalReviews || eff.LearnFromDismissals || !eff.QuietReviews || eff.FailureStatus != config.FailureStatusNeutral ||
 		eff.JobTimeout != 20*time.Minute || eff.JobMemory.Cmp(resource.MustParse("2Gi")) != 0 ||
-		eff.RerunLimitPerMR != 30 || eff.RerunLimitPerRepo != 200 {
+		eff.RerunLimitPerMR != 30 || eff.RerunLimitPerRepo != 200 || eff.BlockingStatus != config.BlockingStatusNeutral {
 		t.Errorf("dashboard repository = %+v", eff)
 	}
 	wantOverridden(t, eff)

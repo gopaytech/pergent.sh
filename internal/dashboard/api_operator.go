@@ -52,7 +52,7 @@ const (
 	msgBadTrustMode      = `the body must be {"mode": "follow_visibility" | "on" | "off"}`
 	msgNothingToChange   = `nothing to change: give "secrets"`
 
-	msgBadDefaults      = "the body must be a JSON object of defaults: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, ruleSets"
+	msgBadDefaults      = "the body must be a JSON object of defaults: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, failureStatus, blockingStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, ruleSets"
 	msgNoBuiltInDefault = "built-in rules have no default: choose them on each repository's Settings"
 	instanceNameLimit   = 63
 )
@@ -818,6 +818,7 @@ func (d *Dashboard) defaultsView(ctx context.Context) (DefaultsView, error) {
 		LinkedReposEnabled: def.LinkedReposEnabled,
 		CommentLayout:      layoutText(def.CommentLayout),
 		FailureStatus:      string(def.FailureStatus),
+		BlockingStatus:     string(def.BlockingStatus),
 		JobTimeoutSeconds:  int64(def.JobTimeout / time.Second), MaxTurns: def.MaxTurns, JobMemory: quantityText(def.JobMemory),
 		RerunLimitPerMR: def.RerunLimitPerMR, RerunLimitPerRepo: def.RerunLimitPerRepo,
 		Skills: nonNil(stored.Skills), RuleSets: nonNil(stored.RuleSets),
@@ -831,6 +832,7 @@ func defaultValues(eff settings.Effective) DefaultValues {
 		LinkedReposEnabled: eff.LinkedReposEnabled,
 		CommentLayout:      layoutText(eff.CommentLayout),
 		FailureStatus:      string(eff.FailureStatus),
+		BlockingStatus:     string(eff.BlockingStatus),
 		JobTimeoutSeconds:  int64(eff.JobTimeout / time.Second), MaxTurns: eff.MaxTurns, JobMemory: quantityText(eff.JobMemory),
 		RerunLimitPerMR: eff.RerunLimitPerMR, RerunLimitPerRepo: eff.RerunLimitPerRepo}
 }
@@ -842,7 +844,7 @@ func pinnedDefaults(s store.RepoDefaults) map[string]bool {
 		"approve": s.Approve != nil, "reviewDrafts": s.ReviewDrafts != nil, "inlineFindings": s.InlineFindings != nil,
 		"commandsAuthorAndMaintainersOnly": s.CommandsAuthorAndMaintainersOnly != nil, "incrementalReviews": s.IncrementalReviews != nil, "learnFromDismissals": s.LearnFromDismissals != nil, "quietReviews": s.QuietReviews != nil,
 		"commentLayout": len(s.CommentLayout) > 0, "linkedReposEnabled": s.LinkedReposEnabled != nil,
-		"failureStatus": s.FailureStatus != nil, "jobTimeoutSeconds": s.JobTimeoutSeconds != nil, "maxTurns": s.MaxTurns != nil,
+		"failureStatus": s.FailureStatus != nil, "blockingStatus": s.BlockingStatus != nil, "jobTimeoutSeconds": s.JobTimeoutSeconds != nil, "maxTurns": s.MaxTurns != nil,
 		"jobMemory": s.JobMemory != nil, "rerunLimitPerMR": s.RerunLimitPerMR != nil, "rerunLimitPerRepo": s.RerunLimitPerRepo != nil,
 	}
 }
@@ -938,6 +940,8 @@ func (d *Dashboard) parseDefaults(r *http.Request, kept, keptRuleSets []string) 
 			edit, msg = commentLayoutSetting(raw, null, msgBadDefaults)
 		case "failureStatus":
 			edit, msg = failureStatusSetting(raw, null)
+		case "blockingStatus":
+			edit, msg = blockingStatusSetting(raw, null)
 		case "skills":
 			skillsGiven = true
 			edit, msg = defaultSkillsSetting(raw, null)
@@ -957,7 +961,7 @@ func (d *Dashboard) parseDefaults(r *http.Request, kept, keptRuleSets []string) 
 		}
 		edit(&row)
 	}
-	return store.RepoDefaults{Approve: row.Approve, ReviewDrafts: row.ReviewDrafts, InlineFindings: row.InlineFindings, CommandsAuthorAndMaintainersOnly: row.CommandsAuthorAndMaintainersOnly, IncrementalReviews: row.IncrementalReviews, LearnFromDismissals: row.LearnFromDismissals, QuietReviews: row.QuietReviews, LinkedReposEnabled: row.LinkedReposEnabled, CommentLayout: row.CommentLayout, FailureStatus: row.FailureStatus,
+	return store.RepoDefaults{Approve: row.Approve, ReviewDrafts: row.ReviewDrafts, InlineFindings: row.InlineFindings, CommandsAuthorAndMaintainersOnly: row.CommandsAuthorAndMaintainersOnly, IncrementalReviews: row.IncrementalReviews, LearnFromDismissals: row.LearnFromDismissals, QuietReviews: row.QuietReviews, LinkedReposEnabled: row.LinkedReposEnabled, CommentLayout: row.CommentLayout, FailureStatus: row.FailureStatus, BlockingStatus: row.BlockingStatus,
 		JobTimeoutSeconds: row.JobTimeoutSeconds, MaxTurns: row.MaxTurns, JobMemory: row.JobMemory,
 		RerunLimitPerMR: row.RerunLimitPerMR, RerunLimitPerRepo: row.RerunLimitPerRepo, Skills: row.Skills,
 		RuleSets: row.RuleSets}, skillsGiven, ""
@@ -998,7 +1002,8 @@ func defaultSkillsSetting(raw json.RawMessage, null bool) (func(*store.Dashboard
 }
 
 // changedDefaults names the settings that differ between two sets of
-// defaults, in the API's spelling.
+// defaults, in the API's spelling; a status setting with its new value
+// (statusDetail).
 func changedDefaults(a, b store.RepoDefaults) []string {
 	var out []string
 	if !samePtr(a.Approve, b.Approve) {
@@ -1029,7 +1034,10 @@ func changedDefaults(a, b store.RepoDefaults) []string {
 		out = append(out, "linkedReposEnabled")
 	}
 	if !samePtr(a.FailureStatus, b.FailureStatus) {
-		out = append(out, "failureStatus")
+		out = append(out, statusDetail("failureStatus", b.FailureStatus))
+	}
+	if !samePtr(a.BlockingStatus, b.BlockingStatus) {
+		out = append(out, statusDetail("blockingStatus", b.BlockingStatus))
 	}
 	if !samePtr(a.JobTimeoutSeconds, b.JobTimeoutSeconds) {
 		out = append(out, "jobTimeoutSeconds")

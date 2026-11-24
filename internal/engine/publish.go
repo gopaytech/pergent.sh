@@ -119,13 +119,15 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if !ok || plat.Forge == nil {
 		return fmt.Errorf("no bots for instance %q", run.MR.Instance)
 	}
-	failure := config.FailureStatusFailed
+	// Settings that can't be read publish nothing (the publish is retried),
+	// and a repository that is gone gets failed: only a read neutral softens.
+	failure, blocking := config.FailureStatusFailed, config.BlockingStatusFailed
 	repo, ok, err := e.settings().Get(ctx, run.MR.Instance, run.ProjectPath)
 	if err != nil {
 		return fmt.Errorf("load repository settings: %w", err)
 	}
 	if ok {
-		failure = repo.FailureStatus
+		failure, blocking = repo.FailureStatus, repo.BlockingStatus
 	}
 	run, restarted, err := e.mergeBase(ctx, run, log)
 	if err != nil {
@@ -181,7 +183,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 		// A backup entry reviewed it: the comment says which, and why.
 		o.FallbackNote = policy.FallbackLine(run.ModelEntryName, run.FallbackClass)
 	}
-	if policy.Decide(o, failure).Approve {
+	if policy.Decide(o, failure, blocking).Approve {
 		// Only a review that would be approved depends on whether the
 		// change is a draft and the approve side can reach the repository.
 		var err error
@@ -189,7 +191,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 			return err
 		}
 	}
-	d := policy.Decide(o, failure)
+	d := policy.Decide(o, failure, blocking)
 
 	if err := e.upsertComment(ctx, plat.Forge, run, d.Comment); err != nil {
 		return fmt.Errorf("post comment: %w", err)
@@ -1010,7 +1012,8 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 // sweep tries again what fails here), and one final status is set on the
 // head so a required check isn't left running (GitHub's Check Run stays
 // in_progress from dispatch otherwise): the repository's failure_status, or
-// failed when its settings can't be read or it is gone (gaveUpStatus).
+// failed when its settings can't be read or it is gone, and neutral for a
+// repository with blocking_status neutral (gaveUpStatus).
 // Nothing is approved. An API review
 // has none of these: its callback is queued instead, best effort.
 func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
@@ -1037,7 +1040,7 @@ func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 	wcancel()
 
 	rctx, rcancel := settleCtx(ctx)
-	status := e.gaveUpStatus(rctx, run, log)
+	status, description := e.gaveUpStatus(rctx, run, log)
 	if err := e.Store.SetGaveUpStatus(rctx, run.ID, string(status)); err != nil {
 		// Only the dashboard's account of the status is lost: it says failed.
 		log.Warn("couldn't record the final status of the review that wasn't posted", "error", e.redact(err.Error()))
@@ -1046,27 +1049,43 @@ func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
-	if err := e.setStatus(sctx, plat, run, status, gaveUpDescription); err != nil {
+	if err := e.setStatus(sctx, plat, run, status, description); err != nil {
 		log.Warn("couldn't set the final status of the review that wasn't posted", "error", e.redact(err.Error()))
 	}
 }
 
-// gaveUpStatus is the final status of a run that gave up: the repository's
-// failure_status, as for any review that couldn't be done. It is neutral only
-// when the settings are read, the repository is found and it asks for
-// neutral, and the run's stored result has no blocking findings (blocking
-// findings are failed whatever failure_status says). Anything else fails
-// closed: a result that can't be read again, and the result of an
-// incremental or some-skills run that was never merged with the rest of the
-// review, whose missing part could hold blocking findings. Dismissals are
-// not read, so a dismissed finding still counts here.
-func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logger) forge.StatusState {
+// gaveUpStatus is the final status of a run that gave up, with its
+// description. Settings that can't be read and a repository that is gone
+// give failed. Otherwise it is the repository's failure_status
+// (gaveUpFailureStatus), and a failed one is neutral, with " · not blocking
+// merge" after the description, when the repository's blocking_status is
+// neutral: its status is never failed.
+func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logger) (forge.StatusState, string) {
 	repo, ok, err := e.settings().Get(ctx, run.MR.Instance, run.ProjectPath)
 	if err != nil {
 		log.Warn("couldn't read the repository settings; the final status is failed", "error", e.redact(err.Error()))
-		return forge.StatusFailed
+		return forge.StatusFailed, gaveUpDescription
 	}
-	if !ok || repo.FailureStatus != config.FailureStatusNeutral {
+	if !ok {
+		return forge.StatusFailed, gaveUpDescription
+	}
+	status := e.gaveUpFailureStatus(ctx, run, repo, log)
+	if status == forge.StatusFailed && repo.BlockingStatus == config.BlockingStatusNeutral {
+		return forge.StatusNeutral, policy.NotBlockingMerge(gaveUpDescription)
+	}
+	return status, gaveUpDescription
+}
+
+// gaveUpFailureStatus is the repository's failure_status for a run that gave
+// up, as for any review that couldn't be done. It is neutral only when the
+// repository asks for neutral and the run's stored result has no blocking
+// findings (blocking findings are failed whatever failure_status says).
+// Anything else fails closed: a result that can't be read again, and the
+// result of an incremental or some-skills run that was never merged with the
+// rest of the review, whose missing part could hold blocking findings.
+// Dismissals are not read, so a dismissed finding still counts here.
+func (e *Engine) gaveUpFailureStatus(ctx context.Context, run store.Run, repo settings.Effective, log *slog.Logger) forge.StatusState {
+	if repo.FailureStatus != config.FailureStatusNeutral {
 		return forge.StatusFailed
 	}
 	// The publish stores the merged result before it posts: read it again.
@@ -1091,8 +1110,8 @@ func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logg
 		log.Warn("couldn't read the multi review; the final status is failed", "error", e.redact(err.Error()))
 		return forge.StatusFailed
 	}
-	o := rc.checked(e.outcome(stored, chosenCI(stored, repo, ok), log), log)
-	if policy.Decide(o, config.FailureStatusNeutral).Kind == policy.KindBlocking || len(ci.Blocking(o.CI)) > 0 {
+	o := rc.checked(e.outcome(stored, chosenCI(stored, repo, true), log), log)
+	if policy.Decide(o, config.FailureStatusNeutral, config.BlockingStatusFailed).Kind == policy.KindBlocking || len(ci.Blocking(o.CI)) > 0 {
 		return forge.StatusFailed
 	}
 	return forge.StatusNeutral

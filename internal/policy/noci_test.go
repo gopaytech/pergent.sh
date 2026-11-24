@@ -60,7 +60,7 @@ func noCICases() map[string]noCICase {
 func TestDecideNoCIByteIdentical(t *testing.T) {
 	got := map[string]Decision{}
 	for name, c := range noCICases() {
-		got[name] = Decide(c.o, c.failure)
+		got[name] = Decide(c.o, c.failure, config.BlockingStatusFailed)
 	}
 	if *updateNoCI {
 		b, err := json.MarshalIndent(got, "", "  ")

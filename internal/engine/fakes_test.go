@@ -365,7 +365,7 @@ func testConfig(gitlabURL string) *config.Config {
 			TrustedAuthorsOnly: config.TrustOff,
 		}},
 		Repositories: []config.Repository{{
-			GitLab: testInstance, Project: testProjectPath, FailureStatus: config.FailureStatusFailed,
+			GitLab: testInstance, Project: testProjectPath, FailureStatus: config.FailureStatusFailed, BlockingStatus: config.BlockingStatusFailed,
 		}},
 		LLM: config.LLM{Provider: "anthropic", Model: "claude-sonnet-4", APIKeyEnv: "OPENCODE_API_KEY"},
 		Jobs: config.Jobs{

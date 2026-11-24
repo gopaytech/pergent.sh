@@ -27,7 +27,7 @@ func TestImpactDoesntCountAsReviewed(t *testing.T) {
 		"listing a reviewed one": {Name: result.ImpactSkill, Verdict: "no_blocking_issues", Files: result.Files{Reviewed: []string{"go.mod"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := Decide(Outcome{Result: completed(skipped, impact)}, config.FailureStatusFailed)
+			d := Decide(Outcome{Result: completed(skipped, impact)}, config.FailureStatusFailed, config.BlockingStatusFailed)
 			if d.Approve || d.Kind != KindNotApproved || d.Description != descNothingToReview {
 				t.Fatalf("decision = %+v; want nothing reviewed, not approved", d)
 			}
@@ -38,7 +38,7 @@ func TestImpactDoesntCountAsReviewed(t *testing.T) {
 // With a file reviewed by a skill, a clean impact check is still approved.
 func TestCleanImpactApproves(t *testing.T) {
 	r := completed(skill("security", "no_blocking_issues", "a.go"), impactSkill("no_blocking_issues", cleanImpactNote))
-	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed); !d.Approve || d.Kind != KindApprove {
+	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed); !d.Approve || d.Kind != KindApprove {
 		t.Fatalf("decision = %+v; want an approval", d)
 	}
 }
@@ -48,7 +48,7 @@ func TestFailedImpactWithholdsApproval(t *testing.T) {
 	failed.Failures = []result.Failure{{Message: result.ImpactNotRunMessage}}
 	r := completed(skill("security", "no_blocking_issues", "a.go"), failed)
 
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve || d.Kind != KindFailed || d.Status != StatusFailed || d.Description != "Review failed for 1 of 2 skills" {
 		t.Fatalf("decision = %+v; want a failed review that is not approved", d)
 	}
@@ -56,7 +56,7 @@ func TestFailedImpactWithholdsApproval(t *testing.T) {
 		t.Errorf("the comment doesn't say which repositories weren't covered:\n%s", d.Comment)
 	}
 	// An impact verdict this code doesn't know is a failure too.
-	if d := Decide(Outcome{Result: completed(skill("security", "no_blocking_issues", "a.go"), impactSkill("maybe"))}, config.FailureStatusFailed); d.Approve {
+	if d := Decide(Outcome{Result: completed(skill("security", "no_blocking_issues", "a.go"), impactSkill("maybe"))}, config.FailureStatusFailed, config.BlockingStatusFailed); d.Approve {
 		t.Errorf("an unknown impact verdict approved: %+v", d)
 	}
 }
@@ -64,7 +64,7 @@ func TestFailedImpactWithholdsApproval(t *testing.T) {
 func TestBlockingImpactBlocks(t *testing.T) {
 	b := withFinding(impactSkill("has_blocking_issues"), "blocking", "abc123def456", "calls it with the old signature")
 	r := completed(skill("security", "no_blocking_issues", "a.go"), b)
-	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed); d.Kind != KindBlocking || d.Approve {
+	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed); d.Kind != KindBlocking || d.Approve {
 		t.Fatalf("decision = %+v; want blocking", d)
 	}
 }
@@ -72,7 +72,7 @@ func TestBlockingImpactBlocks(t *testing.T) {
 // The clean run's note reaches the comment through the skill's notes.
 func TestCleanImpactSaysSo(t *testing.T) {
 	r := completed(skill("security", "no_blocking_issues", "a.go"), impactSkill("no_blocking_issues", cleanImpactNote))
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if !strings.Contains(d.Comment, cleanImpactNote) {
 		t.Fatalf("the comment lacks %q:\n%s", cleanImpactNote, d.Comment)
 	}
@@ -84,7 +84,7 @@ func TestCleanImpactSaysSo(t *testing.T) {
 // A review that did not run the check says nothing about it.
 func TestNoImpactRunSaysNothing(t *testing.T) {
 	r := completed(skill("security", "no_blocking_issues", "a.go"))
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if strings.Contains(strings.ToLower(d.Comment), "impact") {
 		t.Errorf("the comment of a review with no impact check mentions it:\n%s", d.Comment)
 	}
@@ -100,7 +100,7 @@ func TestQuietKeepsImpactSuggestionsInTheComment(t *testing.T) {
 	_ = json.Unmarshal(s.Findings[0], &f)
 	title = f.Title
 
-	d := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if !strings.Contains(d.Comment, title) || !strings.Contains(d.Comment, "a caller might break") {
 		t.Errorf("a quiet comment lacks the impact suggestion:\n%s", d.Comment)
 	}
@@ -113,18 +113,18 @@ func TestOwnImpactSkillCountsAsReviewed(t *testing.T) {
 	own := result.Skill{Name: "impact", Verdict: "no_blocking_issues", Files: result.Files{Reviewed: []string{"a.go"}}}
 	r := completed(own)
 	r.OwnImpact = true
-	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed); !d.Approve || d.Kind != KindApprove {
+	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed); !d.Approve || d.Kind != KindApprove {
 		t.Fatalf("decision = %+v; want an approval", d)
 	}
 	// Unmarked it is the check, which reviews no file.
-	if d := Decide(Outcome{Result: completed(own)}, config.FailureStatusFailed); d.Approve || d.Description != descNothingToReview {
+	if d := Decide(Outcome{Result: completed(own)}, config.FailureStatusFailed, config.BlockingStatusFailed); d.Approve || d.Description != descNothingToReview {
 		t.Fatalf("unmarked decision = %+v; want nothing reviewed", d)
 	}
 	// A failed one fails the review like any skill.
 	failed := result.Skill{Name: "impact", Verdict: "failed"}
 	rf := completed(skill("security", "no_blocking_issues", "a.go"), failed)
 	rf.OwnImpact = true
-	if d := Decide(Outcome{Result: rf}, config.FailureStatusFailed); d.Approve || d.Kind != KindFailed {
+	if d := Decide(Outcome{Result: rf}, config.FailureStatusFailed, config.BlockingStatusFailed); d.Approve || d.Kind != KindFailed {
 		t.Fatalf("failed own skill decision = %+v", d)
 	}
 }

@@ -55,6 +55,7 @@ export default function RepositoryDetail() {
         {repo.source === "config" ? "managed by config" : repo.paused ? "paused in the dashboard" : "switched on in the dashboard"}
       </div>
       <div className="sub spaced">{multiReviewText(view.multiReview)}</div>
+      {view.settings.blockingStatus.value === "neutral" && <div className="sub spaced">Merge gate: off (blocking status is neutral)</div>}
       {repo.paused && (
         <div className="alert" role="note" aria-label="Paused">
           <span className="prose">

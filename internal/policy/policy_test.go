@@ -236,7 +236,7 @@ func TestDecide(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			d := Decide(tc.outcome, tc.failure)
+			d := Decide(tc.outcome, tc.failure, config.BlockingStatusFailed)
 			if d.Status != tc.wantStatus || d.Description != tc.wantDesc || d.Approve != tc.wantApprove {
 				t.Errorf("got status=%q desc=%q approve=%v, want %q %q %v", d.Status, d.Description, d.Approve, tc.wantStatus, tc.wantDesc, tc.wantApprove)
 			}
@@ -264,7 +264,7 @@ func TestDecideNothingReviewed(t *testing.T) {
 		result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}, {Path: "vendor/x.go", Rule: "vendored"}}}},
 		result.Skill{Name: "b", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}},
 	)
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Status != StatusSuccess || d.Approve || d.Description != "Nothing to review: every changed file is skipped" {
 		t.Fatalf("got %+v", d)
 	}
@@ -278,7 +278,7 @@ func TestDecideNothingReviewed(t *testing.T) {
 
 func TestDecideNothingReviewedNoteAppendedWithoutBlock(t *testing.T) {
 	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}})
-	d := Decide(withoutBlock(t, Outcome{Result: r}), config.FailureStatusFailed)
+	d := Decide(withoutBlock(t, Outcome{Result: r}), config.FailureStatusFailed, config.BlockingStatusFailed)
 	want := "---\n**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look.\n\n- `go.sum` (lockfile)"
 	if !strings.HasSuffix(d.Comment, "\n\n"+want+"\n") {
 		t.Errorf("the note must be appended at the end:\n%s", d.Comment)
@@ -310,7 +310,7 @@ func TestDecideNothingReviewedCapsAtTwenty(t *testing.T) {
 		skipped = append(skipped, result.Skipped{Path: fmt.Sprintf("lock/%02d.lock", i), Rule: "lockfile"})
 	}
 	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: skipped}})
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	// The note is what is capped; the comment's own Files list is render's.
 	note := noteOf(t, d.Comment)
 	if got := strings.Count(note, "(lockfile)"); got != 20 {
@@ -328,7 +328,7 @@ func TestDecideNothingReviewedCapsAtTwenty(t *testing.T) {
 func TestDecideNothingReviewedNoSkippedAtAll(t *testing.T) {
 	// A completed review with nothing reviewed and nothing skipped (an empty diff)
 	// is still not approved.
-	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues"))}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues"))}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve || d.Status != StatusSuccess {
 		t.Fatalf("got %+v", d)
 	}
@@ -337,7 +337,7 @@ func TestDecideNothingReviewedNoSkippedAtAll(t *testing.T) {
 func TestDecideAnyReviewedFileMeansApprove(t *testing.T) {
 	// One skill reviewed a file, the other reviewed none: still reviewed.
 	r := completed(skill("a", "no_blocking_issues"), skill("b", "no_blocking_issues", "f.go"))
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if !d.Approve || d.Description != "No blocking issues" {
 		t.Fatalf("got %+v", d)
 	}
@@ -349,7 +349,7 @@ func TestMarkerPrepended(t *testing.T) {
 	r := completed(skill("a", "has_blocking_issues", "f.go"))
 	for _, job := range []string{"### no marker here", "x\n" + Marker + "\ny", ""} {
 		r.Comment.Markdown = job
-		d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+		d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 		if !strings.HasPrefix(d.Comment, Marker+"\n") || strings.Count(d.Comment, Marker) != 1 {
 			t.Errorf("job comment %q: comment %q", job, d.Comment)
 		}
@@ -358,11 +358,11 @@ func TestMarkerPrepended(t *testing.T) {
 	// An error result keeps the Job's comment: the marker is added when it
 	// lacks one and the comment is left alone when it has one.
 	e := &result.Result{Status: "error", Comment: result.Comment{Markdown: "### no marker here"}}
-	if d := Decide(Outcome{Result: e}, config.FailureStatusFailed); d.Comment != Marker+"\n### no marker here" {
+	if d := Decide(Outcome{Result: e}, config.FailureStatusFailed, config.BlockingStatusFailed); d.Comment != Marker+"\n### no marker here" {
 		t.Errorf("comment: %q", d.Comment)
 	}
 	e.Comment.Markdown = "x\n" + Marker + "\ny"
-	if d := Decide(Outcome{Result: e}, config.FailureStatusFailed); d.Comment != e.Comment.Markdown {
+	if d := Decide(Outcome{Result: e}, config.FailureStatusFailed, config.BlockingStatusFailed); d.Comment != e.Comment.Markdown {
 		t.Errorf("comment: %q", d.Comment)
 	}
 }
@@ -420,7 +420,7 @@ func TestDecideCI(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			d := Decide(tc.o, tc.failure)
+			d := Decide(tc.o, tc.failure, config.BlockingStatusFailed)
 			if d.Kind != tc.kind || d.Status != tc.status || d.Approve != tc.approve || d.Description != tc.desc {
 				t.Fatalf("got kind %q status %q approve %v desc %q\nwant %q %q %v %q", d.Kind, d.Status, d.Approve, d.Description, tc.kind, tc.status, tc.approve, tc.desc)
 			}
@@ -433,7 +433,7 @@ func TestDecideCI(t *testing.T) {
 
 func TestDecideCIPlacesLineAfterHeader(t *testing.T) {
 	r := completed(skill("a", "no_blocking_issues", "f.go"))
-	d := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob("test", "failed", true)}}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob("test", "failed", true)}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if !strings.Contains(d.Comment, "\n_CI: test failed (blocks approval)_\n") {
 		t.Errorf("line is not on its own line:\n%s", d.Comment)
 	}
@@ -441,7 +441,7 @@ func TestDecideCIPlacesLineAfterHeader(t *testing.T) {
 
 func TestDecideCIDescriptionIsShort(t *testing.T) {
 	r := completed(skill("a", "no_blocking_issues", "f.go"))
-	d := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob(strings.Repeat("x", 500), "failed", true)}}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob(strings.Repeat("x", 500), "failed", true)}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if n := len([]rune(d.Description)); n > 140 {
 		t.Errorf("description is %d characters, want at most 140", n)
 	}
@@ -453,8 +453,8 @@ func TestDecideCIDescriptionIsShort(t *testing.T) {
 // With no CI jobs every decision is what it was before.
 func TestDecideNoCIChangesNothing(t *testing.T) {
 	r := completed(skill("a", "no_blocking_issues", "f.go"))
-	a := Decide(Outcome{Result: r}, config.FailureStatusFailed)
-	b := Decide(Outcome{Result: r, CI: []store.CIJobResult{}}, config.FailureStatusFailed)
+	a := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
+	b := Decide(Outcome{Result: r, CI: []store.CIJobResult{}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if a != b {
 		t.Errorf("an empty CI list changed the decision:\n%+v\n%+v", a, b)
 	}
@@ -462,7 +462,7 @@ func TestDecideNoCIChangesNothing(t *testing.T) {
 		t.Errorf("comment mentions CI:\n%s", a.Comment)
 	}
 	// A non-blocking, passed job never changes the verdict either.
-	c := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob("x", "failed", false)}}, config.FailureStatusFailed)
+	c := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob("x", "failed", false)}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if c.Kind != a.Kind || c.Status != a.Status || c.Approve != a.Approve || c.Description != a.Description {
 		t.Errorf("a non-blocking job changed the decision: %+v", c)
 	}
@@ -473,7 +473,7 @@ func TestDecideEmptyCIIsNoCI(t *testing.T) {
 	for name, c := range noCICases() {
 		o := c.o
 		o.CI = []store.CIJobResult{}
-		if a, b := Decide(c.o, c.failure), Decide(o, c.failure); a != b {
+		if a, b := Decide(c.o, c.failure, config.BlockingStatusFailed), Decide(o, c.failure, config.BlockingStatusFailed); a != b {
 			t.Errorf("%s: an empty CI list changed the decision:\n%+v\n%+v", name, a, b)
 		}
 	}
@@ -487,7 +487,7 @@ func TestNoteGoesBeforeRealFindingsBlockShape(t *testing.T) {
 	if !strings.HasSuffix(block, "\n") {
 		t.Fatalf("block = %q", block)
 	}
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve {
 		t.Fatal("approved")
 	}
@@ -509,7 +509,7 @@ func TestCleanVerdictWithNotReviewedFilesFailsClosed(t *testing.T) {
 		f    config.FailureStatus
 		want Status
 	}{{config.FailureStatusFailed, StatusFailed}, {config.FailureStatusNeutral, StatusNeutral}} {
-		d := Decide(Outcome{Result: completed(s, skill("b", "no_blocking_issues", "f.go"))}, tc.f)
+		d := Decide(Outcome{Result: completed(s, skill("b", "no_blocking_issues", "f.go"))}, tc.f, config.BlockingStatusFailed)
 		if d.Approve || d.Status != tc.want || d.Description != "Review failed for 1 of 2 skills" {
 			t.Errorf("%s: got %+v", tc.f, d)
 		}
@@ -521,7 +521,7 @@ func TestNothingReviewedListsDistinctPathsWithJoinedRules(t *testing.T) {
 		result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}, {Path: "a.go", Rule: "generated"}}}},
 		result.Skill{Name: "b", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "out of scope"}, {Path: "go.sum", Rule: "lockfile"}}}},
 	)
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	note := noteOf(t, d.Comment)
 	if strings.Count(note, "`go.sum`") != 1 || !strings.Contains(note, "- `go.sum` (lockfile, out of scope)") {
 		t.Errorf("note: %q", note)
@@ -543,7 +543,7 @@ func TestNothingReviewedCapCountsPaths(t *testing.T) {
 		result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: a}},
 		result.Skill{Name: "b", Verdict: "no_blocking_issues", Files: result.Files{Skipped: b}},
 	)
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	note := noteOf(t, d.Comment)
 	if got := strings.Count(note, "(lockfile, vendored)"); got != 20 {
 		t.Errorf("listed %d, want 20", got)
@@ -613,7 +613,7 @@ func TestDecideNeutralizesQuickActions(t *testing.T) {
 		"failure reason": {FailureReason: "x\n/approve"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := Decide(o, config.FailureStatusFailed)
+			d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 			// GitLab deletes "\r" and then runs a "/" at column 0.
 			for _, line := range strings.Split(strings.ReplaceAll(d.Comment, "\r", ""), "\n") {
 				if strings.HasPrefix(line, "/") {
@@ -625,7 +625,7 @@ func TestDecideNeutralizesQuickActions(t *testing.T) {
 			}
 		})
 	}
-	d := Decide(Outcome{Result: clean}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: clean}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	// The summary and the check reach the comment, so the line loop above
 	// has them to look at.
 	for _, want := range []string{"**Summary:** summary", "| c | ❌ | detail"} {
@@ -661,7 +661,7 @@ func TestDecidePartlySkippedNotApproved(t *testing.T) {
 					Skipped:  []result.Skipped{{Path: "x/skipped", Rule: "out of scope"}},
 				}},
 			)
-			d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+			d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 			if d.Approve || d.Status != StatusSuccess || d.Description != "No blocking issues; not approved: some changed files weren't reviewed" {
 				t.Fatalf("got %+v", d)
 			}
@@ -681,7 +681,7 @@ func TestDecidePartlySkippedCapsAtTwenty(t *testing.T) {
 		skipped = append(skipped, result.Skipped{Path: fmt.Sprintf("vendor/%02d.go", i), Rule: "vendored"})
 	}
 	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Reviewed: []string{"f.go"}, Skipped: skipped}})
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve {
 		t.Fatal("approved")
 	}
@@ -709,7 +709,7 @@ const (
 // marked ready.
 func TestDecideDraftNotApproved(t *testing.T) {
 	r := completed(skill("a", "no_blocking_issues", "f.go"))
-	d := Decide(Outcome{Result: r, Draft: true}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, Draft: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve || d.Status != StatusSuccess || d.Description != "No blocking issues; not approved: draft" {
 		t.Fatalf("got %+v", d)
 	}
@@ -719,7 +719,7 @@ func TestDecideDraftNotApproved(t *testing.T) {
 // The approve App missing from a repository: reviewed, success, no approval.
 func TestDecideApproveUnavailableNotApproved(t *testing.T) {
 	r := completed(skill("a", "no_blocking_issues", "f.go"))
-	d := Decide(Outcome{Result: r, ApproveUnavailable: true}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, ApproveUnavailable: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve || d.Status != StatusSuccess ||
 		d.Description != "No blocking issues; not approved: the pergent approve App isn't installed on this repository or lacks Pull requests: write" {
 		t.Fatalf("got %+v", d)
@@ -729,7 +729,7 @@ func TestDecideApproveUnavailableNotApproved(t *testing.T) {
 
 // A draft on a repository without the approve App: the draft is the reason.
 func TestDecideDraftWinsOverApproveUnavailable(t *testing.T) {
-	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), Draft: true, ApproveUnavailable: true}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), Draft: true, ApproveUnavailable: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve || d.Description != "No blocking issues; not approved: draft" ||
 		!strings.Contains(d.Comment, wantNoteDraft) || strings.Contains(d.Comment, "approve App") {
 		t.Fatalf("got %+v", d)
@@ -756,10 +756,10 @@ func TestDecideDraftKeepsOtherRows(t *testing.T) {
 	for name, o := range cases {
 		for _, flags := range []struct{ draft, unavailable bool }{{true, false}, {false, true}, {true, true}} {
 			t.Run(name, func(t *testing.T) {
-				base := Decide(o, config.FailureStatusFailed)
+				base := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 				flagged := o
 				flagged.Draft, flagged.ApproveUnavailable = flags.draft, flags.unavailable
-				got := Decide(flagged, config.FailureStatusFailed)
+				got := Decide(flagged, config.FailureStatusFailed, config.BlockingStatusFailed)
 				if got != base {
 					t.Errorf("draft=%v unavailable=%v changed the decision:\n%+v\nwant\n%+v", flags.draft, flags.unavailable, got, base)
 				}
@@ -770,7 +770,7 @@ func TestDecideDraftKeepsOtherRows(t *testing.T) {
 
 // A draft with blocking findings is failed, as any review with them.
 func TestDecideDraftWithBlockingFindingsFails(t *testing.T) {
-	d := Decide(Outcome{Result: completed(skill("a", "has_blocking_issues", "f.go")), Draft: true}, config.FailureStatusNeutral)
+	d := Decide(Outcome{Result: completed(skill("a", "has_blocking_issues", "f.go")), Draft: true}, config.FailureStatusNeutral, config.BlockingStatusFailed)
 	if d.Approve || d.Status != StatusFailed || d.Description != "Blocking issues found" || strings.Contains(d.Comment, "draft") {
 		t.Fatalf("got %+v", d)
 	}
@@ -780,7 +780,7 @@ func TestDecideDraftWithBlockingFindingsFails(t *testing.T) {
 // and is appended when there is no block.
 func TestDecideDraftNoteWithoutBlock(t *testing.T) {
 	r := completed(skill("a", "no_blocking_issues", "f.go"))
-	d := Decide(withoutBlock(t, Outcome{Result: r, Draft: true}), config.FailureStatusFailed)
+	d := Decide(withoutBlock(t, Outcome{Result: r, Draft: true}), config.FailureStatusFailed, config.BlockingStatusFailed)
 	if !strings.HasSuffix(d.Comment, "\n\n"+wantNoteDraft+"\n") || strings.Contains(d.Comment, "<!-- pergent:findings ") {
 		t.Errorf("want the note appended at the end of a comment with no block:\n%s", d.Comment)
 	}
@@ -790,14 +790,14 @@ func TestDecideDraftNoteWithoutBlock(t *testing.T) {
 // the reason and note say the bot can't reach the repository.
 func TestDecideApproveBotUnavailableNotApproved(t *testing.T) {
 	r := completed(skill("a", "no_blocking_issues", "f.go"))
-	d := Decide(Outcome{Result: r, ApproveUnavailable: true, ApproveBot: true}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, ApproveUnavailable: true, ApproveBot: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve || d.Status != StatusSuccess ||
 		d.Description != "No blocking issues; not approved: the pergent approve bot can't reach this repository" {
 		t.Fatalf("got %+v", d)
 	}
 	checkNote(t, d.Comment, r, "---\n**Not approved:** the pergent approve bot can't reach this repository.")
 	// ApproveBot alone changes nothing.
-	if d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveBot: true}, config.FailureStatusFailed); !d.Approve {
+	if d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveBot: true}, config.FailureStatusFailed, config.BlockingStatusFailed); !d.Approve {
 		t.Errorf("ApproveBot without ApproveUnavailable: %+v", d)
 	}
 }
@@ -806,14 +806,14 @@ func TestDecideApproveBotUnavailableNotApproved(t *testing.T) {
 // write: the reason and note name the permission.
 func TestDecideReviewAppApproverUnavailableNotApproved(t *testing.T) {
 	r := completed(skill("a", "no_blocking_issues", "f.go"))
-	d := Decide(Outcome{Result: r, ApproveUnavailable: true, ApproveReviewApp: true}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, ApproveUnavailable: true, ApproveReviewApp: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve || d.Status != StatusSuccess ||
 		d.Description != "No blocking issues; not approved: the pergent review App lacks Pull requests: write on this repository" {
 		t.Fatalf("got %+v", d)
 	}
 	checkNote(t, d.Comment, r, "---\n**Not approved:** the pergent review App lacks Pull requests: write on this repository.")
 	// ApproveReviewApp alone changes nothing.
-	if d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveReviewApp: true}, config.FailureStatusFailed); !d.Approve {
+	if d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveReviewApp: true}, config.FailureStatusFailed, config.BlockingStatusFailed); !d.Approve {
 		t.Errorf("ApproveReviewApp without ApproveUnavailable: %+v", d)
 	}
 }
@@ -826,7 +826,7 @@ func TestDecideUnknownSkipRuleNotApproved(t *testing.T) {
 		Reviewed: []string{"f.go"},
 		Skipped:  []result.Skipped{{Path: "x/new", Rule: "too large"}, {Path: "docs/a.md", Rule: "out of scope"}},
 	}})
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve || d.Status != StatusSuccess || d.Description != "No blocking issues; not approved: some changed files weren't reviewed" {
 		t.Fatalf("got %+v", d)
 	}
@@ -842,7 +842,7 @@ func TestDecideUnknownSkipRuleNotApproved(t *testing.T) {
 	// Nothing reviewed, only an unknown rule: still not approved.
 	only := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
 		Skipped: []result.Skipped{{Path: "x/new", Rule: "too large"}}}})
-	if d := Decide(Outcome{Result: only}, config.FailureStatusFailed); d.Approve {
+	if d := Decide(Outcome{Result: only}, config.FailureStatusFailed, config.BlockingStatusFailed); d.Approve {
 		t.Fatalf("approved a review of nothing: %+v", d)
 	}
 }
@@ -858,7 +858,7 @@ func TestSkippedNoteEscapesPaths(t *testing.T) {
 			{Path: "e\u202ef", Rule: "binary\n# x`"},
 		},
 	}})
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve {
 		t.Fatal("approved")
 	}
@@ -887,7 +887,7 @@ func TestSkippedNoteCapsPathLengthAndSize(t *testing.T) {
 		Reviewed: []string{"f.go"},
 		Skipped:  []result.Skipped{{Path: long, Rule: "vendored"}},
 	}})
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	want := "\n- `" + strings.Repeat("é", maxListedPath) + "…` (vendored)"
 	if got := noteOf(t, d.Comment); !strings.Contains(got, want) {
 		t.Errorf("long path not cut at %d characters: %q", maxListedPath, got)
@@ -903,7 +903,7 @@ func TestSkippedNoteCapsPathLengthAndSize(t *testing.T) {
 		)
 	}
 	big := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Reviewed: []string{"f.go"}, Skipped: skipped}})
-	d = Decide(Outcome{Result: big}, config.FailureStatusFailed)
+	d = Decide(Outcome{Result: big}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	note := noteOf(t, d.Comment)
 	if len(note) > maxNoteBytes {
 		t.Errorf("note is %d bytes, want at most %d", len(note), maxNoteBytes)
@@ -919,7 +919,7 @@ const wantNoteApprovalOff = "---\n**Not approved:** approval is turned off for t
 // commented and gets its success status, but is never approved.
 func TestDecideApprovalOff(t *testing.T) {
 	r := completed(skill("a", "no_blocking_issues", "f.go"))
-	d := Decide(Outcome{Result: r, ApprovalOff: true}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, ApprovalOff: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Approve || d.Status != StatusSuccess ||
 		d.Description != "No blocking issues; not approved: approval is turned off" {
 		t.Fatalf("got %+v", d)
@@ -935,7 +935,7 @@ func TestDecideApprovalOffWinsOverDraftAndUnavailable(t *testing.T) {
 		{Draft: true, ApproveUnavailable: true},
 	} {
 		o.Result, o.ApprovalOff = completed(skill("a", "no_blocking_issues", "f.go")), true
-		d := Decide(o, config.FailureStatusFailed)
+		d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 		if d.Approve || d.Description != "No blocking issues; not approved: approval is turned off" ||
 			!strings.Contains(d.Comment, wantNoteApprovalOff) || strings.Count(d.Comment, "**Not approved:**") != 1 {
 			t.Errorf("%+v: got %+v", o, d)
@@ -963,10 +963,10 @@ func TestDecideApprovalOffKeepsOtherRows(t *testing.T) {
 	for name, o := range cases {
 		t.Run(name, func(t *testing.T) {
 			for _, fs := range []config.FailureStatus{config.FailureStatusFailed, config.FailureStatusNeutral} {
-				base := Decide(o, fs)
+				base := Decide(o, fs, config.BlockingStatusFailed)
 				off := o
 				off.ApprovalOff = true
-				if got := Decide(off, fs); got != base {
+				if got := Decide(off, fs, config.BlockingStatusFailed); got != base {
 					t.Errorf("approval off changed the decision:\n%+v\nwant\n%+v", got, base)
 				}
 			}
@@ -993,7 +993,7 @@ func TestDecideKind(t *testing.T) {
 		"draft":            {Outcome{Result: completed(skill("a", "no_blocking_issues", "x.go")), Draft: true}, KindDraft},
 		"clean":            {Outcome{Result: completed(skill("a", "no_blocking_issues", "x.go"))}, KindApprove},
 	} {
-		if got := Decide(tc.o, config.FailureStatusFailed).Kind; got != tc.want {
+		if got := Decide(tc.o, config.FailureStatusFailed, config.BlockingStatusFailed).Kind; got != tc.want {
 			t.Errorf("%s: Kind = %q, want %q", name, got, tc.want)
 		}
 	}
@@ -1014,7 +1014,7 @@ func TestDecideDismissals(t *testing.T) {
 	dismissal := render.Dismissal{Fingerprint: fp, Severity: "blocking", By: "maya", Reason: "ok"}
 
 	t.Run("all blocking dismissed approves", func(t *testing.T) {
-		d := Decide(Outcome{Result: completed(blocking), Dismissals: []render.Dismissal{dismissal}}, config.FailureStatusFailed)
+		d := Decide(Outcome{Result: completed(blocking), Dismissals: []render.Dismissal{dismissal}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 		if d.Kind != KindApprove || !d.Approve || d.Status != StatusSuccess {
 			t.Fatalf("decision = %+v, want an approval", d)
 		}
@@ -1025,7 +1025,7 @@ func TestDecideDismissals(t *testing.T) {
 	})
 	t.Run("another blocking finding still blocks", func(t *testing.T) {
 		two := withFinding(blocking, "blocking", "ffffff000000", "plain")
-		d := Decide(Outcome{Result: completed(two), Dismissals: []render.Dismissal{dismissal}}, config.FailureStatusFailed)
+		d := Decide(Outcome{Result: completed(two), Dismissals: []render.Dismissal{dismissal}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 		if d.Kind != KindBlocking || d.Approve || !strings.Contains(d.Comment, "1 blocking issue") {
 			t.Errorf("decision = %+v", d)
 		}
@@ -1033,14 +1033,14 @@ func TestDecideDismissals(t *testing.T) {
 	t.Run("a dismissal covering nothing keeps the comment", func(t *testing.T) {
 		other := render.Dismissal{Fingerprint: "ffffff000000", Severity: "blocking"}
 		r := completed(blocking)
-		d := Decide(Outcome{Result: r, Dismissals: []render.Dismissal{other}}, config.FailureStatusFailed)
-		if want := Decide(Outcome{Result: r}, config.FailureStatusFailed); d != want || d.Kind != KindBlocking ||
+		d := Decide(Outcome{Result: r, Dismissals: []render.Dismissal{other}}, config.FailureStatusFailed, config.BlockingStatusFailed)
+		if want := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed); d != want || d.Kind != KindBlocking ||
 			strings.Contains(d.Comment, "Dismissed (") || !strings.Contains(d.Comment, "#### Findings (1)") {
 			t.Errorf("decision = %+v, want the comment without dismissals and blocking", d)
 		}
 	})
 	t.Run("notes go before the new findings block", func(t *testing.T) {
-		d := Decide(Outcome{Result: completed(blocking), Dismissals: []render.Dismissal{dismissal}, Draft: true}, config.FailureStatusFailed)
+		d := Decide(Outcome{Result: completed(blocking), Dismissals: []render.Dismissal{dismissal}, Draft: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 		i := strings.Index(d.Comment, noteDraft)
 		j := strings.Index(d.Comment, "<!-- pergent:findings ")
 		if d.Kind != KindDraft || i < 0 || j < i || !strings.HasSuffix(d.Comment, "-->\n") {
@@ -1054,7 +1054,7 @@ func TestDecideDismissals(t *testing.T) {
 			Result: completed(s), Dismissals: []render.Dismissal{dismissal},
 			Redact: func(t string) string { return strings.ReplaceAll(t, "sk-secret-123", "***") },
 		}
-		d := Decide(o, config.FailureStatusFailed)
+		d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 		if strings.Contains(d.Comment, "sk-secret-123") {
 			t.Errorf("comment leaks the secret: %q", d.Comment)
 		}
@@ -1068,7 +1068,7 @@ func TestDecideDismissals(t *testing.T) {
 		s = withFinding(s, "suggestion", fp, "x")
 		d := Decide(Outcome{
 			Result: completed(s), Dismissals: []render.Dismissal{{Fingerprint: fp, Severity: "suggestion"}}, MaxComment: 5000,
-		}, config.FailureStatusFailed)
+		}, config.FailureStatusFailed, config.BlockingStatusFailed)
 		if len(d.Comment) > 5000 {
 			t.Errorf("comment is %d bytes, want at most 5000", len(d.Comment))
 		}
@@ -1076,7 +1076,7 @@ func TestDecideDismissals(t *testing.T) {
 	t.Run("failed skill stays failed", func(t *testing.T) {
 		f := blocking
 		f.Verdict = "failed"
-		d := Decide(Outcome{Result: completed(f), Dismissals: []render.Dismissal{dismissal}}, config.FailureStatusFailed)
+		d := Decide(Outcome{Result: completed(f), Dismissals: []render.Dismissal{dismissal}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 		if d.Kind != KindFailed || d.Approve {
 			t.Errorf("decision = %+v, want failed", d)
 		}
@@ -1099,7 +1099,7 @@ func TestDecideDismissalsRedactBeforeRendering(t *testing.T) {
 
 	for name, max := range map[string]int{"no limit": 0, "small limit": 600} {
 		t.Run(name, func(t *testing.T) {
-			d := Decide(Outcome{Result: completed(s), Dismissals: []render.Dismissal{dismissal}, MaxComment: max, Redact: redact}, config.FailureStatusFailed)
+			d := Decide(Outcome{Result: completed(s), Dismissals: []render.Dismissal{dismissal}, MaxComment: max, Redact: redact}, config.FailureStatusFailed, config.BlockingStatusFailed)
 			if strings.Contains(d.Comment, key) {
 				t.Errorf("comment leaks the key: %q", d.Comment)
 			}
@@ -1130,7 +1130,7 @@ func TestDecideDismissalsKeepNotReviewedFailed(t *testing.T) {
 	const fp = "abc123def456"
 	s := withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain")
 	s.Files.NotReviewed = []json.RawMessage{json.RawMessage(`{"path":"g.go","cause":"timeout"}`)}
-	d := Decide(Outcome{Result: completed(s), Dismissals: []render.Dismissal{{Fingerprint: fp, Severity: "blocking"}}}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: completed(s), Dismissals: []render.Dismissal{{Fingerprint: fp, Severity: "blocking"}}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Kind != KindFailed || d.Approve || d.Status != StatusFailed {
 		t.Errorf("decision = %+v, want failed and not approved", d)
 	}
@@ -1146,7 +1146,7 @@ func TestDecideMergedResultIsRenderedAgain(t *testing.T) {
 	r.Merged = true
 	r.Comment.Markdown = "### style\n\nNo blocking issues.\n"
 
-	d := Decide(Outcome{Result: r, Redact: func(s string) string { return strings.ReplaceAll(s, "plain", "***") }}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, Redact: func(s string) string { return strings.ReplaceAll(s, "plain", "***") }}, config.FailureStatusFailed, config.BlockingStatusFailed)
 
 	if d.Kind != KindBlocking {
 		t.Errorf("kind = %q, want blocking", d.Kind)
@@ -1165,7 +1165,7 @@ func TestDecideMergedResultIsRenderedAgain(t *testing.T) {
 
 	// Merged or not, the comment is the result's own, never the stored one.
 	r.Merged = false
-	plain := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	plain := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if !strings.Contains(plain.Comment, "| `security` |") || !strings.Contains(plain.Comment, "| `style` |") || strings.Contains(plain.Comment, "### style") {
 		t.Errorf("an unmerged result's comment is rendered from the result too: %q", plain.Comment)
 	}
@@ -1176,7 +1176,7 @@ func TestDecideMergedResultIsRenderedAgain(t *testing.T) {
 func TestDecideMergeNote(t *testing.T) {
 	r := completed(skill("style", "no_blocking_issues", "a.go"))
 	r.MergeNote = result.NoteBaseUnreadable
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	i, j := strings.Index(d.Comment, result.NoteBaseUnreadable), strings.Index(d.Comment, "<!-- pergent:findings ")
 	if i < 0 || j < i {
 		t.Errorf("comment = %q, want the note before the findings block", d.Comment)
@@ -1188,12 +1188,12 @@ func TestDecideMergeNote(t *testing.T) {
 
 	blocking := completed(withFinding(skill("style", "has_blocking_issues", "a.go"), "blocking", "abc123def456", "x"))
 	blocking.MergeNote = result.NoteBaseUnreadable
-	if d := Decide(Outcome{Result: blocking}, config.FailureStatusFailed); d.Kind != KindBlocking {
+	if d := Decide(Outcome{Result: blocking}, config.FailureStatusFailed, config.BlockingStatusFailed); d.Kind != KindBlocking {
 		t.Errorf("blocking findings still block: %+v", d)
 	}
 	failed := completed(skill("style", "failed", "a.go"))
 	failed.MergeNote = result.NoteBaseUnreadable
-	if d := Decide(Outcome{Result: failed}, config.FailureStatusFailed); d.Kind != KindFailed {
+	if d := Decide(Outcome{Result: failed}, config.FailureStatusFailed, config.BlockingStatusFailed); d.Kind != KindFailed {
 		t.Errorf("a failed skill still fails: %+v", d)
 	}
 }
@@ -1204,14 +1204,14 @@ func TestDecideIncrementalNote(t *testing.T) {
 	const from = "abc1234def5678abc1234def5678abc1234def56"
 	r := completed(skill("style", "no_blocking_issues", "a.go"))
 	r.Incremental = &result.Incremental{Reviewed: 2, Carried: 28, From: from}
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	const want = "Re-reviewed 2 files · 28 carried over from `abc1234`"
 	if !strings.Contains(d.Comment, want) {
 		t.Errorf("comment lacks %q:\n%s", want, d.Comment)
 	}
 
 	r.Incremental = nil
-	d = Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d = Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if strings.Contains(d.Comment, "Re-reviewed") || strings.Contains(d.Comment, "carried over") {
 		t.Errorf("a full review's comment has the incremental line:\n%s", d.Comment)
 	}
@@ -1230,7 +1230,7 @@ func TestDecideRendersCommandsAndLinks(t *testing.T) {
 			return fmt.Sprintf("https://example.com/blob/%s#L%d", path, line)
 		},
 	}
-	d := Decide(o, config.FailureStatusFailed)
+	d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	for _, want := range []string{
 		"Reply `@pergent-bot dismiss abc123 <reason>`",
 		"Run again: `@pergent-bot review`",
@@ -1259,7 +1259,7 @@ func TestDecideRendersCommandsAndLinks(t *testing.T) {
 func TestDecideNoMentionNoCommands(t *testing.T) {
 	r := completed(withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", "abc123def456", "plain"))
 	r.Head, r.PergentVersion = "0123456789abcdef", "v0.3.0"
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	for _, bad := range []string{"dismiss", "Run again", "@"} {
 		if strings.Contains(d.Comment, bad) {
 			t.Errorf("comment has %q without a mention:\n%s", bad, d.Comment)
@@ -1292,7 +1292,7 @@ func TestDecideKeepsConfidenceAndSuggestion(t *testing.T) {
 	}
 	s.Findings = append(s.Findings, raw)
 	r := completed(s)
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 
 	for _, want := range []string{
 		"### ✅ No blocking issues · Confidence 4/5",
@@ -1337,7 +1337,7 @@ func TestDecideRedactsConfidenceReasonAndSuggestion(t *testing.T) {
 		"with a dismissal":         {{Fingerprint: "ffffff000000", Severity: "blocking", By: "maya"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := Decide(Outcome{Result: completed(s), Redact: redact, Dismissals: dismissals}, config.FailureStatusFailed)
+			d := Decide(Outcome{Result: completed(s), Redact: redact, Dismissals: dismissals}, config.FailureStatusFailed, config.BlockingStatusFailed)
 			if strings.Contains(d.Comment, key) {
 				t.Errorf("comment leaks the key: %s", d.Comment)
 			}
@@ -1355,7 +1355,7 @@ func TestDecideRedactsConfidenceReasonAndSuggestion(t *testing.T) {
 
 // The Job's comment is never posted for a completed review.
 func TestDecideIgnoresJobComment(t *testing.T) {
-	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go"))}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go"))}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if strings.Contains(d.Comment, jobComment) || strings.Contains(d.Comment, findingsBlock) {
 		t.Errorf("the Job's comment was used: %s", d.Comment)
 	}
@@ -1417,8 +1417,8 @@ func TestDecideInlineChangesOnlyTheComment(t *testing.T) {
 	blocking := completed(withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain"))
 	clean := completed(skill("security", "no_blocking_issues", "a.go"))
 	for name, r := range map[string]*result.Result{"blocking": blocking, "clean": clean} {
-		off := Decide(Outcome{Result: r, Mention: "pergent-bot"}, config.FailureStatusFailed)
-		on := Decide(Outcome{Result: r, Mention: "pergent-bot", InlineOn: true, Inline: map[string]bool{fp: true}}, config.FailureStatusFailed)
+		off := Decide(Outcome{Result: r, Mention: "pergent-bot"}, config.FailureStatusFailed, config.BlockingStatusFailed)
+		on := Decide(Outcome{Result: r, Mention: "pergent-bot", InlineOn: true, Inline: map[string]bool{fp: true}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 		if on.Status != off.Status || on.Description != off.Description || on.Approve != off.Approve || on.Kind != off.Kind {
 			t.Errorf("%s: decision with inline = %+v, without = %+v", name, on, off)
 		}
@@ -1462,7 +1462,7 @@ func quietFixtureOutcome(r *result.Result) Outcome {
 // the commit before Outcome had a Quiet field, and regenerated only when a
 // pergent pin changes the layout on purpose.
 func TestCommentOffMatchesBeforeQuiet(t *testing.T) {
-	got := Decide(quietFixtureOutcome(quietFixture()), config.FailureStatusFailed).Comment
+	got := Decide(quietFixtureOutcome(quietFixture()), config.FailureStatusFailed, config.BlockingStatusFailed).Comment
 	const path = "testdata/quiet-off.md"
 	if *updateQuietOff {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
@@ -1531,7 +1531,7 @@ func TestDecideQuietComment(t *testing.T) {
 	r := quietFixture()
 	o := quietFixtureOutcome(r)
 	o.Quiet = true
-	d := Decide(o, config.FailureStatusFailed)
+	d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	// The passed check and the n/a check are named by their own text: the
 	// layout shows checks open, so no summary line stands for them.
 	for _, bad := range []string{"<summary>Files (", "omitted to fit", "Output is escaped", "Uploads are checked", "go.sum"} {
@@ -1595,9 +1595,9 @@ func TestDecideQuietChangesOnlyTheComment(t *testing.T) {
 			if c.set != nil {
 				c.set(&o)
 			}
-			off := Decide(o, config.FailureStatusFailed)
+			off := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 			o.Quiet = true
-			on := Decide(o, config.FailureStatusFailed)
+			on := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 			if on.Status != off.Status || on.Description != off.Description || on.Approve != off.Approve || on.Kind != off.Kind {
 				t.Errorf("decision quiet = %+v, off = %+v", on, off)
 			}
@@ -1614,7 +1614,7 @@ func TestDecideQuietKeepsTheSkippedNote(t *testing.T) {
 	r := completed(result.Skill{Name: "security", Verdict: "no_blocking_issues", Files: result.Files{
 		Reviewed: []string{"a.go"}, Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}},
 	}})
-	d := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Kind != KindNotApproved || strings.Contains(d.Comment, "<summary>Files (") {
 		t.Fatalf("decision = %+v, want not approved and no Files list:\n%s", d, d.Comment)
 	}
@@ -1631,9 +1631,9 @@ func TestDecideQuietWithDismissal(t *testing.T) {
 	const fp = "abc123def456"
 	blocking := completed(withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain"))
 	o := Outcome{Result: blocking, Dismissals: []render.Dismissal{{Fingerprint: fp, Severity: "blocking", By: "maya", Reason: "ok"}}}
-	off := Decide(o, config.FailureStatusFailed)
+	off := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	o.Quiet = true
-	on := Decide(o, config.FailureStatusFailed)
+	on := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if on.Status != off.Status || on.Description != off.Description || on.Approve != off.Approve || on.Kind != off.Kind || on.Kind != KindApprove {
 		t.Fatalf("decision quiet = %+v, off = %+v, want the same approval", on, off)
 	}
@@ -1654,7 +1654,7 @@ func TestDecideQuietCarriedResult(t *testing.T) {
 	r := completed(s)
 	r.Merged = true
 	r.Incremental = &result.Incremental{Reviewed: 1, Carried: 1, From: "abc1234def5678"}
-	d := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	for _, want := range []string{"carried over from before", "Re-reviewed 1 file · 1 carried over from `abc1234` · quiet</sub>"} {
 		if !strings.Contains(d.Comment, want) {
 			t.Errorf("comment lacks %q:\n%s", want, d.Comment)
@@ -1669,8 +1669,8 @@ func TestDecideQuietCarriedResult(t *testing.T) {
 // shorten.
 func TestDecideQuietErrorResult(t *testing.T) {
 	r := &result.Result{SchemaVersion: 1, Status: "error", Error: &result.Error{Code: "commit_missing", Message: "boom"}}
-	off := Decide(Outcome{Result: r}, config.FailureStatusFailed)
-	on := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed)
+	off := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
+	on := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if on != off {
 		t.Errorf("quiet = %+v, off = %+v, want the same decision", on, off)
 	}
@@ -1678,9 +1678,9 @@ func TestDecideQuietErrorResult(t *testing.T) {
 		t.Errorf("an error comment says quiet:\n%s", on.Comment)
 	}
 	for _, o := range []Outcome{{FailureReason: "the Job died"}, {}} {
-		off := Decide(o, config.FailureStatusFailed)
+		off := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 		o.Quiet = true
-		if on := Decide(o, config.FailureStatusFailed); on != off {
+		if on := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed); on != off {
 			t.Errorf("quiet = %+v, off = %+v, want the same decision", on, off)
 		}
 	}
@@ -1691,14 +1691,14 @@ func TestDecideQuietErrorResult(t *testing.T) {
 // so there is no note about them.
 func TestDecideQuietAtTheCommentLimit(t *testing.T) {
 	r := quietFixture()
-	full := Decide(Outcome{Result: r, Mention: "pergent-bot", Quiet: true}, config.FailureStatusFailed).Comment
-	off := Decide(Outcome{Result: r, Mention: "pergent-bot"}, config.FailureStatusFailed).Comment
+	full := Decide(Outcome{Result: r, Mention: "pergent-bot", Quiet: true}, config.FailureStatusFailed, config.BlockingStatusFailed).Comment
+	off := Decide(Outcome{Result: r, Mention: "pergent-bot"}, config.FailureStatusFailed, config.BlockingStatusFailed).Comment
 	// A limit the quiet comment fits and the full one does not.
 	limit := len(full) + 10
 	if len(off) <= limit {
 		t.Fatalf("the off comment (%d bytes) must be over the limit %d for this test", len(off), limit)
 	}
-	d := Decide(Outcome{Result: r, Mention: "pergent-bot", Quiet: true, MaxComment: limit}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, Mention: "pergent-bot", Quiet: true, MaxComment: limit}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if len(d.Comment) > limit {
 		t.Errorf("comment is %d bytes, want at most %d", len(d.Comment), limit)
 	}
@@ -1715,7 +1715,7 @@ func TestDecideQuietAtTheCommentLimit(t *testing.T) {
 	// Smaller still: the findings are cut by the usual steps, the blocking
 	// one stays.
 	tight := len(full) - 400
-	d = Decide(Outcome{Result: r, Mention: "pergent-bot", Quiet: true, MaxComment: tight}, config.FailureStatusFailed)
+	d = Decide(Outcome{Result: r, Mention: "pergent-bot", Quiet: true, MaxComment: tight}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if len(d.Comment) > tight || !strings.Contains(d.Comment, "<b>Unchecked input</b>") || !strings.Contains(d.Comment, "plain") {
 		t.Errorf("comment (%d bytes, limit %d) must keep the blocking finding:\n%s", len(d.Comment), tight, d.Comment)
 	}
@@ -1774,10 +1774,10 @@ func TestRenderOptionsBadLayout(t *testing.T) {
 // A bad list gives the default comment, byte for byte.
 func TestDecideBadLayoutIsTheDefaultComment(t *testing.T) {
 	r := quietFixture()
-	want := Decide(quietFixtureOutcome(r), config.FailureStatusFailed).Comment
+	want := Decide(quietFixtureOutcome(r), config.FailureStatusFailed, config.BlockingStatusFailed).Comment
 	o := quietFixtureOutcome(r)
 	o.Layout = []string{"findings:open", "findings:collapsed"}
-	if got := Decide(o, config.FailureStatusFailed).Comment; got != want {
+	if got := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed).Comment; got != want {
 		t.Errorf("comment with a bad layout:\n%s\nwant the default:\n%s", got, want)
 	}
 }
@@ -1815,9 +1815,9 @@ func TestDecideLayoutChangesOnlyTheComment(t *testing.T) {
 			if c.set != nil {
 				c.set(&o)
 			}
-			def := Decide(o, config.FailureStatusFailed)
+			def := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 			o.Layout = []string{"findings:collapsed"}
-			got := Decide(o, config.FailureStatusFailed)
+			got := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 			if got.Status != def.Status || got.Description != def.Description || got.Approve != def.Approve || got.Kind != def.Kind {
 				t.Errorf("decision with a layout = %+v, default = %+v", got, def)
 			}
@@ -1831,7 +1831,7 @@ func TestDecideLayoutComment(t *testing.T) {
 	r := quietFixture()
 	o := quietFixtureOutcome(r)
 	o.Layout = []string{"findings:collapsed"}
-	d := Decide(o, config.FailureStatusFailed)
+	d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if strings.Contains(d.Comment, "<summary>Files (") {
 		t.Errorf("the comment has the Files list:\n%s", d.Comment)
 	}
@@ -1841,7 +1841,7 @@ func TestDecideLayoutComment(t *testing.T) {
 		}
 	}
 	// The same fixture with the default layout lists the files.
-	if def := Decide(quietFixtureOutcome(r), config.FailureStatusFailed).Comment; !strings.Contains(def, "<summary>Files (") {
+	if def := Decide(quietFixtureOutcome(r), config.FailureStatusFailed, config.BlockingStatusFailed).Comment; !strings.Contains(def, "<summary>Files (") {
 		t.Fatalf("the default comment lacks the Files list:\n%s", def)
 	}
 }
@@ -1852,7 +1852,7 @@ func TestDecideQuietWinsOverLayout(t *testing.T) {
 	o := quietFixtureOutcome(quietFixture())
 	o.Quiet = true
 	o.Layout = []string{"findings:open", "checks:open", "files:open"}
-	d := Decide(o, config.FailureStatusFailed)
+	d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	for _, bad := range []string{"<summary>Files (", "Output is escaped"} {
 		if strings.Contains(d.Comment, bad) {
 			t.Errorf("a quiet comment has %q:\n%s", bad, d.Comment)
@@ -1909,7 +1909,7 @@ func TestReviewedDeletionApproves(t *testing.T) {
 	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
 		Reviewed: []string{"gone.go"}, Deleted: []string{"gone.go"},
 		Renamed: []result.Renamed{{Path: "new.go", From: "old.go"}}}})
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Status != StatusSuccess || !d.Approve {
 		t.Errorf("decision = %+v, want success and approve", d)
 	}
@@ -1920,7 +1920,7 @@ func TestReviewedDeletionApproves(t *testing.T) {
 func TestSkippedDeletionStillBlocks(t *testing.T) {
 	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
 		Reviewed: []string{"f.go"}, Skipped: []result.Skipped{{Path: "gone.bin", Rule: "deleted"}}}})
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Status != StatusSuccess || d.Approve {
 		t.Errorf("decision = %+v, want success and no approval", d)
 	}
@@ -1938,7 +1938,7 @@ func TestRedactedDeletedPathsKeepTheirMarks(t *testing.T) {
 	d := Decide(Outcome{
 		Result: completed(s), Redact: func(t string) string { return strings.ReplaceAll(t, "SECRETTOKEN", "***") },
 		FileURL: func(path string, line, end int) string { return "https://example.test/blob/" + path },
-	}, config.FailureStatusFailed)
+	}, config.FailureStatusFailed, config.BlockingStatusFailed)
 
 	if strings.Contains(d.Comment, "SECRETTOKEN") {
 		t.Errorf("a raw path is in the comment:\n%s", d.Comment)
@@ -1975,7 +1975,7 @@ func TestErrorCommentCILineIsInert(t *testing.T) {
 func TestDecideErrorResultCILine(t *testing.T) {
 	e := &result.Result{SchemaVersion: 1, Status: "error", Error: &result.Error{Code: "x", Message: "boom"},
 		Comment: result.Comment{Markdown: Marker + "\n⚠️ failed"}}
-	d := Decide(Outcome{Result: e, CI: []store.CIJobResult{ciJob("test", "failed", true)}}, config.FailureStatusNeutral)
+	d := Decide(Outcome{Result: e, CI: []store.CIJobResult{ciJob("test", "failed", true)}}, config.FailureStatusNeutral, config.BlockingStatusFailed)
 	if d.Kind != KindFailed || d.Status != StatusFailed || !strings.HasSuffix(d.Comment, "\n\n_CI: test failed (blocks approval)_") {
 		t.Errorf("got %+v", d)
 	}
@@ -1991,7 +1991,7 @@ func TestDecideErrorResultCILineBeforeFindingsBlock(t *testing.T) {
 		"block, newline end": Marker + "\n⚠️ failed\n\n" + block + "\n",
 	} {
 		e := &result.Result{SchemaVersion: 1, Status: "error", Comment: result.Comment{Markdown: md}}
-		d := Decide(Outcome{Result: e, CI: []store.CIJobResult{ciJob("test", "failed", true)}}, config.FailureStatusFailed)
+		d := Decide(Outcome{Result: e, CI: []store.CIJobResult{ciJob("test", "failed", true)}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 		want := Marker + "\n⚠️ failed\n\n_CI: test failed (blocks approval)_\n\n" + block
 		if !strings.HasPrefix(d.Comment, want) || strings.TrimRight(d.Comment, "\n") != want {
 			t.Errorf("%s: comment = %q, want %q", name, d.Comment, want)
@@ -2000,7 +2000,7 @@ func TestDecideErrorResultCILineBeforeFindingsBlock(t *testing.T) {
 	// No CI: the comment is the result's own, byte for byte.
 	md := Marker + "\n⚠️ failed\n\n" + block + "\n"
 	e := &result.Result{SchemaVersion: 1, Status: "error", Comment: result.Comment{Markdown: md}}
-	if d := Decide(Outcome{Result: e}, config.FailureStatusFailed); d.Comment != md {
+	if d := Decide(Outcome{Result: e}, config.FailureStatusFailed, config.BlockingStatusFailed); d.Comment != md {
 		t.Errorf("no CI: comment = %q, want %q", d.Comment, md)
 	}
 }
@@ -2008,7 +2008,7 @@ func TestDecideErrorResultCILineBeforeFindingsBlock(t *testing.T) {
 // The review's own description stays, the CI part follows and is cut first.
 func TestDecideCIDescriptionJoinedAndCapped(t *testing.T) {
 	r := completed(skill("a", "has_blocking_issues", "f.go"))
-	d := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob(strings.Repeat("x", 500), "failed", true)}}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob(strings.Repeat("x", 500), "failed", true)}}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if !strings.HasPrefix(d.Description, "Blocking issues found; CI blocks approval: xxx") || len([]rune(d.Description)) > 140 || !strings.HasSuffix(d.Description, "… failed") {
 		t.Errorf("description = %q (%d)", d.Description, len([]rune(d.Description)))
 	}
@@ -2084,7 +2084,7 @@ func TestMultiReviewOffLine(t *testing.T) {
 func TestPublishMultiReviewOffNote(t *testing.T) {
 	r := completed(skill("security", "no_blocking_issues", "a.go"))
 	o := Outcome{Result: r, Mention: "bot", MultiReviewOffNote: MultiReviewOffLine("the review image does not support it")}
-	d := Decide(o, config.FailureStatusFailed)
+	d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	want := DefaultFooterNote + " · multi review off: the review image does not support it · Run again: `@bot review`"
 	if !strings.Contains(d.Comment, want) {
 		t.Errorf("comment lacks the footer %q:\n%s", want, d.Comment)
@@ -2138,7 +2138,7 @@ func TestDecideMultiReviewNamesAndHide(t *testing.T) {
 	hide := func(s string) string { return HideModels(s, []ModelRef{{"zeta-provider-b", "omega-model-b"}}, nil) }
 	names := &render.MultiReviewNames{Reviewers: []string{"team-a", "team-b"}, Judge: "team-j"}
 	o := Outcome{Result: multiReviewResult(name), Hide: hide, MultiReview: names}
-	d := Decide(o, config.FailureStatusFailed)
+	d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	for _, want := range []string{"Multi review: team-a, team-b · judge team-j", "found by team-a", "judge disagreed"} {
 		if !strings.Contains(d.Comment, want) {
 			t.Errorf("comment lacks %q:\n%s", want, d.Comment)
@@ -2157,7 +2157,7 @@ func TestDecideMultiReviewNamesAndHide(t *testing.T) {
 	}
 
 	o.MultiReview = nil
-	d = Decide(o, config.FailureStatusFailed)
+	d = Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if strings.Contains(d.Comment, "Multi review:") {
 		t.Errorf("comment without names names a multi review:\n%s", d.Comment)
 	}
@@ -2171,7 +2171,7 @@ func TestDecideMultiReviewNamesAndHide(t *testing.T) {
 func TestDecideMultiReviewSkippedLine(t *testing.T) {
 	names := &render.MultiReviewNames{Reviewers: []string{"team-a", "team-b", "team-c"}, Judge: "team-j",
 		Skipped: []render.SkippedReviewer{{Name: "team-b", Reason: "the token quota"}}}
-	d := Decide(Outcome{Result: multiReviewResult("plain"), MultiReview: names}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: multiReviewResult("plain"), MultiReview: names}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if n := strings.Count(d.Comment, "Multi review: team-b was skipped: the token quota."); n != 1 {
 		t.Errorf("the skip line is in the comment %d times; want once:\n%s", n, d.Comment)
 	}
@@ -2206,12 +2206,12 @@ func TestDecideMultiReviewDropsChangedSuggestion(t *testing.T) {
 	const name = "omega-model-b"
 	hide := func(s string) string { return HideModels(s, []ModelRef{{"zeta-provider-b", name}}, nil) }
 	o := Outcome{Result: multiReviewResult(name), Hide: hide, MultiReview: &render.MultiReviewNames{Reviewers: []string{"team-a", "team-b"}}}
-	d := Decide(o, config.FailureStatusFailed)
+	d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if strings.Contains(d.Comment, "x := the model") || strings.Contains(d.Comment, "x := "+name) {
 		t.Errorf("comment shows the changed suggestion:\n%s", d.Comment)
 	}
 	o.Result = multiReviewResult("plain")
-	if d := Decide(o, config.FailureStatusFailed); !strings.Contains(d.Comment, "x := plain") {
+	if d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed); !strings.Contains(d.Comment, "x := plain") {
 		t.Errorf("comment lost a suggestion that names no model:\n%s", d.Comment)
 	}
 }

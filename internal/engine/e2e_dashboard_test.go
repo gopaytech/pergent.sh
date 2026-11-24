@@ -69,7 +69,7 @@ func newDashboardE2E(t *testing.T, edit ...func(o *dashboard.Options)) *dashE2E 
 	cfg := env.Engine.Config
 	cfg.Dashboard = config.Dashboard{URL: dashURL}
 	cfg.Repositories = append(cfg.Repositories, config.Repository{
-		GitLab: testInstance, Project: paymentsPath, FailureStatus: config.FailureStatusFailed,
+		GitLab: testInstance, Project: paymentsPath, FailureStatus: config.FailureStatusFailed, BlockingStatus: config.BlockingStatusFailed,
 	})
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("dashboard test config is invalid: %v", err)

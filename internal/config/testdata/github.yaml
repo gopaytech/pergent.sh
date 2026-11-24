@@ -31,6 +31,7 @@ repositories:
     project: acme/widgets
     skills: [security]
     failure_status: neutral
+    blocking_status: neutral
 
 llm:
   provider: anthropic

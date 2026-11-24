@@ -29,6 +29,7 @@ import LinkedReposEditor, { tidyLinks, type LinkableState } from "../LinkedRepos
 import { useWrite } from "../layout/write";
 import { parseQuota, quotaProblem, quotaText } from "../quota";
 import RuleSetPicker from "../RuleSetPicker";
+import { blockingHelp, blockingLabel, failureHelp, failureLabel, notUsedNote } from "../statusSettings";
 import { ErrorBox, Loading, Switch, bytesText } from "../ui";
 import RepoModelChain from "./RepoModelChain";
 
@@ -125,6 +126,8 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         canSetTrust={view.role === "admin"}
         // So is the token quota.
         canSetQuota={view.role === "admin"}
+        // And the two status settings.
+        canSetStatus={view.role === "admin"}
         instanceTrust={view.instanceTrustedAuthorsOnly}
         platform={repo.platform}
         ciNames={ciNames.isSuccess ? ciNames.data.names : null}
@@ -146,7 +149,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
           const caps =
             view.role === "admin"
               ? ""
-              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories, who is trusted and the token quota.";
+              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories, who is trusted, the token quota and the status settings.";
           if (window.confirm(`Put every setting of this repository back to its default?${caps} The model chain stays as it is.`)) reset.mutate();
         }}
       />
@@ -330,6 +333,7 @@ type Draft = {
   // null is the default layout.
   commentLayout: string[] | null;
   failureStatus: string;
+  blockingStatus: string;
   // mode "default" is a null skills setting: the default list.
   skillsMode: "default" | "choose";
   skills: string[];
@@ -395,6 +399,7 @@ function Form({
   canSetLinks,
   canSetTrust,
   canSetQuota,
+  canSetStatus,
   instanceTrust,
   platform,
   ciNames,
@@ -419,6 +424,7 @@ function Form({
   canSetLinks: boolean;
   canSetTrust: boolean;
   canSetQuota: boolean;
+  canSetStatus: boolean;
   // instanceTrust is the instance's mode, which "Instance default" follows.
   instanceTrust: TrustMode;
   platform: string;
@@ -452,6 +458,7 @@ function Form({
     linkedRepos: settings.linkedRepos.value.map((l) => ({ ...l, watched: [...l.watched] })),
     commentLayout: settings.commentLayout.overridden ? settings.commentLayout.value : null,
     failureStatus: settings.failureStatus.value,
+    blockingStatus: settings.blockingStatus.value,
     skillsMode: settings.skills.value === null ? "default" : "choose",
     skills: skillsNow,
     repoSkills: settings.repoSkills.value,
@@ -538,7 +545,12 @@ function Form({
     // it would pin the repository to today's default.
     const followed = initial.commentLayout === null && d.commentLayout !== null && sameLayout(d.commentLayout, settings.commentLayout.value);
     if (!followed && !sameLayout(d.commentLayout, initial.commentLayout)) body.commentLayout = d.commentLayout;
-    if (d.failureStatus !== initial.failureStatus) body.failureStatus = d.failureStatus;
+    // The status settings are an admin's: a maintainer's save never carries
+    // them (the server would refuse the whole save).
+    if (canSetStatus) {
+      if (d.failureStatus !== initial.failureStatus) body.failureStatus = d.failureStatus;
+      if (d.blockingStatus !== initial.blockingStatus) body.blockingStatus = d.blockingStatus;
+    }
     if (d.skillsMode === "default") {
       // Back to the default list: null resets the setting.
       if (initial.skillsMode === "choose") body.skills = null;
@@ -629,19 +641,33 @@ function Form({
           <Switch label="Approve clean reviews" checked={d.approve} disabled={disabled} onChange={(v) => set("approve", v)} />
         </Setting>
         <Setting
-          name="Status when a review fails"
-          overridden={settings.failureStatus.overridden}
-          help={`"neutral" won't block merging when a review can't be done. On GitLab the status is success; the review is still not approved.`}
+          name={blockingLabel}
+          overridden={settings.blockingStatus.overridden}
+          help={blockingHelp}
         >
           <select
-            aria-label="Status when a review fails"
+            aria-label={blockingLabel}
+            value={d.blockingStatus}
+            disabled={disabled || !canSetStatus}
+            onChange={(e) => set("blockingStatus", e.target.value)}
+          >
+            <option value="failed">failed (blocks merge)</option>
+            <option value="neutral">neutral</option>
+          </select>
+          {!locked && !canSetStatus && <div className="meta">Only an admin changes this.</div>}
+        </Setting>
+        <Setting name={failureLabel} overridden={settings.failureStatus.overridden} help={failureHelp}>
+          <select
+            aria-label={failureLabel}
             value={d.failureStatus}
-            disabled={disabled}
+            disabled={disabled || !canSetStatus}
             onChange={(e) => set("failureStatus", e.target.value)}
           >
             <option value="failed">failed (blocks merge)</option>
             <option value="neutral">neutral</option>
           </select>
+          {d.blockingStatus === "neutral" && <div className="meta">{notUsedNote}</div>}
+          {!locked && !canSetStatus && <div className="meta">Only an admin changes this.</div>}
         </Setting>
         <Setting
           name="Review drafts"

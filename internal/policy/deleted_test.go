@@ -25,7 +25,7 @@ func goAndDocs(goVerdict string) *result.Result {
 // A deletion one skill reviewed is approved even though another skill's scope
 // leaves it out, and the comment doesn't call it skipped.
 func TestDeletionOneSkillReviewedApproves(t *testing.T) {
-	d := Decide(Outcome{Result: goAndDocs("no_blocking_issues")}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: goAndDocs("no_blocking_issues")}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Kind != KindApprove || !d.Approve || d.Status != StatusSuccess {
 		t.Errorf("decision = %+v, want approve", d)
 	}
@@ -43,7 +43,7 @@ func TestDeletionNoSkillReviewedStillBlocks(t *testing.T) {
 		result.Skill{Name: "docs", Verdict: "no_blocking_issues", Files: result.Files{
 			Reviewed: []string{},
 			Skipped:  []result.Skipped{{Path: "pkg/new.go", Rule: "out of scope"}, {Path: "pkg/old.go", Rule: "deleted"}}}})
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Kind != KindNotApproved || d.Approve || d.Description != descPartlySkipped {
 		t.Errorf("decision = %+v, want not approved, partly skipped", d)
 	}
@@ -60,7 +60,7 @@ func TestUnreviewedDeletionBesideAReviewedOneBlocks(t *testing.T) {
 	for i := range r.Skills {
 		r.Skills[i].Files.Skipped = append(r.Skills[i].Files.Skipped, result.Skipped{Path: "pkg/blob.bin", Rule: "deleted"})
 	}
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Kind != KindNotApproved || d.Approve {
 		t.Fatalf("decision = %+v, want not approved", d)
 	}
@@ -78,7 +78,7 @@ func TestUnreviewedDeletionBesideAReviewedOneBlocks(t *testing.T) {
 
 // A failed skill's files.deleted approves nothing: the review fails.
 func TestDeletionOfAFailedSkillIsNotApproved(t *testing.T) {
-	d := Decide(Outcome{Result: goAndDocs("failed")}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: goAndDocs("failed")}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Kind != KindFailed || d.Approve || d.Status == StatusSuccess {
 		t.Errorf("decision = %+v, want failed", d)
 	}
@@ -92,7 +92,7 @@ func TestCheckSkillDeletionDoesNotApprove(t *testing.T) {
 			Reviewed: []string{"pkg/new.go"}, Skipped: []result.Skipped{{Path: "pkg/old.go", Rule: "deleted"}}}},
 		result.Skill{Name: result.ImpactSkill, Verdict: "no_blocking_issues", Files: result.Files{
 			Reviewed: []string{"pkg/old.go"}, Deleted: []string{"pkg/old.go"}}})
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Kind != KindNotApproved || d.Approve {
 		t.Errorf("decision = %+v, want not approved", d)
 	}
@@ -103,7 +103,7 @@ func TestCheckSkillDeletionDoesNotApprove(t *testing.T) {
 func TestDeletedWithoutReviewedDoesNotApprove(t *testing.T) {
 	r := goAndDocs("no_blocking_issues")
 	r.Skills[0].Files.Reviewed = []string{"pkg/new.go"}
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Kind != KindNotApproved || d.Approve {
 		t.Errorf("decision = %+v, want not approved", d)
 	}
@@ -145,7 +145,7 @@ func TestCarriedDeletionOneSkillReviewedApproves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Kind != KindApprove || !d.Approve {
 		t.Errorf("decision = %+v, want approve", d)
 	}
@@ -160,7 +160,7 @@ func TestRedactedDeletedPathNeverApproves(t *testing.T) {
 	r := completed(result.Skill{Name: "all", Verdict: "no_blocking_issues", Files: result.Files{
 		Reviewed: []string{"b.go", redacted}, Deleted: []string{redacted},
 		Skipped: []result.Skipped{{Path: redacted, Rule: "deleted"}}}})
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed, config.BlockingStatusFailed)
 	if d.Kind != KindNotApproved || d.Approve || d.Description != descPartlySkipped {
 		t.Fatalf("decision = %+v, want not approved, partly skipped", d)
 	}
