@@ -85,6 +85,33 @@ describe("AdminSettings comment footer", () => {
 });
 
 describe("AdminSettings defaults", () => {
+  it("sets the blocking status default, and says failure status is not used while it is neutral", async () => {
+    const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, blockingStatus: "neutral" } } });
+    renderApp("/admin/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const blocking = within(form).getByLabelText("Status when a review finds blocking issues");
+    expect(blocking).toHaveValue("failed");
+    expect(within(form).queryByText("Not used: the blocking status is neutral")).not.toBeInTheDocument();
+    await userEvent.selectOptions(blocking, "neutral");
+    expect(within(form).getByText("Not used: the blocking status is neutral")).toBeInTheDocument();
+    // The failure status stays changeable, so it can be set before going back to failed.
+    expect(within(form).getByLabelText("Status when a review can't run")).toBeEnabled();
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ blockingStatus: "neutral", failureStatus: null });
+  });
+
+  it("puts a saved blocking status back on the config value", async () => {
+    const saved = { ...defaults, blockingStatus: "neutral", pinned: { blockingStatus: true } };
+    const fake = fakeApi({ ...routes(), "GET /api/admin/defaults": { body: saved }, "PUT /api/admin/defaults": { body: defaults } });
+    renderApp("/admin/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    expect(within(form).getByText("Not used: the blocking status is neutral")).toBeInTheDocument();
+    await userEvent.click(within(form).getByRole("button", { name: "Use config value for Status when a review finds blocking issues" }));
+    expect(within(form).getByLabelText("Status when a review finds blocking issues")).toHaveValue("failed");
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ blockingStatus: null });
+  });
+
   it("shows the defaults in a form an admin can change", async () => {
     fakeApi(routes());
     renderApp("/admin/settings");
@@ -92,7 +119,7 @@ describe("AdminSettings defaults", () => {
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByRole("switch", { name: "Approve clean reviews" })).toBeChecked();
     expect(within(form).getByRole("switch", { name: "Review drafts" })).toBeChecked();
-    expect(within(form).getByLabelText("Status when a review fails")).toHaveValue("failed");
+    expect(within(form).getByLabelText("Status when a review can't run")).toHaveValue("failed");
     expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue("600");
     expect(within(form).getByLabelText("Max steps")).toHaveValue("40");
     expect(
@@ -129,6 +156,7 @@ describe("AdminSettings defaults", () => {
       linkedReposEnabled: null,
       commentLayout: null,
       failureStatus: null,
+      blockingStatus: null,
       jobTimeoutSeconds: 900,
       maxTurns: null,
       jobMemory: "6Gi",
@@ -371,6 +399,7 @@ describe("AdminSettings defaults", () => {
       linkedReposEnabled: null,
       commentLayout: null,
       failureStatus: null,
+      blockingStatus: null,
       jobTimeoutSeconds: null,
       maxTurns: null,
       jobMemory: null,
@@ -409,7 +438,8 @@ describe("AdminSettings defaults", () => {
     expect(row("Quiet reviews")).toHaveTextContent("From config: off");
     expect(row("Linked repositories")).toHaveTextContent("From config: off");
     expect(row("Comment layout")).toHaveTextContent("Not saved here: repositories switched on in the dashboard start with the built-in layout.");
-    expect(row("Status when a review fails")).toHaveTextContent("From config: failed (blocks merge)");
+    expect(row("Status when a review can't run")).toHaveTextContent("From config: failed (blocks merge)");
+    expect(row("Status when a review finds blocking issues")).toHaveTextContent("From config: failed (blocks merge)");
     expect(row("Timeout")).toHaveTextContent("From config: 600");
     expect(row("Max steps")).toHaveTextContent("From config: 40");
     expect(row("Memory limit")).toHaveTextContent("From config: none");

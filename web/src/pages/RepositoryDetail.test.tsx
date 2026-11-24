@@ -70,6 +70,25 @@ describe("RepositoryDetail: the multi review line", () => {
   });
 });
 
+describe("RepositoryDetail: the merge gate line", () => {
+  const withBlocking = (value: string) => {
+    const detail = repoDetail(repoPayments, "viewer");
+    detail.settings.blockingStatus = { value, overridden: value === "neutral" };
+    return { ...base, "GET /api/me": { body: viewer }, "GET /api/repositories/main/acme/payments": { body: detail } };
+  };
+
+  it("says the merge gate is off while the blocking status is neutral, also to a viewer", async () => {
+    renderAt("/repos/main/acme/payments", withBlocking("neutral"));
+    expect(await screen.findByText("Merge gate: off (blocking status is neutral)")).toBeInTheDocument();
+  });
+
+  it("has no merge gate line while the blocking status is failed", async () => {
+    renderAt("/repos/main/acme/payments", withBlocking("failed"));
+    await screen.findByText("Multi review: off");
+    expect(screen.queryByText(/^Merge gate/)).not.toBeInTheDocument();
+  });
+});
+
 describe("RepositoryDetail", () => {
   it("shows the repository's reviews first", async () => {
     renderAt("/repos/main/acme/payments", base);
@@ -115,7 +134,7 @@ describe("RepositoryDetail", () => {
     expect(within(approve).getByRole("switch")).toBeChecked();
     const drafts = screen.getByRole("switch", { name: "Review drafts" }).closest(".set") as HTMLElement;
     expect(within(drafts).getByText("default")).toHaveClass("badge", "cfg");
-    expect(screen.getByRole("combobox", { name: "Status when a review fails" })).toHaveValue("failed");
+    expect(screen.getByRole("combobox", { name: "Status when a review can't run" })).toHaveValue("failed");
     expect(screen.getByRole("textbox", { name: "Timeout (seconds)" })).toHaveValue("600");
     const memory = screen.getByRole("textbox", { name: "Memory limit" });
     expect(memory).toHaveValue("6Gi");
@@ -136,7 +155,8 @@ describe("RepositoryDetail", () => {
     for (const el of [
       screen.getByRole("switch", { name: "Approve clean reviews" }),
       screen.getByRole("switch", { name: "Review drafts" }),
-      screen.getByRole("combobox", { name: "Status when a review fails" }),
+      screen.getByRole("combobox", { name: "Status when a review can't run" }),
+      screen.getByRole("combobox", { name: "Status when a review finds blocking issues" }),
       screen.getByRole("textbox", { name: "Timeout (seconds)" }),
       screen.getByRole("textbox", { name: "Max steps" }),
       screen.getByRole("textbox", { name: "Memory limit" }),
