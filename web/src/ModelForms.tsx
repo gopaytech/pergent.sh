@@ -26,16 +26,21 @@ const baseURLHelp = "Empty uses the provider's own API. Set it for a proxy or an
 
 // AddModelForm adds an entry with a POST to path: its name, provider, model,
 // base URL and key, and with teamsMayUse, the admins' switch that lets team
-// chains use it. onAdded gets the new entry's name.
+// chains use it. onAdded gets the new entry's name. With onCancel, the form
+// sits inside the caller's Models card, opened by its Add model button,
+// with a Cancel beside Add model; without, it is a card of its own.
 export function AddModelForm<T extends { name: string }>({
   path,
   teamsMayUse,
   onAdded,
+  onCancel,
 }: {
   path: string;
   teamsMayUse?: boolean;
   onAdded: (added: T) => void;
+  onCancel?: () => void;
 }) {
+  const inCard = onCancel !== undefined;
   const write = useWrite();
   const [name, setName] = useState("");
   const [choice, setChoice] = useState("");
@@ -74,92 +79,99 @@ export function AddModelForm<T extends { name: string }>({
     });
   };
   return (
-    <form className="card pad stack" aria-label="Add a model" onSubmit={submit}>
-      <h2>Add a model</h2>
-      <label htmlFor="llm-name">Name</label>
-      <input
-        id="llm-name"
-        type="text"
-        {...noFill}
-        spellCheck={false}
-        maxLength={64}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        required
-      />
-      <div className="meta">{nameHelp}</div>
-      <label htmlFor="llm-provider">Provider</label>
-      <select id="llm-provider" value={choice} onChange={(e) => setChoice(e.target.value)} required>
-        <option value="" disabled>
-          Choose a provider
-        </option>
-        {providers.map(([id, label]) => (
-          <option key={id} value={id}>
-            {label}
+    <form className={inCard ? "add-model" : "card"} aria-label="Add a model" onSubmit={submit}>
+      {inCard ? <h3>Add a model</h3> : <h2>Add a model</h2>}
+      <div className="pad stack">
+        <label htmlFor="llm-name">Name</label>
+        <input
+          id="llm-name"
+          type="text"
+          {...noFill}
+          spellCheck={false}
+          maxLength={64}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
+        <div className="meta">{nameHelp}</div>
+        <label htmlFor="llm-provider">Provider</label>
+        <select id="llm-provider" value={choice} onChange={(e) => setChoice(e.target.value)} required>
+          <option value="" disabled>
+            Choose a provider
           </option>
-        ))}
-        <option value="other">Other (type its ID)</option>
-      </select>
-      {choice === "other" && (
-        <>
-          <label htmlFor="llm-provider-id">Provider ID</label>
-          <input
-            id="llm-provider-id"
-            type="text"
-            {...noFill}
-            spellCheck={false}
-            value={otherID}
-            onChange={(e) => setOtherID(e.target.value)}
-            required
-          />
-          <div className="meta">The provider's ID in opencode. With a Base URL, it is any OpenAI-compatible server.</div>
-        </>
-      )}
-      <label htmlFor="llm-model">Model</label>
-      <input
-        id="llm-model"
-        type="text"
-        {...noFill}
-        spellCheck={false}
-        value={model}
-        onChange={(e) => setModel(e.target.value)}
-        required
-      />
-      <div className="meta">The model's ID as the provider names it.</div>
-      <label htmlFor="llm-base-url">Base URL</label>
-      <input
-        id="llm-base-url"
-        type="text"
-        {...noFill}
-        spellCheck={false}
-        placeholder="the provider's own"
-        value={baseURL}
-        onChange={(e) => setBaseURL(e.target.value)}
-      />
-      <div className="meta">{baseURLHelp}</div>
-      <label htmlFor="llm-api-key">API key</label>
-      <input
-        id="llm-api-key"
-        type="password"
-        {...secretFill}
-        spellCheck={false}
-        value={key}
-        onChange={(e) => setKey(e.target.value)}
-        required
-      />
-      {teamsMayUse && (
-        <label className="link-block">
-          <Switch label="Teams may use it" checked={forTeams} onChange={setForTeams} />
-          <span>Teams may use it in their chains. Its key then pays for their reviews.</span>
-        </label>
-      )}
-      {add.isError && <ErrorBox error={add.error} />}
-      {note && (
-        <div className="note" role="status">
-          {note}
-        </div>
-      )}
-      <div className="actions-row">
+          {providers.map(([id, label]) => (
+            <option key={id} value={id}>
+              {label}
+            </option>
+          ))}
+          <option value="other">Other (type its ID)</option>
+        </select>
+        {choice === "other" && (
+          <>
+            <label htmlFor="llm-provider-id">Provider ID</label>
+            <input
+              id="llm-provider-id"
+              type="text"
+              {...noFill}
+              spellCheck={false}
+              value={otherID}
+              onChange={(e) => setOtherID(e.target.value)}
+              required
+            />
+            <div className="meta">The provider's ID in opencode. With a Base URL, it is any OpenAI-compatible server.</div>
+          </>
+        )}
+        <label htmlFor="llm-model">Model</label>
+        <input
+          id="llm-model"
+          type="text"
+          {...noFill}
+          spellCheck={false}
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          required
+        />
+        <div className="meta">The model's ID as the provider names it.</div>
+        <label htmlFor="llm-base-url">Base URL</label>
+        <input
+          id="llm-base-url"
+          type="text"
+          {...noFill}
+          spellCheck={false}
+          placeholder="the provider's own"
+          value={baseURL}
+          onChange={(e) => setBaseURL(e.target.value)}
+        />
+        <div className="meta">{baseURLHelp}</div>
+        <label htmlFor="llm-api-key">API key</label>
+        <input
+          id="llm-api-key"
+          type="password"
+          {...secretFill}
+          spellCheck={false}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          required
+        />
+        {teamsMayUse && (
+          <label className="link-block">
+            <Switch label="Teams may use it" checked={forTeams} onChange={setForTeams} />
+            <span>Teams may use it in their chains. Its key then pays for their reviews.</span>
+          </label>
+        )}
+        {add.isError && <ErrorBox error={add.error} />}
+      </div>
+      <div className="foot">
+        {note && (
+          <span className="meta grow" role="status">
+            {note}
+          </span>
+        )}
+        {inCard && (
+          <button type="button" className="btn" disabled={add.isPending} onClick={onCancel}>
+            Cancel
+          </button>
+        )}
         <button type="submit" className="btn primary" disabled={add.isPending}>
           Add model
         </button>
@@ -251,12 +263,12 @@ export function EditModelForm({
         </div>
       )}
       {save.isError && <ErrorBox error={save.error} />}
-      <div className="actions-row">
-        <button type="submit" className="btn primary small" disabled={save.isPending}>
-          Save
-        </button>
+      <div className="actions-row end">
         <button type="button" className="btn small" disabled={save.isPending} onClick={onDone}>
           Cancel
+        </button>
+        <button type="submit" className="btn primary small" disabled={save.isPending}>
+          Save
         </button>
       </div>
     </form>

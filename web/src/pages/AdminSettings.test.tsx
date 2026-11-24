@@ -27,6 +27,32 @@ import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
 
+// folded lists the cards and model rows still folded.
+const folded = () => [...document.querySelectorAll<HTMLButtonElement>("button[data-fold][aria-expanded='false']")];
+
+// unfold opens every folded card and model row, as an admin reading the whole page would.
+async function unfold() {
+  for (let shut = folded(); shut.length > 0; shut = folded()) {
+    for (const b of shut) await userEvent.click(b);
+  }
+}
+
+// openSettings renders the page, waits for what it reads, and unfolds it all.
+async function openSettings() {
+  const r = renderApp("/admin/settings");
+  await screen.findByRole("heading", { name: "Settings", level: 1 });
+  await waitFor(() => expect(screen.queryByText("Loading…")).not.toBeInTheDocument());
+  await unfold();
+  return r;
+}
+
+// openAddModel opens the Add a model form inside the Models card.
+async function openAddModel() {
+  const card = await screen.findByRole("region", { name: "Models" });
+  await userEvent.click(within(card).getByRole("button", { name: "Add model" }));
+  return within(card).getByRole("form", { name: "Add a model" });
+}
+
 const routes = (me = ssoAdmin) => ({
   "GET /api/me": { body: me },
   "GET /api/admin/defaults": { body: defaults },
@@ -43,7 +69,7 @@ describe("AdminSettings comment footer", () => {
       ...routes(),
       "PUT /api/admin/comment-footer": { body: { ...commentFooter, note: "Run by the team" } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Comment footer" });
     const input = within(form).getByLabelText("Text");
     expect(input).toHaveValue("");
@@ -63,7 +89,7 @@ describe("AdminSettings comment footer", () => {
       "GET /api/admin/comment-footer": { body: { ...commentFooter, note: "Run by the team" } },
       "PUT /api/admin/comment-footer": { body: commentFooter },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Comment footer" });
     await userEvent.clear(within(form).getByLabelText("Text"));
     await userEvent.click(within(form).getByRole("button", { name: "Save footer" }));
@@ -76,7 +102,7 @@ describe("AdminSettings comment footer", () => {
       ...routes(),
       "PUT /api/admin/comment-footer": { status: 400, body: { error: "The footer text can't contain <." } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Comment footer" });
     await userEvent.type(within(form).getByLabelText("Text"), "a <b>");
     await userEvent.click(within(form).getByRole("button", { name: "Save footer" }));
@@ -87,7 +113,7 @@ describe("AdminSettings comment footer", () => {
 describe("AdminSettings defaults", () => {
   it("sets the blocking status default, and says failure status is not used while it is neutral", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, blockingStatus: "neutral" } } });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const blocking = within(form).getByLabelText("Status when a review finds blocking issues");
     expect(blocking).toHaveValue("failed");
@@ -103,7 +129,7 @@ describe("AdminSettings defaults", () => {
   it("puts a saved blocking status back on the config value", async () => {
     const saved = { ...defaults, blockingStatus: "neutral", pinned: { blockingStatus: true } };
     const fake = fakeApi({ ...routes(), "GET /api/admin/defaults": { body: saved }, "PUT /api/admin/defaults": { body: defaults } });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByText("Not used: the blocking status is neutral")).toBeInTheDocument();
     await userEvent.click(within(form).getByRole("button", { name: "Use config value for Status when a review finds blocking issues" }));
@@ -114,7 +140,7 @@ describe("AdminSettings defaults", () => {
 
   it("shows the defaults in a form an admin can change", async () => {
     fakeApi(routes());
-    renderApp("/admin/settings");
+    await openSettings();
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByRole("switch", { name: "Approve clean reviews" })).toBeChecked();
@@ -135,7 +161,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, approve: false, jobTimeoutSeconds: 900, jobMemory: "6Gi" } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("switch", { name: "Approve clean reviews" }));
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
@@ -175,7 +201,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, inlineFindings: false } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(
       within(form).getByText(
@@ -200,7 +226,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, commandsAuthorAndMaintainersOnly: false } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByText(/When on, only the author of a change and the repository's maintainers and owners can use pergent commands on it. When off, anyone with write access can./)).toBeInTheDocument();
     const names = within(form)
@@ -221,7 +247,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, incrementalReviews: false } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByText(/After a push, review only the files changed since the last review./)).toBeInTheDocument();
     const names = within(form)
@@ -242,7 +268,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, learnFromDismissals: false } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByText(/Later reviews are told what people with write access rejected, and why./)).toBeInTheDocument();
     const names = within(form)
@@ -263,7 +289,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, quietReviews: true } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(
       within(form).getByText(/Fewer nitpicks, no suggestion threads and a shorter comment. Blocking findings, failures and approval stay the same./),
@@ -286,7 +312,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, linkedReposEnabled: true, pinned: { linkedReposEnabled: true } } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Linked repositories", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(row).toHaveTextContent("Off by default");
@@ -310,7 +336,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Comment layout", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(form).getByText("Quiet reviews", { selector: ".name" }).closest(".set")?.nextElementSibling).toBe(row);
@@ -329,7 +355,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Comment layout", { selector: ".name" }).closest(".set") as HTMLElement;
     await userEvent.click(within(row).getByRole("button", { name: "Move Files up" }));
@@ -346,7 +372,7 @@ describe("AdminSettings defaults", () => {
       },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Comment layout", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText(/Saved here: repositories switched on in the dashboard start with this layout./)).toBeInTheDocument();
@@ -367,7 +393,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, rerunLimitPerMR: 3, rerunLimitPerRepo: 120 } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const perMR = within(form).getByLabelText("Re-run cap per MR/PR (per day)");
     const perRepo = within(form).getByLabelText("Re-run cap per repository (per day)");
@@ -385,7 +411,7 @@ describe("AdminSettings defaults", () => {
 
   it("saving untouched defaults sends null for values equal to the config", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toEqual({
@@ -412,7 +438,7 @@ describe("AdminSettings defaults", () => {
 
   it("sets the default rule sets in order, with no Built-in rules default", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     // Built-in rules are chosen per repository: there is no default to set.
     expect(within(form).queryByRole("switch", { name: "Built-in rules" })).not.toBeInTheDocument();
@@ -426,7 +452,7 @@ describe("AdminSettings defaults", () => {
 
   it("says under each default what the config gives", async () => {
     fakeApi(routes());
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = (name: string) => within(form).getByText(name, { selector: ".name" }).closest(".set") as HTMLElement;
     expect(row("Approve clean reviews")).toHaveTextContent("From config: on");
@@ -461,7 +487,7 @@ describe("AdminSettings defaults", () => {
       "GET /api/admin/defaults": { body: pinnedTimeout },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Timeout", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says 1800.")).toBeInTheDocument();
@@ -482,7 +508,7 @@ describe("AdminSettings defaults", () => {
       },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Only the author and maintainers use commands", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says on.")).toBeInTheDocument();
@@ -501,7 +527,7 @@ describe("AdminSettings defaults", () => {
       },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Incremental reviews", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says on.")).toBeInTheDocument();
@@ -520,7 +546,7 @@ describe("AdminSettings defaults", () => {
       },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Learn from dismissals", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says on.")).toBeInTheDocument();
@@ -539,7 +565,7 @@ describe("AdminSettings defaults", () => {
       },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Quiet reviews", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says off.")).toBeInTheDocument();
@@ -556,7 +582,7 @@ describe("AdminSettings defaults", () => {
       "GET /api/admin/defaults": { body: pinnedTimeout },
       "PUT /api/admin/defaults": { body: pinnedTimeout },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobTimeoutSeconds: 600, maxTurns: null });
@@ -565,7 +591,7 @@ describe("AdminSettings defaults", () => {
   it("lets a config timeout outside 60-7200 be saved untouched or typed, as null", async () => {
     const long = { ...defaults, jobTimeoutSeconds: 10800, config: { ...defaults.config, jobTimeoutSeconds: 10800 } };
     const fake = fakeApi({ ...routes(), "GET /api/admin/defaults": { body: long }, "PUT /api/admin/defaults": { body: long } });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     await waitFor(() => expect(fake.find("PUT", "/api/admin/defaults")).toHaveLength(1));
@@ -579,7 +605,7 @@ describe("AdminSettings defaults", () => {
 
   it("still refuses a timeout over 7200 that differs from the config", async () => {
     const fake = fakeApi(routes());
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
     await userEvent.type(within(form).getByLabelText("Timeout (seconds)"), "7201");
@@ -590,7 +616,7 @@ describe("AdminSettings defaults", () => {
 
   it("sends a changed value as it is", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, jobTimeoutSeconds: 900 } } });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
     await userEvent.type(within(form).getByLabelText("Timeout (seconds)"), "900");
@@ -600,7 +626,7 @@ describe("AdminSettings defaults", () => {
 
   it("sends an emptied re-run cap as null, the built-in default", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Re-run cap per repository (per day)"));
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
@@ -609,7 +635,7 @@ describe("AdminSettings defaults", () => {
 
   it.each(["0", "1001", "1.5"])("refuses the re-run cap %s without asking the server", async (value) => {
     const fake = fakeApi(routes());
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const perMR = within(form).getByLabelText("Re-run cap per MR/PR (per day)");
     await userEvent.clear(perMR);
@@ -621,7 +647,7 @@ describe("AdminSettings defaults", () => {
 
   it("sends an empty memory limit as null, the built-in default", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobMemory: null });
@@ -629,7 +655,7 @@ describe("AdminSettings defaults", () => {
 
   it.each(["abc", "59", "7201"])("refuses a timeout of %s without asking the server", async (text) => {
     const fake = fakeApi(routes());
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
     await userEvent.type(within(form).getByLabelText("Timeout (seconds)"), text);
@@ -640,7 +666,7 @@ describe("AdminSettings defaults", () => {
 
   it("refuses a timeout that isn't a whole number without asking the server", async () => {
     const fake = fakeApi(routes());
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
@@ -650,7 +676,7 @@ describe("AdminSettings defaults", () => {
 
   it("sends a changed Max steps with the other defaults", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, maxTurns: 90 } } });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Max steps"));
     await userEvent.type(within(form).getByLabelText("Max steps"), "90");
@@ -660,7 +686,7 @@ describe("AdminSettings defaults", () => {
 
   it.each(["4", "201", ""])("refuses Max steps %j without asking the server", async (text) => {
     const fake = fakeApi(routes());
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Max steps"));
     if (text !== "") await userEvent.type(within(form).getByLabelText("Max steps"), text);
@@ -674,7 +700,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { status: 400, body: { error: "jobMemory must be between 256Mi and 32Gi" } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.type(within(form).getByLabelText("Memory limit"), "1Mi");
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
@@ -688,7 +714,7 @@ describe("AdminSettings default skills", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "security-review"] } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const picker = await screen.findByRole("group", { name: "Default skills" });
     expect(within(picker).getByRole("switch", { name: "Default skill code-review" })).toBeChecked();
     expect(within(picker).getByRole("switch", { name: "Default skill security-review" })).not.toBeChecked();
@@ -708,7 +734,7 @@ describe("AdminSettings default skills", () => {
       "GET /api/skills": () => ({ body: skillReads++ === 0 ? librarySkills : librarySkills.map((s) => ({ ...s, inDefaults: true })) }),
       "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "security-review"] } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const picker = await screen.findByRole("group", { name: "Default skills" });
     await userEvent.click(within(picker).getByRole("switch", { name: "Default skill security-review" }));
     await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
@@ -722,7 +748,7 @@ describe("AdminSettings default skills", () => {
       "GET /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "old-skill"] } },
       "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review"] } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const picker = await screen.findByRole("group", { name: "Default skills" });
     const old = within(picker).getByRole("switch", { name: "Default skill old-skill" });
     expect(old).toBeChecked();
@@ -748,7 +774,7 @@ describe("AdminSettings default skills", () => {
         body: { error: "the library skills come to 1000 KiB; a review takes at most 900 KiB" },
       },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const picker = await screen.findByRole("group", { name: "Default skills" });
     const total = within(picker).getByText("Total 1000 KiB of 900 KiB");
     expect(total).toHaveClass("problem");
@@ -760,7 +786,7 @@ describe("AdminSettings default skills", () => {
 
   it("can save an empty default list, and says what that means", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, skills: [] } } });
-    renderApp("/admin/settings");
+    await openSettings();
     const picker = await screen.findByRole("group", { name: "Default skills" });
     await userEvent.click(within(picker).getByRole("switch", { name: "Default skill code-review" }));
     expect(within(picker).getByText(/gets no skills/)).toBeInTheDocument();
@@ -774,7 +800,7 @@ describe("AdminSettings default skills", () => {
       "GET /api/skills": { status: 500, body: { error: "boom" } },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(await within(form).findByText("boom")).toBeInTheDocument();
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
@@ -789,18 +815,18 @@ describe("AdminSettings models", () => {
 
   it("lists each model by its name, with its provider and model, default mark, base URL, key and chains", async () => {
     fakeApi(listed());
-    renderApp("/admin/settings");
+    await openSettings();
     const sonnet = await entry("Claude Sonnet");
     expect(sonnet).toHaveTextContent("anthropic / claude-sonnet");
     expect(within(sonnet).getByText("default")).toBeInTheDocument();
     expect(sonnet).toHaveTextContent("set · changed 3 days ago");
     // The repositories that name no model follow the default.
     expect(sonnet).toHaveTextContent("3 repositories name no model and follow it");
-    expect(sonnet).toHaveTextContent("In chains: global chain");
+    // The chains that name an entry are left to the removal's confirmation.
+    expect(sonnet).not.toHaveTextContent("In chains");
     const opus = await entry("Claude Opus");
     expect(within(opus).queryByText("default")).not.toBeInTheDocument();
     expect(opus).toHaveTextContent("https://llm.example.com/v1");
-    expect(opus).toHaveTextContent("In chains: main/acme/payments");
     // No key is ever in the page, nor an input for one until Replace.
     expect(within(opus).queryByLabelText("New API key")).not.toBeInTheDocument();
     // The only text input is the model limit: none for a key.
@@ -817,7 +843,7 @@ describe("AdminSettings models", () => {
         ],
       }),
     );
-    renderApp("/admin/settings");
+    await openSettings();
     const sonnet = await entry("Claude Sonnet");
     expect(sonnet).toHaveTextContent("Tokens this month: 1,234");
     expect(within(sonnet).queryByRole("meter")).not.toBeInTheDocument();
@@ -835,7 +861,7 @@ describe("AdminSettings models", () => {
       "PUT /api/admin/models/m-opus/limit": { status: 204 },
       "DELETE /api/admin/models/m-opus/limit": { status: 204 },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const opus = await entry("Claude Opus");
     const input = within(opus).getByLabelText("Model limit of Claude Opus");
     const save = within(opus).getByRole("button", { name: "Save the model limit of Claude Opus" });
@@ -858,7 +884,7 @@ describe("AdminSettings models", () => {
       ...listed(),
       "PUT /api/admin/models/m-opus/limit": { status: 400, body: { error: "monthlyTokens must be a whole number from 1 to 1000000000000000" } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const opus = await entry("Claude Opus");
     const input = within(opus).getByLabelText("Model limit of Claude Opus");
     await userEvent.type(input, "5M");
@@ -874,7 +900,7 @@ describe("AdminSettings models", () => {
   it("limits the config file's entry too", async () => {
     const config: ModelAdminView = { ...modelSonnet, id: "config", source: "config", default: true, name: "anthropic/claude-sonnet" };
     const fake = fakeApi({ ...listed({ canSetDefault: false, models: [config] }), "PUT /api/admin/models/config/limit": { status: 204 } });
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("anthropic/claude-sonnet");
     await userEvent.type(within(row).getByLabelText("Model limit of anthropic/claude-sonnet"), "900");
     await userEvent.click(within(row).getByRole("button", { name: "Save the model limit of anthropic/claude-sonnet" }));
@@ -885,7 +911,7 @@ describe("AdminSettings models", () => {
   it("shows a name, provider or model as text, never as HTML", async () => {
     const evil = { ...modelOpus, id: "m-evil", name: "<b>bold</b>", provider: "<img src=x onerror=alert(1)>", model: "<i>x</i>", usedIn: [] };
     fakeApi(listed({ models: [modelSonnet, evil] }));
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("<b>bold</b>");
     expect(row).toHaveTextContent("<img src=x onerror=alert(1)>");
     expect(document.querySelector("img")).toBeNull();
@@ -904,8 +930,8 @@ describe("AdminSettings models", () => {
         return { status: 201, body: ds };
       },
     });
-    renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Add a model" });
+    await openSettings();
+    const form = await openAddModel();
     const provider = within(form).getByLabelText("Provider");
     const options = within(provider)
       .getAllByRole("option")
@@ -949,8 +975,8 @@ describe("AdminSettings models", () => {
 
   it("takes any other provider ID, and teams may not use the entry unless switched on", async () => {
     const fake = fakeApi({ ...listed(), "POST /api/admin/models": { status: 201, body: modelOpus } });
-    renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Add a model" });
+    await openSettings();
+    const form = await openAddModel();
     expect(within(form).queryByLabelText("Provider ID")).not.toBeInTheDocument();
     await userEvent.type(within(form).getByLabelText("Name"), "Llama");
     await userEvent.selectOptions(within(form).getByLabelText("Provider"), "other");
@@ -970,8 +996,8 @@ describe("AdminSettings models", () => {
 
   it("leaves the non-secret fields to no password manager either", async () => {
     fakeApi(listed());
-    renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Add a model" });
+    await openSettings();
+    const form = await openAddModel();
     // A password manager fills a saved username into the text field before
     // a password field: the Base URL once showed "admin".
     for (const label of ["Name", "Model", "Base URL"]) {
@@ -984,8 +1010,8 @@ describe("AdminSettings models", () => {
 
   it("shows the server's text when an add is refused", async () => {
     fakeApi({ ...listed(), "POST /api/admin/models": { status: 409, body: { error: "an entry with this name exists already" } } });
-    renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Add a model" });
+    await openSettings();
+    const form = await openAddModel();
     await userEvent.type(within(form).getByLabelText("Name"), "Claude Sonnet");
     await userEvent.selectOptions(within(form).getByLabelText("Provider"), "anthropic");
     await userEvent.type(within(form).getByLabelText("Model"), "claude-sonnet");
@@ -996,7 +1022,7 @@ describe("AdminSettings models", () => {
 
   it("changes the name, base URL and key of an entry: provider and model can't be edited", async () => {
     const fake = fakeApi({ ...listed(), "PUT /api/admin/models/m-opus": { body: modelOpus } });
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("Claude Opus");
     await userEvent.click(within(row).getByRole("button", { name: "Edit Claude Opus" }));
     const form = screen.getByRole("form", { name: "Edit Claude Opus" });
@@ -1018,7 +1044,7 @@ describe("AdminSettings models", () => {
 
   it("sends a replacement key from an empty password input, and forgets it", async () => {
     const fake = fakeApi({ ...listed(), "PUT /api/admin/models/m-opus": { body: modelOpus } });
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("Claude Opus");
     await userEvent.click(within(row).getByRole("button", { name: "Edit Claude Opus" }));
     const form = screen.getByRole("form", { name: "Edit Claude Opus" });
@@ -1040,7 +1066,7 @@ describe("AdminSettings models", () => {
 
   it("turns teams may use on with a PUT that keeps the base URL", async () => {
     const fake = fakeApi({ ...listed(), "PUT /api/admin/models/m-opus": { body: { ...modelOpus, teamsMayUse: true } } });
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("Claude Opus");
     const toggle = within(row).getByRole("switch", { name: "Teams may use Claude Opus" });
     expect(toggle).not.toBeChecked();
@@ -1060,7 +1086,7 @@ describe("AdminSettings models", () => {
         body: { ...models, models: [{ ...modelSonnet, default: false }, { ...modelOpus, default: true }] },
       },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("Claude Opus");
     await userEvent.click(within(row).getByRole("button", { name: "Set Claude Opus as default" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Claude Opus"));
@@ -1074,7 +1100,7 @@ describe("AdminSettings models", () => {
   it("changes nothing when the default's confirmation is refused", async () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
     const fake = fakeApi(listed());
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("Claude Opus");
     await userEvent.click(within(row).getByRole("button", { name: "Set Claude Opus as default" }));
     expect(fake.find("POST", "/api/admin/models/m-opus/default")).toHaveLength(0);
@@ -1082,7 +1108,7 @@ describe("AdminSettings models", () => {
 
   it("offers neither set-as-default nor removal on the default entry", async () => {
     fakeApi(listed());
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("Claude Sonnet");
     expect(within(row).queryByRole("button", { name: /as default/ })).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: /^Remove/ })).not.toBeInTheDocument();
@@ -1101,7 +1127,7 @@ describe("AdminSettings models", () => {
         return { status: 204 };
       },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("Claude Opus");
     await userEvent.click(within(row).getByRole("button", { name: "Remove Claude Opus" }));
     expect(confirm).toHaveBeenCalledWith(
@@ -1115,7 +1141,7 @@ describe("AdminSettings models", () => {
     const confirm = vi.fn(() => false);
     vi.stubGlobal("confirm", confirm);
     fakeApi(listed({ models: [modelSonnet, { ...modelOpus, usedIn: [] }] }));
-    renderApp("/admin/settings");
+    await openSettings();
     await userEvent.click(within(await entry("Claude Opus")).getByRole("button", { name: "Remove Claude Opus" }));
     expect(confirm).toHaveBeenCalledWith("Remove Claude Opus from the list? Its key is deleted.");
   });
@@ -1123,7 +1149,7 @@ describe("AdminSettings models", () => {
   it("shows the server's text when a removal is refused", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     fakeApi({ ...listed(), "DELETE /api/admin/models/m-opus": { status: 500, body: { error: "could not save" } } });
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("Claude Opus");
     await userEvent.click(within(row).getByRole("button", { name: "Remove Claude Opus" }));
     expect(await within(row).findByRole("alert")).toHaveTextContent("could not save");
@@ -1132,11 +1158,14 @@ describe("AdminSettings models", () => {
   it("gives the config file's entry no controls but its limit, and says where to change it", async () => {
     const config: ModelAdminView = { ...modelSonnet, id: "config", source: "config", default: true, name: "anthropic/claude-sonnet" };
     fakeApi(listed({ canSetDefault: false, models: [config, { ...modelOpus, default: false }] }));
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await entry("anthropic/claude-sonnet");
     expect(row).toHaveTextContent("from the config file");
-    // Only its limits can be changed here: the model limit and the team limits (the fold button has no label).
-    expect(within(row).getAllByRole("button").map((e) => e.getAttribute("aria-label") ?? e.textContent)).toEqual([
+    // Only its limits can be changed here: the model limit and the team limits. The row's own fold button opens it.
+    const controls = within(row)
+      .getAllByRole("button")
+      .filter((e) => !e.hasAttribute("data-fold"));
+    expect(controls.map((e) => e.getAttribute("aria-label") ?? e.textContent)).toEqual([
       "Save the model limit of anthropic/claude-sonnet",
       "Team limits (0)",
     ]);
@@ -1148,7 +1177,7 @@ describe("AdminSettings models", () => {
     expect(within(other).queryByRole("button", { name: /as default/ })).not.toBeInTheDocument();
     expect(within(other).getByRole("button", { name: "Edit Claude Opus" })).toBeInTheDocument();
     expect(within(other).getByRole("button", { name: "Remove Claude Opus" })).toBeInTheDocument();
-    expect(screen.getByRole("form", { name: "Add a model" })).toBeInTheDocument();
+    expect(await openAddModel()).toBeInTheDocument();
   });
 
   it("shows a banner and the mark while an entry has one, and clears it", async () => {
@@ -1163,7 +1192,7 @@ describe("AdminSettings models", () => {
         return { status: 204 };
       },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const banner = await screen.findByRole("note", { name: "Marked entries" });
     expect(banner).toHaveTextContent("Claude Opus: out of quota until 2026-11-21 14:00 UTC");
     const row = await entry("Claude Opus");
@@ -1176,13 +1205,13 @@ describe("AdminSettings models", () => {
 
   it("says so when the list is empty", async () => {
     fakeApi(listed({ models: [], followingDefault: 0 }));
-    renderApp("/admin/settings");
+    await openSettings();
     expect(await screen.findByText(/No model yet/)).toBeInTheDocument();
   });
 
   it("shows the error when the list can't be read", async () => {
     fakeApi({ ...routes(operator), "GET /api/admin/models": { status: 500, body: { error: "boom" } } });
-    renderApp("/admin/settings");
+    await openSettings();
     expect(await screen.findByText("boom")).toBeInTheDocument();
   });
 });
@@ -1205,7 +1234,7 @@ describe("AdminSettings team limits", () => {
 
   it("folds the team limits until opened, then lists each with its team's tokens", async () => {
     const fake = page();
-    renderApp("/admin/settings");
+    await openSettings();
     const row = await screen.findByRole("group", { name: "Claude Opus" });
     const toggle = within(row).getByRole("button", { name: "Team limits (1)" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -1226,7 +1255,7 @@ describe("AdminSettings team limits", () => {
       "PUT /api/admin/models/m-opus/team-limits/2": { status: 204 },
       "DELETE /api/admin/models/m-opus/team-limits/2": { status: 204 },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const payments = within(await open("Claude Opus")).getByRole("group", { name: "Team Payments" });
     const input = within(payments).getByLabelText("Limit of Payments on Claude Opus");
     await userEvent.clear(input);
@@ -1240,7 +1269,7 @@ describe("AdminSettings team limits", () => {
 
   it("adds a limit for a team that has none, and offers no team twice", async () => {
     const fake = page({ "PUT /api/admin/models/m-opus/team-limits/3": { status: 204 } });
-    renderApp("/admin/settings");
+    await openSettings();
     const list = await open("Claude Opus");
     const pick = await within(list).findByRole("combobox", { name: "Team to limit on Claude Opus" });
     // Payments has a limit on it already: only Platform is offered.
@@ -1258,7 +1287,7 @@ describe("AdminSettings team limits", () => {
 
   it("shows the error when the teams can't be read", async () => {
     page({ "GET /api/teams": { status: 500, body: { error: "boom" } } });
-    renderApp("/admin/settings");
+    await openSettings();
     expect(await within(await open("Claude Opus")).findByRole("alert")).toHaveTextContent("boom");
   });
 });
@@ -1268,7 +1297,7 @@ describe("AdminSettings global chain", () => {
 
   it("shows the global chain with the config file's entry in front", async () => {
     fakeApi({ ...routes(operator), "GET /api/admin/chain": { body: chain } });
-    renderApp("/admin/settings");
+    await openSettings();
     const card = await screen.findByRole("region", { name: "Global chain" });
     const list = await within(card).findByRole("list", { name: "Model chain" });
     expect(within(list).getAllByRole("listitem").map((r) => r.querySelector("b")?.textContent)).toEqual(["openai/gpt-5", "Claude Sonnet"]);
@@ -1277,7 +1306,7 @@ describe("AdminSettings global chain", () => {
   it("saves the chain with a PUT of its entries, and shows the answer", async () => {
     const saved: ChainView = { ...chain, entries: [entryConfig, { ...entrySonnet, position: 2 }, { ...entryOpus, position: 3 }] };
     const fake = fakeApi({ ...routes(operator), "GET /api/admin/chain": { body: chain }, "PUT /api/admin/chain": { body: saved } });
-    renderApp("/admin/settings");
+    await openSettings();
     const card = await screen.findByRole("region", { name: "Global chain" });
     await userEvent.selectOptions(await within(card).findByRole("combobox", { name: "Entry to add" }), "Claude Opus (global)");
     await userEvent.click(within(card).getByRole("button", { name: "Add" }));
@@ -1299,7 +1328,7 @@ describe("AdminSettings global chain", () => {
       "GET /api/admin/chain": { body: chain },
       "PUT /api/admin/chain": { status: 400, body: { error: "the chain has more than 5 entries" } },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const card = await screen.findByRole("region", { name: "Global chain" });
     await userEvent.click(await within(card).findByRole("button", { name: "Save chain" }));
     expect(await within(card).findByRole("alert")).toHaveTextContent("the chain has more than 5 entries");
@@ -1312,7 +1341,7 @@ describe("AdminSettings global chain", () => {
       "GET /api/admin/chain": { body: { ...chain, entries: [entryConfig, marked] } },
       "DELETE /api/admin/models/m-sonnet/mark": { status: 204 },
     });
-    renderApp("/admin/settings");
+    await openSettings();
     const card = await screen.findByRole("region", { name: "Global chain" });
     await userEvent.click(await within(card).findByRole("button", { name: "Clear mark of Claude Sonnet" }));
     expect(fake.find("DELETE", "/api/admin/models/m-sonnet/mark")).toHaveLength(1);
@@ -1332,10 +1361,95 @@ describe("AdminSettings access", () => {
 describe("AdminSettings: no chain B", () => {
   it("has no global chain B card, and asks for no panel chain", async () => {
     const fake = fakeApi(routes(operator));
-    renderApp("/admin/settings");
+    await openSettings();
     const card = await screen.findByRole("region", { name: "Global chain" });
     expect(await within(card).findByText("Claude Sonnet")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/\bchain B\b/i);
     expect(fake.calls.filter((c) => c.url.includes("panel-chain"))).toHaveLength(0);
+  });
+});
+
+describe("AdminSettings folding", () => {
+  // render waits for the page with every card still folded.
+  const render = async () => {
+    const r = renderApp("/admin/settings");
+    await screen.findByRole("heading", { name: "Settings", level: 1 });
+    await waitFor(() => expect(screen.queryByText("Loading…")).not.toBeInTheDocument());
+    return r;
+  };
+  const title = (name: RegExp) => screen.getByRole("button", { name });
+
+  it("starts with every card folded, each with a one-line summary", async () => {
+    fakeApi(routes(operator));
+    await render();
+    expect(title(/^Repository defaults/)).toHaveAttribute("aria-expanded", "false");
+    expect(title(/^Repository defaults/)).toHaveTextContent("All follow the config · 1 default skill · 0 default rule sets");
+    expect(title(/^Comment footer/)).toHaveTextContent("The default text");
+    expect(title(/^Models/)).toHaveTextContent("2 models · default Claude Sonnet");
+    expect(await screen.findByRole("button", { name: /^Global chain/ })).toHaveTextContent("1 entry · first Claude Sonnet");
+    // A folded card's fields are out of reach until it is opened.
+    expect(screen.queryByRole("button", { name: "Save defaults" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Text" })).not.toBeInTheDocument();
+    await userEvent.click(title(/^Comment footer/));
+    expect(title(/^Comment footer/)).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("textbox", { name: "Text" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save footer" }).closest(".foot")).not.toBeNull();
+    await userEvent.click(title(/^Comment footer/));
+    expect(screen.queryByRole("textbox", { name: "Text" })).not.toBeInTheDocument();
+  });
+
+  it("shows a model as one line, and its details and controls once opened", async () => {
+    fakeApi({ ...routes(operator), "GET /api/admin/models": { body: { ...models, models: [{ ...modelSonnet, used: 1234 }, { ...modelOpus, limit: 5000, used: 4200 }] } } });
+    await render();
+    await userEvent.click(title(/^Models/));
+    const opus = screen.getByRole("group", { name: "Claude Opus" });
+    const head = within(opus).getByRole("button", { name: /Claude Opus/ });
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    expect(head).toHaveTextContent("anthropic / claude-opus");
+    expect(head).toHaveTextContent("4,200 of 5,000 tokens this month");
+    expect(within(screen.getByRole("group", { name: "Claude Sonnet" })).getByRole("button", { name: /Claude Sonnet/ })).toHaveTextContent(
+      "1,234 tokens this month",
+    );
+    expect(within(opus).queryByRole("button", { name: "Edit Claude Opus" })).not.toBeInTheDocument();
+    await userEvent.click(head);
+    expect(within(opus).getByRole("button", { name: "Edit Claude Opus" })).toBeInTheDocument();
+    expect(within(opus).getByLabelText("Model limit of Claude Opus")).toHaveValue("5000");
+  });
+
+  it("opens Add a model inside the Models card from its title, and Cancel closes it", async () => {
+    fakeApi(routes(operator));
+    await render();
+    const card = screen.getByRole("region", { name: "Models" });
+    await userEvent.click(within(card).getByRole("button", { name: "Add model" }));
+    // The card unfolds with the form at its foot; the title's button hides while it is open.
+    expect(title(/^Models/)).toHaveAttribute("aria-expanded", "true");
+    const form = within(card).getByRole("form", { name: "Add a model" });
+    expect(within(card).getByRole("button", { name: "Add model" }).closest(".foot")).not.toBeNull();
+    await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+    expect(within(card).queryByRole("form", { name: "Add a model" })).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Add model" })).toBeInTheDocument();
+  });
+
+  it("waits for a changed limit before Save, and saves on Enter too", async () => {
+    const fake = fakeApi({
+      ...routes(operator),
+      "GET /api/admin/models": { body: { ...models, models: [modelSonnet, { ...modelOpus, limit: 5000, used: 10 }] } },
+      "PUT /api/admin/models/m-opus/limit": { status: 204 },
+    });
+    await openSettings();
+    const opus = screen.getByRole("group", { name: "Claude Opus" });
+    const save = within(opus).getByRole("button", { name: "Save the model limit of Claude Opus" });
+    expect(save).toBeDisabled();
+    const input = within(opus).getByLabelText("Model limit of Claude Opus");
+    await userEvent.type(input, "0{Enter}");
+    await waitFor(() => expect(fake.find("PUT", "/api/admin/models/m-opus/limit")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/admin/models/m-opus/limit")[0].body).toEqual({ monthlyTokens: 50000 });
+  });
+
+  it("puts Save chain in the card's save bar", async () => {
+    fakeApi(routes(operator));
+    await openSettings();
+    const card = screen.getByRole("region", { name: "Global chain" });
+    expect(within(card).getByRole("button", { name: "Save chain" }).closest(".foot")).not.toBeNull();
   });
 });

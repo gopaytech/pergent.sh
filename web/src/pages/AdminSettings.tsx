@@ -20,6 +20,7 @@ import {
 import ChainEditor from "../ChainEditor";
 import LimitField from "../LimitField";
 import CommentLayoutEditor from "../CommentLayoutEditor";
+import { FoldHead, countText } from "../Fold";
 import { useWrite } from "../layout/write";
 import RuleSetPicker from "../RuleSetPicker";
 import MarkBanner, { markText } from "../MarkBanner";
@@ -61,6 +62,7 @@ export default function AdminSettings() {
 function CommentFooter({ v }: { v: CommentFooterView }) {
   const client = useQueryClient();
   const write = useWrite();
+  const [open, setOpen] = useState(false);
   const [text, setText] = useState(v.note);
   const [note, setNote] = useState("");
   const save = useMutation({
@@ -77,32 +79,36 @@ function CommentFooter({ v }: { v: CommentFooterView }) {
     save.mutate(text.trim());
   };
   return (
-    <form className="card pad stack" aria-label="Comment footer" onSubmit={submit}>
-      <h2>Comment footer</h2>
-      <label htmlFor="comment-footer-note">Text</label>
-      <input
-        id="comment-footer-note"
-        type="text"
-        {...noFill}
-        placeholder={v.default}
-        maxLength={200}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-      />
-      <div className="meta">
-        One line at the bottom of every review comment, from the next comment on. Markdown links work. An @ shows as plain text and notifies
-        nobody. Empty uses the default.
-      </div>
-      {save.isError && <ErrorBox error={save.error} />}
-      <div className="foot">
-        {note && (
-          <span className="meta grow" role="status">
-            {note}
-          </span>
-        )}
-        <button type="submit" className="btn primary" disabled={save.isPending}>
-          Save footer
-        </button>
+    <form className={open ? "card" : "card folded"} aria-label="Comment footer" onSubmit={submit}>
+      <FoldHead title="Comment footer" summary={v.note === "" ? "The default text" : v.note} open={open} onToggle={() => setOpen(!open)} />
+      <div hidden={!open}>
+        <div className="pad stack">
+          <label htmlFor="comment-footer-note">Text</label>
+          <input
+            id="comment-footer-note"
+            type="text"
+            {...noFill}
+            placeholder={v.default}
+            maxLength={200}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <div className="meta">
+            One line at the bottom of every review comment, from the next comment on. Markdown links work. An @ shows as plain text and notifies
+            nobody. Empty uses the default.
+          </div>
+          {save.isError && <ErrorBox error={save.error} />}
+        </div>
+        <div className="foot">
+          {note && (
+            <span className="meta grow" role="status">
+              {note}
+            </span>
+          )}
+          <button type="submit" className="btn primary" disabled={save.isPending}>
+            Save footer
+          </button>
+        </div>
       </div>
     </form>
   );
@@ -135,9 +141,21 @@ const capValue = (n: number) => (n > 0 ? String(n) : "");
 // pinnedLayout is the layout saved here, or null while the built-in one applies.
 const pinnedLayout = (v: DefaultsView) => (v.pinned.commentLayout === true ? v.commentLayout : null);
 
+// defaultsSummary is the folded card's line: how many defaults were set
+// here, and how many default skills and rule sets there are.
+function defaultsSummary(v: DefaultsView) {
+  const set = Object.values(v.pinned).filter((p) => p === true).length;
+  return [
+    set === 0 ? "All follow the config" : `${set} set here`,
+    countText(v.skills.length, "default skill"),
+    countText((v.ruleSets ?? []).length, "default rule set"),
+  ].join(" · ");
+}
+
 function Defaults({ v }: { v: DefaultsView }) {
   const client = useQueryClient();
   const write = useWrite();
+  const [open, setOpen] = useState(false);
   const [approve, setApprove] = useState(v.approve);
   const [reviewDrafts, setReviewDrafts] = useState(v.reviewDrafts);
   const [inlineFindings, setInlineFindings] = useState(v.inlineFindings);
@@ -225,388 +243,390 @@ function Defaults({ v }: { v: DefaultsView }) {
     });
   };
   return (
-    <form className="card" aria-label="Repository defaults" noValidate onSubmit={submit}>
-      <h2>Repository defaults</h2>
-      <div className="pad meta">
-        What a repository you switch on in the dashboard starts with. A repository can override each in its own settings;
-        those listed in the config file keep the config's.
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Approve clean reviews</div>
-          <div className="help">
-            When off, pergent still reviews and comments but never approves.
-            <FromConfig field="Approve clean reviews" pinned={pinned("approve")} shown={onOff(cfg.approve)} disabled={save.isPending} onUse={() => setApprove(cfg.approve)} />
+    <form className={open ? "card" : "card folded"} aria-label="Repository defaults" noValidate onSubmit={submit}>
+      <FoldHead title="Repository defaults" summary={defaultsSummary(v)} open={open} onToggle={() => setOpen(!open)} />
+      <div hidden={!open}>
+        <div className="pad meta">
+          What a repository you switch on in the dashboard starts with. A repository can override each in its own settings;
+          those listed in the config file keep the config's.
+        </div>
+        <div className="set">
+          <div>
+            <div className="name">Approve clean reviews</div>
+            <div className="help">
+              When off, pergent still reviews and comments but never approves.
+              <FromConfig field="Approve clean reviews" pinned={pinned("approve")} shown={onOff(cfg.approve)} disabled={save.isPending} onUse={() => setApprove(cfg.approve)} />
+            </div>
+          </div>
+          <div>
+            <Switch label="Approve clean reviews" checked={approve} disabled={save.isPending} onChange={setApprove} />
           </div>
         </div>
-        <div>
-          <Switch label="Approve clean reviews" checked={approve} disabled={save.isPending} onChange={setApprove} />
+        <div className="set">
+          <div>
+            <div className="name">Review drafts</div>
+            <div className="help">
+              When off, a draft isn't reviewed until it is marked ready.
+              <FromConfig
+                field="Review drafts"
+                pinned={pinned("reviewDrafts")}
+                shown={onOff(cfg.reviewDrafts)}
+                disabled={save.isPending}
+                onUse={() => setReviewDrafts(cfg.reviewDrafts)}
+              />
+            </div>
+          </div>
+          <div>
+            <Switch label="Review drafts" checked={reviewDrafts} disabled={save.isPending} onChange={setReviewDrafts} />
+          </div>
         </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Review drafts</div>
-          <div className="help">
-            When off, a draft isn't reviewed until it is marked ready.
-            <FromConfig
-              field="Review drafts"
-              pinned={pinned("reviewDrafts")}
-              shown={onOff(cfg.reviewDrafts)}
+        <div className="set">
+          <div>
+            <div className="name">Inline findings</div>
+            <div className="help">
+              Post each finding as a comment on its lines, with a one-click fix when it is small. Off keeps every finding in the review comment.
+              <FromConfig
+                field="Inline findings"
+                pinned={pinned("inlineFindings")}
+                shown={onOff(cfg.inlineFindings)}
+                disabled={save.isPending}
+                onUse={() => setInlineFindings(cfg.inlineFindings)}
+              />
+            </div>
+          </div>
+          <div>
+            <Switch label="Inline findings" checked={inlineFindings} disabled={save.isPending} onChange={setInlineFindings} />
+          </div>
+        </div>
+        <div className="set">
+          <div>
+            <div className="name">Only the author and maintainers use commands</div>
+            <div className="help">
+              When on, only the author of a change and the repository&apos;s maintainers and owners can use pergent commands on it. When off, anyone with write access can.
+              <FromConfig
+                field="Only the author and maintainers use commands"
+                pinned={pinned("commandsAuthorAndMaintainersOnly")}
+                shown={onOff(cfg.commandsAuthorAndMaintainersOnly)}
+                disabled={save.isPending}
+                onUse={() => setCommandsOnly(cfg.commandsAuthorAndMaintainersOnly)}
+              />
+            </div>
+          </div>
+          <div>
+            <Switch label="Only the author and maintainers use commands" checked={commandsOnly} disabled={save.isPending} onChange={setCommandsOnly} />
+          </div>
+        </div>
+        <div className="set">
+          <div>
+            <div className="name">Incremental reviews</div>
+            <div className="help">
+              After a push, review only the files changed since the last review.
+              <FromConfig
+                field="Incremental reviews"
+                pinned={pinned("incrementalReviews")}
+                shown={onOff(cfg.incrementalReviews)}
+                disabled={save.isPending}
+                onUse={() => setIncremental(cfg.incrementalReviews)}
+              />
+            </div>
+          </div>
+          <div>
+            <Switch label="Incremental reviews" checked={incremental} disabled={save.isPending} onChange={setIncremental} />
+          </div>
+        </div>
+        <div className="set">
+          <div>
+            <div className="name">Learn from dismissals</div>
+            <div className="help">
+              Later reviews are told what people with write access rejected, and why.
+              <FromConfig
+                field="Learn from dismissals"
+                pinned={pinned("learnFromDismissals")}
+                shown={onOff(cfg.learnFromDismissals)}
+                disabled={save.isPending}
+                onUse={() => setLearn(cfg.learnFromDismissals)}
+              />
+            </div>
+          </div>
+          <div>
+            <Switch label="Learn from dismissals" checked={learn} disabled={save.isPending} onChange={setLearn} />
+          </div>
+        </div>
+        <div className="set">
+          <div>
+            <div className="name">Quiet reviews</div>
+            <div className="help">
+              Fewer nitpicks, no suggestion threads and a shorter comment. Blocking findings, failures and approval stay the
+              same.
+              <FromConfig
+                field="Quiet reviews"
+                pinned={pinned("quietReviews")}
+                shown={onOff(cfg.quietReviews)}
+                disabled={save.isPending}
+                onUse={() => setQuiet(cfg.quietReviews)}
+              />
+            </div>
+          </div>
+          <div>
+            <Switch label="Quiet reviews" checked={quiet} disabled={save.isPending} onChange={setQuiet} />
+          </div>
+        </div>
+        <div className="set">
+          <div>
+            <div className="name">Comment layout</div>
+            <div className="help">
+              The blocks of the review comment, in order. A block that is not shown is left out.
+              {pinned("commentLayout") ? (
+                <span> Saved here: repositories switched on in the dashboard start with this layout.</span>
+              ) : (
+                <span> Not saved here: repositories switched on in the dashboard start with the built-in layout.</span>
+              )}
+            </div>
+          </div>
+          <div className="wide">
+            <CommentLayoutEditor value={layout} defaults={cfg.commentLayout} disabled={save.isPending} onChange={setLayout} />
+          </div>
+        </div>
+        <div className="set">
+          <div>
+            <div className="name">Linked repositories</div>
+            <div className="help">
+              Off by default. The impact check across a repository's linked repositories is on for repositories switched on in
+              the dashboard that don't set it. The links themselves are set on each repository's page, by an admin.
+              <FromConfig
+                field="Linked repositories"
+                pinned={pinned("linkedReposEnabled")}
+                shown={onOff(cfg.linkedReposEnabled)}
+                disabled={save.isPending}
+                onUse={() => setLinked(cfg.linkedReposEnabled)}
+              />
+            </div>
+          </div>
+          <div>
+            <Switch label="Linked repositories" checked={linked} disabled={save.isPending} onChange={setLinked} />
+          </div>
+        </div>
+        <div className="set">
+          <div>
+            <div className="name">{blockingLabel}</div>
+            <div className="help">
+              {blockingHelp}
+              <FromConfig
+                field={blockingLabel}
+                pinned={pinned("blockingStatus")}
+                shown={statusText(cfg.blockingStatus)}
+                disabled={save.isPending}
+                onUse={() => setBlockingStatus(cfg.blockingStatus)}
+              />
+            </div>
+          </div>
+          <div>
+            <select aria-label={blockingLabel} value={blockingStatus} disabled={save.isPending} onChange={(e) => setBlockingStatus(e.target.value)}>
+              <option value="failed">failed (blocks merge)</option>
+              <option value="neutral">neutral</option>
+            </select>
+          </div>
+        </div>
+        <div className="set">
+          <div>
+            <div className="name">{failureLabel}</div>
+            <div className="help">
+              {failureHelp}
+              <FromConfig
+                field={failureLabel}
+                pinned={pinned("failureStatus")}
+                shown={statusText(cfg.failureStatus)}
+                disabled={save.isPending}
+                onUse={() => setFailureStatus(cfg.failureStatus)}
+              />
+            </div>
+          </div>
+          <div>
+            <select aria-label={failureLabel} value={failureStatus} disabled={save.isPending} onChange={(e) => setFailureStatus(e.target.value)}>
+              <option value="failed">failed (blocks merge)</option>
+              <option value="neutral">neutral</option>
+            </select>
+            {blockingStatus === "neutral" && <div className="meta">{notUsedNote}</div>}
+          </div>
+        </div>
+        <div className="set">
+          <div>
+            <div className="name">Timeout</div>
+            <div className="help">
+              How long one review may run, in seconds (60 to 7200).
+              <FromConfig
+                field="Timeout"
+                pinned={pinned("jobTimeoutSeconds")}
+                shown={String(cfg.jobTimeoutSeconds)}
+                disabled={save.isPending}
+                onUse={() => setTimeoutText(String(cfg.jobTimeoutSeconds))}
+              />
+            </div>
+          </div>
+          <div>
+            <input
+              type="text"
+              inputMode="numeric"
+              aria-label="Timeout (seconds)"
+              value={timeout}
               disabled={save.isPending}
-              onUse={() => setReviewDrafts(cfg.reviewDrafts)}
+              onChange={(e) => setTimeoutText(e.target.value)}
             />
           </div>
         </div>
-        <div>
-          <Switch label="Review drafts" checked={reviewDrafts} disabled={save.isPending} onChange={setReviewDrafts} />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Inline findings</div>
-          <div className="help">
-            Post each finding as a comment on its lines, with a one-click fix when it is small. Off keeps every finding in the review comment.
-            <FromConfig
-              field="Inline findings"
-              pinned={pinned("inlineFindings")}
-              shown={onOff(cfg.inlineFindings)}
+        <div className="set">
+          <div>
+            <div className="name">Max steps</div>
+            <div className="help">
+              Steps each opencode run may take before pergent stops it; each step can call several tools.
+              <FromConfig field="Max steps" pinned={pinned("maxTurns")} shown={String(cfg.maxTurns)} disabled={save.isPending} onUse={() => setSteps(String(cfg.maxTurns))} />
+            </div>
+          </div>
+          <div>
+            <input
+              type="text"
+              inputMode="numeric"
+              aria-label="Max steps"
+              value={steps}
               disabled={save.isPending}
-              onUse={() => setInlineFindings(cfg.inlineFindings)}
+              onChange={(e) => setSteps(e.target.value)}
             />
           </div>
         </div>
-        <div>
-          <Switch label="Inline findings" checked={inlineFindings} disabled={save.isPending} onChange={setInlineFindings} />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Only the author and maintainers use commands</div>
-          <div className="help">
-            When on, only the author of a change and the repository&apos;s maintainers and owners can use pergent commands on it. When off, anyone with write access can.
-            <FromConfig
-              field="Only the author and maintainers use commands"
-              pinned={pinned("commandsAuthorAndMaintainersOnly")}
-              shown={onOff(cfg.commandsAuthorAndMaintainersOnly)}
+        <div className="set">
+          <div>
+            <div className="name">Memory limit</div>
+            <div className="help">
+              For example 6Gi (256Mi to 32Gi). Empty follows the config.
+              <FromConfig
+                field="Memory limit"
+                pinned={pinned("jobMemory")}
+                shown={cfg.jobMemory === "" ? "none" : cfg.jobMemory}
+                disabled={save.isPending}
+                onUse={() => setMemory(cfg.jobMemory)}
+              />
+            </div>
+          </div>
+          <div>
+            <input
+              type="text"
+              aria-label="Memory limit"
+              placeholder="none"
+              value={memory}
               disabled={save.isPending}
-              onUse={() => setCommandsOnly(cfg.commandsAuthorAndMaintainersOnly)}
+              onChange={(e) => setMemory(e.target.value)}
             />
           </div>
         </div>
-        <div>
-          <Switch label="Only the author and maintainers use commands" checked={commandsOnly} disabled={save.isPending} onChange={setCommandsOnly} />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Incremental reviews</div>
-          <div className="help">
-            After a push, review only the files changed since the last review.
-            <FromConfig
-              field="Incremental reviews"
-              pinned={pinned("incrementalReviews")}
-              shown={onOff(cfg.incrementalReviews)}
+        <div className="set">
+          <div>
+            <div className="name">Re-run cap per MR/PR</div>
+            <div className="help">
+              The most re-runs (buttons and comments) of one merge request or pull request in a UTC day, 1 to 1000. Pushes
+              always run.
+              <FromConfig
+                field="Re-run cap per MR/PR"
+                pinned={pinned("rerunLimitPerMR")}
+                shown={capText(cfg.rerunLimitPerMR)}
+                disabled={save.isPending}
+                onUse={() => setCapMR(capValue(cfg.rerunLimitPerMR))}
+              />
+            </div>
+          </div>
+          <div>
+            <input
+              type="number"
+              aria-label="Re-run cap per MR/PR (per day)"
+              min={1}
+              max={1000}
+              step={1}
+              value={capMR}
               disabled={save.isPending}
-              onUse={() => setIncremental(cfg.incrementalReviews)}
+              onChange={(e) => setCapMR(e.target.value)}
             />
           </div>
         </div>
-        <div>
-          <Switch label="Incremental reviews" checked={incremental} disabled={save.isPending} onChange={setIncremental} />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Learn from dismissals</div>
-          <div className="help">
-            Later reviews are told what people with write access rejected, and why.
-            <FromConfig
-              field="Learn from dismissals"
-              pinned={pinned("learnFromDismissals")}
-              shown={onOff(cfg.learnFromDismissals)}
+        <div className="set">
+          <div>
+            <div className="name">Re-run cap per repository</div>
+            <div className="help">
+              The most re-runs across a whole repository in a UTC day, 1 to 1000.
+              <FromConfig
+                field="Re-run cap per repository"
+                pinned={pinned("rerunLimitPerRepo")}
+                shown={capText(cfg.rerunLimitPerRepo)}
+                disabled={save.isPending}
+                onUse={() => setCapRepo(capValue(cfg.rerunLimitPerRepo))}
+              />
+            </div>
+          </div>
+          <div>
+            <input
+              type="number"
+              aria-label="Re-run cap per repository (per day)"
+              min={1}
+              max={1000}
+              step={1}
+              value={capRepo}
               disabled={save.isPending}
-              onUse={() => setLearn(cfg.learnFromDismissals)}
+              onChange={(e) => setCapRepo(e.target.value)}
             />
           </div>
         </div>
-        <div>
-          <Switch label="Learn from dismissals" checked={learn} disabled={save.isPending} onChange={setLearn} />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Quiet reviews</div>
-          <div className="help">
-            Fewer nitpicks, no suggestion threads and a shorter comment. Blocking findings, failures and approval stay the
-            same.
-            <FromConfig
-              field="Quiet reviews"
-              pinned={pinned("quietReviews")}
-              shown={onOff(cfg.quietReviews)}
-              disabled={save.isPending}
-              onUse={() => setQuiet(cfg.quietReviews)}
-            />
+        <div className="set">
+          <div>
+            <div className="name">Default skills</div>
+            <div className="help">
+              The library skills a repository reviews when it doesn't choose its own. A review takes at most{" "}
+              {bytesText(skillBudget)} of library skill text.
+            </div>
           </div>
         </div>
-        <div>
-          <Switch label="Quiet reviews" checked={quiet} disabled={save.isPending} onChange={setQuiet} />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Comment layout</div>
-          <div className="help">
-            The blocks of the review comment, in order. A block that is not shown is left out.
-            {pinned("commentLayout") ? (
-              <span> Saved here: repositories switched on in the dashboard start with this layout.</span>
-            ) : (
-              <span> Not saved here: repositories switched on in the dashboard start with the built-in layout.</span>
-            )}
-          </div>
-        </div>
-        <div className="wide">
-          <CommentLayoutEditor value={layout} defaults={cfg.commentLayout} disabled={save.isPending} onChange={setLayout} />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Linked repositories</div>
-          <div className="help">
-            Off by default. The impact check across a repository's linked repositories is on for repositories switched on in
-            the dashboard that don't set it. The links themselves are set on each repository's page, by an admin.
-            <FromConfig
-              field="Linked repositories"
-              pinned={pinned("linkedReposEnabled")}
-              shown={onOff(cfg.linkedReposEnabled)}
-              disabled={save.isPending}
-              onUse={() => setLinked(cfg.linkedReposEnabled)}
-            />
-          </div>
-        </div>
-        <div>
-          <Switch label="Linked repositories" checked={linked} disabled={save.isPending} onChange={setLinked} />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">{blockingLabel}</div>
-          <div className="help">
-            {blockingHelp}
-            <FromConfig
-              field={blockingLabel}
-              pinned={pinned("blockingStatus")}
-              shown={statusText(cfg.blockingStatus)}
-              disabled={save.isPending}
-              onUse={() => setBlockingStatus(cfg.blockingStatus)}
-            />
-          </div>
-        </div>
-        <div>
-          <select aria-label={blockingLabel} value={blockingStatus} disabled={save.isPending} onChange={(e) => setBlockingStatus(e.target.value)}>
-            <option value="failed">failed (blocks merge)</option>
-            <option value="neutral">neutral</option>
-          </select>
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">{failureLabel}</div>
-          <div className="help">
-            {failureHelp}
-            <FromConfig
-              field={failureLabel}
-              pinned={pinned("failureStatus")}
-              shown={statusText(cfg.failureStatus)}
-              disabled={save.isPending}
-              onUse={() => setFailureStatus(cfg.failureStatus)}
-            />
-          </div>
-        </div>
-        <div>
-          <select aria-label={failureLabel} value={failureStatus} disabled={save.isPending} onChange={(e) => setFailureStatus(e.target.value)}>
-            <option value="failed">failed (blocks merge)</option>
-            <option value="neutral">neutral</option>
-          </select>
-          {blockingStatus === "neutral" && <div className="meta">{notUsedNote}</div>}
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Timeout</div>
-          <div className="help">
-            How long one review may run, in seconds (60 to 7200).
-            <FromConfig
-              field="Timeout"
-              pinned={pinned("jobTimeoutSeconds")}
-              shown={String(cfg.jobTimeoutSeconds)}
-              disabled={save.isPending}
-              onUse={() => setTimeoutText(String(cfg.jobTimeoutSeconds))}
-            />
-          </div>
-        </div>
-        <div>
-          <input
-            type="text"
-            inputMode="numeric"
-            aria-label="Timeout (seconds)"
-            value={timeout}
+        {library.isPending && <Loading />}
+        {library.isError && <ErrorBox error={library.error} />}
+        {library.isSuccess && (
+          <SkillPicker
+            library={library.data}
+            // Stored default names the library no longer has (a delete is refused
+            // while one is in use, but the list may predate that).
+            missing={v.skills.filter((n) => !library.data.some((s) => s.name === n))}
+            selected={skills}
             disabled={save.isPending}
-            onChange={(e) => setTimeoutText(e.target.value)}
+            onChange={setSkills}
           />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Max steps</div>
-          <div className="help">
-            Steps each opencode run may take before pergent stops it; each step can call several tools.
-            <FromConfig field="Max steps" pinned={pinned("maxTurns")} shown={String(cfg.maxTurns)} disabled={save.isPending} onUse={() => setSteps(String(cfg.maxTurns))} />
-          </div>
-        </div>
-        <div>
-          <input
-            type="text"
-            inputMode="numeric"
-            aria-label="Max steps"
-            value={steps}
-            disabled={save.isPending}
-            onChange={(e) => setSteps(e.target.value)}
-          />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Memory limit</div>
-          <div className="help">
-            For example 6Gi (256Mi to 32Gi). Empty follows the config.
-            <FromConfig
-              field="Memory limit"
-              pinned={pinned("jobMemory")}
-              shown={cfg.jobMemory === "" ? "none" : cfg.jobMemory}
-              disabled={save.isPending}
-              onUse={() => setMemory(cfg.jobMemory)}
-            />
-          </div>
-        </div>
-        <div>
-          <input
-            type="text"
-            aria-label="Memory limit"
-            placeholder="none"
-            value={memory}
-            disabled={save.isPending}
-            onChange={(e) => setMemory(e.target.value)}
-          />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Re-run cap per MR/PR</div>
-          <div className="help">
-            The most re-runs (buttons and comments) of one merge request or pull request in a UTC day, 1 to 1000. Pushes
-            always run.
-            <FromConfig
-              field="Re-run cap per MR/PR"
-              pinned={pinned("rerunLimitPerMR")}
-              shown={capText(cfg.rerunLimitPerMR)}
-              disabled={save.isPending}
-              onUse={() => setCapMR(capValue(cfg.rerunLimitPerMR))}
-            />
-          </div>
-        </div>
-        <div>
-          <input
-            type="number"
-            aria-label="Re-run cap per MR/PR (per day)"
-            min={1}
-            max={1000}
-            step={1}
-            value={capMR}
-            disabled={save.isPending}
-            onChange={(e) => setCapMR(e.target.value)}
-          />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Re-run cap per repository</div>
-          <div className="help">
-            The most re-runs across a whole repository in a UTC day, 1 to 1000.
-            <FromConfig
-              field="Re-run cap per repository"
-              pinned={pinned("rerunLimitPerRepo")}
-              shown={capText(cfg.rerunLimitPerRepo)}
-              disabled={save.isPending}
-              onUse={() => setCapRepo(capValue(cfg.rerunLimitPerRepo))}
-            />
-          </div>
-        </div>
-        <div>
-          <input
-            type="number"
-            aria-label="Re-run cap per repository (per day)"
-            min={1}
-            max={1000}
-            step={1}
-            value={capRepo}
-            disabled={save.isPending}
-            onChange={(e) => setCapRepo(e.target.value)}
-          />
-        </div>
-      </div>
-      <div className="set">
-        <div>
-          <div className="name">Default skills</div>
-          <div className="help">
-            The library skills a repository reviews when it doesn't choose its own. A review takes at most{" "}
-            {bytesText(skillBudget)} of library skill text.
-          </div>
-        </div>
-      </div>
-      {library.isPending && <Loading />}
-      {library.isError && <ErrorBox error={library.error} />}
-      {library.isSuccess && (
-        <SkillPicker
-          library={library.data}
-          // Stored default names the library no longer has (a delete is refused
-          // while one is in use, but the list may predate that).
-          missing={v.skills.filter((n) => !library.data.some((s) => s.name === n))}
-          selected={skills}
-          disabled={save.isPending}
-          onChange={setSkills}
-        />
-      )}
-      <div className="set">
-        <div>
-          <div className="name">Default rule sets</div>
-          <div className="help">
-            The rule sets, in match order, of a repository that doesn't choose its own. The first entry that matches a file gives
-            it its rule.
-          </div>
-        </div>
-      </div>
-      {ruleLibrary.isPending && <Loading />}
-      {ruleLibrary.isError && <ErrorBox error={ruleLibrary.error} />}
-      {ruleLibrary.isSuccess && (
-        <RuleSetPicker
-          label="Default rule sets"
-          library={ruleLibrary.data}
-          selected={defaultRuleSets}
-          disabled={save.isPending}
-          onChange={setDefaultRuleSets}
-        />
-      )}
-      {save.isError && <ErrorBox error={save.error} />}
-      <div className="foot">
-        {problem && <span className="meta problem">{problem}</span>}
-        {note && (
-          <span className="meta grow" role="status">
-            {note}
-          </span>
         )}
-        <button type="submit" className="btn primary" disabled={save.isPending}>
-          Save defaults
-        </button>
+        <div className="set">
+          <div>
+            <div className="name">Default rule sets</div>
+            <div className="help">
+              The rule sets, in match order, of a repository that doesn't choose its own. The first entry that matches a file gives
+              it its rule.
+            </div>
+          </div>
+        </div>
+        {ruleLibrary.isPending && <Loading />}
+        {ruleLibrary.isError && <ErrorBox error={ruleLibrary.error} />}
+        {ruleLibrary.isSuccess && (
+          <RuleSetPicker
+            label="Default rule sets"
+            library={ruleLibrary.data}
+            selected={defaultRuleSets}
+            disabled={save.isPending}
+            onChange={setDefaultRuleSets}
+          />
+        )}
+        {save.isError && <ErrorBox error={save.error} />}
+        <div className="foot">
+          {problem && <span className="meta problem">{problem}</span>}
+          {note && (
+            <span className="meta grow" role="status">
+              {note}
+            </span>
+          )}
+          <button type="submit" className="btn primary" disabled={save.isPending}>
+            Save defaults
+          </button>
+        </div>
       </div>
     </form>
   );
@@ -687,45 +707,82 @@ const repositoriesText = (n: number) => `${n} ${n === 1 ? "repository" : "reposi
 // and never shown.
 function Models({ v }: { v: ModelsAdminView }) {
   const client = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
   return (
     <>
-      <section className="card" aria-label="Models">
-        <h2>Models</h2>
-        <MarkBanner entries={v.models} />
-        <div className="pad meta">
-          Reviews run on the global chain below, unless a repository's owner team or the repository has a chain of its own. A
-          team chain may use only the entries with teams may use on.
-        </div>
-        {!v.canSetDefault && (
+      <section className={open ? "card" : "card folded"} aria-label="Models">
+        <FoldHead title="Models" summary={modelsSummary(v)} open={open} onToggle={() => setOpen(!open)}>
+          {!adding && (
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => {
+                setOpen(true);
+                setAdding(true);
+              }}
+            >
+              Add model
+            </button>
+          )}
+        </FoldHead>
+        <div hidden={!open}>
+          <MarkBanner entries={v.models} />
           <div className="pad meta">
-            The config file has an llm: block, which is the default; change it there. The models below can still be added,
-            changed and removed.
+            Reviews run on the global chain below, unless a repository's owner team or the repository has a chain of its own. A
+            team chain may use only the entries with teams may use on.
           </div>
-        )}
-        {v.models.length === 0 && <div className="pad meta">No model yet. Add one below; the first is the default.</div>}
-        {v.models.map((m) => (
-          <ModelRow key={m.id} m={m} canSetDefault={v.canSetDefault} following={v.followingDefault} />
-        ))}
+          {!v.canSetDefault && (
+            <div className="pad meta">
+              The config file has an llm: block, which is the default; change it there. The models below can still be added,
+              changed and removed.
+            </div>
+          )}
+          {v.models.length === 0 && <div className="pad meta">No model yet. Add one with Add model; the first is the default.</div>}
+          {v.models.map((m) => (
+            <ModelRow key={m.id} m={m} canSetDefault={v.canSetDefault} following={v.followingDefault} />
+          ))}
+          {adding && (
+            <AddModelForm<ModelAdminView>
+              path="/api/admin/models"
+              teamsMayUse
+              onCancel={() => setAdding(false)}
+              onAdded={() => {
+                // The first entry is the default: the list says which.
+                client.invalidateQueries({ queryKey: modelsKey });
+                client.invalidateQueries({ queryKey: chainKey });
+                client.invalidateQueries({ queryKey: ["repo-reviewers"] });
+                client.invalidateQueries({ queryKey: ["repo"] });
+              }}
+            />
+          )}
+        </div>
       </section>
       <GlobalChain />
-      <AddModelForm<ModelAdminView>
-        path="/api/admin/models"
-        teamsMayUse
-        onAdded={() => {
-          // The first entry is the default: the list says which.
-          client.invalidateQueries({ queryKey: modelsKey });
-          client.invalidateQueries({ queryKey: chainKey });
-          client.invalidateQueries({ queryKey: ["repo-reviewers"] });
-          client.invalidateQueries({ queryKey: ["repo"] });
-        }}
-      />
     </>
   );
 }
 
+// modelsSummary is the folded Models card's line: how many models, which
+// is the default, and how many are marked.
+function modelsSummary(v: ModelsAdminView) {
+  if (v.models.length === 0) return "No models";
+  const def = v.models.find((m) => m.default);
+  const marked = v.models.filter((m) => m.mark?.live).length;
+  return [countText(v.models.length, "model"), def ? `default ${def.name}` : "", marked > 0 ? `${marked} marked` : ""]
+    .filter((p) => p !== "")
+    .join(" · ");
+}
+
+// tokensText is a model's tokens this month, against its limit when it has one.
+const fmt = (n: number) => n.toLocaleString("en-US");
+const tokensText = (used: number, limit: number | null) => `${fmt(used)}${limit === null ? "" : ` of ${fmt(limit)}`} tokens this month`;
+
 function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDefault: boolean; following: number }) {
   const client = useQueryClient();
   const write = useWrite();
+  // A row shows its name, model and tokens; the rest opens on a click.
+  const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   // A change of the list moves what the chains and repository pages show.
   const changed = () => {
@@ -770,85 +827,88 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
     if (window.confirm(`Remove ${m.name} from the list? Its key is deleted.${chains}`)) remove.mutate();
   };
   return (
-    <div className="pad stack" role="group" aria-label={m.name}>
-      <div className="row">
-        <b className="grow">{m.name}</b>
+    <div className="model-row" role="group" aria-label={m.name}>
+      <button type="button" className="fold model-head" aria-expanded={open} data-fold="" onClick={() => setOpen(!open)}>
+        <b>{m.name}</b>
         {m.default && <span className="badge">default</span>}
         {fromConfig && <span className="badge cfg">from the config file</span>}
-      </div>
-      <div className="meta mono">
-        {m.provider} / {m.model}
-      </div>
-      {m.baseURL && <div className="meta">Base URL {m.baseURL}</div>}
-      <div className="meta">Key {secretText(m.key)}</div>
-      {m.usedIn.length > 0 && <div className="meta">In chains: {m.usedIn.join(", ")}</div>}
-      {m.default && following > 0 && (
-        <div className="meta">
-          {repositoriesText(following)} name no model and follow it.
-        </div>
-      )}
-      <QuotaLine ariaLabel={`Tokens of ${m.name} this month`} use={{ used: m.used, limit: m.limit }} />
-      <LimitField
-        key={String(m.limit)}
-        label={`Model limit of ${m.name}`}
-        saveLabel={`Save the model limit of ${m.name}`}
-        hint="Tokens per calendar month (UTC), input plus output, on every instance and repository. Empty: no limit."
-        limit={m.limit}
-        path={paths.apiAdminModelLimit(m.id)}
-        onSaved={limitsChanged}
-      />
-      <ModelTeamLimits m={m} onChanged={limitsChanged} />
-      {m.mark?.live && (
-        <div className="row">
-          <span className="grow meta warn-text">Marked: {markText(m.mark)}</span>
-          <button type="button" className="btn small" aria-label={`Clear mark of ${m.name}`} disabled={clear.isPending} onClick={() => clear.mutate()}>
-            Clear mark
-          </button>
-        </div>
-      )}
-      {!fromConfig && (
-        <label className="link-block">
-          <Switch label={`Teams may use ${m.name}`} checked={m.teamsMayUse} disabled={busy} onChange={(on) => forTeams.mutate(on)} />
-          <span>Teams may use it</span>
-        </label>
-      )}
-      {!fromConfig && !editing && (
-        <div className="actions-row">
-          <button type="button" className="btn small" aria-label={`Edit ${m.name}`} disabled={busy} onClick={() => setEditing(true)}>
-            Edit
-          </button>
-          {canSetDefault && !m.default && (
-            <button
-              type="button"
-              className="btn small"
-              aria-label={`Set ${m.name} as default`}
-              disabled={busy}
-              onClick={() => {
-                const moved =
-                  following === 0
-                    ? "No repository follows the default today."
-                    : `The ${repositoriesText(following)} that name no model will review with it from now on.`;
-                if (window.confirm(`Make ${m.name} the default model? ${moved}`)) makeDefault.mutate();
-              }}
-            >
-              Set as default
+        {m.mark?.live && <span className="badge warn">marked</span>}
+        <span className="meta mono grow">
+          {m.provider} / {m.model}
+        </span>
+        <span className="meta">{tokensText(m.used, m.limit)}</span>
+      </button>
+      <div className="pad stack model-body" hidden={!open}>
+        {m.baseURL && <div className="meta">Base URL {m.baseURL}</div>}
+        <div className="meta">Key {secretText(m.key)}</div>
+        {m.default && following > 0 && (
+          <div className="meta">
+            {repositoriesText(following)} name no model and follow it.
+          </div>
+        )}
+        <QuotaLine ariaLabel={`Tokens of ${m.name} this month`} use={{ used: m.used, limit: m.limit }} />
+        <LimitField
+          key={String(m.limit)}
+          label={`Model limit of ${m.name}`}
+          saveLabel={`Save the model limit of ${m.name}`}
+          hint="Tokens per calendar month (UTC), input plus output, on every instance and repository. Empty: no limit."
+          limit={m.limit}
+          path={paths.apiAdminModelLimit(m.id)}
+          onSaved={limitsChanged}
+        />
+        <ModelTeamLimits m={m} onChanged={limitsChanged} />
+        {m.mark?.live && (
+          <div className="row">
+            <span className="grow meta warn-text">Marked: {markText(m.mark)}</span>
+            <button type="button" className="btn small" aria-label={`Clear mark of ${m.name}`} disabled={clear.isPending} onClick={() => clear.mutate()}>
+              Clear mark
             </button>
-          )}
-          {!m.default && (
-            <button type="button" className="btn small" aria-label={`Remove ${m.name}`} disabled={busy} onClick={confirmRemove}>
-              Remove
+          </div>
+        )}
+        {!fromConfig && (
+          <label className="link-block">
+            <Switch label={`Teams may use ${m.name}`} checked={m.teamsMayUse} disabled={busy} onChange={(on) => forTeams.mutate(on)} />
+            <span>Teams may use it</span>
+          </label>
+        )}
+        {!fromConfig && !editing && (
+          <div className="actions-row">
+            <button type="button" className="btn small" aria-label={`Edit ${m.name}`} disabled={busy} onClick={() => setEditing(true)}>
+              Edit
             </button>
-          )}
-        </div>
-      )}
-      {!fromConfig && m.default && !editing && <div className="meta">Make another model the default to remove this one.</div>}
-      {editing && (
-        <EditModelForm m={m} path={`/api/admin/models/${encodeURIComponent(m.id)}`} onDone={() => setEditing(false)} onSaved={changed} />
-      )}
-      {makeDefault.isError && <ErrorBox error={makeDefault.error} />}
-      {remove.isError && <ErrorBox error={remove.error} />}
-      {forTeams.isError && <ErrorBox error={forTeams.error} />}
-      {clear.isError && <ErrorBox error={clear.error} />}
+            {canSetDefault && !m.default && (
+              <button
+                type="button"
+                className="btn small"
+                aria-label={`Set ${m.name} as default`}
+                disabled={busy}
+                onClick={() => {
+                  const moved =
+                    following === 0
+                      ? "No repository follows the default today."
+                      : `The ${repositoriesText(following)} that name no model will review with it from now on.`;
+                  if (window.confirm(`Make ${m.name} the default model? ${moved}`)) makeDefault.mutate();
+                }}
+              >
+                Set as default
+              </button>
+            )}
+            {!m.default && (
+              <button type="button" className="btn small" aria-label={`Remove ${m.name}`} disabled={busy} onClick={confirmRemove}>
+                Remove
+              </button>
+            )}
+          </div>
+        )}
+        {!fromConfig && m.default && !editing && <div className="meta">Make another model the default to remove this one.</div>}
+        {editing && (
+          <EditModelForm m={m} path={`/api/admin/models/${encodeURIComponent(m.id)}`} onDone={() => setEditing(false)} onSaved={changed} />
+        )}
+        {makeDefault.isError && <ErrorBox error={makeDefault.error} />}
+        {remove.isError && <ErrorBox error={remove.error} />}
+        {forTeams.isError && <ErrorBox error={forTeams.error} />}
+        {clear.isError && <ErrorBox error={clear.error} />}
+      </div>
     </div>
   );
 }
@@ -981,6 +1041,7 @@ function GlobalChain() {
   const client = useQueryClient();
   const write = useWrite();
   const chain = useQuery({ queryKey: chainKey, queryFn: () => api.get<ChainView>("/api/admin/chain") });
+  const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
   const changed = () => {
     client.invalidateQueries({ queryKey: modelsKey });
@@ -1005,34 +1066,40 @@ function GlobalChain() {
     },
   });
   return (
-    <section className="card" aria-label="Global chain">
-      <h2>Global chain</h2>
-      <div className="pad meta">
-        Reviews try the entries in this order. When the provider says an entry is out of quota or credit, or rejects its key, the
-        review starts again on the next one. The first entry is the default.
-      </div>
-      {chain.isPending && <Loading />}
-      {chain.isError && <ErrorBox error={chain.error} />}
-      {chain.isSuccess && (
-        <ChainEditor
-          // A new answer from the server starts the editor again from it.
-          key={JSON.stringify(chain.data)}
-          value={chain.data}
-          choices={chain.data.choices}
-          readOnly={chain.data.readOnly}
-          allowEmpty
-          busy={save.isPending}
-          onSave={(entries) => save.mutate(entries)}
-          onClear={(e) => clear.mutate(e)}
-        />
-      )}
-      {note && (
-        <div className="pad note" role="status">
-          {note}
+    <section className={open ? "card" : "card folded"} aria-label="Global chain">
+      <FoldHead title="Global chain" summary={chainSummary(chain.data)} open={open} onToggle={() => setOpen(!open)} />
+      <div hidden={!open}>
+        <div className="pad meta">
+          Reviews try the entries in this order. When the provider says an entry is out of quota or credit, or rejects its key, the
+          review starts again on the next one. The first entry is the default.
         </div>
-      )}
-      {save.isError && <ErrorBox error={save.error} />}
-      {clear.isError && <ErrorBox error={clear.error} />}
+        {chain.isPending && <Loading />}
+        {chain.isError && <ErrorBox error={chain.error} />}
+        {chain.isSuccess && (
+          <ChainEditor
+            // A new answer from the server starts the editor again from it.
+            key={JSON.stringify(chain.data)}
+            value={chain.data}
+            choices={chain.data.choices}
+            readOnly={chain.data.readOnly}
+            allowEmpty
+            busy={save.isPending}
+            note={note}
+            onSave={(entries) => save.mutate(entries)}
+            onClear={(e) => clear.mutate(e)}
+          />
+        )}
+        {save.isError && <ErrorBox error={save.error} />}
+        {clear.isError && <ErrorBox error={clear.error} />}
+      </div>
     </section>
   );
+}
+
+// chainSummary is the folded chain card's line: how many entries, and the
+// first, which reviews try first.
+function chainSummary(c: ChainView | undefined) {
+  if (!c) return "";
+  if (c.entries.length === 0) return "No entries";
+  return `${countText(c.entries.length, "entry", "entries")} · first ${c.entries[0].name}`;
 }
