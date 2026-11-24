@@ -926,6 +926,8 @@ var openAPISchemas = map[string]schemaType{
 	"UsageWastedView":         outputSchema(UsageWastedView{}),
 	"UsageOutlierView":        outputSchema(UsageOutlierView{}),
 	"UsageRepositoryView":     outputSchema(UsageRepositoryView{}),
+	"TeamUsageView":           outputSchema(TeamUsageView{}),
+	"TeamUsageRepoView":       outputSchema(TeamUsageRepoView{}),
 	"SecretView":              outputSchema(SecretView{}),
 	"InstanceAdminView":       outputSchema(InstanceAdminView{}),
 	"ModelsAdminView":         outputSchema(ModelsAdminView{}),

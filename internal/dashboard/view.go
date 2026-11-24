@@ -1846,6 +1846,31 @@ type UsageOutlierView struct {
 	At          string `json:"at"`
 }
 
+// TeamUsageRepoView is one repository in GET /api/teams/{id}/usage: the
+// tokens and reviews of the rows the team owned, under the path it was last
+// reported under.
+type TeamUsageRepoView struct {
+	Instance string          `json:"instance"`
+	Project  string          `json:"project"`
+	Tokens   UsageTokensView `json:"tokens"`
+	Reviews  int64           `json:"reviews"`
+}
+
+// TeamUsageView is GET /api/teams/{id}/usage (the team's maintainers and
+// admins): what the repositories the team owned used in the last Days days.
+// PartialRange is true when the range starts before the oldest usage row
+// with any owner team: rows written before that have none, so the team's
+// numbers start there.
+type TeamUsageView struct {
+	Days         int                 `json:"days"`
+	Tokens       UsageTokensView     `json:"tokens"`
+	Reviews      int64               `json:"reviews"`
+	Daily        []UsageDayView      `json:"daily"`
+	Repositories []TeamUsageRepoView `json:"repositories"`
+	Models       []UsageNamedView    `json:"models"`
+	PartialRange bool                `json:"partialRange"`
+}
+
 // UsageRepositoryView is GET /api/repositories/{instance}/{project}/usage
 // (admins).
 type UsageRepositoryView struct {

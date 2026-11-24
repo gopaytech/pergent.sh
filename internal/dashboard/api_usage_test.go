@@ -498,3 +498,80 @@ func TestUsageSplitsSource(t *testing.T) {
 		t.Errorf("CSV = %v; want the global row, then the team row", rows)
 	}
 }
+
+// A team's usage is for its maintainers and admins: a viewer of the team gets
+// 403, anyone else 404. It counts only the rows the team owned, and
+// partialRange says the range starts before the oldest row with an owner team.
+func TestTeamUsageAccess(t *testing.T) {
+	t.Parallel()
+	te := newTeamsEnv(t)
+	now := te.clock.now()
+	te.usageRun(runFix{project: "acme/payments", number: 1, head: head('1'), at: now.Add(-10 * day), model: "m1", provider: "anthropic"},
+		usageSkill("security", "no_blocking_issues", 5, 1))
+	te.usageRun(runFix{project: "acme/payments", number: 2, head: head('2'), at: now.Add(-2 * time.Hour), model: "m2", provider: "openai"},
+		usageSkill("security", "no_blocking_issues", 100, 10))
+	// Widgets owns acme/widgets; Payments only covers it.
+	te.usageRun(runFix{project: "acme/widgets", number: 3, head: head('3'), at: now.Add(-time.Hour), model: "m1", provider: "anthropic"},
+		usageSkill("security", "no_blocking_issues", 999, 0))
+	usageURL := teamURL(te.payments, "/usage")
+
+	for _, c := range []struct {
+		name   string
+		cookie *http.Cookie
+	}{{"other viewer", te.other}, {"other maintainer", te.otherMaintainer}} {
+		t.Run(c.name, func(t *testing.T) {
+			wantCode(t, te.get(c.cookie, usageURL), c.name, http.StatusNotFound)
+		})
+	}
+	t.Run("viewer", func(t *testing.T) {
+		rec := te.get(te.viewer, usageURL)
+		wantCode(t, rec, "viewer", http.StatusForbidden)
+		if got := errorOf(t, rec); got != msgTeamUsageRead {
+			t.Errorf("viewer: error = %q", got)
+		}
+	})
+	for _, c := range []struct {
+		name   string
+		cookie *http.Cookie
+	}{{"maintainer", te.maintainer}, {"admin", te.admin}} {
+		t.Run(c.name, func(t *testing.T) {
+			v := decode[TeamUsageView](t, te.get(c.cookie, usageURL), c.name, http.StatusOK)
+			if v.Days != 30 {
+				t.Errorf("days = %d; want the default 30", v.Days)
+			}
+			// Widgets' 999 tokens on acme/widgets are not in Payments' answer.
+			if v.Tokens.In != 105 || v.Tokens.Out != 11 || v.Reviews != 2 {
+				t.Errorf("totals = %+v over %d reviews; want 105 in, 11 out, 2 reviews", v.Tokens, v.Reviews)
+			}
+			if len(v.Repositories) != 1 || v.Repositories[0] != (TeamUsageRepoView{Instance: "main", Project: "acme/payments",
+				Tokens: UsageTokensView{In: 105, Out: 11}, Reviews: 2}) {
+				t.Errorf("repositories = %+v; want acme/payments only", v.Repositories)
+			}
+			if len(v.Models) != 2 || v.Models[0].Name != "m2" || v.Models[1].Name != "m1" || v.Models[1].Tokens.In != 5 {
+				t.Errorf("models = %+v; want m2, then m1 with Payments' 5 tokens only", v.Models)
+			}
+			if len(v.Daily) != 2 || v.Daily[0].Day >= v.Daily[1].Day {
+				t.Errorf("daily = %+v; want 2 days, oldest first", v.Daily)
+			}
+		})
+	}
+	for _, q := range []string{"?days=0", "?days=91"} {
+		t.Run("days"+q, func(t *testing.T) {
+			rec := te.get(te.maintainer, usageURL+q)
+			wantCode(t, rec, q, http.StatusBadRequest)
+			if got := errorOf(t, rec); got != msgBadUsageDays {
+				t.Errorf("%s: error = %q", q, got)
+			}
+		})
+	}
+	t.Run("partial range", func(t *testing.T) {
+		// The oldest owned row is 10 days old.
+		if v := decode[TeamUsageView](t, te.get(te.maintainer, usageURL+"?days=90"), "days=90", http.StatusOK); !v.PartialRange || v.Days != 90 {
+			t.Errorf("days=90: partialRange = %v, days = %d; want true, 90", v.PartialRange, v.Days)
+		}
+		v := decode[TeamUsageView](t, te.get(te.maintainer, usageURL+"?days=7"), "days=7", http.StatusOK)
+		if v.PartialRange || v.Tokens.In != 100 {
+			t.Errorf("days=7: partialRange = %v, tokens %+v; want false and the last row only", v.PartialRange, v.Tokens)
+		}
+	})
+}

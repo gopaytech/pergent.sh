@@ -3316,6 +3316,41 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/usage:
+    get:
+      operationId: getTeamUsage
+      tags: [Organization]
+      summary: What a team's repositories used
+      description: |
+        For the team's maintainers and admins: a viewer of the team gets 403
+        (`only maintainers of this team see its usage`), anyone else 404.
+        Tokens used in the last `days` days by the repositories the team
+        owned when the usage was written, so a repository that moved to
+        another team leaves its earlier tokens with the old one. A multi
+        review counts each reviewer and the judge on its own model, once.
+        `daily` is each UTC day with usage, oldest first; `repositories` and
+        `models` are busiest first. Totals and rankings add input and output
+        tokens only. `reviews` counts a review once, however many skills it
+        ran. `partialRange` is true when the range starts before the oldest
+        usage row with any owner team (v0.19.0 started to record it), so
+        older reviews are not counted.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - $ref: '#/components/parameters/UsageDays'
+      responses:
+        '200':
+          description: The team's usage.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamUsageView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/teams/{id}/chain:
     get:
       operationId: getTeamChain
@@ -8579,6 +8614,37 @@ components:
           type: array
           description: API clients with usage in the period, busiest first, each with its tenants.
           items: {$ref: '#/components/schemas/UsageClientView'}
+    TeamUsageView:
+      description: Body of `GET /api/teams/{id}/usage`. Never another team's numbers.
+      type: object
+      required: [days, tokens, reviews, daily, repositories, models, partialRange]
+      properties:
+        days: {type: integer}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews: {type: integer, format: int64}
+        daily:
+          type: array
+          items: {$ref: '#/components/schemas/UsageDayView'}
+        repositories:
+          type: array
+          description: Busiest first.
+          items: {$ref: '#/components/schemas/TeamUsageRepoView'}
+        models:
+          type: array
+          description: Busiest first. `failed` is 0.
+          items: {$ref: '#/components/schemas/UsageNamedView'}
+        partialRange:
+          type: boolean
+          description: The range starts before the oldest usage row with any owner team, so older reviews are not counted.
+    TeamUsageRepoView:
+      description: One repository of a team's usage, with the path it was last reported under.
+      type: object
+      required: [instance, project, tokens, reviews]
+      properties:
+        instance: {type: string}
+        project: {type: string}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews: {type: integer, format: int64}
     UsageNamedView:
       description: One skill or model of a repository's usage.
       type: object

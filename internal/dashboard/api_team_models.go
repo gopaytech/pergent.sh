@@ -32,6 +32,7 @@ func (d *Dashboard) teamRoutes(mux *http.ServeMux) {
 	route("PUT /api/teams/{id}/models/{model}/limit", d.putTeamModelLimit)
 	route("DELETE /api/teams/{id}/models/{model}/limit", d.deleteTeamModelLimit)
 	route("GET /api/teams/{id}/limits", d.teamLimits)
+	route("GET /api/teams/{id}/usage", d.teamUsage)
 	route("GET /api/teams/{id}/chain", d.getTeamChain)
 	route("PUT /api/teams/{id}/chain", d.putTeamChain)
 }
