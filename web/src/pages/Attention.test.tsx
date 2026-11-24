@@ -28,25 +28,13 @@ describe("AttentionRows", () => {
     show([row("clone_failing", message)]);
     expect(screen.getByText(message)).toBeInTheDocument();
     expect(screen.getByText("Failing")).toHaveClass("pill", "bad");
-    expect(screen.getByRole("link", { name: "acme/payments" })).toHaveAttribute("href", "/repos/main/acme/payments?tab=setup");
+    expect(screen.getByText("acme/payments")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("shows an out-of-memory repository the same way", () => {
     show([row("out_of_memory", "Reviews ran out of memory 2 times in the last 7 days. Raise the Job memory limit.")]);
     expect(screen.getByText("Failing")).toHaveClass("pill", "bad");
-  });
-
-  it("shows an API client whose callbacks fail as Failing, linked to the client", () => {
-    const message =
-      "Callbacks to this client failed for 3 reviews in the last 24 hours. Check its callback URL; the results stay readable with GET /v1/reviews/{id}.";
-    show([
-      { instance: "", project: "", client: "gateway", kind: "callback_failing", message, updatedAt: "2026-11-10T10:00:00Z" },
-      { instance: "", project: "", client: "billing", kind: "callback_failing", message, updatedAt: "2026-11-10T10:00:00Z" },
-    ]);
-    expect(screen.getAllByText(message)).toHaveLength(2);
-    expect(screen.getAllByText("Failing")[0]).toHaveClass("pill", "bad");
-    expect(screen.getByRole("link", { name: "API client gateway" })).toHaveAttribute("href", "/api-clients/gateway");
-    expect(screen.getByRole("link", { name: "API client billing" })).toHaveAttribute("href", "/api-clients/billing");
   });
 
   it("shows a kind it does not know as Setup", () => {

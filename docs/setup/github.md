@@ -92,7 +92,7 @@ With a separate approve App, add its key to the Secret (`--from-file=GITHUB_APPR
 
 Exactly one of `approve_with_review_app`, `approve_app` and `approve_token_env` is set. `approve_app` can't name the review App's ID or key; say `approve_with_review_app: true` for that.
 
-At startup pergent.sh reads each App's slug (`GET /app`) and its bot user (`GET /users/<slug>[bot]`), and, for an instance in the config file, stops with an error naming the instance if a key doesn't work (an instance added in the dashboard is logged and recorded as "Needs attention" instead). The bot user lookup is unauthenticated (GitHub allows 60 an hour per address), which is plenty unless the pod restarts in a loop. Then, at startup and every hour, it looks each listed repository up: the review App's installation, the repository's ID and clone URL, and whether the approve side can reach it. A listed repository the review App isn't installed on is logged as an error on every pass and can't be reviewed.
+At startup pergent.sh reads each App's slug (`GET /app`) and its bot user (`GET /users/<slug>[bot]`), and, for an instance in the config file, stops with an error naming the instance if a key doesn't work (an instance added in the dashboard is logged instead). The bot user lookup is unauthenticated (GitHub allows 60 an hour per address), which is plenty unless the pod restarts in a loop. Then, at startup and every hour, it looks each listed repository up: the review App's installation, the repository's ID and clone URL, and whether the approve side can reach it. A listed repository the review App isn't installed on is logged as an error on every pass and can't be reviewed.
 
 ## The `pergent` Check Run
 

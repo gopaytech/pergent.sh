@@ -441,10 +441,6 @@ func TestOverview(t *testing.T) {
 	if r := ov.Recent[1]; r.Reason != "the review Job ran out of memory (OOMKilled)" {
 		t.Errorf("failed reason = %q", r.Reason)
 	}
-	if len(ov.Attention) != 1 || ov.Attention[0].Project != "acme/widgets" || ov.Attention[0].Kind != "single_approval" ||
-		ov.Attention[0].Message != "message for single_approval" {
-		t.Errorf("attention = %+v; want only acme/widgets' item", ov.Attention)
-	}
 
 	// A longer period counts the older review too.
 	if ov := getJSON[OverviewView](e, c, "/api/overview?days=30"); ov.Stats.Reviews != 5 || ov.Stats.Approved != 2 {
@@ -455,52 +451,16 @@ func TestOverview(t *testing.T) {
 	}
 }
 
-func TestOverviewInstanceItemsOnlyForAdmins(t *testing.T) {
+// An API client's failing callbacks are stored with the client's name as the
+// project: never a repository's item, even when a repository has that path.
+func TestCallbackFailingIsNoRepositorys(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, nil)
 	overviewFixture(e)
-	c := e.userOnMain(true, "acme/widgets")
-	ov := getJSON[OverviewView](e, c, "/api/overview")
-	var kinds []string
-	for _, a := range ov.Attention {
-		kinds = append(kinds, a.Instance+"/"+a.Project+"/"+a.Kind)
-	}
-	// An admin sees the setup problems of every instance.
-	want := "gh/acme/widgets/approver_unreachable,main//token_expiry,main/acme/payments/out_of_memory,main/acme/widgets/single_approval"
-	if strings.Join(kinds, ",") != want {
-		t.Errorf("admin attention = %v", kinds)
-	}
-}
-
-// An API client's failing callbacks are shown to admins only, as the
-// client's, never as a repository's.
-func TestCallbackFailingOnlyForAdmins(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t, nil)
-	overviewFixture(e)
-	const msg = "Callbacks to this client failed for 3 reviews in the last 24 hours."
-	if err := e.st.SetAttention(ctx, "", "gateway", "callback_failing", msg); err != nil {
+	if err := e.st.SetAttention(ctx, "", "acme/widgets", "callback_failing", "Callbacks failed."); err != nil {
 		t.Fatal(err)
 	}
-
-	// The user first: userOnMain(true) makes alice an admin for good.
-	user := e.userOnMain(false, "acme/widgets")
-	for _, a := range getJSON[OverviewView](e, user, "/api/overview").Attention {
-		if a.Kind == "callback_failing" || a.Client != "" {
-			t.Errorf("a user sees the client's item: %+v", a)
-		}
-	}
-
 	admin := e.userOnMain(true, "acme/widgets")
-	var got []AttentionView
-	for _, a := range getJSON[OverviewView](e, admin, "/api/overview").Attention {
-		if a.Kind == "callback_failing" {
-			got = append(got, a)
-		}
-	}
-	if len(got) != 1 || got[0].Client != "gateway" || got[0].Instance != "" || got[0].Project != "" || got[0].Message != msg {
-		t.Errorf("admin attention = %+v; want the gateway client's item", got)
-	}
 	for _, a := range getJSON[RepositoryDetailView](e, admin, "/api/repositories/main/acme/widgets").Attention {
 		if a.Kind == "callback_failing" {
 			t.Errorf("a repository's attention holds the client's item: %+v", a)
@@ -520,14 +480,11 @@ func TestAttentionOnlyForActiveRepos(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := e.userOnMain(false, "acme/widgets", "acme/tools")
-	if ov := getJSON[OverviewView](e, c, "/api/overview"); len(ov.Attention) != 1 {
-		t.Fatalf("attention while switched on = %+v", ov.Attention)
+	if v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/tools"); len(v.Attention) != 1 {
+		t.Fatalf("attention while switched on = %+v", v.Attention)
 	}
 	if err := e.st.DeleteDashboardRepo(ctx, "main", "acme/tools"); err != nil {
 		t.Fatal(err)
-	}
-	if ov := getJSON[OverviewView](e, c, "/api/overview"); len(ov.Attention) != 0 {
-		t.Errorf("attention after switching off = %+v", ov.Attention)
 	}
 	e.wantStatus(c, "/api/repositories/main/acme/tools", http.StatusNotFound)
 	if repos := getJSON[[]RepositoryView](e, c, "/api/repositories"); len(repos) != 1 || repos[0].Project != "acme/widgets" {
@@ -671,6 +628,25 @@ func TestReviewDetail(t *testing.T) {
 	} {
 		e.wantStatus(c, target, http.StatusNotFound)
 	}
+}
+
+// An admin's review list keeps the runs of a removed repository, whose
+// project row is gone, so the admin can open them; nobody else can.
+func TestReviewDetailOfRemovedRepository(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	run := e.addRun(runFix{project: "acme/old", number: 5, head: head('a'), result: cleanResult(head('a')),
+		outcome: OutcomeNoBlocking, at: e.clock.now().Add(-time.Hour), title: "Old change"})
+	e.exec(`DELETE FROM projects WHERE instance = 'main' AND path = 'acme/old'`)
+
+	v := getJSON[ReviewDetailView](e, e.operator(), "/api/reviews/main/acme/old/5")
+	if v.Header.Project != "acme/old" || v.Header.Title != "Old change" || len(v.Runs) != 1 || v.Runs[0].ID != run {
+		t.Fatalf("review of the removed repository = %+v", v)
+	}
+	if v.Role != "" || v.Can != (CanView{}) {
+		t.Errorf("role %q, can %+v; want no buttons on a repository that is not switched on", v.Role, v.Can)
+	}
+	e.wantStatus(e.userOnMain(false, "acme/widgets"), "/api/reviews/main/acme/old/5", http.StatusNotFound)
 }
 
 // Outcomes are the ones the publisher recorded: settings changed since, an
@@ -1790,40 +1766,6 @@ func TestRepoSkillURLEscapesPath(t *testing.T) {
 		if got := repoSkillURL(in, "a/b", "main", "c.md"); got != "" {
 			t.Errorf("url = %q for %+v, want none", got, in)
 		}
-	}
-}
-
-// An item with no instance is about the library as a whole: every admin
-// sees it; a viewer never does.
-func TestGlobalAttentionForAdmins(t *testing.T) {
-	t.Parallel()
-	kinds := func(e *env, c *http.Cookie) string {
-		var out []string
-		for _, a := range getJSON[OverviewView](e, c, "/api/overview").Attention {
-			out = append(out, a.Instance+"/"+a.Project+"/"+a.Kind)
-		}
-		return strings.Join(out, ",")
-	}
-	for name, tc := range map[string]struct {
-		signIn func(e *env) *http.Cookie
-		want   string
-	}{
-		"viewer":      {func(e *env) *http.Cookie { return e.userOnMain(false, "acme/widgets") }, ""},
-		"sso admin":   {func(e *env) *http.Cookie { return e.userOnMain(true) }, "//library_problem,gh//token_expiry"},
-		"local admin": {func(e *env) *http.Cookie { return e.signInOperator() }, "//library_problem,gh//token_expiry"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			e := newEnv(t, nil)
-			if err := e.st.SetAttention(ctx, "", "", "library_problem", "a library skill needs a look"); err != nil {
-				t.Fatal(err)
-			}
-			if err := e.st.SetAttention(ctx, "gh", "", "token_expiry", "another instance's"); err != nil {
-				t.Fatal(err)
-			}
-			if got := kinds(e, tc.signIn(e)); got != tc.want {
-				t.Errorf("attention = %q, want %q", got, tc.want)
-			}
-		})
 	}
 }
 

@@ -58,16 +58,6 @@ func TestAdminSeesEverything(t *testing.T) {
 	for _, target := range []string{"/api/users", "/api/teams", "/api/audit", "/api/admin/settings", "/api/admin/instances"} {
 		e.wantStatus(c, target, http.StatusOK)
 	}
-	ov := getJSON[OverviewView](e, c, "/api/overview")
-	var kinds []string
-	for _, a := range ov.Attention {
-		kinds = append(kinds, a.Instance+"/"+a.Project+"/"+a.Kind)
-	}
-	for _, want := range []string{"main//token_expiry", "main/acme/payments/out_of_memory", "gh/acme/widgets/approver_unreachable"} {
-		if !slices.Contains(kinds, want) {
-			t.Errorf("attention = %v; want %s", kinds, want)
-		}
-	}
 }
 
 // A user sees the repositories their teams cover and nothing else: not the
@@ -607,15 +597,6 @@ func TestLocalAdminSeesEverything(t *testing.T) {
 		t.Errorf("gh run log = %+v", v)
 	}
 	ov := getJSON[OverviewView](e, c, "/api/overview")
-	var kinds []string
-	for _, a := range ov.Attention {
-		kinds = append(kinds, a.Instance+"/"+a.Project+"/"+a.Kind)
-	}
-	for _, want := range []string{"main//token_expiry", "main/acme/payments/out_of_memory", "gh/acme/widgets/approver_unreachable"} {
-		if !slices.Contains(kinds, want) {
-			t.Errorf("attention = %v; want %s", kinds, want)
-		}
-	}
 	if ov.Stats.Reviews < 7 {
 		t.Errorf("stats = %+v; want both instances' runs", ov.Stats)
 	}

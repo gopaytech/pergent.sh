@@ -17,6 +17,15 @@ const base = { "GET /api/overview?days=7": { body: overview } };
 const adminPages = ["Users", "Teams", "Integrations", "Settings", "Usage", "Audit log"];
 const userPages = ["Overview", "Repositories", "Reviews", "Skills", "Rules", "Teams"];
 
+// expectAccount checks the menu's account block: the name on one line (the
+// whole name in its tooltip, as a long one is cut short), the role below it.
+function expectAccount(name: string, role: string) {
+  const account = screen.getByRole("region", { name: "Account" });
+  expect(within(account).getByText(name)).toHaveAttribute("title", name);
+  expect(within(account).getByText(role)).toHaveClass("role");
+  expect(within(account).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+}
+
 // linkNames are the menu's links by their label, without the icon and the badge.
 const linkNames = (nav: HTMLElement) =>
   within(nav)
@@ -40,7 +49,7 @@ describe("Layout: the user area", () => {
       expect(within(nav).queryByRole("link", { name: label })).not.toBeInTheDocument();
     }
     expect(within(nav).getAllByRole("link").filter((a) => a.getAttribute("href")?.startsWith("/admin"))).toEqual([]);
-    expect(screen.getByText(/dev-user/)).toHaveTextContent("dev-user · user");
+    expectAccount("dev-user", "User");
   });
 
   it("gives an admin the user pages and a link across to the admin area", async () => {
@@ -53,7 +62,7 @@ describe("Layout: the user area", () => {
     expect(within(nav).getByRole("link", { name: "Admin area" })).toHaveAttribute("href", "/admin");
     for (const label of adminPages.filter((p) => p !== "Teams")) expect(within(nav).queryByRole("link", { name: label })).not.toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: "Teams" })).toHaveAttribute("href", "/teams");
-    expect(screen.getByText(/^sso-admin/)).toHaveTextContent("sso-admin · admin");
+    expectAccount("sso-admin", "Admin");
   });
 
   it("says in the link across how many users wait for a team", async () => {
@@ -63,11 +72,11 @@ describe("Layout: the user area", () => {
     expect(within(nav).getByRole("link", { name: "Admin area, 3 waiting" })).toHaveTextContent("3 waiting");
   });
 
-  it("names the menu's account <name> · admin or <name> · user, and never says operator", async () => {
+  it("names the menu's account with the role Admin or User, and never says operator", async () => {
     fakeApi({ ...base, "GET /api/me": { body: operator } });
     const first = renderApp("/");
     await screen.findByRole("navigation", { name: "Main" });
-    expect(screen.getByText(/^admin ·/)).toHaveTextContent("admin · admin");
+    expectAccount("admin", "Admin");
     expect(document.body).not.toHaveTextContent(/operator/i);
     first.unmount();
 

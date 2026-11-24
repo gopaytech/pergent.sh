@@ -85,12 +85,10 @@ export type ReviewSummary = {
   attempts: number;
 };
 
+// AttentionView is one setup problem of a repository.
 export type AttentionView = {
   instance: string;
   project: string;
-  // client is the API client the problem is about (callback_failing), with
-  // instance and project "".
-  client?: string;
   kind: string;
   message: string;
   updatedAt: string;
@@ -103,7 +101,6 @@ export type SetupView = { llm: boolean; instance: boolean; skill: boolean; repos
 export type OverviewView = {
   stats: StatsView;
   recent: ReviewSummary[];
-  attention: AttentionView[];
   setup: SetupView | null;
 };
 

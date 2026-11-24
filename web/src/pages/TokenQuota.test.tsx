@@ -270,6 +270,20 @@ describe("Token quota: instances", () => {
     expect(fake.find("PUT", "/api/admin/instances/extra/token-quota")[0].body).toEqual({ monthlyTokenQuota: 1000 });
   });
 
+  it("waits for a changed instance quota before Save, and saves on Enter too", async () => {
+    const fake = fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/admin/instances": { body: [{ ...instanceDashboardGitLab, monthlyTokenQuota: 5000 }] },
+      "PUT /api/admin/instances/extra/token-quota": { status: 204 },
+    });
+    renderApp("/admin/integrations");
+    const extra = await screen.findByRole("region", { name: "GitLab · extra" });
+    expect(within(extra).getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.type(within(extra).getByLabelText("Monthly token quota"), "0{Enter}");
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/instances/extra/token-quota")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/admin/instances/extra/token-quota")[0].body).toEqual({ monthlyTokenQuota: 50000 });
+  });
+
   it("sends null when an instance's quota is emptied, and refuses a non-number", async () => {
     const fake = fakeApi({
       "GET /api/me": { body: operator },

@@ -110,31 +110,53 @@ aside {
   margin: 14px 10px 4px;
 }
 
-.me .grow {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 .me {
   margin-top: auto;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 12px 10px 4px;
+  border-top: 1px solid var(--side-2);
   font-size: 13px;
 }
 
+.me .who {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.me .name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.me .meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.me .role,
+.me .meta-line > span[aria-hidden] {
+  opacity: 0.65;
+}
+
 .avatar {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   flex: none;
   border-radius: 50%;
   background: var(--avatar);
   display: grid;
   place-items: center;
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .me .error {
@@ -281,7 +303,7 @@ textarea {
 select:disabled,
 textarea:disabled,
 input:not(.toggle):disabled {
-  background: var(--soft);
+  background-color: var(--soft);
   color: var(--muted);
 }
 
@@ -478,18 +500,16 @@ a.mr:hover {
   white-space: nowrap;
 }
 
-.attention .title a,
 .row .title a {
   color: var(--text);
   text-decoration: none;
 }
 
-.attention .title a:hover,
 .row .title a:hover {
   text-decoration: underline;
 }
 
-.attention .why {
+.row .why {
   font-size: 12px;
   color: var(--muted);
 }
@@ -725,13 +745,6 @@ pre {
 
 .down {
   color: var(--bad);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: 1.6fr 1fr;
-  gap: 16px;
-  align-items: start;
 }
 
 /* --- review detail --- */
@@ -1324,7 +1337,6 @@ details.built-in-doc pre.doc {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .grid,
   .layout,
   .set {
     grid-template-columns: 1fr;
@@ -1642,4 +1654,168 @@ pre.diff .diff-del {
 .checklist li.done a {
   color: var(--muted);
   text-decoration: line-through;
+}
+
+/* --- dropdowns: the browser's own arrow sits on the edge; draw one with room.
+   :not([multiple]) leaves a list box alone and outranks .table select and
+   .check select, so the compact ones keep the room on the right too. --- */
+
+select:not([multiple]) {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 10px 6px;
+  padding-right: 32px;
+}
+
+/* --- a card whose title folds and unfolds it --- */
+
+.card h2.fold-head {
+  padding: 0;
+  padding-right: 16px;
+}
+
+.card.folded h2.fold-head {
+  border-bottom: 0;
+}
+
+.fold {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fold::before {
+  content: "▸";
+  color: var(--muted);
+  flex: none;
+  width: 10px;
+}
+
+.fold[aria-expanded="true"]::before {
+  content: "▾";
+}
+
+.fold-title {
+  flex: none;
+}
+
+.fold-sum {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A model in the admin's list: one line, the rest unfolds under it. */
+.model-row {
+  border-top: 1px solid var(--line);
+}
+
+.model-head {
+  align-items: center;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.model-head .badge {
+  margin-left: 0;
+}
+
+.model-head .mono {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-body {
+  padding-top: 0;
+  padding-left: 36px;
+}
+
+.badge.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+/* The form Add model opens at the foot of the Models card. */
+.add-model {
+  border-top: 1px solid var(--line);
+}
+
+.add-model h3 {
+  font-size: 13px;
+  margin: 0;
+  padding: 12px 16px 0;
+}
+
+.actions-row.end {
+  justify-content: flex-end;
+}
+
+/* A monthly token limit: its name, then the input with Save beside it. */
+.limit-field .inline-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.limit-field .inline-field input {
+  width: 220px;
+}
+
+.stack .limit-field .inline-field .btn {
+  margin-top: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+/* A folded body stays hidden even where its class sets a display. */
+[hidden] {
+  display: none !important;
+}
+
+/* A review row's outcome sits in a column of its own width, so every title
+   starts at the same place whatever the outcome's word. */
+.review-row > .pill:first-child {
+  flex: none;
+  min-width: 92px;
+  text-align: center;
+}
+
+/* A line of text with one button at its end, inside a card. */
+.row-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.limit-field .inline-field .btn {
+  margin-top: 0;
+}
+
+/* Usage tables scroll sideways: keep each name on one line, and give the
+   cache and reasoning note room so it wraps less. */
+.card.scroll .table td:first-child {
+  white-space: nowrap;
+}
+
+.card.scroll .table td.num.meta {
+  min-width: 240px;
 }

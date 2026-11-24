@@ -88,7 +88,7 @@ export default function RepositoryDetail() {
       )}
       <Tabs<Tab> tabs={tabs} value={tab} onChange={(t) => setSearch(t === "reviews" ? {} : { tab: t }, { replace: true })} />
       <div role="tabpanel">
-        {tab === "reviews" && <ReviewList filter={{ project: repo.project, days: 90 }} label="Reviews of this repository" />}
+        {tab === "reviews" && <ReviewList filter={{ project: repo.project, days: 90 }} label="Reviews of this repository" inRepo />}
         {tab === "skill-results" && <SkillResults instance={repo.instance} project={repo.project} />}
         {tab === "settings" && <SettingsTab view={view} queryKey={queryKey} />}
         {tab === "past-dismissals" && (
@@ -107,7 +107,7 @@ export default function RepositoryDetail() {
         {tab === "setup" && (
           <section className="card" aria-label="Setup checks">
             <h2>Setup checks</h2>
-            <AttentionRows items={view.attention} platform={repo.platform} linkRepos={false} />
+            <AttentionRows items={view.attention} />
           </section>
         )}
       </div>

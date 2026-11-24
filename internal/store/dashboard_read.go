@@ -292,3 +292,21 @@ func (s *Store) ProjectByPath(ctx context.Context, instance, project string) (Pr
 	}
 	return p, true, nil
 }
+
+// RunProjectID returns the platform ID of the repository at project (matched
+// ignoring case) on instance, as its newest stored run has it; ok is false
+// when it has no run. The projects table forgets a repository that is
+// removed, its runs stay: the review list still shows them.
+func (s *Store) RunProjectID(ctx context.Context, instance, project string) (int64, bool, error) {
+	var id int64
+	err := s.pool.QueryRow(ctx, `SELECT project_id FROM runs
+		WHERE instance = $1::text AND lower(project_path) = lower($2::text)
+		ORDER BY created_at DESC LIMIT 1`, instance, project).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
+}

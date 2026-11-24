@@ -67,7 +67,10 @@ export const platformName = (p: string) => (p === "github" ? "GitHub" : p === "g
 // changeRef is how the platform writes a change: acme/widgets !12 on
 // GitLab, acme/widgets #12 on GitHub.
 export const changeRef = (platform: string, project: string, number: number) =>
-  `${project} ${platform === "github" ? "#" : "!"}${number}`;
+  `${project} ${changeNumber(platform, number)}`;
+
+// changeNumber is a change's number alone: "#45" on GitHub, "!45" on GitLab.
+export const changeNumber = (platform: string, number: number) => `${platform === "github" ? "#" : "!"}${number}`;
 
 // ago says how long before now t was, roughly.
 export function ago(t: string, now = Date.now()): string {

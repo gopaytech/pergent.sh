@@ -40,7 +40,7 @@ const adminItems = (waitingUsers: number): NavItem[] => [
 ];
 
 // roleLabel is what the menu calls the signed-in account.
-const roleLabel = (me: Me) => (me.admin ? "admin" : "user");
+const roleLabel = (me: Me) => (me.admin ? "Admin" : "User");
 
 // waitingRefetch is how often a waiting account asks whether it was added to
 // a team, in ms.
@@ -147,15 +147,23 @@ export default function Layout() {
               </>
             )}
           </nav>
-          <div className="me">
+          {/* The name on one line, cut short with the whole of it in the
+              tooltip; the role and Sign out below it. */}
+          <section className="me" aria-label="Account">
             <div className="avatar" aria-hidden="true">
               {initials(user.username)}
             </div>
-            <span className="grow">
-              {user.username} · {roleLabel(user)}
-            </span>
-            <SignOut />
-          </div>
+            <div className="who">
+              <div className="name" title={user.username}>
+                {user.username}
+              </div>
+              <div className="meta-line">
+                <span className="role">{roleLabel(user)}</span>
+                <span aria-hidden="true">·</span>
+                <SignOut />
+              </div>
+            </div>
+          </section>
         </aside>
         <main>
           <Outlet />

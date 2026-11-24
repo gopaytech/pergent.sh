@@ -373,6 +373,27 @@ func TestProjectByPath(t *testing.T) {
 	}
 }
 
+// A removed repository has no project row, but its runs still name its ID.
+func TestRunProjectID(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	if _, err := s.pool.Exec(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, state, created_at)
+		VALUES ('main', 7, 1, 'Acme/Old', 'a', 'published', now() - interval '2 days'),
+		       ('main', 9, 2, 'Acme/Old', 'b', 'published', now() - interval '1 day')`); err != nil {
+		t.Fatal(err)
+	}
+	id, ok, err := s.RunProjectID(ctx, "main", "acme/old")
+	if err != nil || !ok || id != 9 {
+		t.Fatalf("RunProjectID = %d, %v, %v; want 9, the newest run's, for the path in any case", id, ok, err)
+	}
+	if _, ok, err := s.RunProjectID(ctx, "main", "acme/none"); ok || err != nil {
+		t.Fatalf("RunProjectID of a path with no run = %v, %v", ok, err)
+	}
+	if _, ok, err := s.RunProjectID(ctx, "other", "acme/old"); ok || err != nil {
+		t.Fatalf("RunProjectID on another instance = %v, %v", ok, err)
+	}
+}
+
 // The dashboard's list queries can use the per-project indexes: they read a
 // bounded range of a repository's runs, never the whole table.
 func TestDashboardQueriesUseIndexes(t *testing.T) {

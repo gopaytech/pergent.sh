@@ -245,24 +245,30 @@ function TokenQuota({ inst, locked }: { inst: InstanceAdminView; locked: boolean
     setProblem("");
     change.mutate(quota);
   };
+  // Save waits for a change; Enter in the input saves too, as for a model limit.
+  const changed = text.trim() !== quotaText(inst.monthlyTokenQuota);
   return (
-    <div>
+    <div className="limit-field">
       <QuotaLine ariaLabel="Instance token quota" use={{ used: inst.tokensThisMonth, limit: inst.monthlyTokenQuota }} />
-      <div className="search">
-        <label>
-          Monthly token quota{" "}
-          <input
-            type="text"
-            inputMode="numeric"
-            aria-label="Monthly token quota"
-            placeholder="no quota"
-            value={text}
-            disabled={locked}
-            onChange={(e) => setText(e.target.value)}
-          />
-        </label>
+      <div className="name">Monthly token quota</div>
+      <div className="inline-field">
+        <input
+          type="text"
+          inputMode="numeric"
+          aria-label="Monthly token quota"
+          placeholder="no quota"
+          value={text}
+          disabled={locked}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (changed && !locked) save();
+            }
+          }}
+        />
         {!locked && (
-          <button type="button" className="btn small" disabled={change.isPending} onClick={save}>
+          <button type="button" className="btn small" disabled={change.isPending || !changed} onClick={save}>
             Save
           </button>
         )}

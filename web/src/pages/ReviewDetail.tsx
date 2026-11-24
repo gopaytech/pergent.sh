@@ -603,6 +603,8 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
   const findings: Located[] = view.skills
     .flatMap((s) => s.findings.map((f) => ({ ...f, skill: s.name })))
     .sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
+  // A skill that failed reported nothing: its findings are missing, not zero.
+  const failed = view.skills.filter((s) => s.verdict === "failed").map((s) => s.name);
   return (
     <>
       {(view.ciJobs !== null || view.ciDeadline !== null) && <CIJobs jobs={view.ciJobs ?? []} deadline={view.ciDeadline} />}
@@ -645,7 +647,18 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
                   {note}
                 </div>
               )}
-              {findings.length === 0 && <div className="pad meta">No findings.</div>}
+              {findings.length === 0 && failed.length === 0 && <div className="pad meta">No findings.</div>}
+              {findings.length === 0 && failed.length > 0 && (
+                <div className="pad row-note">
+                  <span className="meta grow">
+                    No findings, because {failed.join(", ")} failed before {failed.length === 1 ? "it" : "they"} could report any. The logs
+                    show why.
+                  </span>
+                  <button type="button" className="btn small" onClick={() => setTab("logs")}>
+                    Show logs
+                  </button>
+                </div>
+              )}
               {findings.map((f, i) => (
                 <Finding key={`${f.skill}/${f.id}/${i}`} f={f} blocking={f.severity !== "suggestion" || blockingFPs.has(f.fingerprint)} actions={actions} />
               ))}

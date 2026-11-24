@@ -38,6 +38,24 @@ describe("ReviewDetail", () => {
     expect(row("unversioned")).toHaveTextContent(/· library$/);
   });
 
+  it("says a failed skill's findings are missing, not zero, and opens the logs", async () => {
+    const run = structuredClone(runDetail);
+    run.skills = [{ ...run.skills[0], verdict: "failed", findings: [], dismissed: [], checks: [] }];
+    renderAndWait(run);
+    const panel = await screen.findByText(/No findings, because security-review failed before it could report any/);
+    expect(screen.queryByText("No findings.")).not.toBeInTheDocument();
+    await userEvent.click(within(panel.closest(".row-note") as HTMLElement).getByRole("button", { name: "Show logs" }));
+    expect(screen.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("still says No findings when every skill finished clean", async () => {
+    const run = structuredClone(runDetail);
+    run.skills = run.skills.map((sk) => ({ ...sk, verdict: "no_blocking_issues" as const, findings: [] }));
+    renderAndWait(run);
+    expect(await screen.findByText("No findings.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show logs" })).not.toBeInTheDocument();
+  });
+
   it("says what an incremental review covered, and nothing for a full one", async () => {
     const note = "Re-reviewed 2 files · 28 carried over from `abc1234`";
     const { unmount } = renderAndWait({ ...runDetail, incrementalNote: note });

@@ -227,36 +227,25 @@ func parseDays(r *http.Request, def, max int) (int, bool) {
 }
 
 // attention returns the setup problems of the repositories in active (only
-// only's when its Path isn't ""), and, when only is zero, the instance-wide
-// ones, those about the library as a whole (no instance) and those about an
-// API client, for admins.
-func (d *Dashboard) attention(ctx context.Context, se Session, active map[RepoKey]settings.Effective, only RepoKey) ([]AttentionView, error) {
+// only's when its Path isn't ""). Instance-wide items, the library's (no
+// instance) and an API client's are never a repository's: no view shows them.
+func (d *Dashboard) attention(ctx context.Context, active map[RepoKey]settings.Effective, only RepoKey) ([]AttentionView, error) {
 	items, err := d.Store.Attention(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := []AttentionView{}
 	for _, a := range items {
-		if a.Kind == store.AttentionCallbackFailing {
-			// Stored with the client's name as the project: never a
-			// repository's.
-			if a.Instance == "" && only.Path == "" && se.Admin {
-				out = append(out, AttentionView{Client: a.Project, Kind: a.Kind, Message: a.Message, UpdatedAt: a.UpdatedAt.UTC()})
-			}
+		// A client's item is stored with the client's name as the project.
+		if a.Kind == store.AttentionCallbackFailing || a.Project == "" {
 			continue
 		}
 		k := repoKey(a.Instance, a.Project)
-		switch {
-		case a.Project == "":
-			if only.Path != "" || !se.Admin {
-				continue
-			}
-		case only.Path != "" && k != only:
+		if only.Path != "" && k != only {
 			continue
-		default:
-			if _, ok := active[k]; !ok {
-				continue
-			}
+		}
+		if _, ok := active[k]; !ok {
+			continue
 		}
 		out = append(out, AttentionView{Instance: a.Instance, Project: a.Project, Kind: a.Kind,
 			Message: a.Message, UpdatedAt: a.UpdatedAt.UTC()})
@@ -273,14 +262,7 @@ func (d *Dashboard) overview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "days must be a number from 1 to 90")
 		return
 	}
-	repos, err := d.activeRepos(ctx, se)
-	if err != nil {
-		d.failed(w, r, "listing repositories", err)
-		return
-	}
-	active := byProject(repos)
 	vis := visibility(se)
-
 	counts, err := d.Store.RunStats(ctx, vis, d.now().Add(-time.Duration(days)*day))
 	if err != nil {
 		d.failed(w, r, "counting reviews", err)
@@ -302,10 +284,6 @@ func (d *Dashboard) overview(w http.ResponseWriter, r *http.Request) {
 	view := OverviewView{Stats: stats, Recent: []ReviewSummary{}}
 	for _, run := range recent {
 		view.Recent = append(view.Recent, d.summary(run, judge(run)))
-	}
-	if view.Attention, err = d.attention(ctx, se, active, RepoKey{}); err != nil {
-		d.failed(w, r, "listing setup problems", err)
-		return
 	}
 	if se.Admin {
 		if view.Setup, err = d.setup(ctx); err != nil {
@@ -463,6 +441,11 @@ func (d *Dashboard) review(w http.ResponseWriter, r *http.Request) {
 	// The merge request of the project the user sees at that path, not of
 	// one that had the path before.
 	id, ok, err := d.projectID(ctx, se, instance, project)
+	if err == nil && !ok && se.All {
+		// An admin's review list holds the runs of a repository that was
+		// removed, whose project row is gone: its runs still name it.
+		id, ok, err = d.Store.RunProjectID(ctx, instance, project)
+	}
 	if err != nil {
 		d.failed(w, r, "loading a project", err)
 		return
@@ -1090,7 +1073,7 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 	if err != nil {
 		return nil, err
 	}
-	items, err := d.attention(ctx, se, active, RepoKey{})
+	items, err := d.attention(ctx, active, RepoKey{})
 	if err != nil {
 		return nil, err
 	}
@@ -1233,7 +1216,7 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
-	items, err := d.attention(ctx, se, byProject([]settings.Effective{repo}), repoKey(repo.Instance, repo.Project))
+	items, err := d.attention(ctx, byProject([]settings.Effective{repo}), repoKey(repo.Instance, repo.Project))
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
