@@ -202,6 +202,38 @@ func TestJWTRefusesWrongIssuer(t *testing.T) {
 	wantHeader(t, "other key", email, st, "", headerInvalid)
 }
 
+// Teleport's app access signs a token whose iss is the cluster name, not a
+// URL, whose aud is the app's URI and whose email is in username. Only an
+// exact iss passes.
+func TestJWTPlainIssuer(t *testing.T) {
+	const appURI = "http://pergent-sh.pergent.svc:8080"
+	j := newJWTHarness(t, func(s *config.SignIn) {
+		s.Issuer, s.Audience, s.Header, s.EmailClaim = "main", appURI, "Teleport-Jwt-Assertion", "username"
+	})
+	if p := j.d.cfg.Dashboard.SignIn.Problems(true); len(p) != 0 {
+		t.Fatalf("Problems = %q, want none", p)
+	}
+	teleport := func(iss string) string {
+		return j.token(func(c map[string]any) {
+			delete(c, "email")
+			delete(c, "email_verified")
+			c["iss"], c["aud"], c["sub"], c["username"] = iss, appURI, "alice@example.com", "alice@example.com"
+			c["roles"] = []string{"access"}
+		})
+	}
+	read := func(tok string) (string, headerStatus) {
+		req := httptest.NewRequest("GET", "/api/me", nil)
+		req.Header.Set("Teleport-Jwt-Assertion", tok)
+		return j.d.Auth.fromHeader(req)
+	}
+	email, st := read(teleport("main"))
+	wantHeader(t, "iss main", email, st, "alice@example.com", headerValid)
+	for _, iss := range []string{"other", "Main", "main ", "https://main"} {
+		email, st := read(teleport(iss))
+		wantHeader(t, "iss "+iss, email, st, "", headerInvalid)
+	}
+}
+
 // A token meant for another app behind the proxy must be refused, so an issuer
 // and an audience are both required: without either, every token is refused.
 func TestJWTNeedsIssuerAndAudience(t *testing.T) {

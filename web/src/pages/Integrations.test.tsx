@@ -582,7 +582,10 @@ describe("Integrations: Sign-in", () => {
     const box = await section();
     await userEvent.selectOptions(within(box).getByLabelText("Mode"), "jwt");
     await userEvent.type(within(box).getByLabelText("Header"), "X-Auth-Token");
-    await userEvent.type(within(box).getByLabelText("Issuer"), "https://proxy.example.com");
+    // A JWT issuer is only compared with the token's iss: a Teleport cluster
+    // name is not an address.
+    expect(box).toHaveTextContent("The token's iss, exactly.");
+    await userEvent.type(within(box).getByLabelText("Issuer"), "main");
     await userEvent.type(within(box).getByLabelText("Audience"), "pergent");
     await userEvent.type(within(box).getByLabelText("JWKS URL"), "https://proxy.example.com/keys");
     await userEvent.type(within(box).getByLabelText("Allowed emails"), "a@example.org");
@@ -590,7 +593,7 @@ describe("Integrations: Sign-in", () => {
     expect(fake.find("PUT", "/api/admin/sign-in")[0].body).toEqual({
       mode: "jwt",
       label: "",
-      issuer: "https://proxy.example.com",
+      issuer: "main",
       clientID: "",
       header: "X-Auth-Token",
       audience: "pergent",
