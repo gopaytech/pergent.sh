@@ -93,7 +93,7 @@ function AdminActions({ v }: { v: TeamPageView }) {
         <button type="button" className="btn small" onClick={() => setRenaming(!renaming)}>
           Rename
         </button>
-        <button type="button" className="btn small" disabled={remove.isPending} onClick={confirmRemove}>
+        <button type="button" className="btn small danger" disabled={remove.isPending} onClick={confirmRemove}>
           Remove team
         </button>
       </div>

@@ -62,10 +62,15 @@ export default function TeamRepositories({ view }: { view: TeamPageView }) {
               </label>
               <button
                 type="button"
-                className="btn small"
+                className="btn small danger"
                 aria-label={`Remove ${entryLabel(r)}`}
                 disabled={save.isPending}
-                onClick={() => save.mutate({ repos: live.filter((x) => !same(x, r)) })}
+                onClick={() => {
+                  // It saves at once: ask first, and say what the team stops giving.
+                  if (window.confirm(`Remove ${entryLabel(r)} from this team? Its members lose the access it gives, and it stops using this team's models.`)) {
+                    save.mutate({ repos: live.filter((x) => !same(x, r)) });
+                  }
+                }}
               >
                 Remove
               </button>

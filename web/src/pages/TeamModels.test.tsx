@@ -43,7 +43,7 @@ describe("MyTeams", () => {
   it("says so when the session is on no team", async () => {
     fakeApi({ ...routes(ssoAdmin), "GET /api/me/teams": { body: [] } });
     renderApp("/teams");
-    expect(await screen.findByText("No team yet.")).toBeInTheDocument();
+    expect(await screen.findByText("You are on no team yet, so you see no repositories. Ask an admin to add you to one.")).toBeInTheDocument();
   });
 });
 
