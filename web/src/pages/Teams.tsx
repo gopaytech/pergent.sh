@@ -1,35 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 
-import {
-  ApiError,
-  api,
-  paths,
-  type AddUserBody,
-  type InstanceAdminView,
-  type MemberRole,
-  type RepositoryView,
-  type TeamRepoView,
-  type TeamUpdate,
-  type TeamView,
-  type UserView,
-} from "../api";
+import { api, paths, type TeamView } from "../api";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading } from "../ui";
+import { membersText, teamCountsText } from "./teamText";
 
-// memberRoles are the roles a member has on a team.
-const memberRoles: MemberRole[] = ["viewer", "maintainer"];
-
-// repoLabel names what a team covers: a whole instance or one repository.
-const repoLabel = (r: { instance: string; project: string }) => (r.project === "" ? `All repositories of ${r.instance}` : r.project);
-
-// ownerLabel names an entry's owner tick.
-const ownerLabel = (r: { instance: string; project: string }) =>
-  r.project === "" ? `Owner of every repository of ${r.instance}` : `Owner of ${r.project} on ${r.instance}`;
-
-// Teams lists the teams, makes new ones, and opens one to change its
-// members and the repositories it covers.
+// Teams lists the teams with counts and makes new ones. A team is changed on
+// its own page.
 export default function Teams() {
   const teams = useQuery({ queryKey: ["teams"], queryFn: () => api.get<TeamView[]>("/api/teams") });
   return (
@@ -56,12 +35,15 @@ export default function Teams() {
 function CreateTeam() {
   const client = useQueryClient();
   const write = useWrite();
+  const navigate = useNavigate();
   const [name, setName] = useState("");
   const create = useMutation({
     mutationFn: () => write<TeamView>("POST", "/api/teams", { name: name.trim() }),
-    onSuccess: () => {
+    onSuccess: (team) => {
       setName("");
-      return client.invalidateQueries({ queryKey: ["teams"] });
+      client.invalidateQueries({ queryKey: ["teams"] });
+      // Members are the first thing to add to a new team.
+      navigate(paths.team(team.id, "members"));
     },
   });
   const submit = (e: FormEvent) => {
@@ -93,7 +75,6 @@ function CreateTeam() {
 function TeamCard({ team }: { team: TeamView }) {
   const client = useQueryClient();
   const write = useWrite();
-  const [editing, setEditing] = useState(false);
   const remove = useMutation({
     mutationFn: () => write<void>("DELETE", `/api/teams/${team.id}`),
     onSuccess: () => {
@@ -106,14 +87,17 @@ function TeamCard({ team }: { team: TeamView }) {
   const confirmRemove = () => {
     if (window.confirm(`Remove the team ${team.name}? Its members stay, but lose the access it gave them.`)) remove.mutate();
   };
+  // A whole instance has no project.
+  const counts = {
+    repoCount: team.repos.filter((r) => r.project !== "").length,
+    instanceCount: team.repos.filter((r) => r.project === "").length,
+    ownedCount: team.repos.filter((r) => r.owner).length,
+  };
   return (
     <section className="card" aria-label={team.name}>
       <h2>
-        <span>{team.name}</span>
+        <Link to={paths.team(team.id)}>{team.name}</Link>
         <span className="actions-row">
-          <button type="button" className="btn small" onClick={() => setEditing(!editing)}>
-            {editing ? "Close" : "Edit"}
-          </button>
           <button type="button" className="btn small" disabled={remove.isPending} onClick={confirmRemove}>
             Remove
           </button>
@@ -121,287 +105,9 @@ function TeamCard({ team }: { team: TeamView }) {
       </h2>
       {remove.isError && <ErrorBox error={remove.error} />}
       <div className="facts">
-        <div>
-          Members: {team.members.length === 0 ? "none" : team.members.map((m) => `${m.username} (${m.role})`).join(", ")}
-        </div>
-        <div>
-          Repositories:{" "}
-          {team.repos.length === 0 ? "none" : team.repos.map((r) => (r.owner ? `${repoLabel(r)} (owner)` : repoLabel(r))).join(", ")}
-        </div>
+        <div>{membersText(team.members.length)}</div>
+        <div>{teamCountsText(counts)}</div>
       </div>
-      {/* A new answer from the server starts the editor again from it. */}
-      {editing && <Editor key={JSON.stringify(team)} team={team} onClose={() => setEditing(false)} />}
     </section>
-  );
-}
-
-// RepoRef is a repository or instance entry a team may cover.
-type RepoRef = { instance: string; project: string };
-
-// repoKey identifies a team's repository in the editor's selection.
-const repoKey = (r: RepoRef) => JSON.stringify([r.instance, r.project]);
-
-// Editor loads what the choices are made from, then shows the form.
-function Editor({ team, onClose }: { team: TeamView; onClose: () => void }) {
-  const users = useQuery({ queryKey: ["users"], queryFn: () => api.get<UserView[]>("/api/users") });
-  const repos = useQuery({ queryKey: ["repositories"], queryFn: () => api.get<RepositoryView[]>("/api/repositories") });
-  // A team may cover any instance.
-  const instances = useQuery({
-    queryKey: ["admin-instances"],
-    queryFn: () => api.get<InstanceAdminView[]>("/api/admin/instances"),
-  });
-  if (users.isPending || repos.isPending || instances.isPending) return <Loading />;
-  if (users.isError) return <ErrorBox error={users.error} />;
-  if (repos.isError) return <ErrorBox error={repos.error} />;
-  if (instances.isError) return <ErrorBox error={instances.error} />;
-  const instanceNames = instances.data.filter((i) => !i.removing).map((i) => i.name);
-  return (
-    <EditorForm
-      team={team}
-      accounts={users.data.filter((u) => u.kind === "sso")}
-      instanceNames={instanceNames}
-      switchedOn={repos.data.filter((r) => r.on || r.paused).map((r) => ({ instance: r.instance, project: r.project }))}
-      paused={repos.data.filter((r) => r.paused).map((r) => ({ instance: r.instance, project: r.project }))}
-      onClose={onClose}
-    />
-  );
-}
-
-function EditorForm({
-  team,
-  accounts,
-  instanceNames,
-  switchedOn,
-  paused,
-  onClose,
-}: {
-  team: TeamView;
-  accounts: UserView[];
-  instanceNames: string[];
-  // switchedOn holds the paused repositories too: a team may cover one.
-  switchedOn: RepoRef[];
-  paused: RepoRef[];
-  onClose: () => void;
-}) {
-  const client = useQueryClient();
-  const write = useWrite();
-  // The choices: whole instances and the repositories switched on or paused,
-  // and what the team covers that is none of those: shown as removed and
-  // unticked, since saving it would be refused.
-  const available: RepoRef[] = [...instanceNames.map((instance) => ({ instance, project: "" })), ...switchedOn];
-  const gone: RepoRef[] = team.repos.filter((r) => !available.some((c) => repoKey(c) === repoKey(r)));
-  const choices = [...available, ...gone];
-  const isGone = (c: RepoRef) => gone.some((g) => repoKey(g) === repoKey(c));
-  const isPaused = (c: RepoRef) => paused.some((p) => repoKey(p) === repoKey(c));
-
-  const [name, setName] = useState(team.name);
-  // The members: account ID to the role on this team.
-  const [members, setMembers] = useState(() => new Map<number, MemberRole>(team.members.map((m) => [m.accountId, m.role])));
-  const [covered, setCovered] = useState(() => new Set(team.repos.filter((r) => !isGone(r)).map(repoKey)));
-  // The owner ticks, of covered entries only: an entry the team stops
-  // covering loses its tick.
-  const [owned, setOwned] = useState(() => new Set(team.repos.filter((r) => r.owner && !isGone(r)).map(repoKey)));
-  // Adding by email: the account is made now, as invited, and joins the team
-  // when the team is saved. An account that is there already is asked for too,
-  // so it is marked added (it can sign in whatever the allowlist says); a 409
-  // says it was added before, which is fine.
-  const [email, setEmail] = useState("");
-  const addEmail = useMutation({
-    mutationFn: async (body: AddUserBody): Promise<UserView | null> => {
-      try {
-        return await write<UserView>("POST", "/api/admin/users", body);
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 409) return null;
-        throw err;
-      }
-    },
-    onSuccess: async (user, body) => {
-      let id = user?.id;
-      if (id === undefined) {
-        // Added before: it is on the list of accounts, read again in case it is new there.
-        const fresh = await client.fetchQuery({
-          queryKey: ["users"],
-          queryFn: () => api.get<UserView[]>("/api/users"),
-          staleTime: 0,
-        });
-        id = fresh.find((u) => u.email.toLowerCase() === body.email.toLowerCase())?.id;
-      } else {
-        client.invalidateQueries({ queryKey: ["users"] });
-      }
-      // Someone on the team already keeps their role.
-      if (id !== undefined) setMembers((old) => (old.has(id) ? old : new Map(old).set(id, "viewer")));
-      setEmail("");
-    },
-  });
-  const save = useMutation({
-    mutationFn: (body: TeamUpdate) => write<TeamView>("PUT", `/api/teams/${team.id}`, body),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["teams"] });
-      client.invalidateQueries({ queryKey: ["users"] });
-      client.invalidateQueries({ queryKey: ["me"] });
-      onClose();
-    },
-  });
-
-  const toggle = <T,>(set: Set<T>, v: T, on: boolean) => {
-    const next = new Set(set);
-    if (on) next.add(v);
-    else next.delete(v);
-    return next;
-  };
-  const setMember = (id: number, role: MemberRole | null) => {
-    const next = new Map(members);
-    if (role === null) next.delete(id);
-    else next.set(id, role);
-    setMembers(next);
-  };
-  const tryAddEmail = () => {
-    const typed = email.trim();
-    if (typed !== "") addEmail.mutate({ email: typed });
-  };
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    save.mutate({
-      name: name.trim(),
-      members: [...members].map(([accountId, role]) => ({ accountId, role })).sort((a, b) => a.accountId - b.accountId),
-      repos: choices
-        .filter((c) => covered.has(repoKey(c)))
-        .map((c): TeamRepoView => ({ instance: c.instance, project: c.project, owner: owned.has(repoKey(c)) })),
-    });
-  };
-  return (
-    <form className="pad stack editor" aria-label={`Edit ${team.name}`} onSubmit={submit}>
-      <label htmlFor={`team-${team.id}-name`}>Name</label>
-      <input
-        id={`team-${team.id}-name`}
-        type="text"
-        autoComplete="off"
-        maxLength={100}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        required
-      />
-
-      <fieldset>
-        <legend>Members</legend>
-        {accounts.length === 0 && <div className="meta">Nobody yet. Add a person by email below.</div>}
-        {accounts.map((u) => (
-          <div className="check" key={u.id}>
-            <label className="check plain">
-              <input
-                type="checkbox"
-                checked={members.has(u.id)}
-                onChange={(e) => setMember(u.id, e.target.checked ? "viewer" : null)}
-              />
-              <span>
-                {u.username}
-                {u.invited && <span className="meta"> (invited)</span>}
-              </span>
-            </label>
-            {members.has(u.id) && (
-              <select
-                aria-label={`Role of ${u.username}`}
-                value={members.get(u.id)}
-                onChange={(e) => setMember(u.id, e.target.value as MemberRole)}
-              >
-                {memberRoles.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-        ))}
-        <div className="add-email">
-          <label htmlFor={`team-${team.id}-email`}>Add by email</label>
-          <input
-            id={`team-${team.id}-email`}
-            type="text"
-            inputMode="email"
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            maxLength={254}
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            // Enter adds the email; it must not save the whole team.
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                tryAddEmail();
-              }
-            }}
-          />
-          <button type="button" className="btn small" disabled={addEmail.isPending} onClick={tryAddEmail}>
-            Add email
-          </button>
-        </div>
-        <div className="meta">
-          A new email makes the account now, as invited, and it can sign in whatever the allowed domains say. It joins the team
-          when you save.
-        </div>
-        {addEmail.isError && <ErrorBox error={addEmail.error} />}
-      </fieldset>
-
-      <fieldset>
-        <legend>Repositories</legend>
-        <div className="meta">
-          The owner team's models and chain are what the repository's reviews use. An entry has one owner team at most; a
-          repository's own entry wins over its instance's.
-        </div>
-        {choices.map((c) => (
-          <div className="check" key={repoKey(c)}>
-            <label className="check plain">
-              <input
-                type="checkbox"
-                checked={covered.has(repoKey(c))}
-                onChange={(e) => {
-                  setCovered(toggle(covered, repoKey(c), e.target.checked));
-                  if (!e.target.checked) setOwned(toggle(owned, repoKey(c), false));
-                }}
-              />
-              <span>
-                {c.project === "" ? (
-                  repoLabel(c)
-                ) : (
-                  <>
-                    <span className="mr">{c.project}</span> <span className="meta">{c.instance}</span>
-                  </>
-                )}
-                {isPaused(c) && (
-                  <span className="meta">
-                    {" "}
-                    (<Link to={paths.repo(c.instance, c.project)}>paused</Link>)
-                  </span>
-                )}
-                {isGone(c) && <span className="meta"> (removed)</span>}
-              </span>
-            </label>
-            {covered.has(repoKey(c)) && (
-              <label className="check plain">
-                <input
-                  type="checkbox"
-                  aria-label={ownerLabel(c)}
-                  checked={owned.has(repoKey(c))}
-                  onChange={(e) => setOwned(toggle(owned, repoKey(c), e.target.checked))}
-                />
-                <span>owner</span>
-              </label>
-            )}
-          </div>
-        ))}
-        {choices.length === 0 && <div className="meta">No repository is switched on yet.</div>}
-      </fieldset>
-      {save.isError && <ErrorBox error={save.error} />}
-      <div className="actions-row">
-        <button type="submit" className="btn primary" disabled={save.isPending}>
-          Save
-        </button>
-        <button type="button" className="btn" onClick={onClose}>
-          Cancel
-        </button>
-      </div>
-    </form>
   );
 }
