@@ -727,7 +727,9 @@ describe("RepositoryDetail", () => {
       "href",
       "https://gitlab.example.com/acme/payments/-/blob/main/.claude/skills/agent-rules/SKILL.md",
     );
-    expect(within(folder).getByText("Be <i>strict</i>.").tagName).toBe("PRE");
+    // Markdown, with any HTML written out as text, never made an element.
+    expect(within(folder).getByText("Be <i>strict</i>.")).toBeInTheDocument();
+    expect(folder.querySelector("i")).toBeNull();
 
     // A link that isn't http(s) is never made.
     expect(within(within(skills).getByText("evil").closest(".skill-doc") as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
@@ -753,8 +755,9 @@ describe("RepositoryDetail", () => {
     renderApp("/repos/main/acme/payments?tab=inputs");
     expect(await screen.findByText(/Read from the default branch/)).toHaveTextContent("main");
     expect(screen.getByText("code-review").closest(".skill")).toHaveTextContent("repo");
-    expect(screen.getByText("Repo's own <b>review</b>.").tagName).toBe("PRE");
-    expect(screen.getByText(/Be kind\./).tagName).toBe("PRE");
+    expect(screen.getByText("Repo's own <b>review</b>.")).toBeInTheDocument();
+    expect(screen.getByText(/Be kind\./)).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Instructions" })).queryByText("review", { selector: "b" })).toBeNull();
   });
 
   it("shows the rule list a review would get, with each entry's source, and a problem", async () => {
@@ -783,7 +786,7 @@ describe("RepositoryDetail", () => {
     expect(within(rules).getByText("internal/api/**/*.go").closest(".skill")).toHaveTextContent("repo");
     expect(within(rules).getByText("**/*.pb.go").closest(".skill")).toHaveTextContent("dashboard:base");
     expect(within(rules).getByText("**/*.pb.go").closest(".skill")).toHaveTextContent("off");
-    expect(within(rules).getByText("Defer <b>rollback</b>.").tagName).toBe("PRE");
+    expect(within(rules).getByText("Defer <b>rollback</b>.")).toBeInTheDocument();
     // One list in match order: the repository's, the sets', then each
     // built-in rule as its own row with its globs and its text.
     const rows = [...rules.querySelectorAll("details.skill-doc")].map((d) => d.getAttribute("data-rule"));
@@ -791,7 +794,7 @@ describe("RepositoryDetail", () => {
     const yaml = rules.querySelector('[data-rule="built-in|yaml"]') as HTMLElement;
     expect(within(yaml).getByText("**/*.yml")).toBeInTheDocument();
     expect(within(yaml).getByText("built-in")).toHaveClass("src");
-    expect(within(rules).getByText("Check the <b>errors</b>.").tagName).toBe("PRE");
+    expect(within(rules).getByText("Check the <b>errors</b>.")).toBeInTheDocument();
     expect(rules).not.toHaveTextContent(/chosen/i);
     unmount();
 

@@ -62,14 +62,19 @@ describe("SkillEditor: new", () => {
 });
 
 describe("SkillEditor: one skill", () => {
-  it("renders skill content as text", async () => {
+  it("renders skill content as markdown, with any HTML shown as text, and the source a click away", async () => {
     const detail = { ...skillWrittenDetail, content: "<script>x</script>\n# h\n" };
     fakeApi({ "GET /api/me": { body: viewer }, "GET /api/skills/code-review": { body: detail } });
     const { container } = renderApp("/skills/view/code-review");
-    const pre = await screen.findByText(/<script>x<\/script>/);
+    // The HTML is written out, never run; the heading is a heading.
+    // The renderer loads on its own: wait for the heading it draws.
+    expect(await screen.findByRole("heading", { name: "h" })).toBeInTheDocument();
+    expect(screen.getByText(/<script>x<\/script>/)).toBeInTheDocument();
+    expect(container.querySelector("script")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Show source" }));
+    const pre = screen.getByText(/<script>x<\/script>/);
     expect(pre.tagName).toBe("PRE");
     expect(pre).toHaveTextContent("# h");
-    expect(container.querySelector("script")).toBeNull();
     expect(screen.queryByRole("heading", { name: "h" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
@@ -178,14 +183,13 @@ describe("SkillEditor: one skill", () => {
       "GET /api/skills/install": { body: { ...skillWrittenDetail, name: "install", content: "Install text.\n" } },
     });
     renderApp("/skills/view/install");
-    expect((await screen.findByText(/Install text\./)).tagName).toBe("PRE");
+    expect(await screen.findByText(/Install text\./)).toBeInTheDocument();
   });
 
   it("an installed skill is read-only for an admin, who can copy it", async () => {
     fakeApi({ "GET /api/me": { body: ssoAdmin }, "GET /api/skills/security-review": { body: skillInstalledDetail } });
     renderApp("/skills/view/security-review");
-    const pre = await screen.findByText(/Look for security bugs\./);
-    expect(pre.tagName).toBe("PRE");
+    expect(await screen.findByText(/Look for security bugs\./)).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
     expect(screen.getByText(/can't be edited/)).toBeInTheDocument();
@@ -203,8 +207,9 @@ describe("SkillEditor: one skill", () => {
     const history = await screen.findByRole("region", { name: "Versions" });
     expect(within(history).getAllByRole("button", { name: /^View v/ })).toHaveLength(2);
     await userEvent.click(within(history).getByRole("button", { name: "View v1" }));
-    const pre = await screen.findByText(/<b>old<\/b> text/);
-    expect(pre.tagName).toBe("PRE");
+    // An old version is markdown too, with its HTML shown as text.
+    expect(await screen.findByText(/<b>old<\/b> text/)).toBeInTheDocument();
+    expect(within(history.parentElement as HTMLElement).queryByRole("strong")).toBeNull();
   });
 
   it("says so for a skill that is not in the library", async () => {

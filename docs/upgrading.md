@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Skills, instructions and rules render as markdown,** on a repository's **Skills & instructions** tab, the **Rules** page, the built-in rule picker and a skill's page with its old versions: headings, lists, code, tables and task lists. A skill's front matter shows apart, and **Show source** shows the text as written. HTML in the text is shown as text and never runs; links open in a new tab and only when they are http(s); an image shows as a link to it. Rule sets stay YAML, shown as written. The renderer (`react-markdown` with `remark-gfm`, both MIT) loads on its own, about 51 KB gzipped, only when one of these views first shows.
 - **A phone gets a top bar with a Menu button.** The menu no longer fills the first screen, tab rows scroll sideways instead of squeezing their labels, and review titles wrap to 2 lines instead of being cut off.
 - **The menu's icons are line drawings,** the same on every system, instead of emoji.
 - **The browser tab names the page,** such as `acme/payments · pergent.sh`.

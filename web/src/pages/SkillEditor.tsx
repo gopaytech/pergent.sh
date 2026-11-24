@@ -7,6 +7,7 @@ import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { Ago, ErrorBox, Loading, NotFound, Pill, SkillSourceText, bytesText } from "../ui";
 import { useUnsavedGuard } from "../unsaved";
+import Markdown from "../MarkdownLazy";
 
 // maxSkillBytes is the most a skill may be (inputs.MaxSkillBytes, 128 KiB):
 // the counter warns and Save waits; the server checks again.
@@ -212,7 +213,7 @@ function SkillPage({ skill, reload }: { skill: SkillDetail; reload: () => Promis
       ) : (
         <section className="card" aria-label="Skill text">
           {me.admin && <div className="pad meta">An installed skill can't be edited. Copy it from the list to change it.</div>}
-          <pre className="doc">{skill.content}</pre>
+          <Markdown text={skill.content} />
         </section>
       )}
       <Versions name={skill.name} versions={skill.versions} />
@@ -250,7 +251,7 @@ function Versions({ name, versions }: { name: string; versions: SkillVersion[] }
       ))}
       {shown !== null && one.isPending && <Loading />}
       {shown !== null && one.isError && <ErrorBox error={one.error} />}
-      {shown !== null && one.isSuccess && <pre className="doc">{one.data.content}</pre>}
+      {shown !== null && one.isSuccess && <Markdown text={one.data.content} />}
     </section>
   );
 }
