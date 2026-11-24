@@ -181,7 +181,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 		// A backup entry reviewed it: the comment says which, and why.
 		o.FallbackNote = policy.FallbackLine(run.ModelEntryName, run.FallbackClass)
 	}
-	if policy.Decide(o, failure).Approve {
+	if policy.Decide(o, failure, config.BlockingStatusFailed).Approve {
 		// Only a review that would be approved depends on whether the
 		// change is a draft and the approve side can reach the repository.
 		var err error
@@ -189,7 +189,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 			return err
 		}
 	}
-	d := policy.Decide(o, failure)
+	d := policy.Decide(o, failure, config.BlockingStatusFailed)
 
 	if err := e.upsertComment(ctx, plat.Forge, run, d.Comment); err != nil {
 		return fmt.Errorf("post comment: %w", err)
@@ -1092,7 +1092,7 @@ func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logg
 		return forge.StatusFailed
 	}
 	o := rc.checked(e.outcome(stored, chosenCI(stored, repo, ok), log), log)
-	if policy.Decide(o, config.FailureStatusNeutral).Kind == policy.KindBlocking || len(ci.Blocking(o.CI)) > 0 {
+	if policy.Decide(o, config.FailureStatusNeutral, config.BlockingStatusFailed).Kind == policy.KindBlocking || len(ci.Blocking(o.CI)) > 0 {
 		return forge.StatusFailed
 	}
 	return forge.StatusNeutral

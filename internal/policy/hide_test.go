@@ -63,12 +63,12 @@ func TestDecideHidesTheModelInFailures(t *testing.T) {
 		"error comment": {Result: &result.Result{SchemaVersion: 1, Status: "error", Error: &result.Error{Code: "x", Message: "m"}, Comment: result.Comment{Markdown: Marker + "\n" + leak}}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			plain := Decide(o, config.FailureStatusFailed)
+			plain := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 			if !strings.Contains(plain.Comment, leak) {
 				t.Fatalf("the fixture's comment doesn't carry the text to hide:\n%s", plain.Comment)
 			}
 			o.Hide = hide
-			d := Decide(o, config.FailureStatusFailed)
+			d := Decide(o, config.FailureStatusFailed, config.BlockingStatusFailed)
 			if strings.Contains(d.Comment, "openai") || strings.Contains(d.Comment, "my-model") {
 				t.Errorf("the comment names the model or provider:\n%s", d.Comment)
 			}

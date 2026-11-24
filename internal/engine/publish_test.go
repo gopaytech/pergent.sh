@@ -2730,7 +2730,7 @@ func TestOutcomeFailedRunWithoutCISnapshot(t *testing.T) {
 		if !slices.Equal(o.CI, want) {
 			t.Errorf("%s: Outcome.CI = %+v, want %+v", name, o.CI, want)
 		}
-		if d := policy.Decide(o, config.FailureStatusNeutral); d.Status != policy.StatusFailed || d.Approve {
+		if d := policy.Decide(o, config.FailureStatusNeutral, config.BlockingStatusFailed); d.Status != policy.StatusFailed || d.Approve {
 			t.Errorf("%s: decided %s, approve %v; want failed, no approval", name, d.Status, d.Approve)
 		}
 	}
