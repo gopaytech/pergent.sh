@@ -47,6 +47,17 @@ const (
 	FailureStatusNeutral FailureStatus = "neutral"
 )
 
+// BlockingStatus is the commit status of a review that finds blocking
+// issues. Neutral never sets a failed status: it also covers a blocking CI
+// job, a review that could not be done and a publish that gave up. A
+// blocking review is never approved, whatever it says.
+type BlockingStatus string
+
+const (
+	BlockingStatusFailed  BlockingStatus = "failed"
+	BlockingStatusNeutral BlockingStatus = "neutral"
+)
+
 const defaultGitHubAPIURL = "https://api.github.com"
 
 // Platform names, as returned by Config.Platform.
@@ -272,6 +283,9 @@ type Repository struct {
 	RuleSets      []string
 	BuiltInRules  []string
 	FailureStatus FailureStatus
+	// BlockingStatus is the status of a review with blocking issues
+	// (default failed).
+	BlockingStatus BlockingStatus
 	// Approve is whether a clean review is approved (default true).
 	Approve *bool
 	// ReviewDrafts is whether a draft is reviewed (default true).
@@ -394,6 +408,7 @@ type fileRepository struct {
 	RuleSets       []string        `yaml:"rule_sets"`
 	BuiltInRules   builtInRuleList `yaml:"built_in_rules"`
 	FailureStatus  FailureStatus   `yaml:"failure_status"`
+	BlockingStatus BlockingStatus  `yaml:"blocking_status"`
 	Approve        *bool           `yaml:"approve"`
 	ReviewDrafts   *bool           `yaml:"review_drafts"`
 	InlineFindings *bool           `yaml:"inline_findings"`
@@ -452,7 +467,7 @@ func (f fileRepository) repository() Repository {
 	r := Repository{
 		GitLab: f.GitLab, GitHub: f.GitHub, Project: f.Project, Skills: f.Skills, RepoSkills: f.RepoSkills,
 		RuleSets: f.RuleSets, BuiltInRules: f.BuiltInRules.orderedBuiltIns(),
-		FailureStatus: f.FailureStatus, Approve: f.Approve, ReviewDrafts: f.ReviewDrafts,
+		FailureStatus: f.FailureStatus, BlockingStatus: f.BlockingStatus, Approve: f.Approve, ReviewDrafts: f.ReviewDrafts,
 		InlineFindings:  f.InlineFindings,
 		RerunLimitPerMR: f.RerunLimitPerMR, RerunLimitPerRepo: f.RerunLimitPerRepo,
 		MaxTurns: f.MaxTurns,
@@ -730,6 +745,9 @@ func (c *Config) applyDefaults() {
 		if c.Repositories[i].FailureStatus == "" {
 			c.Repositories[i].FailureStatus = FailureStatusFailed
 		}
+		if c.Repositories[i].BlockingStatus == "" {
+			c.Repositories[i].BlockingStatus = BlockingStatusFailed
+		}
 	}
 }
 
@@ -916,6 +934,10 @@ func (c *Config) Validate() error {
 		if repo.FailureStatus != FailureStatusFailed && repo.FailureStatus != FailureStatusNeutral {
 			add("repositories[%d] (%s): failure_status %q must be %q or %q",
 				i, repo.Project, repo.FailureStatus, FailureStatusFailed, FailureStatusNeutral)
+		}
+		if repo.BlockingStatus != BlockingStatusFailed && repo.BlockingStatus != BlockingStatusNeutral {
+			add("repositories[%d] (%s): blocking_status %q must be %q or %q",
+				i, repo.Project, repo.BlockingStatus, BlockingStatusFailed, BlockingStatusNeutral)
 		}
 		if repo.JobTimeout != nil && *repo.JobTimeout <= 0 {
 			add("repositories[%d] (%s): job_timeout must be positive, got %s", i, repo.Project, *repo.JobTimeout)

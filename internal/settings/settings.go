@@ -36,6 +36,7 @@ const (
 	KeyReviewDrafts   = "review_drafts"
 	KeyInlineFindings = "inline_findings"
 	KeyFailureStatus  = "failure_status"
+	KeyBlockingStatus = "blocking_status"
 	KeySkills         = "skills"
 	KeyRepoSkills     = "repo_skills"
 	KeyJobTimeout     = "job_timeout"
@@ -110,6 +111,9 @@ type Effective struct {
 	// the rules: that is links.Validate, at review time.
 	LinkedRepos   []store.Link
 	FailureStatus config.FailureStatus
+	// BlockingStatus is the status of a review with blocking issues:
+	// neutral never sets a failed status (see config.BlockingStatus).
+	BlockingStatus config.BlockingStatus
 	// Skills are the library skills reviewed; nil means the default list.
 	Skills []string
 	// RepoSkills are the detected repository skills turned on; nil is none.
@@ -329,6 +333,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		ReviewDrafts:   true,
 		InlineFindings: true,
 		FailureStatus:  config.FailureStatusFailed,
+		BlockingStatus: config.BlockingStatusFailed,
 
 		CommandsAuthorAndMaintainersOnly: true,
 		IncrementalReviews:               true,
@@ -344,7 +349,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		InstanceMonthlyTokenQuota:  r.instanceQuota(instance),
 		Overridden: map[string]bool{
 			KeyTrustedAuthorsOnly: false, KeyTrustedAuthors: false, KeyMonthlyTokenQuota: false,
-			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
+			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false, KeyBlockingStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false, KeyModel: false,
 			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCheckDeleted: false, KeyCIJobs: false, KeyCommentLayout: false, KeyLinkedReposEnabled: false,
 			KeyRuleSets: false, KeyBuiltInRules: false,
@@ -385,6 +390,11 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 			eff.FailureStatus = fs
 		}
 	}
+	if stored.BlockingStatus != nil {
+		if bs, ok := blockingStatus(*stored.BlockingStatus); ok {
+			eff.BlockingStatus = bs
+		}
+	}
 	if stored.JobTimeoutSeconds != nil && *stored.JobTimeoutSeconds > 0 {
 		eff.JobTimeout = time.Duration(*stored.JobTimeoutSeconds) * time.Second
 	}
@@ -420,6 +430,16 @@ func failureStatus(s string) (config.FailureStatus, bool) {
 	switch fs := config.FailureStatus(s); fs {
 	case config.FailureStatusFailed, config.FailureStatusNeutral:
 		return fs, true
+	}
+	return "", false
+}
+
+// blockingStatus is s as a config.BlockingStatus; ok is false for an unknown
+// one.
+func blockingStatus(s string) (config.BlockingStatus, bool) {
+	switch bs := config.BlockingStatus(s); bs {
+	case config.BlockingStatusFailed, config.BlockingStatusNeutral:
+		return bs, true
 	}
 	return "", false
 }
@@ -553,6 +573,9 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if repo.FailureStatus != "" && repo.FailureStatus != config.FailureStatusFailed {
 		eff.FailureStatus, eff.Overridden[KeyFailureStatus] = repo.FailureStatus, true
 	}
+	if repo.BlockingStatus != "" && repo.BlockingStatus != config.BlockingStatusFailed {
+		eff.BlockingStatus, eff.Overridden[KeyBlockingStatus] = repo.BlockingStatus, true
+	}
 	if len(repo.Skills) > 0 {
 		eff.Skills, eff.Overridden[KeySkills] = slices.Clone(repo.Skills), true
 	}
@@ -642,6 +665,11 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	if row.FailureStatus != nil {
 		if fs, ok := failureStatus(*row.FailureStatus); ok {
 			eff.FailureStatus, eff.Overridden[KeyFailureStatus] = fs, true
+		}
+	}
+	if row.BlockingStatus != nil {
+		if bs, ok := blockingStatus(*row.BlockingStatus); ok {
+			eff.BlockingStatus, eff.Overridden[KeyBlockingStatus] = bs, true
 		}
 	}
 	if len(row.Skills) > 0 {

@@ -1,5 +1,11 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+**A new repository setting, `blocking_status`, can keep pergent from blocking a merge with its status:** [How approval works](concepts/approval.md#blocking-status). It is `failed` or `neutral`, and `failed` is the default, so nothing changes until someone sets `neutral`. With `neutral` the `pergent` status is never red: blocking findings, a blocking CI job that did not pass, a review that could not be done and a review that could not be posted all get `neutral`, which is `success` on GitLab and a `neutral` Check Run on GitHub. The status description then ends with ` · not blocking merge`. The review still lists the blocking issues and is never approved.
+
+- **New config key `repositories[].blocking_status`.** **Rolling back:** the previous release refuses unknown keys, so remove `blocking_status` from the config before you roll back.
+
 ## Upgrading to 0.19.0
 
 - **On a GitLab instance that does not send `bot`, no one's comment runs a command.** If `GET /api/v4/users/<id>` has no `"bot"` key, upgrade GitLab first. **When pergent.sh can't say whether the author is a bot, the author is no longer counted as a person.** pergent.sh asks GitLab (`GET /users/:id`) whether a commenter or a change's author is a bot. A user with no user ID, and a user whose answer has no `bot` flag, used to count as a person. Now, with no `bot` flag, a username that matches a GitLab bot pattern (`project_<id>_bot…`, `group_<id>_bot…`, `service_account_…`) is a bot. For any other username, and for a user with no user ID, pergent.sh can't say whether the author is a bot. Such an author's commands are dropped with 👎 and no reply, and their changes are left out of [Skill results](concepts/skill-results.md). On an instance that sends `bot`, the only change is for an author with no user ID: their commands are now dropped too.
