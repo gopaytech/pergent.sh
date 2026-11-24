@@ -1,16 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 
-import { api, paths, type MyTeamView, type TeamRepoView } from "../api";
+import { api, paths, type MyTeamView } from "../api";
 import { ErrorBox, Loading } from "../ui";
+import { membersText, teamCountsText } from "./teamText";
 
 const myTeamsKey = ["my-teams"];
 
-// coverText names what a team covers, and says which entries it owns.
-const coverText = (r: TeamRepoView) => `${r.project === "" ? `All repositories of ${r.instance}` : r.project}${r.owner ? " (owner)" : ""}`;
-
 // MyTeams lists the session's teams in the user area (every team, for an
-// admin), each linked to its page with the team's models and chain.
+// admin), each linked to its page, with counts and no repository names.
 export default function MyTeams() {
   const teams = useQuery({ queryKey: myTeamsKey, queryFn: () => api.get<MyTeamView[]>("/api/me/teams") });
   return (
@@ -36,7 +34,8 @@ export default function MyTeams() {
               </h2>
               <div className="facts">
                 <div>Your role: {t.role}</div>
-                <div>Repositories: {t.repos.length === 0 ? "none" : t.repos.map(coverText).join(", ")}</div>
+                <div>{teamCountsText(t)}</div>
+                <div>{membersText(t.memberCount)}</div>
               </div>
             </section>
           ))

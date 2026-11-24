@@ -462,6 +462,8 @@ export type RepositoryDetailView = {
   // builtInRulesOff is why reviews leave chosen built-in rules out
   // (jobs.image can't load only those); "" when they load them.
   builtInRulesOff: string;
+  // ownerTeam is the team that owns the repository; null when none.
+  ownerTeam: OwnerTeamView | null;
 };
 
 // GraphView is a repository's Code graph: the switch, whether the install
@@ -1349,7 +1351,65 @@ export type TeamView = {
 
 // MyTeamView is a team of GET /api/me/teams: role is the session's on it
 // ("admin" for an admin, who sees every team).
-export type MyTeamView = { id: number; name: string; role: Role; repos: TeamRepoView[] };
+// The counts are the Teams list's: members; entries with a project;
+// whole-instance entries; entries with the owner tick.
+export type MyTeamView = {
+  id: number;
+  name: string;
+  role: Role;
+  repos: TeamRepoView[];
+  memberCount: number;
+  repoCount: number;
+  instanceCount: number;
+  ownedCount: number;
+};
+
+// TeamTab is a tab of the team page (?tab=).
+export type TeamTab = "repositories" | "members" | "models" | "limits" | "usage";
+
+// TeamEntryView is an entry of a team: a repository, or a whole instance
+// (project ""). removed: it is no longer switched on, or its instance is gone
+// or being removed; the next save drops it.
+export type TeamEntryView = { instance: string; project: string; owner: boolean; paused: boolean; removed: boolean };
+
+// TeamPageView is GET /api/teams/{id}. canEdit is an admin only. A member's
+// email is "" unless the session is an admin.
+export type TeamPageView = {
+  team: TeamRef;
+  role: Role;
+  canEdit: boolean;
+  members: TeamMemberView[];
+  repos: TeamEntryView[];
+};
+
+// RepositoryChoiceView is one thing an admin may add to a team: a switched-on
+// repository, or a whole instance (project ""). ownedBy is the other team
+// that owns it at the same level, or null.
+export type RepositoryChoiceView = { instance: string; project: string; paused: boolean; ownedBy: TeamRef | null };
+
+// RepositoryChoicesView is GET /api/teams/{id}/repository-choices: one page.
+// The whole-instance entries are on page 1 only.
+export type RepositoryChoicesView = { items: RepositoryChoiceView[]; page: number; hasMore: boolean };
+
+// TeamUsageRepoView is one repository in GET /api/teams/{id}/usage.
+export type TeamUsageRepoView = { instance: string; project: string; tokens: UsageTokensView; reviews: number };
+
+// TeamUsageView is GET /api/teams/{id}/usage (maintainers and admins).
+// partialRange: the range starts before the oldest usage row with any owner
+// team, so the numbers start there.
+export type TeamUsageView = {
+  days: number;
+  tokens: UsageTokensView;
+  reviews: number;
+  daily: UsageDayView[];
+  repositories: TeamUsageRepoView[];
+  models: UsageNamedView[];
+  partialRange: boolean;
+};
+
+// OwnerTeamView is a repository's owner team on its page. open: the session
+// may open the team's page.
+export type OwnerTeamView = { id: number; name: string; open: boolean };
 
 // TeamModelView is one of a team's own entries. baseURL is "" for a viewer;
 // the key is only whether one is set. usedIn and mark are ModelAdminView's.
@@ -1636,7 +1696,13 @@ export const paths = {
   // The repository's reviewers 2 to 5 and its judge: GET, PUT {reviewers, judge}.
   apiRepoReviewers: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/reviewers`,
   // The team pages of the user area, and the team routes.
-  team: (id: number) => `/teams/${seg(String(id))}`,
+  // team is a team's page; the tab is in ?tab=, and Repositories is the default.
+  team: (id: number, tab?: TeamTab) =>
+    `/teams/${seg(String(id))}${tab === undefined || tab === "repositories" ? "" : `?tab=${tab}`}`,
+  apiTeam: (id: number) => `/api/teams/${seg(String(id))}`,
+  apiTeamUsage: (id: number, days: number) => `/api/teams/${seg(String(id))}/usage?days=${days}`,
+  apiTeamRepositoryChoices: (id: number, search: string, page: number) =>
+    `/api/teams/${seg(String(id))}/repository-choices?search=${encodeURIComponent(search)}&page=${page}`,
   apiTeamModels: (id: number) => `/api/teams/${seg(String(id))}/models`,
   apiTeamModel: (id: number, model: string) => `/api/teams/${seg(String(id))}/models/${seg(model)}`,
   apiTeamModelMark: (id: number, model: string) => `/api/teams/${seg(String(id))}/models/${seg(model)}/mark`,

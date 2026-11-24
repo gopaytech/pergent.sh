@@ -23,6 +23,7 @@ const (
 func (d *Dashboard) teamRoutes(mux *http.ServeMux) {
 	route := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(h)) }
 	route("GET /api/me/teams", d.myTeams)
+	route("GET /api/teams/{id}", d.teamPage)
 	route("GET /api/teams/{id}/models", d.teamModels)
 	route("POST /api/teams/{id}/models", d.createTeamModel)
 	route("PUT /api/teams/{id}/models/{model}", d.updateTeamModel)
@@ -31,6 +32,7 @@ func (d *Dashboard) teamRoutes(mux *http.ServeMux) {
 	route("PUT /api/teams/{id}/models/{model}/limit", d.putTeamModelLimit)
 	route("DELETE /api/teams/{id}/models/{model}/limit", d.deleteTeamModelLimit)
 	route("GET /api/teams/{id}/limits", d.teamLimits)
+	route("GET /api/teams/{id}/usage", d.teamUsage)
 	route("GET /api/teams/{id}/chain", d.getTeamChain)
 	route("PUT /api/teams/{id}/chain", d.putTeamChain)
 }
@@ -123,12 +125,68 @@ func (d *Dashboard) myTeams(w http.ResponseWriter, r *http.Request) {
 			role = roleByAccount(t.Members)[se.AccountID]
 		}
 		v := MyTeamView{ID: t.ID, Name: t.Name, Role: role, Repos: []TeamRepoView{}}
+		v.MemberCount = len(t.Members)
 		for _, tr := range t.Repos {
 			v.Repos = append(v.Repos, TeamRepoView{Instance: tr.Instance, Project: tr.Project, Owner: tr.Owner})
+			if tr.Project == "" {
+				v.InstanceCount++
+			} else {
+				v.RepoCount++
+			}
+			if tr.Owner {
+				v.OwnedCount++
+			}
 		}
 		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// --- GET /api/teams/{id} ---
+
+// teamPage is the team page's read side, for its members and admins. Only an
+// admin may change the team, and only an admin sees the members' emails.
+func (d *Dashboard) teamPage(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	t, role, ok := d.teamFor(w, r, RoleViewer)
+	if !ok {
+		return
+	}
+	accounts, err := d.accountsByID(ctx)
+	if err != nil {
+		d.failed(w, r, "reading the team", err)
+		return
+	}
+	on, err := d.Repos.ListAll(ctx)
+	if err != nil {
+		d.failed(w, r, "reading the team", err)
+		return
+	}
+	paused := make(map[RepoKey]bool, len(on))
+	for _, e := range on {
+		paused[repoKey(e.Instance, e.Project)] = e.Paused
+	}
+	v := TeamPageView{Team: TeamRef{ID: t.ID, Name: t.Name}, Role: role.String(), CanEdit: se.Admin,
+		Members: []TeamMemberView{}, Repos: []TeamEntryView{}}
+	for _, m := range t.Members {
+		a := accounts[m.AccountID]
+		mv := TeamMemberView{AccountID: m.AccountID, Username: a.Username, Role: m.Role}
+		if se.Admin {
+			mv.Email = a.Email
+		}
+		v.Members = append(v.Members, mv)
+	}
+	for _, tr := range t.Repos {
+		e := TeamEntryView{Instance: tr.Instance, Project: tr.Project, Owner: tr.Owner}
+		if tr.Project == "" {
+			e.Removed = !d.knownInstance(tr.Instance)
+		} else {
+			p, there := paused[repoKey(tr.Instance, tr.Project)]
+			e.Removed, e.Paused = !there, p
+		}
+		v.Repos = append(v.Repos, e)
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 // --- the team's own entries ---

@@ -21,7 +21,8 @@ const (
 	// makes as many as it likes.
 	usageTenantLimit = 100
 
-	msgBadUsageDays = "days must be a number from 1 to 90"
+	msgBadUsageDays  = "days must be a number from 1 to 90"
+	msgTeamUsageRead = "only maintainers of this team see its usage"
 )
 
 // usageTokens is t as the views carry it.
@@ -110,6 +111,47 @@ func (d *Dashboard) usageOverview(w http.ResponseWriter, r *http.Request) {
 		out.Reviews += c.Reviews
 	}
 	out.Tokens = usageTokens(total)
+	writeJSON(w, http.StatusOK, out)
+}
+
+// --- GET /api/teams/{id}/usage ---
+
+// teamUsage serves what the repositories team {id} owned used in the last
+// days (TeamUsageView): only the rows written while the team owned them. 404
+// for a non-member, 403 for a viewer, as teamLimits.
+func (d *Dashboard) teamUsage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	t, role, ok := d.teamFor(w, r, RoleViewer)
+	if !ok {
+		return
+	}
+	if role < RoleMaintainer {
+		writeError(w, http.StatusForbidden, msgTeamUsageRead)
+		return
+	}
+	days, ok := parseDays(r, defaultUsageDays, maxUsageDays)
+	if !ok {
+		writeError(w, http.StatusBadRequest, msgBadUsageDays)
+		return
+	}
+	since := d.now().Add(-time.Duration(days) * day)
+	u, err := d.Store.TeamUsage(ctx, t.ID, since)
+	if err != nil {
+		d.failed(w, r, "reading usage", err)
+		return
+	}
+	start, found, err := d.Store.OwnerTeamUsageStart(ctx)
+	if err != nil {
+		d.failed(w, r, "reading usage", err)
+		return
+	}
+	out := TeamUsageView{Days: days, Tokens: usageTokens(u.Tokens), Reviews: u.Reviews, Daily: usageDays(u.Daily),
+		Repositories: make([]TeamUsageRepoView, 0, len(u.Repos)), Models: usageNamed(u.Models),
+		PartialRange: found && since.Before(start)}
+	for _, repo := range u.Repos {
+		out.Repositories = append(out.Repositories, TeamUsageRepoView{Instance: repo.Instance, Project: repo.ProjectPath,
+			Tokens: usageTokens(repo.Tokens), Reviews: repo.Reviews})
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

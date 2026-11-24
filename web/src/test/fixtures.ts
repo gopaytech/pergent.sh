@@ -36,6 +36,8 @@ import type {
   TeamLimitsView,
   TeamModelsView,
   TeamModelView,
+  RepositoryChoicesView,
+  TeamPageView,
   TeamView,
   UsageOverviewView,
   UsageRepositoryView,
@@ -366,6 +368,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     failedAt: null,
   },
   builtInRulesOff: "",
+  ownerTeam: null,
 });
 
 // A skill written in the dashboard, on the default list.
@@ -1066,9 +1069,45 @@ export const chainGlobal: ChainView = {
 
 // The teams of GET /api/me/teams for a maintainer of Payments.
 export const myTeams: MyTeamView[] = [
-  { id: 2, name: "Payments", role: "maintainer", repos: [{ instance: "main", project: "acme/payments", owner: true }] },
-  { id: 3, name: "Platform", role: "viewer", repos: [{ instance: "main", project: "", owner: false }] },
+  {
+    id: 2,
+    name: "Payments",
+    role: "maintainer",
+    repos: [{ instance: "main", project: "acme/payments", owner: true }],
+    memberCount: 2,
+    repoCount: 1,
+    instanceCount: 0,
+    ownedCount: 1,
+  },
+  {
+    id: 3,
+    name: "Platform",
+    role: "viewer",
+    repos: [{ instance: "main", project: "", owner: false }],
+    memberCount: 1,
+    repoCount: 0,
+    instanceCount: 1,
+    ownedCount: 0,
+  },
 ];
+
+// The page of Payments, as GET /api/teams/2 answers: a maintainer's view
+// (canEdit is an admin only). It has an invited member, a removed entry and
+// a whole-instance entry, to show that a save carries them as read.
+export const teamPagePayments: TeamPageView = {
+  team: { id: 2, name: "Payments" },
+  role: "maintainer",
+  canEdit: false,
+  members: [
+    { accountId: 11, username: "ana", email: "", role: "maintainer" },
+    { accountId: 12, username: "bo", email: "", role: "viewer" },
+  ],
+  repos: [
+    { instance: "main", project: "acme/payments", owner: true, paused: false, removed: false },
+    { instance: "main", project: "acme/old", owner: false, paused: false, removed: true },
+    { instance: "side", project: "", owner: false, paused: false, removed: false },
+  ],
+};
 
 // Payments' own entry, as a maintainer sees it (a viewer gets no base URL).
 export const teamModelQwen: TeamModelView = {
@@ -1169,3 +1208,19 @@ export const reviewersWith = (extra: ChainEntryView[][], judge: ChainEntryView[]
   reviewers: extra.map((e, i) => ({ number: i + 2, chain: reviewerChain(...e) })),
   judge: reviewerChain(...judge),
 });
+
+// Page 1 and page 2 of the choices for the search "pay" on Payments: the second
+// result is owned by another team, and page 1 says there is more.
+export const teamChoicesPay: RepositoryChoicesView = {
+  items: [
+    { instance: "main", project: "acme/payments-api", paused: false, ownedBy: null },
+    { instance: "main", project: "acme/payroll", paused: true, ownedBy: { id: 3, name: "Widgets" } },
+  ],
+  page: 1,
+  hasMore: true,
+};
+export const teamChoicesPay2: RepositoryChoicesView = {
+  items: [{ instance: "side", project: "acme/paybox", paused: false, ownedBy: null }],
+  page: 2,
+  hasMore: false,
+};

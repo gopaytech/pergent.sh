@@ -13,6 +13,8 @@ import {
   repoPayments,
   repoToolsPaused,
   repoWidgets,
+  teamEmpty,
+  teamPayments,
   viewer,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
@@ -74,6 +76,67 @@ describe("Repositories", () => {
     expect(post.body).toEqual({ project: "acme/payments", instance: "main" });
     // The page moves after the POST answers; wait for it, as findBy stops at the first match.
     await vi.waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/repos/main/acme/payments"));
+  });
+
+  describe("the owner team select", () => {
+    const routes = (teams = [teamPayments, teamEmpty]) => ({
+      "GET /api/me": { body: operator },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "GET /api/teams": { body: teams },
+      "GET /api/admin/instances/main/repositories?search=": {
+        body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], page: 1, hasMore: false, truncated: false },
+      },
+      "POST /api/repositories": { status: 201, body: repoDetail(repoPayments) },
+    });
+
+    it("lists None first, then every team, and sends the chosen team with the switch-on", async () => {
+      const fake = fakeApi(routes());
+      renderApp("/repos?add=1");
+      const picker = await screen.findByRole("region", { name: "Add repository" });
+      await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+      const select = await within(picker).findByLabelText("Owner team");
+      expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["None", "Payments", "Platform"]);
+      await userEvent.selectOptions(select, "Payments");
+      await userEvent.click(await within(picker).findByRole("button", { name: "Switch on acme/payments" }));
+      const [post] = fake.find("POST", "/api/repositories");
+      expect(post.body).toEqual({ project: "acme/payments", instance: "main", ownerTeam: teamPayments.id });
+    });
+
+    it("reads the team lists and the owner team again after a switch-on with an owner team", async () => {
+      fakeApi(routes());
+      const { client } = renderApp("/repos?add=1");
+      const spy = vi.spyOn(client, "invalidateQueries");
+      const picker = await screen.findByRole("region", { name: "Add repository" });
+      await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+      await userEvent.selectOptions(await within(picker).findByLabelText("Owner team"), "Payments");
+      await userEvent.click(await within(picker).findByRole("button", { name: "Switch on acme/payments" }));
+      const keys = () => spy.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey: unknown[] }).queryKey));
+      await vi.waitFor(() => expect(keys()).toContain('["repositories"]'));
+      for (const k of ["[\"teams\"]", "[\"my-teams\"]", `["team",${teamPayments.id}]`]) {
+        expect(keys()).toContain(k);
+      }
+    });
+
+    it("sends no ownerTeam with None", async () => {
+      const fake = fakeApi(routes());
+      renderApp("/repos?add=1");
+      const picker = await screen.findByRole("region", { name: "Add repository" });
+      await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+      await within(picker).findByLabelText("Owner team");
+      await userEvent.click(await within(picker).findByRole("button", { name: "Switch on acme/payments" }));
+      const [post] = fake.find("POST", "/api/repositories");
+      expect(post.body).toEqual({ project: "acme/payments", instance: "main" });
+    });
+
+    it("says which team owns the whole instance today", async () => {
+      const widgets = { ...teamEmpty, id: 4, name: "Widgets", repos: [{ instance: "main", project: "", owner: true }] };
+      fakeApi(routes([teamPayments, widgets]));
+      renderApp("/repos?add=1");
+      const picker = await screen.findByRole("region", { name: "Add repository" });
+      await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+      expect(await within(picker).findByText("Owner today: Widgets (all repositories of main)")).toBeInTheDocument();
+    });
   });
 
   it("says what to do when the repository can't be reached any more", async () => {

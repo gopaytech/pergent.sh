@@ -1245,9 +1245,29 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
+	owner, err := d.ownerTeamView(ctx, se, repo)
+	if err != nil {
+		return RepositoryDetailView{}, err
+	}
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
 		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model, MultiReview: multi,
-		Quota: d.quotaView(ctx, se, repo), Graph: gv, BuiltInRulesOff: builtInRulesOff(d.cfg.Jobs.Image)}, nil
+		Quota: d.quotaView(ctx, se, repo), Graph: gv, BuiltInRulesOff: builtInRulesOff(d.cfg.Jobs.Image),
+		OwnerTeam: owner}, nil
+}
+
+// ownerTeamView is repo's owner team (Store.OwnerTeam) as its page shows
+// it, nil for none. Open: the session is an admin or a member of the team.
+func (d *Dashboard) ownerTeamView(ctx context.Context, se Session, repo settings.Effective) (*OwnerTeamView, error) {
+	id, ok, err := d.Store.OwnerTeam(ctx, repo.Instance, repo.Project)
+	if err != nil || !ok {
+		return nil, err
+	}
+	t, found, err := d.Store.Team(ctx, id)
+	if err != nil || !found {
+		return nil, err // removed meanwhile: no owner team
+	}
+	member := slices.ContainsFunc(t.Members, func(m store.TeamMember) bool { return m.AccountID == se.AccountID })
+	return &OwnerTeamView{ID: t.ID, Name: t.Name, Open: se.Admin || member}, nil
 }
 
 // builtInRulesOff is why a review with jobs.image image leaves chosen

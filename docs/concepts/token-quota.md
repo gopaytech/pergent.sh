@@ -89,7 +89,7 @@ A quota caps a repository or an instance. A **limit** caps one model entry. Limi
 - **The dashboard.**
   - **Models list.** The **Models** list on the admin **Settings** page shows each global entry, the config file's included. It shows `Tokens this month: <used> of <limit>` and a bar when the entry has a model limit. The **Monthly token limit** field sets it, and empty is no limit.
   - **Team limits.** Under each entry, **Team limits** opens the list of each team's limit on it, with that team's tokens. An admin adds, changes and removes them there.
-  - **The team page.** It has a **Model limits** card for the team's maintainers and admins. The card shows each of the team's own entries with its limit, and they set it. It also shows each global entry an admin limited for the team, and only an admin changes that one there. A global entry's model limit shows on the card only as `Model limit for all teams: room left` or `used up`, because its numbers count other teams. A viewer sees no card.
+  - **The team page.** It has a **Model limits** card on its **Limits** tab for the team's maintainers and admins. The card shows each of the team's own entries with its limit, and they set it. It also shows each global entry an admin limited for the team, and only an admin changes that one there. A global entry's model limit shows on the card only as `Model limit for all teams: room left` or `used up`, because its numbers count other teams. A viewer sees no card.
   - **Chains.** Chain A, the reviewer chains and the judge chain tag an entry at its limit with `model limit used up` or `team limit used up`. The global chain reads the model limits only. A team's chain and a repository's chain read the owner team's limits too.
 
 ## Good to know

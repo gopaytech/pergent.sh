@@ -1682,3 +1682,122 @@ func TestCheckDeletedSetting(t *testing.T) {
 		t.Errorf("a dashboard row was made for the config repository")
 	}
 }
+
+// POST /api/repositories with ownerTeam switches the repository on and makes
+// the team its owner in one step, audited as the team page audits it. An
+// unknown team is 400 before the platform is asked; another team's owner
+// tick on a paused repository is 409, and the repository stays paused.
+func TestSwitchOnOwnerTeam(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	e.cat["main"].set("acme/gadgets", "acme/tools", "acme/theirs")
+	c := e.userOnMain(true)
+	devs := e.team("devs", nil)
+	ops := e.team("ops", nil)
+	body := func(project string, team int64) string {
+		return fmt.Sprintf(`{"instance":"main","project":%q,"ownerTeam":%d}`, project, team)
+	}
+
+	t.Run("unknown team", func(t *testing.T) {
+		for _, id := range []int64{999999, 0} {
+			before := e.cat["main"].checkCount()
+			rec := e.send(c, "POST", "/api/repositories", body("acme/gadgets", id))
+			if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgNoTeam {
+				t.Errorf("ownerTeam %d = %d %s; want 400 %q", id, rec.Code, rec.Body, msgNoTeam)
+			}
+			if n := e.cat["main"].checkCount() - before; n != 0 {
+				t.Errorf("ownerTeam %d asked the platform %d times; want 0", id, n)
+			}
+		}
+		if _, found := e.storedRepo("main", "acme/gadgets"); found {
+			t.Error("acme/gadgets was switched on for an unknown team")
+		}
+	})
+	t.Run("valid team", func(t *testing.T) {
+		rec := e.send(c, "POST", "/api/repositories", body("acme/gadgets", devs))
+		detail := decode[RepositoryDetailView](t, rec, "POST with ownerTeam", http.StatusCreated)
+		if want := (OwnerTeamView{ID: devs, Name: "devs", Open: true}); detail.OwnerTeam == nil || *detail.OwnerTeam != want {
+			t.Errorf("detail.ownerTeam = %+v; want %+v", detail.OwnerTeam, want)
+		}
+		teams := decode[RepoTeamsView](t, e.get(c, "/api/repositories/main/acme/gadgets/teams"), "GET teams", http.StatusOK)
+		if i := slices.IndexFunc(teams.Teams, func(v RepoTeamView) bool { return v.ID == devs }); i < 0 || !teams.Teams[i].Direct {
+			t.Errorf("teams = %+v; want devs direct", teams.Teams)
+		}
+		if got := e.storedTeam(devs).Repos; !slices.Equal(got, []store.TeamRepo{{Instance: "main", Project: "acme/gadgets", Owner: true}}) {
+			t.Errorf("devs repos = %+v", got)
+		}
+		if got := e.auditActionsOf("acme/gadgets"); !slices.Equal(got, []string{"repository_on", "team_updated", "owner_set"}) {
+			t.Errorf("audit = %v", got)
+		}
+		if set := e.auditOf("owner_set"); len(set) != 1 || set[0].Detail != "devs: main/acme/gadgets" {
+			t.Errorf("owner_set = %+v; want one, detail %q", set, "devs: main/acme/gadgets")
+		}
+	})
+	t.Run("another owner on a paused repository", func(t *testing.T) {
+		e.pausedRepo("main", "acme/theirs", nil)
+		e.editTeam(ops, func(tm *store.Team) {
+			tm.Repos = append(tm.Repos, store.TeamRepo{Instance: "main", Project: "acme/theirs", Owner: true})
+		})
+		rec := e.send(c, "POST", "/api/repositories", body("acme/theirs", devs))
+		if want := "acme/theirs already has owner ops"; rec.Code != http.StatusConflict || errorOf(t, rec) != want {
+			t.Errorf("POST = %d %s; want 409 %q", rec.Code, rec.Body, want)
+		}
+		if r, _ := e.storedRepo("main", "acme/theirs"); r.Enabled {
+			t.Error("the repository was resumed although the owner was refused")
+		}
+		if got := e.storedTeam(devs).Repos; len(got) != 1 {
+			t.Errorf("devs repos = %+v; want acme/gadgets alone", got)
+		}
+		if got := e.auditActionsOf("acme/theirs"); len(got) != 0 {
+			t.Errorf("audit = %v; want nothing", got)
+		}
+	})
+	t.Run("no owner team", func(t *testing.T) {
+		rec := e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/tools"}`)
+		detail := decode[RepositoryDetailView](t, rec, "POST without ownerTeam", http.StatusCreated)
+		if detail.OwnerTeam != nil {
+			t.Errorf("detail.ownerTeam = %+v; want null", detail.OwnerTeam)
+		}
+		if got := e.auditActionsOf("acme/tools"); !slices.Equal(got, []string{"repository_on"}) {
+			t.Errorf("audit = %v", got)
+		}
+	})
+}
+
+// A repository's page names its owner team. Open (a link to the team page)
+// is for an admin and the team's members; anyone else who sees the
+// repository gets the name alone. No owner team is null.
+func TestRepositoryOwnerTeamShown(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	e.dashboardRepo("main", "acme/tools", nil)
+	bob := e.sso("bob@example.com")
+	devs := e.team("devs", viewerMembers(e.alice()), store.TeamRepo{Instance: "main", Project: "acme/gadgets", Owner: true})
+	e.team("readers", viewerMembers(bob), store.TeamRepo{Instance: "main", Project: "acme/gadgets"},
+		store.TeamRepo{Instance: "main", Project: "acme/tools"})
+
+	for _, tc := range []struct {
+		name    string
+		c       *http.Cookie
+		project string
+		want    *OwnerTeamView
+	}{
+		{"member of the owner team", e.aliceSession(), "acme/gadgets", &OwnerTeamView{ID: devs, Name: "devs", Open: true}},
+		{"member of another team", e.sessionFor(bob), "acme/gadgets", &OwnerTeamView{ID: devs, Name: "devs", Open: false}},
+		{"no owner team", e.sessionFor(bob), "acme/tools", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := e.get(tc.c, "/api/repositories/main/"+tc.project)
+			detail := decode[RepositoryDetailView](t, rec, "GET "+tc.project, http.StatusOK)
+			switch {
+			case tc.want == nil && detail.OwnerTeam != nil:
+				t.Errorf("ownerTeam = %+v; want null", detail.OwnerTeam)
+			case tc.want == nil && !strings.Contains(rec.Body.String(), `"ownerTeam":null`):
+				t.Errorf("body has no ownerTeam null: %s", rec.Body)
+			case tc.want != nil && (detail.OwnerTeam == nil || *detail.OwnerTeam != *tc.want):
+				t.Errorf("ownerTeam = %+v; want %+v", detail.OwnerTeam, tc.want)
+			}
+		})
+	}
+}

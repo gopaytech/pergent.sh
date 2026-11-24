@@ -11,6 +11,7 @@ import {
   type LibrarySkill,
   type RepositoryDetailView,
   type RepositoryView,
+  type TeamView,
 } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
@@ -158,7 +159,11 @@ function Picker() {
   const client = useQueryClient();
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
+  const [ownerTeam, setOwnerTeam] = useState("");
   const chosen = instance !== "";
+  // The owner team is optional. A list that can't be read leaves the select out.
+  const teams = useQuery({ queryKey: ["teams"], queryFn: () => api.get<TeamView[]>("/api/teams") });
+  const today = chosen ? teams.data?.find((t) => t.repos.some((r) => r.instance === instance && r.project === "" && r.owner)) : undefined;
   // A repository switched on here gets the default skills: with none set, it
   // has no skills and isn't reviewed. A library that can't be read says nothing.
   const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
@@ -192,10 +197,20 @@ function Picker() {
   const truncated = available.data?.pages.some((p) => p.truncated) ?? false;
   const on = useMutation({
     mutationFn: (project: string) =>
-      write<RepositoryDetailView>("POST", "/api/repositories", { project, instance }),
+      write<RepositoryDetailView>("POST", "/api/repositories", {
+        project,
+        instance,
+        ...(ownerTeam !== "" && { ownerTeam: Number(ownerTeam) }),
+      }),
     onSuccess: (detail) => {
       client.invalidateQueries({ queryKey: ["repositories"] });
       client.invalidateQueries({ queryKey: ["available"] });
+      if (ownerTeam !== "") {
+        // The new owner changes what the team lists and covers.
+        client.invalidateQueries({ queryKey: ["teams"] });
+        client.invalidateQueries({ queryKey: ["my-teams"] });
+        client.invalidateQueries({ queryKey: ["team", Number(ownerTeam)] });
+      }
       navigate(paths.repo(detail.repo.instance, detail.repo.project));
     },
   });
@@ -216,6 +231,20 @@ function Picker() {
         </div>
       )}
       {choice}
+      {chosen && teams.isSuccess && (
+        <div className="pad search">
+          <label htmlFor="picker-owner-team">Owner team</label>
+          <select id="picker-owner-team" value={ownerTeam} onChange={(e) => setOwnerTeam(e.target.value)}>
+            <option value="">None</option>
+            {teams.data.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+          {today && <div className="meta">Owner today: {today.name} (all repositories of {instance})</div>}
+        </div>
+      )}
       {chosen && (
         <form className="pad search" onSubmit={submit}>
           <input

@@ -1371,6 +1371,15 @@ paths:
         pergent.sh sets up the webhook and clone credentials within seconds.
         A repository that is paused is resumed instead, with its settings, and
         the answer is 200.
+
+        With `ownerTeam`, the same transaction makes that team the
+        repository's owner: the team's entry for it gets the owner tick, or
+        the team gets a new entry with it. A paused repository keeps its team
+        rows. An `ownerTeam` that is not a team is 400, before the platform
+        is asked. When another team owns the repository's own entry the
+        answer is 409 and nothing changes: a paused repository stays paused.
+        An owner of the whole instance is not in the way. The change is
+        audited as `owner_set`, as from the team page.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -2959,6 +2968,30 @@ paths:
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/teams/{id}:
+    get:
+      operationId: getTeam
+      tags: [Organization]
+      summary: A team's page
+      description: |
+        Members of the team and admins; anyone else gets 404. The members'
+        emails are shown to an admin only. `canEdit` is true for an admin only.
+        An entry is `removed` when its repository is no longer switched on, or
+        its instance is gone or being removed.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      responses:
+        '200':
+          description: The team.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamPageView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
     put:
       operationId: updateTeam
       tags: [Organization]
@@ -3038,6 +3071,44 @@ paths:
                 items: {$ref: '#/components/schemas/MyTeamView'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/repository-choices:
+    get:
+      operationId: listTeamRepositoryChoices
+      tags: [Organization]
+      summary: Repositories and instances to add to a team
+      description: |
+        Admins only; anyone else gets 404, and so does an unknown team. The
+        search behind **Add repository** on the team page. Page 1 starts with
+        the instances (each as a whole-instance entry, `project` empty), then
+        holds up to 50 switched-on repositories, paused ones included, sorted by
+        instance and path. Later pages hold repositories only. What the team
+        already has is left out, a repository in any case. `search` keeps the
+        instance names and paths that hold it, in any case. `ownedBy` is the
+        other team that owns the entry at the same level, or null. 400 for a
+        bad `page` or a `search` over 100 characters.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - name: search
+          in: query
+          description: Keep the instance names and repository paths that hold this.
+          schema:
+            type: string
+            maxLength: 100
+        - $ref: '#/components/parameters/AvailablePage'
+      responses:
+        '200':
+          description: One page of choices.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryChoicesView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/teams/{id}/models:
     get:
@@ -3250,6 +3321,41 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/TeamLimitsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/usage:
+    get:
+      operationId: getTeamUsage
+      tags: [Organization]
+      summary: What a team's repositories used
+      description: |
+        For the team's maintainers and admins: a viewer of the team gets 403
+        (`only maintainers of this team see its usage`), anyone else 404.
+        Tokens used in the last `days` days by the repositories the team
+        owned when the usage was written, so a repository that moved to
+        another team leaves its earlier tokens with the old one. A multi
+        review counts each reviewer and the judge on its own model, once.
+        `daily` is each UTC day with usage, oldest first; `repositories` and
+        `models` are busiest first. Totals and rankings add input and output
+        tokens only. `reviews` counts a review once, however many skills it
+        ran. `partialRange` is true when the range starts before the oldest
+        usage row with any owner team (v0.19.0 started to record it), so
+        older reviews are not counted.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - $ref: '#/components/parameters/UsageDays'
+      responses:
+        '200':
+          description: The team's usage.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamUsageView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
@@ -5458,6 +5564,9 @@ components:
         project:
           type: string
           maxLength: 1024
+        ownerTeam:
+          type: [integer, 'null']
+          description: The ID of the team to make the repository's owner in the same step. Left out or null for none.
     RerunRequest:
       type: object
       properties:
@@ -7381,7 +7490,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff, ownerTeam]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -7425,6 +7534,21 @@ components:
         builtInRulesOff:
           type: string
           description: Why reviews leave out the built-in rules a repository chooses, because `jobs.image` can't load only those; empty when it loads them.
+        ownerTeam:
+          description: The team that owns the repository (its own entry's owner, else its instance entry's). Null when there is none.
+          oneOf:
+            - {$ref: '#/components/schemas/OwnerTeamView'}
+            - {type: 'null'}
+    OwnerTeamView:
+      description: A repository's owner team, on its page.
+      type: object
+      required: [id, name, open]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        open:
+          type: boolean
+          description: Whether the session may open the team's page (an admin, or a member of the team).
     MultiReviewView:
       description: A repository's multi review, on its page. Never a model, a base URL or a key.
       type: object
@@ -8187,7 +8311,7 @@ components:
     MyTeamView:
       description: A team of the session's, with its role there.
       type: object
-      required: [id, name, role, repos]
+      required: [id, name, role, repos, memberCount, repoCount, instanceCount, ownedCount]
       properties:
         id: {type: integer, format: int64}
         name: {type: string}
@@ -8198,6 +8322,68 @@ components:
         repos:
           type: array
           items: {$ref: '#/components/schemas/TeamRepoView'}
+        memberCount: {type: integer, description: The team's members.}
+        repoCount: {type: integer, description: Entries with a project.}
+        instanceCount: {type: integer, description: Whole-instance entries.}
+        ownedCount: {type: integer, description: Entries with the owner tick.}
+    TeamPageView:
+      description: A team's page, as the session sees it.
+      type: object
+      required: [team, role, canEdit, members, repos]
+      properties:
+        team: {$ref: '#/components/schemas/TeamRef'}
+        role:
+          type: string
+          enum: [admin, maintainer, viewer]
+        canEdit:
+          type: boolean
+          description: The session may change the team (an admin only).
+        members:
+          type: array
+          items: {$ref: '#/components/schemas/TeamMemberView'}
+          description: The email of a member is empty unless the session is an admin.
+        repos:
+          type: array
+          items: {$ref: '#/components/schemas/TeamEntryView'}
+    TeamEntryView:
+      description: A repository or a whole instance the team covers.
+      type: object
+      required: [instance, project, owner, paused, removed]
+      properties:
+        instance: {type: string}
+        project: {type: string, description: Empty for a whole instance.}
+        owner: {type: boolean}
+        paused: {type: boolean}
+        removed:
+          type: boolean
+          description: The repository is no longer switched on, or the instance is gone or being removed.
+    RepositoryChoicesView:
+      description: One page of what may be added to a team.
+      type: object
+      required: [items, page, hasMore]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/RepositoryChoiceView'}
+        page:
+          type: integer
+          minimum: 1
+        hasMore:
+          type: boolean
+          description: True when a later page holds more repositories.
+    RepositoryChoiceView:
+      description: A repository or a whole instance that may be added to a team.
+      type: object
+      required: [instance, project, paused, ownedBy]
+      properties:
+        instance: {type: string}
+        project: {type: string, description: Empty for a whole instance.}
+        paused: {type: boolean}
+        ownedBy:
+          description: The other team that owns it at the same level, or null.
+          oneOf:
+            - {$ref: '#/components/schemas/TeamRef'}
+            - {type: 'null'}
     TeamModelsView:
       description: A team's own entries.
       type: object
@@ -8447,6 +8633,37 @@ components:
           type: array
           description: API clients with usage in the period, busiest first, each with its tenants.
           items: {$ref: '#/components/schemas/UsageClientView'}
+    TeamUsageView:
+      description: Body of `GET /api/teams/{id}/usage`. Never another team's numbers.
+      type: object
+      required: [days, tokens, reviews, daily, repositories, models, partialRange]
+      properties:
+        days: {type: integer}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews: {type: integer, format: int64}
+        daily:
+          type: array
+          items: {$ref: '#/components/schemas/UsageDayView'}
+        repositories:
+          type: array
+          description: Busiest first.
+          items: {$ref: '#/components/schemas/TeamUsageRepoView'}
+        models:
+          type: array
+          description: Busiest first. `failed` is 0.
+          items: {$ref: '#/components/schemas/UsageNamedView'}
+        partialRange:
+          type: boolean
+          description: The range starts before the oldest usage row with any owner team, so older reviews are not counted.
+    TeamUsageRepoView:
+      description: One repository of a team's usage, with the path it was last reported under.
+      type: object
+      required: [instance, project, tokens, reviews]
+      properties:
+        instance: {type: string}
+        project: {type: string}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews: {type: integer, format: int64}
     UsageNamedView:
       description: One skill or model of a repository's usage.
       type: object

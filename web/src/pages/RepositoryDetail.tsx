@@ -54,6 +54,11 @@ export default function RepositoryDetail() {
         {platformName(repo.platform)} · {repo.instance} ·{" "}
         {repo.source === "config" ? "managed by config" : repo.paused ? "paused in the dashboard" : "switched on in the dashboard"}
       </div>
+      {view.ownerTeam && (
+        <div className="sub spaced">
+          Owner team: {view.ownerTeam.open ? <Link to={paths.team(view.ownerTeam.id)}>{view.ownerTeam.name}</Link> : view.ownerTeam.name}
+        </div>
+      )}
       <div className="sub spaced">{multiReviewText(view.multiReview)}</div>
       {view.settings.blockingStatus.value === "neutral" && <div className="sub spaced">Merge gate: off (blocking status is neutral)</div>}
       {repo.paused && (

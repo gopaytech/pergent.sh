@@ -542,6 +542,17 @@ type RepositoryDetailView struct {
 	// the repository chooses (jobs.image can't load only those); "" when it
 	// loads them.
 	BuiltInRulesOff string `json:"builtInRulesOff"`
+	// OwnerTeam is the team that owns the repository (its own entry's owner,
+	// else its instance entry's); nil when there is none.
+	OwnerTeam *OwnerTeamView `json:"ownerTeam"`
+}
+
+// OwnerTeamView is a repository's owner team on its page. Open is whether
+// the session may open the team's page: an admin, or a member of the team.
+type OwnerTeamView struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Open bool   `json:"open"`
 }
 
 // MultiReviewView is a repository's multi review on its page. On is
@@ -1298,6 +1309,53 @@ type MyTeamView struct {
 	Name  string         `json:"name"`
 	Role  string         `json:"role"`
 	Repos []TeamRepoView `json:"repos"`
+	// The counts the Teams list shows: members; entries with a project;
+	// whole-instance entries; entries with the owner tick.
+	MemberCount   int `json:"memberCount"`
+	RepoCount     int `json:"repoCount"`
+	InstanceCount int `json:"instanceCount"`
+	OwnedCount    int `json:"ownedCount"`
+}
+
+// TeamPageView is GET /api/teams/{id}: the team page's read side. Role is the
+// session's on the team; CanEdit is whether it may change the team (an admin
+// only). Members have no Email unless the session is an admin.
+type TeamPageView struct {
+	Team    TeamRef          `json:"team"`
+	Role    string           `json:"role"`
+	CanEdit bool             `json:"canEdit"`
+	Members []TeamMemberView `json:"members"`
+	Repos   []TeamEntryView  `json:"repos"`
+}
+
+// TeamEntryView is an entry of a team: a repository, or a whole instance
+// (Project ""). Paused is the repository's state. Removed: the repository is
+// no longer switched on, or the instance is gone or being removed.
+type TeamEntryView struct {
+	Instance string `json:"instance"`
+	Project  string `json:"project"`
+	Owner    bool   `json:"owner"`
+	Paused   bool   `json:"paused"`
+	Removed  bool   `json:"removed"`
+}
+
+// RepositoryChoicesView is GET /api/teams/{id}/repository-choices: one page of
+// what an admin may add to the team. The whole-instance entries are on page 1
+// only, before the repositories.
+type RepositoryChoicesView struct {
+	Items   []RepositoryChoiceView `json:"items"`
+	Page    int                    `json:"page"`
+	HasMore bool                   `json:"hasMore"`
+}
+
+// RepositoryChoiceView is one thing to add: a switched-on repository, or a
+// whole instance (Project ""). OwnedBy is the other team that owns it at the
+// same level, or null for none.
+type RepositoryChoiceView struct {
+	Instance string   `json:"instance"`
+	Project  string   `json:"project"`
+	Paused   bool     `json:"paused"`
+	OwnedBy  *TeamRef `json:"ownedBy"`
 }
 
 // TeamModelsView is GET /api/teams/{id}/models: the team's own entries.
@@ -1791,6 +1849,31 @@ type UsageOutlierView struct {
 	Incremental bool   `json:"incremental"`
 	Total       int64  `json:"total"`
 	At          string `json:"at"`
+}
+
+// TeamUsageRepoView is one repository in GET /api/teams/{id}/usage: the
+// tokens and reviews of the rows the team owned, under the path it was last
+// reported under.
+type TeamUsageRepoView struct {
+	Instance string          `json:"instance"`
+	Project  string          `json:"project"`
+	Tokens   UsageTokensView `json:"tokens"`
+	Reviews  int64           `json:"reviews"`
+}
+
+// TeamUsageView is GET /api/teams/{id}/usage (the team's maintainers and
+// admins): what the repositories the team owned used in the last Days days.
+// PartialRange is true when the range starts before the oldest usage row
+// with any owner team: rows written before that have none, so the team's
+// numbers start there.
+type TeamUsageView struct {
+	Days         int                 `json:"days"`
+	Tokens       UsageTokensView     `json:"tokens"`
+	Reviews      int64               `json:"reviews"`
+	Daily        []UsageDayView      `json:"daily"`
+	Repositories []TeamUsageRepoView `json:"repositories"`
+	Models       []UsageNamedView    `json:"models"`
+	PartialRange bool                `json:"partialRange"`
 }
 
 // UsageRepositoryView is GET /api/repositories/{instance}/{project}/usage

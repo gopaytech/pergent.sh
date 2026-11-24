@@ -18,7 +18,7 @@ There are 2 kinds of entries:
 
 | | Global entries | Team entries |
 | --- | --- | --- |
-| Where | **Models**, on the admin **Settings** page | The team's page under **Teams** (`/teams/<id>`) |
+| Where | **Models**, on the admin **Settings** page | The **Models** tab of the team's page under **Teams** (`/teams/<id>?tab=models`) |
 | Who adds, changes and removes them | Admins | Admins and the maintainers of the team |
 | Who sees them | Admins see the list. Others see an entry's name, provider and model in the chains they can see. | Every member of the team. A viewer sees no base URL. |
 | Chains that can name them | The global chain and any repository chain. A team chain only while **Teams may use it** is on. | The team's own chain, and the chains of the repositories the team owns |
@@ -71,7 +71,7 @@ Admins change the global chain on the admin **Settings** page, under **Global ch
 
 ### The owner team
 
-An admin ticks **owner** on a team's entry for a repository, or for a whole instance, on the admin **Teams** page. The repository page's **Teams** section does not set owners.
+An admin ticks **owner** on a team's entry for a repository, or for a whole instance, on the **Repositories** tab of the team's page (`/teams/<id>`). The repository page's **Teams** section does not set owners. An admin can also pick an **Owner team** when switching a repository on with **Add repository**. The repository page shows `Owner team: <team>` under its name.
 
 - Each level has one owner at most. A second one is refused: `payments/api already has owner Payments`, or `main (whole instance) already has owner Payments` for an instance.
 - The most specific owner wins: a repository's own entry, then its instance's.
@@ -80,7 +80,7 @@ An admin ticks **owner** on a team's entry for a repository, or for a whole inst
 
 ### A team chain
 
-On the team's page, under **Team chain**. A maintainer of the team, or an admin, changes it. It can hold the team's own entries and the global entries teams may use, mixed, in any order.
+On the **Models** tab of the team's page, under **Team chain**. A maintainer of the team, or an admin, changes it. It can hold the team's own entries and the global entries teams may use, mixed, in any order.
 
 A team with no chain of its own shows the global chain and says `This team has no chain of its own: its repositories use the global chain.` **Make a team chain** starts an empty one. Saving it with no entries goes back to the global chain.
 

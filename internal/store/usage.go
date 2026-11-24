@@ -86,14 +86,17 @@ var usageInsertSQL = `INSERT INTO run_usage (run_id, skill, instance, project_id
 // run's run_usage rows, the total of all its Jobs on reviewer 1's source and
 // model, are left out. Any other run, a --no-judge run among them, counts
 // its run_usage rows as they are. The columns are the ones the counts by
-// source and by model read.
+// source, by model and by owner team read. A run_usage_by_model row has no
+// owner team of its own: it takes the one of the run_usage row it was added
+// to (the same run and skill, at most one: the key), as entryTokensSQL does.
 const splitUsageSQL = `(SELECT u.run_id, u.instance, u.project_id, u.project_path, u.skill, u.provider, u.model,
-		u.source, u.reported_at, u.tokens_in, u.tokens_out, u.cache_read, u.cache_write, u.reasoning
+		u.source, u.reported_at, u.tokens_in, u.tokens_out, u.cache_read, u.cache_write, u.reasoning, u.owner_team_id
 	FROM run_usage u WHERE NOT EXISTS (SELECT 1 FROM run_usage_by_model b WHERE b.run_id = u.run_id)
 	UNION ALL
 	SELECT b.run_id, r.instance, r.project_id, r.project_path, b.skill, b.provider, b.model,
-		b.source, b.reported_at, b.tokens_in, b.tokens_out, b.cache_read, b.cache_write, b.reasoning
-	FROM run_usage_by_model b JOIN runs r ON r.id = b.run_id) split_usage`
+		b.source, b.reported_at, b.tokens_in, b.tokens_out, b.cache_read, b.cache_write, b.reasoning, o.owner_team_id
+	FROM run_usage_by_model b JOIN runs r ON r.id = b.run_id
+		LEFT JOIN run_usage o ON o.run_id = b.run_id AND o.skill = b.skill) split_usage`
 
 // RecordJudgeUsage is RecordUsage of a multi review's judge run id
 // (recordJudgedUsage): each skill's tokens are added to the run's run_usage
@@ -635,11 +638,103 @@ func (s *Store) namedUsage(ctx context.Context, query string, args ...any) ([]Na
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (NamedUsage, error) {
-		var u NamedUsage
-		err := row.Scan(append([]any{&u.Provider, &u.Name}, append(u.Tokens.dests(), &u.Runs, &u.Failed)...)...)
+	return pgx.CollectRows(rows, scanNamedUsage)
+}
+
+// scanNamedUsage scans a row of provider, name, tokenSumColumns, runs and
+// failed.
+func scanNamedUsage(row pgx.CollectableRow) (NamedUsage, error) {
+	var u NamedUsage
+	err := row.Scan(append([]any{&u.Provider, &u.Name}, append(u.Tokens.dests(), &u.Runs, &u.Failed)...)...)
+	return u, err
+}
+
+// TeamUsage is what the repositories a team owned used: the total, each UTC
+// day oldest first, the repositories and the models busiest first. Reviews
+// counts a run once. A repository's GlobalTokens and TeamTokens are 0.
+type TeamUsage struct {
+	Tokens  TokenSum
+	Reviews int64
+	Daily   []DayUsage
+	Repos   []RepoUsage
+	Models  []NamedUsage
+}
+
+// teamUsageRows are the splitUsageSQL rows of owner team $1 from $2 on:
+// every part of TeamUsage reads them, so the parts add up.
+const teamUsageRows = splitUsageSQL + ` WHERE owner_team_id = $1::bigint AND reported_at >= $2::timestamptz`
+
+// TeamUsage returns what team used from since on, by reported time: the
+// splitUsageSQL rows whose owner team is the team (the owner of the
+// repository when the row was written, so a repository that moved leaves its
+// earlier rows with the old team). A multi review counts each Job on its own
+// model, once. Repositories show the path they were last reported under; the
+// order of repositories and models, ties included, is UsageByRepository's
+// and UsageByModel's. It reads in one repeatable-read transaction, so a
+// write in between can't make the parts disagree.
+func (s *Store) TeamUsage(ctx context.Context, team int64, since time.Time) (TeamUsage, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return TeamUsage{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // read-only
+	var out TeamUsage
+	if err := tx.QueryRow(ctx, `SELECT `+tokenSumColumns+`, count(DISTINCT run_id) FROM `+teamUsageRows, team, since).
+		Scan(append(out.Tokens.dests(), &out.Reviews)...); err != nil {
+		return TeamUsage{}, err
+	}
+	rows, err := tx.Query(ctx, `SELECT ((reported_at AT TIME ZONE 'UTC')::date)::timestamp AT TIME ZONE 'UTC' AS day, `+tokenSumColumns+`
+		FROM `+teamUsageRows+` GROUP BY day ORDER BY day`, team, since)
+	if err != nil {
+		return TeamUsage{}, err
+	}
+	if out.Daily, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (DayUsage, error) {
+		var u DayUsage
+		err := row.Scan(append([]any{&u.Day}, u.Tokens.dests()...)...)
+		u.Day = u.Day.UTC()
 		return u, err
-	})
+	}); err != nil {
+		return TeamUsage{}, err
+	}
+	rows, err = tx.Query(ctx, `SELECT instance, project_id, (array_agg(project_path ORDER BY reported_at DESC))[1], `+tokenSumColumns+`,
+			count(DISTINCT run_id)
+		FROM `+teamUsageRows+` GROUP BY instance, project_id
+		ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, instance, project_id`, team, since)
+	if err != nil {
+		return TeamUsage{}, err
+	}
+	if out.Repos, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (RepoUsage, error) {
+		var u RepoUsage
+		err := row.Scan(append([]any{&u.Instance, &u.ProjectID, &u.ProjectPath}, append(u.Tokens.dests(), &u.Reviews)...)...)
+		return u, err
+	}); err != nil {
+		return TeamUsage{}, err
+	}
+	rows, err = tx.Query(ctx, `SELECT provider, model, `+tokenSumColumns+`, count(DISTINCT run_id), 0::bigint
+		FROM `+teamUsageRows+` GROUP BY provider, model
+		ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, model, provider`, team, since)
+	if err != nil {
+		return TeamUsage{}, err
+	}
+	if out.Models, err = pgx.CollectRows(rows, scanNamedUsage); err != nil {
+		return TeamUsage{}, err
+	}
+	return out, nil
+}
+
+// OwnerTeamUsageStart returns when the oldest run_usage row with an owner
+// team was reported; found is false when no row has one. Rows written before
+// owner_team_id was (migration 0051) have none, so a team's usage before then
+// is not known.
+func (s *Store) OwnerTeamUsageStart(ctx context.Context) (start time.Time, found bool, err error) {
+	var at *time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT min(reported_at) FROM run_usage WHERE owner_team_id IS NOT NULL`).Scan(&at); err != nil {
+		return time.Time{}, false, err
+	}
+	if at == nil {
+		return time.Time{}, false, nil
+	}
+	return at.UTC(), true, nil
 }
 
 // UsageByMR returns what the busiest limit merge requests of a repository

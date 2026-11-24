@@ -8,12 +8,11 @@ import {
   instanceGitLab,
   operator,
   repoPayments,
-  repoToolsPaused,
   repoWidgets,
   teamEmpty,
+  teamPagePayments,
   teamPayments,
   userDev,
-  userInvited,
   userOperator,
   userWaiting,
 } from "../test/fixtures";
@@ -31,15 +30,26 @@ const base = {
 const teamCard = (name: string) => screen.getByRole("region", { name }) as HTMLElement;
 
 describe("Teams", () => {
-  it("lists the teams with their members, each with a role, and repositories", async () => {
+  it("lists each team with its name linked to the team page, its member count and its repository count", async () => {
     fakeApi({ "GET /api/teams": { body: [teamPayments, teamEmpty] }, ...base });
     renderApp("/admin/teams");
     expect(await screen.findByRole("heading", { name: "Teams" })).toBeInTheDocument();
     const payments = await screen.findByRole("region", { name: "Payments" });
-    expect(payments).toHaveTextContent("dev-user@example.com (maintainer)");
-    expect(payments).toHaveTextContent("acme/payments");
-    expect(teamCard("Platform")).toHaveTextContent("Members: none");
-    expect(teamCard("Platform")).toHaveTextContent("Repositories: none");
+    expect(within(payments).getByRole("link", { name: "Payments" })).toHaveAttribute("href", "/teams/2");
+    expect(payments).toHaveTextContent("1 member");
+    expect(payments).toHaveTextContent("1 repository, owner of 1");
+    expect(payments).not.toHaveTextContent("dev-user@example.com");
+    expect(payments).not.toHaveTextContent("acme/payments");
+    expect(teamCard("Platform")).toHaveTextContent("0 members");
+    expect(teamCard("Platform")).toHaveTextContent("0 repositories");
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
+  it("counts a whole instance on its own, from the entries", async () => {
+    const team = { ...teamPayments, repos: [{ instance: "main", project: "", owner: false }, ...teamPayments.repos] };
+    fakeApi({ "GET /api/teams": { body: [team] }, ...base });
+    renderApp("/admin/teams");
+    expect(await screen.findByRole("region", { name: "Payments" })).toHaveTextContent("1 repository, 1 whole instance, owner of 1");
   });
 
   it("creates a team from a name alone", async () => {
@@ -47,6 +57,7 @@ describe("Teams", () => {
     const fake = fakeApi({
       "GET /api/teams": () => ({ body: listed++ === 0 ? [] : [teamPayments] }),
       "POST /api/teams": { status: 201, body: teamPayments },
+      "GET /api/teams/2": { body: teamPagePayments },
       ...base,
     });
     renderApp("/admin/teams");
@@ -56,8 +67,7 @@ describe("Teams", () => {
     const [post] = fake.find("POST", "/api/teams");
     expect(post.body).toEqual({ name: "Payments" });
     expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
-    expect(await screen.findByRole("region", { name: "Payments" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Team name")).toHaveValue("");
+    await vi.waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/teams/2?tab=members"));
   });
 
   it("shows the server's text when the name is taken", async () => {
@@ -70,262 +80,6 @@ describe("Teams", () => {
     await userEvent.type(await screen.findByLabelText("Team name"), "Payments");
     await userEvent.click(screen.getByRole("button", { name: "Create team" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("a team with this name exists already");
-  });
-
-  it("lists a paused repository as a choice, marked paused and linked to its page", async () => {
-    fakeApi({ "GET /api/teams": { body: [teamPayments] }, ...base, "GET /api/repositories": { body: [repoPayments, repoWidgets, repoToolsPaused] } });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    const editor = screen.getByRole("form", { name: "Edit Payments" });
-    const tools = await within(editor).findByRole("checkbox", { name: /acme\/tools.*paused/ });
-    expect(tools).not.toBeChecked();
-    expect(tools).toBeEnabled();
-    expect(within(editor).getByRole("link", { name: "paused" })).toHaveAttribute("href", "/repos/main/acme/tools");
-  });
-
-  it("shows a covered repository that is removed as such, unticked", async () => {
-    const fake = fakeApi({
-      "GET /api/teams": {
-        body: [
-          {
-            ...teamPayments,
-            repos: [
-              { instance: "main", project: "acme/payments", owner: true },
-              { instance: "main", project: "acme/gone", owner: false },
-            ],
-          },
-        ],
-      },
-      "PUT /api/teams/2": { body: teamPayments },
-      ...base,
-    });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    const editor = screen.getByRole("form", { name: "Edit Payments" });
-    const gone = await within(editor).findByRole("checkbox", { name: /acme\/gone.*removed/ });
-    expect(gone).not.toBeChecked();
-    expect(within(editor).getByRole("checkbox", { name: /^acme\/payments/ })).toBeChecked();
-    await userEvent.click(within(editor).getByRole("button", { name: "Save" }));
-    expect((fake.find("PUT", "/api/teams/2")[0].body as { repos: unknown[] }).repos).toEqual([
-      { instance: "main", project: "acme/payments", owner: true },
-    ]);
-  });
-
-  it("saves the name, members with their roles and repositories with a PUT", async () => {
-    const fake = fakeApi({
-      "GET /api/teams": { body: [teamPayments] },
-      "PUT /api/teams/2": { body: teamPayments },
-      ...base,
-    });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    const editor = screen.getByRole("form", { name: "Edit Payments" });
-    expect(within(editor).queryByLabelText("Role")).not.toBeInTheDocument();
-    const members = within(editor).getByRole("group", { name: "Members" });
-    // Only SSO accounts can be members: a local admin is no member.
-    expect(within(members).queryByRole("checkbox", { name: /admin/ })).not.toBeInTheDocument();
-    expect(within(members).getByRole("checkbox", { name: /dev-user/ })).toBeChecked();
-    expect(within(members).getByLabelText("Role of dev-user@example.com")).toHaveValue("maintainer");
-    // A member added is a viewer until the role is changed.
-    await userEvent.click(within(members).getByRole("checkbox", { name: /newcomer/ }));
-    expect(within(members).getByLabelText("Role of newcomer@example.com")).toHaveValue("viewer");
-    await userEvent.selectOptions(within(members).getByLabelText("Role of dev-user@example.com"), "viewer");
-    const repos = within(editor).getByRole("group", { name: "Repositories" });
-    expect(within(repos).getByRole("checkbox", { name: /^acme\/payments/ })).toBeChecked();
-    expect(within(repos).getByRole("checkbox", { name: /^acme\/widgets/ })).not.toBeChecked();
-    await userEvent.click(within(repos).getByRole("checkbox", { name: /^acme\/widgets/ }));
-    await userEvent.clear(within(editor).getByLabelText("Name"));
-    await userEvent.type(within(editor).getByLabelText("Name"), "Payments crew");
-    await userEvent.click(within(editor).getByRole("button", { name: "Save" }));
-
-    const [put] = fake.find("PUT", "/api/teams/2");
-    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
-    expect(put.body).toEqual({
-      name: "Payments crew",
-      members: [
-        { accountId: 5, role: "viewer" },
-        { accountId: 7, role: "viewer" },
-      ],
-      repos: [
-        { instance: "main", project: "acme/payments", owner: true },
-        { instance: "main", project: "acme/widgets", owner: false },
-      ],
-    });
-    // Saved: the editor closes.
-    await vi.waitFor(() => expect(screen.queryByRole("form", { name: "Edit Payments" })).not.toBeInTheDocument());
-  });
-
-  it("adds a member by typing an email, as an invited account with the role viewer", async () => {
-    let listed = 0;
-    const fake = fakeApi({
-      "GET /api/teams": { body: [teamPayments] },
-      "PUT /api/teams/2": { body: teamPayments },
-      "POST /api/admin/users": { status: 201, body: { ...userInvited, teams: [] } },
-      ...base,
-      "GET /api/users": () => ({ body: listed++ === 0 ? [userWaiting, userDev, userOperator] : [userWaiting, userDev, userOperator, userInvited] }),
-    });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    const editor = screen.getByRole("form", { name: "Edit Payments" });
-    const members = await within(editor).findByRole("group", { name: "Members" });
-    await userEvent.type(within(members).getByLabelText("Add by email"), " invited@example.com ");
-    await userEvent.click(within(members).getByRole("button", { name: "Add email" }));
-    const [post] = fake.find("POST", "/api/admin/users");
-    expect(post.body).toEqual({ email: "invited@example.com" });
-    expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
-    // The new account is on the list, ticked, a viewer, and marked invited.
-    const added = await within(members).findByRole("checkbox", { name: /invited@example.com/ });
-    expect(added).toBeChecked();
-    expect(within(members).getByLabelText("Role of invited@example.com")).toHaveValue("viewer");
-    expect(members).toHaveTextContent("invited");
-    expect(within(members).getByLabelText("Add by email")).toHaveValue("");
-    // It joins the team when the team is saved.
-    await userEvent.click(within(editor).getByRole("button", { name: "Save" }));
-    const [put] = fake.find("PUT", "/api/teams/2");
-    expect((put.body as { members: unknown[] }).members).toEqual([
-      { accountId: 5, role: "maintainer" },
-      { accountId: 9, role: "viewer" },
-    ]);
-  });
-
-  it("asks for an email that is an account already, so it is marked added, and ticks it", async () => {
-    const fake = fakeApi({
-      "GET /api/teams": { body: [teamPayments] },
-      "POST /api/admin/users": { body: userWaiting },
-      ...base,
-    });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    const members = await within(screen.getByRole("form", { name: "Edit Payments" })).findByRole("group", { name: "Members" });
-    expect(within(members).getByRole("checkbox", { name: /newcomer/ })).not.toBeChecked();
-    await userEvent.type(within(members).getByLabelText("Add by email"), "Newcomer@Example.com");
-    await userEvent.click(within(members).getByRole("button", { name: "Add email" }));
-    await vi.waitFor(() => expect(within(members).getByRole("checkbox", { name: /newcomer/ })).toBeChecked());
-    expect(within(members).getByLabelText("Role of newcomer@example.com")).toHaveValue("viewer");
-    expect(fake.find("POST", "/api/admin/users")[0].body).toEqual({ email: "Newcomer@Example.com" });
-    expect(within(members).queryByRole("alert")).not.toBeInTheDocument();
-  });
-
-  it("takes a 409 (added before) as fine and ticks the account", async () => {
-    fakeApi({
-      "GET /api/teams": { body: [teamPayments] },
-      "POST /api/admin/users": { status: 409, body: { error: "this email is added already" } },
-      ...base,
-    });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    const members = await within(screen.getByRole("form", { name: "Edit Payments" })).findByRole("group", { name: "Members" });
-    await userEvent.type(within(members).getByLabelText("Add by email"), "newcomer@example.com");
-    await userEvent.click(within(members).getByRole("button", { name: "Add email" }));
-    await vi.waitFor(() => expect(within(members).getByRole("checkbox", { name: /newcomer/ })).toBeChecked());
-    expect(within(members).queryByRole("alert")).not.toBeInTheDocument();
-    expect(within(members).getByLabelText("Add by email")).toHaveValue("");
-  });
-
-  it("shows the server's text when an email is refused, and adds no member", async () => {
-    fakeApi({
-      "GET /api/teams": { body: [teamPayments] },
-      "POST /api/admin/users": { status: 400, body: { error: "that is not an email address" } },
-      ...base,
-    });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    const members = await within(screen.getByRole("form", { name: "Edit Payments" })).findByRole("group", { name: "Members" });
-    await userEvent.type(within(members).getByLabelText("Add by email"), "not-an-email");
-    await userEvent.click(within(members).getByRole("button", { name: "Add email" }));
-    expect(await within(members).findByRole("alert")).toHaveTextContent("that is not an email address");
-    expect(within(members).getAllByRole("checkbox")).toHaveLength(2);
-  });
-
-  it("offers every instance as a whole", async () => {
-    const fake = fakeApi({
-      "GET /api/teams": { body: [teamPayments] },
-      "PUT /api/teams/2": { body: teamPayments },
-      ...base,
-    });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    const editor = screen.getByRole("form", { name: "Edit Payments" });
-    expect(await within(editor).findByRole("checkbox", { name: "All repositories of extra" })).toBeInTheDocument();
-    await userEvent.click(within(editor).getByRole("checkbox", { name: "All repositories of main" }));
-    await userEvent.click(within(editor).getByRole("button", { name: "Save" }));
-    const [put] = fake.find("PUT", "/api/teams/2");
-    expect((put.body as { repos: unknown[] }).repos).toEqual([
-      { instance: "main", project: "", owner: false },
-      { instance: "main", project: "acme/payments", owner: true },
-    ]);
-  });
-
-  it("shows the server's text when a save is refused, and stays open", async () => {
-    fakeApi({
-      "GET /api/teams": { body: [teamPayments] },
-      "PUT /api/teams/2": { status: 400, body: { error: "members must be accounts that sign in with SSO" } },
-      ...base,
-    });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("members must be accounts that sign in with SSO");
-    expect(screen.getByRole("form", { name: "Edit Payments" })).toBeInTheDocument();
-  });
-
-  it("says on the card which entries the team owns", async () => {
-    fakeApi({ "GET /api/teams": { body: [teamPayments] }, ...base });
-    renderApp("/admin/teams");
-    const payments = await screen.findByRole("region", { name: "Payments" });
-    expect(payments).toHaveTextContent("Repositories: acme/payments (owner)");
-  });
-
-  it("sends the owner tick of each repository and instance entry", async () => {
-    const fake = fakeApi({ "GET /api/teams": { body: [teamPayments] }, "PUT /api/teams/2": { body: teamPayments }, ...base });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    const editor = screen.getByRole("form", { name: "Edit Payments" });
-    const repos = within(editor).getByRole("group", { name: "Repositories" });
-    expect(within(repos).getByRole("checkbox", { name: "Owner of acme/payments on main" })).toBeChecked();
-    // An entry the team doesn't cover has no owner tick.
-    expect(within(repos).queryByRole("checkbox", { name: "Owner of acme/widgets on main" })).not.toBeInTheDocument();
-    await userEvent.click(within(repos).getByRole("checkbox", { name: /^acme\/widgets/ }));
-    await userEvent.click(within(repos).getByRole("checkbox", { name: "Owner of acme/widgets on main" }));
-    await userEvent.click(within(repos).getByRole("checkbox", { name: "All repositories of main" }));
-    await userEvent.click(within(repos).getByRole("checkbox", { name: "Owner of every repository of main" }));
-    await userEvent.click(within(repos).getByRole("checkbox", { name: "Owner of acme/payments on main" }));
-    await userEvent.click(within(editor).getByRole("button", { name: "Save" }));
-    expect((fake.find("PUT", "/api/teams/2")[0].body as { repos: unknown[] }).repos).toEqual([
-      { instance: "main", project: "", owner: true },
-      { instance: "main", project: "acme/payments", owner: false },
-      { instance: "main", project: "acme/widgets", owner: true },
-    ]);
-  });
-
-  it("drops the owner tick of an entry the team stops covering", async () => {
-    const fake = fakeApi({ "GET /api/teams": { body: [teamPayments] }, "PUT /api/teams/2": { body: teamPayments }, ...base });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    const repos = within(screen.getByRole("form", { name: "Edit Payments" })).getByRole("group", { name: "Repositories" });
-    await userEvent.click(within(repos).getByRole("checkbox", { name: /^acme\/payments/ }));
-    expect(within(repos).queryByRole("checkbox", { name: "Owner of acme/payments on main" })).not.toBeInTheDocument();
-    // Covered again, it is not the owner until ticked.
-    await userEvent.click(within(repos).getByRole("checkbox", { name: /^acme\/payments/ }));
-    expect(within(repos).getByRole("checkbox", { name: "Owner of acme/payments on main" })).not.toBeChecked();
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect((fake.find("PUT", "/api/teams/2")[0].body as { repos: unknown[] }).repos).toEqual([
-      { instance: "main", project: "acme/payments", owner: false },
-    ]);
-  });
-
-  it("shows the server's text when another team owns the entry already", async () => {
-    fakeApi({
-      "GET /api/teams": { body: [{ ...teamPayments, repos: [{ instance: "main", project: "acme/payments", owner: false }] }] },
-      "PUT /api/teams/2": { status: 409, body: { error: "acme/payments already has owner Platform" } },
-      ...base,
-    });
-    renderApp("/admin/teams");
-    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Owner of acme/payments on main" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("acme/payments already has owner Platform");
-    expect(screen.getByRole("form", { name: "Edit Payments" })).toBeInTheDocument();
   });
 
   it("removes a team after a confirmation", async () => {
