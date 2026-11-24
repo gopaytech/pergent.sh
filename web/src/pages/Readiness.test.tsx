@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChecklistItem, ReadinessView, ScanView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { ssoAdmin, repoDetail, repoPayments, repoWidgets, reviewBlocking } from "../test/fixtures";
+import { ssoAdmin, repoDetail, repoPayments, repoToolsPaused, repoWidgets, reviewBlocking } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -548,5 +548,14 @@ describe("Readiness", () => {
       .getAllByRole("tab")
       .map((t) => t.textContent);
     expect(names).toEqual(["Reviews", "Skill results", "Settings", "Past dismissals", "Skills & instructions", "Readiness", "Setup checks (1)"]);
+  });
+});
+
+describe("Readiness of a paused repository", () => {
+  it("says a paused repository is not scanned, and how to scan it", async () => {
+    fakeApi(base(view({ canScan: false, latest: null, checklist: null }), repoToolsPaused));
+    renderApp("/repos/main/acme/tools?tab=readiness");
+    expect(await screen.findByText("This repository is paused, so it is not scanned. Switch it on to scan it.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Scan now" })).not.toBeInTheDocument();
   });
 });

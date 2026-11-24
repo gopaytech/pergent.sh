@@ -28,7 +28,7 @@ describe("Overview", () => {
     expect(within(recent).getByText("Blocking")).toHaveClass("pill", "bad");
     expect(within(recent).getByText("Approved")).toHaveClass("pill", "ok");
     expect(within(recent).getByText(/security-review found blocking issues/)).toBeInTheDocument();
-    expect(within(recent).getByRole("link", { name: "View all →" })).toHaveAttribute("href", "/reviews");
+    expect(within(recent).getByRole("link", { name: "View all →" })).toHaveAttribute("href", "/reviews?days=7");
 
     expect(screen.queryByRole("region", { name: "Needs attention" })).not.toBeInTheDocument();
     expect(screen.queryByText(/needs attention/i)).not.toBeInTheDocument();
@@ -91,5 +91,15 @@ describe("Overview", () => {
     renderApp("/");
     expect(await screen.findByText("No reviews yet.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "+ Add repository" })).toHaveAttribute("href", "/repos?add=1");
+  });
+});
+
+describe("Overview: the numbers open their reviews", () => {
+  it("links each number to the reviews behind it, over the same days", async () => {
+    fakeApi({ "GET /api/me": { body: ssoAdmin }, "GET /api/overview?days=7": { body: overview } });
+    renderApp("/");
+    expect(await screen.findByRole("link", { name: /^Failed reviews: \d+\. Open these reviews$/ })).toHaveAttribute("href", "/reviews?outcome=failed&days=7");
+    expect(screen.getByRole("link", { name: /^Blocking findings: / })).toHaveAttribute("href", "/reviews?outcome=blocking&days=7");
+    expect(screen.getByRole("link", { name: /^Reviews: / })).toHaveAttribute("href", "/reviews?days=7");
   });
 });

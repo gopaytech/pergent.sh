@@ -119,7 +119,7 @@ describe("RepositoryDetail", () => {
   it("shows the repository's reviews first", async () => {
     renderAt("/repos/main/acme/payments", base);
     expect(await screen.findByRole("heading", { name: "acme/payments" })).toBeInTheDocument();
-    expect(screen.getByText(/GitLab · main · switched on in the dashboard/)).toBeInTheDocument();
+    expect(screen.getByText((_, el) => el?.classList.contains("sub") === true && /GitLab · main · switched on in the dashboard/.test(el.textContent ?? ""))).toBeInTheDocument();
     const tabs = screen.getByRole("tablist");
     for (const name of ["Reviews", "Settings", "Skills & instructions", "Setup checks (1)"]) {
       expect(within(tabs).getByRole("tab", { name })).toBeInTheDocument();
@@ -1377,7 +1377,7 @@ describe("RepositoryDetail while paused, and Remove", () => {
   it("shows the Paused note on a paused repository", async () => {
     renderAt("/repos/main/acme/tools", pausedRoutes);
     expect(await screen.findByRole("note", { name: "Paused" })).toHaveTextContent("pergent doesn't review this repository");
-    expect(screen.getByText(/GitLab · main · paused in the dashboard/)).toBeInTheDocument();
+    expect(screen.getByText((_, el) => el?.classList.contains("sub") === true && /GitLab · main · paused in the dashboard/.test(el.textContent ?? ""))).toBeInTheDocument();
   });
 
   it("has no Paused note on a running repository", async () => {
@@ -1483,3 +1483,29 @@ function renderAt(path: string, routes: Parameters<typeof fakeApi>[0]) {
   fakeApi(routes);
   return renderApp(path);
 }
+
+describe("RepositoryDetail: switching on a paused repository", () => {
+  const tools = repoDetail(repoToolsPaused);
+  const routes = {
+    ...base,
+    "GET /api/repositories/main/acme/tools": { body: tools },
+    "GET /api/repositories/main/acme/tools/inputs": { body: noInputs },
+    "GET /api/reviews?project=acme%2Ftools&days=90": { body: { items: [], nextCursor: "" } },
+  };
+
+  it("lets an admin switch it on from the Paused note", async () => {
+    const fake = fakeApi({ ...routes, "PUT /api/admin/repositories/main/acme/tools": { body: tools } });
+    renderApp("/repos/main/acme/tools");
+    const note = await screen.findByRole("note", { name: "Paused" });
+    await userEvent.click(within(note).getByRole("button", { name: "Switch on" }));
+    expect(fake.find("PUT", "/api/admin/repositories/main/acme/tools")[0].body).toEqual({ enabled: true });
+  });
+
+  it("tells anyone else that an admin switches it on", async () => {
+    fakeApi({ ...routes, "GET /api/repositories/main/acme/tools": { body: repoDetail(repoToolsPaused, "maintainer") } });
+    renderApp("/repos/main/acme/tools");
+    const note = await screen.findByRole("note", { name: "Paused" });
+    expect(note).toHaveTextContent("An admin can switch it on again.");
+    expect(within(note).queryByRole("button", { name: "Switch on" })).not.toBeInTheDocument();
+  });
+});
