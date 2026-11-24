@@ -71,7 +71,7 @@ func OrderBuiltInRules(names []string) (known, unknown []string) {
 func BuiltInRulesListImage(image string) (ok bool, reason string) {
 	min := BuiltInRulesListMinVersion
 	if min == "" {
-		return false, "no review image can load only the chosen built-in rules yet"
+		return false, "no review image can load only the enabled built-in rules yet"
 	}
 	tag := ImageTag(image)
 	if tag == "" {
@@ -82,7 +82,7 @@ func BuiltInRulesListImage(image string) (ok bool, reason string) {
 		return false, fmt.Sprintf("image tag %q is not a version (vX.Y.Z); choosing built-in rules needs %s or later", tag, min)
 	}
 	if !atLeast {
-		return false, fmt.Sprintf("image tag %q is older than %s, the first pergent that loads only the chosen built-in rules", tag, min)
+		return false, fmt.Sprintf("image tag %q is older than %s, the first pergent that loads only the enabled built-in rules", tag, min)
 	}
 	return true, ""
 }

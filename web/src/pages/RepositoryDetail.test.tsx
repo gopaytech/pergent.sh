@@ -717,6 +717,10 @@ describe("RepositoryDetail", () => {
       ...base,
       "GET /api/repositories/main/acme/payments/inputs": inputs({
         builtIn: ["go", "yaml"],
+        builtInEntries: [
+          { name: "go", paths: ["**/*.go"], rule: "Check the <b>errors</b>." },
+          { name: "yaml", paths: ["**/*.yaml", "**/*.yml"], rule: "Check the keys." },
+        ],
         problem: "",
         entries: [
           { source: "repo", path: "internal/api/**/*.go", off: false, rule: "Defer <b>rollback</b>." },
@@ -726,17 +730,28 @@ describe("RepositoryDetail", () => {
     });
     const { unmount } = renderApp("/repos/main/acme/payments?tab=inputs");
     const rules = await screen.findByRole("region", { name: "Rules" });
+    expect(rules).toHaveTextContent("1 repository · 1 rule set · 2 built-in");
+    expect(rules).toHaveTextContent("The first entry that matches a file gives it its rule.");
     expect(within(rules).getByText("internal/api/**/*.go").closest(".skill")).toHaveTextContent("repo");
     expect(within(rules).getByText("**/*.pb.go").closest(".skill")).toHaveTextContent("dashboard:base");
     expect(within(rules).getByText("**/*.pb.go").closest(".skill")).toHaveTextContent("off");
     expect(within(rules).getByText("Defer <b>rollback</b>.").tagName).toBe("PRE");
-    expect(rules).toHaveTextContent("Then pergent's built-in rules: go, yaml.");
+    // One list in match order: the repository's, the sets', then each
+    // built-in rule as its own row with its globs and its text.
+    const rows = [...rules.querySelectorAll("details.skill-doc")].map((d) => d.getAttribute("data-rule"));
+    expect(rows).toEqual(["repo|internal/api/**/*.go", "dashboard:base|**/*.pb.go", "built-in|go", "built-in|yaml"]);
+    const yaml = rules.querySelector('[data-rule="built-in|yaml"]') as HTMLElement;
+    expect(within(yaml).getByText("**/*.yml")).toBeInTheDocument();
+    expect(within(yaml).getByText("built-in")).toHaveClass("src");
+    expect(within(rules).getByText("Check the <b>errors</b>.").tagName).toBe("PRE");
+    expect(rules).not.toHaveTextContent(/chosen/i);
     unmount();
 
     fakeApi({
       ...base,
       "GET /api/repositories/main/acme/payments/inputs": inputs({
         builtIn: [],
+        builtInEntries: [],
         problem: ".pergent/rules.yaml: entry 1: needs a rule or off: true",
         entries: [],
       }),
@@ -744,7 +759,27 @@ describe("RepositoryDetail", () => {
     renderApp("/repos/main/acme/payments?tab=inputs");
     const broken = await screen.findByRole("region", { name: "Rules" });
     expect(broken).toHaveTextContent(".pergent/rules.yaml: entry 1: needs a rule or off: true");
-    expect(broken).toHaveTextContent("No built-in rules.");
+    expect(broken).toHaveTextContent("0 repository · 0 rule sets · 0 built-in");
+  });
+
+  it("says on the Rules card when reviews leave the enabled built-in rules out", async () => {
+    const off = "Reviews get no built-in rules for now: no review image can load only the enabled built-in rules yet.";
+    fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments": { body: { ...payments, builtInRulesOff: off } },
+      "GET /api/repositories/main/acme/payments/inputs": {
+        body: {
+          branch: "main",
+          skills: [],
+          detected: [],
+          instructions: "",
+          rules: { builtIn: ["go"], builtInEntries: [{ name: "go", paths: ["**/*.go"], rule: "x" }], problem: "", entries: [] },
+        },
+      },
+    });
+    renderApp("/repos/main/acme/payments?tab=inputs");
+    const rules = await screen.findByRole("region", { name: "Rules" });
+    expect(within(rules).getByText(off)).toHaveClass("problem");
   });
 
   it("says when the repository isn't set up yet", async () => {

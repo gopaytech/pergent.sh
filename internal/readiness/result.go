@@ -74,6 +74,15 @@ type Language struct {
 	Uncovered bool   `json:"uncovered,omitempty"`
 }
 
+// BuiltInFit is how many files of the checkout one of pergent's built-in
+// rules matches. A file counts when a review reads it (not binary, not
+// generated), and for every rule whose globs match it, so it can count for
+// several rules.
+type BuiltInFit struct {
+	Name  string `json:"name"`
+	Files int    `json:"files"`
+}
+
 // Why a file is noise.
 const (
 	WhyGeneratedName = "generated or minified name"
@@ -117,6 +126,9 @@ type JobResult struct {
 	Skills            []SkillFit  `json:"skills,omitempty"`
 	Languages         []Language  `json:"languages,omitempty"`
 	Noise             []NoiseFile `json:"noise,omitempty"`
+	// BuiltInRules is each built-in rule that matches a file, in
+	// builtin.yaml order (ScanTree).
+	BuiltInRules []BuiltInFit `json:"builtInRules,omitempty"`
 }
 
 // ScanOutcome is what became of a posted result (the engine returns it, the

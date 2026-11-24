@@ -53,7 +53,7 @@ func setBuiltInListMin(t *testing.T, v string) {
 }
 
 func TestBuiltInRulesListImage(t *testing.T) {
-	const none = "no review image can load only the chosen built-in rules yet"
+	const none = "no review image can load only the enabled built-in rules yet"
 	for _, tc := range []struct {
 		min, image string
 		ok         bool

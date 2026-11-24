@@ -6,6 +6,7 @@ import {
   api,
   isStatus,
   paths,
+  type BuiltInFit,
   type ChecklistItem,
   type ChecklistSection,
   type ChecklistState,
@@ -98,8 +99,9 @@ export default function Readiness({ instance, project }: { instance: string; pro
     },
   });
 
+  // A save of the ticked suggestions: {skills} or {builtInRules}.
   const apply = useMutation({
-    mutationFn: (skills: string[]) => write("PUT", paths.apiRepoSettings(instance, project), { skills }),
+    mutationFn: (body: { skills: string[] } | { builtInRules: string[] }) => write("PUT", paths.apiRepoSettings(instance, project), body),
     onMutate: () => setNote(""),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: key });
@@ -135,7 +137,20 @@ export default function Readiness({ instance, project }: { instance: string; pro
       {v.checklist === null ? (
         <div className="card empty">{scanning ? "The first scan is running." : "Scan this repository to see what it needs."}</div>
       ) : (
-        <Checklist view={v} checklist={v.checklist} saving={apply.isPending} onApply={(skills, saved) => apply.mutate(skills, { onSuccess: saved })} />
+        <>
+          <Checklist
+            view={v}
+            checklist={v.checklist}
+            saving={apply.isPending}
+            onApply={(skills, saved) => apply.mutate({ skills }, { onSuccess: saved })}
+          />
+          <BuiltInSuggestions
+            view={v}
+            suggested={v.checklist.suggestedBuiltInRules}
+            saving={apply.isPending}
+            onApply={(builtInRules, saved) => apply.mutate({ builtInRules }, { onSuccess: saved })}
+          />
+        </>
       )}
     </>
   );
@@ -332,5 +347,82 @@ function Suggestions({
         )
       )}
     </div>
+  );
+}
+
+// The built_in_rules line a config-file repository pastes.
+const builtInRulesLine = (names: string[]) => `built_in_rules: [${names.join(", ")}]`;
+
+const filesText = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
+
+// BuiltInSuggestions are the built-in rules whose globs match files of the
+// scan and that are not enabled, most files first. It is a suggestion only,
+// not a check. A maintainer or admin ticks some and enables them with the
+// ones already enabled; a config-file repository gets the line to paste.
+function BuiltInSuggestions({
+  view,
+  suggested,
+  saving,
+  onApply,
+}: {
+  view: ReadinessView;
+  suggested: BuiltInFit[];
+  saving: boolean;
+  onApply: (names: string[], saved: () => void) => void;
+}) {
+  const [ticked, setTicked] = useState<string[]>([]);
+  if (suggested.length === 0) return null;
+  const choose = view.configRepo || view.canScan;
+  // The ticked names still suggested and not enabled yet.
+  const picked = suggested.map((f) => f.name).filter((n) => ticked.includes(n) && !view.applyBuiltInBase.includes(n));
+  const list = [...view.applyBuiltInBase, ...picked];
+  return (
+    <section className="card" aria-label="Suggested built-in rules">
+      <h2>Suggested built-in rules</h2>
+      <div className="pad stack">
+        <div className="meta">
+          Built-in rules whose globs match files in this repository and that are not enabled. Each one adds its text to the runs on
+          its files, so enable only the ones you need.
+        </div>
+        {suggested.map((f) =>
+          choose ? (
+            <label className="check" key={f.name}>
+              <input
+                type="checkbox"
+                aria-label={f.name}
+                checked={ticked.includes(f.name)}
+                onChange={(e) => setTicked(e.target.checked ? [...ticked, f.name] : ticked.filter((t) => t !== f.name))}
+              />
+              {f.name}{" "}
+              <span className="meta">{filesText(f.files)}</span>
+            </label>
+          ) : (
+            <div key={f.name}>
+              {f.name}{" "}
+              <span className="meta">{filesText(f.files)}</span>
+            </div>
+          ),
+        )}
+        {view.configRepo ? (
+          <>
+            <div className="meta">This repository is set up in the config file. Paste this line there:</div>
+            <pre className="fix">{builtInRulesLine(list)}</pre>
+          </>
+        ) : (
+          view.canScan && (
+            <div>
+              <button
+                type="button"
+                className="btn primary small"
+                disabled={picked.length === 0 || saving}
+                onClick={() => onApply(list, () => setTicked([]))}
+              >
+                Enable {picked.length} {picked.length === 1 ? "rule" : "rules"}
+              </button>
+            </div>
+          )
+        )}
+      </div>
+    </section>
   );
 }

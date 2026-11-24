@@ -492,7 +492,7 @@ describe("RepositorySettings: path rules", () => {
     expect(fake.find("PUT", settingsPath)[0].body).toEqual({ ruleSets: null });
   });
 
-  it("sends only the chosen built-in rules, in pergent's order", async () => {
+  it("sends only the enabled built-in rules, in pergent's order", async () => {
     const fake = fakeApi({
       ...base,
       "GET /api/rule-sets": { body: ruleSets },
@@ -502,16 +502,16 @@ describe("RepositorySettings: path rules", () => {
     renderApp("/repos/main/acme/payments?tab=settings");
     // None by default.
     const card = await screen.findByRole("region", { name: "Built-in rules" });
-    expect(await within(card).findByText("0 of 2 chosen")).toBeInTheDocument();
+    expect(await within(card).findByText("0 of 2 enabled")).toBeInTheDocument();
     expect(within(card).queryByRole("switch")).not.toBeInTheDocument();
     await userEvent.click(within(card).getByRole("checkbox", { name: "Built-in rule ts_js" }));
     await userEvent.click(within(card).getByRole("checkbox", { name: "Built-in rule github_workflows" }));
-    expect(within(card).getByText("2 of 2 chosen")).toBeInTheDocument();
+    expect(within(card).getByText("2 of 2 enabled")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(fake.find("PUT", settingsPath)[0].body).toEqual({ builtInRules: ["github_workflows", "ts_js"] });
   });
 
-  it("sends null when Select none clears the chosen built-in rules", async () => {
+  it("sends null when Select none clears the enabled built-in rules", async () => {
     const detail = repoDetail(repoPayments);
     detail.settings.builtInRules = { value: ["ts_js"], overridden: true };
     const fake = fakeApi({
@@ -529,14 +529,14 @@ describe("RepositorySettings: path rules", () => {
     expect(fake.find("PUT", settingsPath)[0].body).toEqual({ builtInRules: null });
   });
 
-  it("says when reviews can't load the chosen built-in rules yet", async () => {
+  it("says when reviews can't load the enabled built-in rules yet", async () => {
     const detail = repoDetail(repoPayments);
-    detail.builtInRulesOff = "Reviews get no built-in rules for now: no review image can load only the chosen built-in rules yet.";
+    detail.builtInRulesOff = "Reviews get no built-in rules for now: no review image can load only the enabled built-in rules yet.";
     fakeApi({ ...base, [`GET /api/repositories/main/acme/payments`]: { body: detail }, "GET /api/built-in-rules": { body: builtInRules } });
     renderApp("/repos/main/acme/payments?tab=settings");
     const card = await screen.findByRole("region", { name: "Built-in rules" });
     const note = await within(card).findByText(/Reviews get no built-in rules for now/);
-    // Only a note while none is chosen; a problem once one is.
+    // Only a note while none is enabled; a problem once one is.
     expect(note).not.toHaveClass("problem");
     await userEvent.click(await within(card).findByRole("checkbox", { name: "Built-in rule ts_js" }));
     expect(within(card).getByText(/Reviews get no built-in rules for now/)).toHaveClass("problem");

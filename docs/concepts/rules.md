@@ -31,7 +31,7 @@ For each changed file in a skill's batch, pergent walks one ordered list and tak
 
 1. The repository's `.pergent/rules.yaml`, in file order. It is read from the **target branch**, the same commit as the repository's skills, so a change cannot edit its own rules.
 2. The entries of each rule set the repository uses, set by set in the repository's order.
-3. The pergent built-in rules the repository chose, in pergent's order. It chooses none by default.
+3. The pergent built-in rules the repository enabled, in pergent's order. None is enabled by default.
 
 A file that matches nothing, or matches an `off` entry, gets no rule. The skill still reviews it with its own text.
 
@@ -39,9 +39,10 @@ A file that matches nothing, or matches an `off` entry, gets no rule. The skill 
 
 pergent ships built-in rules for 67 file types, adapted from [alibaba/open-code-review](https://github.com/alibaba/open-code-review) (Apache-2.0). They cover common languages, config files, schemas and templates. pergent's [Path rules](https://github.com/gopaytech/pergent/blob/master/docs/concepts/rules.md) page says which file types they cover, the order they match in and what was changed from open-code-review. The texts are in pergent's `rule/builtin/` folder. An entry of the repository or of a rule set for the same file wins over a built-in.
 
-**A repository chooses its built-in rules one by one.** Each rule adds its text to the runs on its files, so a repository picks only the ones it needs, to keep the token cost down. There is no default for every repository: a repository that chose none gets none.
+**A repository enables its built-in rules one by one.** Each rule adds its text to the runs on its files, so a repository enables only the ones it needs, to keep the token cost down. There is no default for every repository: a repository that enabled none gets none.
 
-- On a repository the dashboard manages, choose them under **Built-in rules** on its **Settings**: tick a rule to add it, search by name or glob, and press **Select none** to clear the list. The card says how many are chosen, such as `3 of 67 chosen`.
+- On a repository the dashboard manages, enable them under **Built-in rules** on its **Settings**. The enabled rules are in the group **Enabled (N)** at the top, which a search never hides. Below it are a search by name or glob and the rules that are not enabled. Tick a rule to move it up into **Enabled**, untick it to move it back down, and press **Select none** to clear the list. Each row opens to show the rule's globs and text. The card says how many are enabled, such as `3 of 67 enabled`.
+- The repository's [Readiness](dashboard.md#readiness-scan) tab suggests built-in rules whose globs match files of the repository and that are not enabled, with the number of files each matches.
 - A repository in the config file lists them by name: `repositories[].built_in_rules: [go, yaml]`. The names are the ones on the **Built-in** tab of the **Rules** page. The old switch still works, so a config of v0.18.0 starts: `true` is every built-in rule and `false` is none.
 - A name that is not a built-in rule is refused, in the config and in the API. A name that a later pergent.sh no longer has is dropped from the list when it is read.
 - The repository's own `.pergent/rules.yaml` and its rule sets do not depend on this list.
@@ -68,7 +69,7 @@ Rule sets are on the **Rules** page. Everyone signed in reads them; admins creat
 
 A skill with `rules: false` in its frontmatter gets no rules in any run ([Skills and instructions](skills.md)).
 
-A repository's **Skills & instructions** tab shows the rule list a review of the default branch would get, with each entry's source.
+A repository's **Skills & instructions** tab has a **Rules** card: the rule list a review of the default branch would get, as one list in match order. It starts with a count line, such as `1 repository · 0 rule sets · 2 built-in`. Then come the entries of `.pergent/rules.yaml`, the entries of each rule set, and each enabled built-in rule. Each row has its source (`repo`, `dashboard:<set>` or `built-in`) and opens to show its text. A built-in row also shows its globs. The tab keeps what it read from the repository for 5 minutes, but the built-in rules are read from the repository's settings each time, so a change on **Settings** shows at once.
 
 ## When the rules can't be used
 
@@ -82,23 +83,23 @@ A check that silently stops running is close to a false pass, so none of these r
 
 ## Reviews and the rule list
 
-- A review records the hash of its rule list, the names of the chosen built-in rules and `jobs.image`. When the next push has another hash, every skill with rules on is reviewed in full: none of its files is carried over, and the log says `rules changed`. So a change of the chosen built-in rules gives one full review. A skill with `rules: false` carries as before. A review from before rules existed counts as a change, so the first push after the upgrade is a full review for skills with rules on.
+- A review records the hash of its rule list, the names of the enabled built-in rules and `jobs.image`. When the next push has another hash, every skill with rules on is reviewed in full: none of its files is carried over, and the log says `rules changed`. So a change of the enabled built-in rules gives one full review. A skill with `rules: false` carries as before. A review from before rules existed counts as a change, so the first push after the upgrade is a full review for skills with rules on.
 - `jobs.image` is in the hash because the built-in texts ship inside the image, so a new image can change them. The first push after you change `jobs.image` is a full review for skills with rules on.
 - Quiet reviews get rules as usual.
-- [API reviews](../setup/review-api.md) read no repository file: they get the default rule sets. They have no repository to choose built-in rules, so they get none.
+- [API reviews](../setup/review-api.md) read no repository file: they get the default rule sets. They have no repository to enable built-in rules, so they get none.
 - The rule list reaches the review Job as a file behind the environment variable `PERGENT_RULES`. A pergent image older than v0.11.0 ignores it and reviews as before. Rules never block, so this is not a false pass. Its result has no `rules` object, and the review page says `This image does not use rules.`
 
-## How the chosen built-in rules reach a review
+## How the enabled built-in rules reach a review
 
 The Job gets exactly one of 2 environment variables, never both:
 
-| The repository chose | `jobs.image` | The Job gets |
+| The repository enabled | `jobs.image` | The Job gets |
 |---|---|---|
 | None | Any | `PERGENT_NO_BUILT_IN_RULES=true` |
-| Some | A pergent that loads only the chosen rules | `PERGENT_BUILT_IN_RULES=<names>`, such as `yaml,go` |
+| Some | A pergent that loads only the enabled rules | `PERGENT_BUILT_IN_RULES=<names>`, such as `yaml,go` |
 | Some | An older pergent | `PERGENT_NO_BUILT_IN_RULES=true`, so the review gets no built-in rules |
 
-An older pergent ignores `PERGENT_BUILT_IN_RULES` and would load all 67 rules, which is the cost the list is there to stop. So pergent.sh sends it only to pergent v0.12.0 or newer, the first release that reads it. The default `jobs.image` is v0.12.0. A config that pins an older image gets no built-in rules, even with some chosen.
+An older pergent ignores `PERGENT_BUILT_IN_RULES` and would load all 67 rules, which is the cost the list is there to stop. So pergent.sh sends it only to pergent v0.12.0 or newer, the first release that reads it. The default `jobs.image` is v0.12.0. A config that pins an older image gets no built-in rules, even with some enabled.
 
-While the image can't load the list, the repository's **Settings** says so above the picker, and the review page of each run with chosen rules says why, for example `The chosen built-in rules were left out: image tag "v0.11.0" is older than v0.12.0.`
+While the image can't load the list, the repository's **Settings** says so above the picker, the **Rules** card on **Skills & instructions** says so too, and the review page of each run with enabled rules says why, for example `The enabled built-in rules were left out: image tag "v0.11.0" is older than v0.12.0.`
 - The review page shows the rule each reviewed file was checked with, and the comment's **Files** block ends with one line that counts the files per rule.

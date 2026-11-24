@@ -886,13 +886,13 @@ describe("ReviewDetail path rules", () => {
     expect(screen.getByText("This image does not use rules.")).toBeInTheDocument();
   });
 
-  it("says why the chosen built-in rules were left out", async () => {
+  it("says why the enabled built-in rules were left out", async () => {
     const run = structuredClone(runDetail);
-    run.builtInRulesNote = "The chosen built-in rules were left out: no review image can load only the chosen built-in rules yet.";
+    run.builtInRulesNote = "The enabled built-in rules were left out: no review image can load only the enabled built-in rules yet.";
     fakeApi(routes(run));
     renderApp("/reviews/main/acme/payments/77");
     await userEvent.click(await screen.findByRole("tab", { name: "Files" }));
-    expect(screen.getByText(/The chosen built-in rules were left out: no review image/)).toBeInTheDocument();
+    expect(screen.getByText(/The enabled built-in rules were left out: no review image/)).toBeInTheDocument();
   });
 });
 

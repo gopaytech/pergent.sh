@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent/rule"
 	"github.com/gopaytech/pergent/scope"
 )
 
@@ -67,10 +68,12 @@ func ScanTree(ctx context.Context, root string, in JobInput) (JobResult, error) 
 	}
 	reviewers := effectiveIndexes(r.Skills, in)
 
+	builtIns := builtInScopes()
 	w := walker{
 		dir: dir, attrs: attrs, r: &r, scopes: scopes, reviewers: reviewers,
 		buf: make([]byte, headerRead), top: map[string]fs.FileInfo{}, decided: make([]bool, len(scopes)),
 		langFiles: map[string]int{}, langCovered: map[string]bool{},
+		builtIns: builtIns, builtInFiles: make([]int, len(builtIns)),
 	}
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -115,6 +118,11 @@ func ScanTree(ctx context.Context, root string, in JobInput) (JobResult, error) 
 		a, b := r.Languages[i], r.Languages[j]
 		return a.Files > b.Files || (a.Files == b.Files && a.Name < b.Name)
 	})
+	for i, n := range w.builtInFiles {
+		if n > 0 {
+			r.BuiltInRules = append(r.BuiltInRules, BuiltInFit{Name: builtIns[i].name, Files: n})
+		}
+	}
 
 	if err := w.context(); err != nil {
 		return JobResult{}, err
@@ -164,6 +172,29 @@ func skillFits(ctx context.Context, src inputs.DirSource, in JobInput, r *JobRes
 	return scopes, nil
 }
 
+// builtInScope is the globs of one built-in rule: rule.Builtin is one entry
+// per choice of a {a,b} glob, all under one name.
+type builtInScope struct {
+	name  string
+	paths []string
+}
+
+// builtInScopes groups rule.Builtin by name, in builtin.yaml order.
+func builtInScopes() []builtInScope {
+	var out []builtInScope
+	at := map[string]int{}
+	for _, e := range rule.Builtin() {
+		i, ok := at[e.Name]
+		if !ok {
+			i = len(out)
+			at[e.Name] = i
+			out = append(out, builtInScope{name: e.Name})
+		}
+		out[i].paths = append(out[i].paths, e.Path)
+	}
+	return out
+}
+
 // effectiveIndexes is the indexes into fits of the skills a review would run
 // with the input's assignment, in Effective's order, leaving out any with a
 // Problem.
@@ -204,6 +235,9 @@ type walker struct {
 	langCovered map[string]bool
 	decided     []bool   // per file: r.Skills[i] reviews it
 	reviewedBy  []string // per file: the effective skills that review it
+	// builtInFiles counts, per builtIns rule, the files it matches.
+	builtIns     []builtInScope
+	builtInFiles []int
 }
 
 func (w *walker) file(rel string, info fs.FileInfo) error {
@@ -230,6 +264,14 @@ func (w *walker) file(rel string, info fs.FileInfo) error {
 	for _, i := range w.reviewers {
 		if w.decided[i] {
 			w.reviewedBy = append(w.reviewedBy, w.r.Skills[i].Name)
+		}
+	}
+
+	if rule == "" {
+		for i, b := range w.builtIns {
+			if scope.MatchAny(b.paths, rel) {
+				w.builtInFiles[i]++
+			}
 		}
 	}
 

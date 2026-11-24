@@ -3,12 +3,16 @@ package dashboard
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/gopaytech/pergent/rule"
+
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -114,7 +118,7 @@ func TestBuiltInRulesOffNotes(t *testing.T) {
 	t.Cleanup(func() { config.BuiltInRulesListMinVersion = old })
 	config.BuiltInRulesListMinVersion = ""
 	v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets")
-	if want := "Reviews get no built-in rules for now: no review image can load only the chosen built-in rules yet."; v.BuiltInRulesOff != want {
+	if want := "Reviews get no built-in rules for now: no review image can load only the enabled built-in rules yet."; v.BuiltInRulesOff != want {
 		t.Errorf("builtInRulesOff with no floor = %q, want %q", v.BuiltInRulesOff, want)
 	}
 	config.BuiltInRulesListMinVersion = "v0.11.0"
@@ -124,7 +128,7 @@ func TestBuiltInRulesOffNotes(t *testing.T) {
 	config.BuiltInRulesListMinVersion = "v0.12.0"
 	// It names the tag, never the registry: anyone who sees the repository
 	// reads it.
-	const older = `Reviews get no built-in rules for now: image tag "v0.11.0" is older than v0.12.0, the first pergent that loads only the chosen built-in rules.`
+	const older = `Reviews get no built-in rules for now: image tag "v0.11.0" is older than v0.12.0, the first pergent that loads only the enabled built-in rules.`
 	if v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets"); v.BuiltInRulesOff != older {
 		t.Errorf("builtInRulesOff with an older image = %q, want %q", v.BuiltInRulesOff, older)
 	}
@@ -202,9 +206,16 @@ func TestInputsViewRules(t *testing.T) {
 		got = append(got, r.Source+"|"+r.Path)
 	}
 	// The entries are the repository's and the sets'; the built-in rules
-	// it chose follow them, by name.
+	// it chose follow them, by name and with their text.
 	if !slices.Equal(got, []string{"repo|*.go", "dashboard:a|*.ts"}) || !slices.Equal(v.Rules.BuiltIn, []string{"yaml", "go"}) || v.Rules.Problem != "" {
 		t.Errorf("rules = %+v", v.Rules)
+	}
+	var builtIns []string
+	for _, b := range v.Rules.BuiltInEntries {
+		builtIns = append(builtIns, b.Name)
+	}
+	if !slices.Equal(builtIns, []string{"yaml", "go"}) || v.Rules.BuiltInEntries[0].Rule == "" || len(v.Rules.BuiltInEntries[0].Paths) == 0 {
+		t.Errorf("built-in entries = %+v", v.Rules.BuiltInEntries)
 	}
 
 	e.src["main"].set(func(f *fakeSource) { f.files[".pergent/rules.yaml"] = "rules:\n  - path: a.go\n" })
@@ -212,6 +223,39 @@ func TestInputsViewRules(t *testing.T) {
 	v = getJSON[InputsView](e, c, "/api/repositories/main/acme/widgets/inputs")
 	if v.Rules.Problem != ".pergent/rules.yaml: entry 1: needs a rule or off: true" || len(v.Rules.Entries) != 0 || len(v.Skills) == 0 {
 		t.Errorf("a broken file: rules = %+v, skills %d", v.Rules, len(v.Skills))
+	}
+}
+
+// The built-in part of the Rules card is read from the repository's settings
+// at each request, never kept with the rest: a save on another pod clears
+// only that pod's cache, and the card must not show the old choice.
+func TestInputsBuiltInRulesReadEachRequest(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	d := &Dashboard{
+		now:    func() time.Time { return now },
+		inputs: &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
+		builtInRules: func() []rule.Entry {
+			return []rule.Entry{
+				{Path: "**/*.yaml", Rule: "yaml", Source: rule.SourceBuiltIn, Name: "yaml"},
+				{Path: "**/*.go", Rule: "go", Source: rule.SourceBuiltIn, Name: "go"},
+			}
+		},
+	}
+	kept := InputsView{Branch: "main", Skills: []InputSkill{}, Detected: []DetectedSkillView{},
+		Rules: RulesView{BuiltIn: []string{"yaml"}, BuiltInEntries: []BuiltInRuleView{{Name: "yaml"}}, Entries: []RuleEntryView{}}}
+	d.inputs.entries["main\x00acme/widgets\x007"] = inputsEntry{view: kept, at: now}
+
+	rec := httptest.NewRecorder()
+	d.repositoryInputs(rec, httptest.NewRequest("GET", "/", nil), settings.Effective{Instance: "main", Project: "acme/widgets",
+		BuiltInRules: []string{"go"}}, 7)
+	v := decode[InputsView](t, rec, "GET inputs", http.StatusOK)
+	if v.Branch != "main" || !slices.Equal(v.Rules.BuiltIn, []string{"go"}) || len(v.Rules.BuiltInEntries) != 1 ||
+		v.Rules.BuiltInEntries[0].Name != "go" || v.Rules.BuiltInEntries[0].Rule != "go" {
+		t.Errorf("rules = %+v; want the kept view with the built-in rules chosen now", v.Rules)
+	}
+	if got := d.inputs.entries["main\x00acme/widgets\x007"].view.Rules.BuiltIn; !slices.Equal(got, []string{"yaml"}) {
+		t.Errorf("the kept view changed: %v", got)
 	}
 }
 
@@ -247,7 +291,7 @@ func TestRunViewFileRules(t *testing.T) {
 	if v.BuiltInRulesNote != "" {
 		t.Errorf("builtInRulesNote = %q, want none", v.BuiltInRulesNote)
 	}
-	const note = "The chosen built-in rules were left out: no review image can load only the chosen built-in rules yet."
+	const note = "The enabled built-in rules were left out: no review image can load only the enabled built-in rules yet."
 	e.exec(`UPDATE runs SET built_in_rules_note = $2 WHERE id = $1::uuid`, older, note)
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+older); v.BuiltInRulesNote != note {
 		t.Errorf("builtInRulesNote = %q, want %q", v.BuiltInRulesNote, note)

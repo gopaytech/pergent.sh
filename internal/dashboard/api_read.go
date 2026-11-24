@@ -1426,6 +1426,7 @@ func (d *Dashboard) repositoryInputs(w http.ResponseWriter, r *http.Request, rep
 	case err != nil:
 		writeError(w, http.StatusBadGateway, msgInputsFailed)
 	default:
+		v.Rules = d.withBuiltInRules(v.Rules, repo)
 		writeJSON(w, http.StatusOK, v)
 	}
 }

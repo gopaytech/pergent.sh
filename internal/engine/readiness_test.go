@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -995,5 +996,20 @@ func runScansUntil(t *testing.T, env *testEnv, cond func() bool) {
 			t.Fatal("RunScans did not get there in 5 s")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A Job's built-in rule counts keep only rules pergent.sh knows, each once
+// (the first), with at least one file.
+func TestCleanJobResultBuiltInRules(t *testing.T) {
+	t.Parallel()
+	r := readiness.JobResult{Version: readiness.ResultVersion, Commit: "abc", BuiltInRules: []readiness.BuiltInFit{
+		{Name: "go", Files: 3}, {Name: "not-a-rule", Files: 2}, {Name: "go", Files: 5}, {Name: "yaml", Files: -1},
+		{Name: "json", Files: 0}, {Name: "sql", Files: 1},
+	}}
+	got, ok := cleanJobResult(r, nil)
+	want := []readiness.BuiltInFit{{Name: "go", Files: 3}, {Name: "sql", Files: 1}}
+	if !ok || !slices.Equal(got.BuiltInRules, want) {
+		t.Errorf("built-in rules = %+v, %v; want %+v", got.BuiltInRules, ok, want)
 	}
 }
