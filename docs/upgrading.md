@@ -6,7 +6,12 @@
 - **Add model is a button on the Models card**, which opens the form inside the card. The separate **Add a model** card is gone from that page.
 - **Every Save button is on the right**, in the card's bottom bar. A monthly token limit's **Save** waits for a change, and Enter saves it too.
 - **Dropdowns have room for their arrow** on every page.
-- No API change, no migration and no config change.
+- **An admin can open a review of a removed repository.** The review list kept showing its stored runs, but the review page answered "Not found". It now finds the repository through its runs. Anyone else still gets "Not found".
+- **Review rows line up:** the outcome takes a column of its own width, so every title starts at the same place. A repository's **Reviews** tab shows only the change number, since the page already names the repository and its platform.
+- **A failed skill's missing findings are explained.** When a skill failed, the **Findings** tab says it failed before it could report any, with a **Show logs** button, instead of "No findings."
+- **An instance's monthly token quota** on **Integrations** has the same field as a model limit: its name above, **Save** beside it, waiting for a change, and Enter saves.
+- **The usage tables** keep each repository name on one line and give the cache and reasoning note more room.
+- No API change other than the review page above, no migration and no config change.
 
 ## Upgrading to 0.21.0
 

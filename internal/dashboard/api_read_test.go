@@ -630,6 +630,25 @@ func TestReviewDetail(t *testing.T) {
 	}
 }
 
+// An admin's review list keeps the runs of a removed repository, whose
+// project row is gone, so the admin can open them; nobody else can.
+func TestReviewDetailOfRemovedRepository(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	run := e.addRun(runFix{project: "acme/old", number: 5, head: head('a'), result: cleanResult(head('a')),
+		outcome: OutcomeNoBlocking, at: e.clock.now().Add(-time.Hour), title: "Old change"})
+	e.exec(`DELETE FROM projects WHERE instance = 'main' AND path = 'acme/old'`)
+
+	v := getJSON[ReviewDetailView](e, e.operator(), "/api/reviews/main/acme/old/5")
+	if v.Header.Project != "acme/old" || v.Header.Title != "Old change" || len(v.Runs) != 1 || v.Runs[0].ID != run {
+		t.Fatalf("review of the removed repository = %+v", v)
+	}
+	if v.Role != "" || v.Can != (CanView{}) {
+		t.Errorf("role %q, can %+v; want no buttons on a repository that is not switched on", v.Role, v.Can)
+	}
+	e.wantStatus(e.userOnMain(false, "acme/widgets"), "/api/reviews/main/acme/old/5", http.StatusNotFound)
+}
+
 // Outcomes are the ones the publisher recorded: settings changed since, an
 // approval withdrawn since (the change merged) change nothing. Runs not
 // published show their state; nothing is guessed.
