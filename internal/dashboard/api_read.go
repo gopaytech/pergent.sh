@@ -441,6 +441,11 @@ func (d *Dashboard) review(w http.ResponseWriter, r *http.Request) {
 	// The merge request of the project the user sees at that path, not of
 	// one that had the path before.
 	id, ok, err := d.projectID(ctx, se, instance, project)
+	if err == nil && !ok && se.All {
+		// An admin's review list holds the runs of a repository that was
+		// removed, whose project row is gone: its runs still name it.
+		id, ok, err = d.Store.RunProjectID(ctx, instance, project)
+	}
 	if err != nil {
 		d.failed(w, r, "loading a project", err)
 		return

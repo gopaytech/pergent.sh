@@ -8,7 +8,8 @@ export type ReviewFilter = { project?: string; outcome?: string; days: number };
 
 // ReviewList is a page of reviews matching filter, with "Load more" while
 // the API has a next page.
-export default function ReviewList({ filter, label }: { filter: ReviewFilter; label: string }) {
+// inRepo is a repository's own list (see ReviewRows).
+export default function ReviewList({ filter, label, inRepo }: { filter: ReviewFilter; label: string; inRepo?: boolean }) {
   const list = useInfiniteQuery({
     queryKey: ["reviews", filter.project ?? "", filter.outcome ?? "", filter.days],
     initialPageParam: "",
@@ -29,7 +30,7 @@ export default function ReviewList({ filter, label }: { filter: ReviewFilter; la
   const items = list.data.pages.flatMap((p) => p.items);
   return (
     <section className="card" aria-label={label}>
-      <ReviewRows items={items} empty="No reviews match." />
+      <ReviewRows items={items} empty="No reviews match." inRepo={inRepo} />
       {list.hasNextPage && (
         <div className="foot">
           <button type="button" className="btn" onClick={() => list.fetchNextPage()} disabled={list.isFetchingNextPage}>

@@ -99,10 +99,12 @@ describe("RepositoryDetail", () => {
       expect(within(tabs).getByRole("tab", { name })).toBeInTheDocument();
     }
     expect(within(tabs).getByRole("tab", { name: "Reviews" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByRole("link", { name: /acme\/payments !77/ })).toHaveAttribute(
-      "href",
-      "/reviews/main/acme/payments/77",
-    );
+    // The page names the repository and its platform, so a row shows only the change number.
+    const link = await screen.findByRole("link", { name: /^!77 · / });
+    expect(link).toHaveAttribute("href", "/reviews/main/acme/payments/77");
+    const list = screen.getByRole("region", { name: "Reviews of this repository" });
+    expect(list).not.toHaveTextContent("acme/payments !77");
+    expect(within(list).queryByText("GitLab")).not.toBeInTheDocument();
   });
 
   it("shows Settings to a maintainer of the repository, whoever they are elsewhere", async () => {

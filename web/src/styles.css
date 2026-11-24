@@ -1790,3 +1790,32 @@ select:not([multiple]) {
 [hidden] {
   display: none !important;
 }
+
+/* A review row's outcome sits in a column of its own width, so every title
+   starts at the same place whatever the outcome's word. */
+.review-row > .pill:first-child {
+  flex: none;
+  min-width: 92px;
+  text-align: center;
+}
+
+/* A line of text with one button at its end, inside a card. */
+.row-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.limit-field .inline-field .btn {
+  margin-top: 0;
+}
+
+/* Usage tables scroll sideways: keep each name on one line, and give the
+   cache and reasoning note room so it wraps less. */
+.card.scroll .table td:first-child {
+  white-space: nowrap;
+}
+
+.card.scroll .table td.num.meta {
+  min-width: 240px;
+}
