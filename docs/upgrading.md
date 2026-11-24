@@ -1,6 +1,6 @@
 # ⬆️ Upgrading
 
-## Unreleased
+## Upgrading to 0.21.0
 
 **A JWT sign-in issuer no longer has to be a URL:** [Sign-in](concepts/dashboard.md#sign-in). In `jwt` mode the issuer is only compared with the token's `iss`, so any value with no spaces or control characters (at most 512 characters) is taken, such as a Teleport cluster name. This makes sign-in behind Teleport app access work (see **Behind Teleport** on that page). An OIDC issuer must still be an `https` URL, and so must the JWKS URL.
 
