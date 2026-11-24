@@ -1,38 +1,27 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useParams } from "react-router";
 
-import { api, isStatus, paths, type ChainEntryView, type ChainRef, type ChainView, type TeamModelsView, type TeamModelView } from "../api";
+import { api, paths, type ChainEntryView, type ChainRef, type ChainView, type TeamModelsView, type TeamModelView } from "../api";
 import ChainEditor from "../ChainEditor";
 import { useWrite } from "../layout/write";
 import MarkBanner, { markText } from "../MarkBanner";
 import { AddModelForm, EditModelForm } from "../ModelForms";
-import { ErrorBox, Loading, NotFound, secretText } from "../ui";
-import TeamLimits from "./TeamLimits";
+import { ErrorBox, Loading, secretText } from "../ui";
 
-// TeamModels is a team's page in the user area: the team's own models and
-// keys, and its chain. Every member sees them (never a key, and a viewer no
-// base URL); a maintainer of the team, or an admin, changes them. The team's
-// entries run only for repositories the team owns.
-export default function TeamModels() {
-  const params = useParams();
-  const id = /^[1-9]\d{0,15}$/.test(params.id ?? "") ? Number(params.id) : null;
+// TeamModelsTab is the Models tab of a team's page: the team's own models
+// and keys, and its chain. Every member sees them (never a key, and a viewer
+// no base URL); a maintainer of the team, or an admin, changes them. The
+// team's entries run only for repositories the team owns.
+export default function TeamModelsTab({ team }: { team: number }) {
   const models = useQuery({
-    queryKey: ["team-models", id],
-    queryFn: () => api.get<TeamModelsView>(paths.apiTeamModels(id!)),
-    enabled: id !== null,
+    queryKey: ["team-models", team],
+    queryFn: () => api.get<TeamModelsView>(paths.apiTeamModels(team)),
   });
-  if (id === null || isStatus(models.error, 404)) return <NotFound />;
   if (models.isPending) return <Loading />;
   if (models.isError) return <ErrorBox error={models.error} />;
   const v = models.data;
   return (
-    <div className="narrow">
-      <div className="crumbs">
-        <Link to="/teams">Teams</Link> / {v.team.name}
-      </div>
-      <h1>{v.team.name}</h1>
-      <div className="sub spaced">Your role: {v.role}</div>
+    <>
       <section className="card" aria-label="Models">
         <h2>Models</h2>
         <MarkBanner entries={v.models} />
@@ -41,13 +30,12 @@ export default function TeamModels() {
         </div>
         {v.models.length === 0 && <div className="pad meta">No model of the team's own yet.</div>}
         {v.models.map((m) => (
-          <TeamModelRow key={m.id} team={v.team.id} m={m} canEdit={v.canEdit} />
+          <TeamModelRow key={m.id} team={team} m={m} canEdit={v.canEdit} />
         ))}
       </section>
-      <TeamLimits team={v.team.id} role={v.role} canEdit={v.canEdit} />
-      <TeamChain team={v.team.id} />
-      {v.canEdit && <AddTeamModel team={v.team.id} />}
-    </div>
+      <TeamChain team={team} />
+      {v.canEdit && <AddTeamModel team={team} />}
+    </>
   );
 }
 

@@ -17,6 +17,7 @@ import {
   teamLimitsPayments,
   teamModelQwen,
   teamModelsPayments,
+  teamPagePayments,
   viewer,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
@@ -26,6 +27,7 @@ afterEach(() => vi.unstubAllGlobals());
 const routes = (me = maintainer, models: TeamModelsView = teamModelsPayments, chain: ChainView = chainTeam) => ({
   "GET /api/me": { body: me },
   "GET /api/me/teams": { body: myTeams },
+  "GET /api/teams/2": { body: { ...teamPagePayments, role: models.role } },
   "GET /api/teams/2/models": { body: models },
   "GET /api/teams/2/chain": { body: chain },
   "GET /api/teams/2/limits": { body: teamLimitsPayments },
@@ -59,7 +61,7 @@ describe("MyTeams", () => {
 describe("TeamModels", () => {
   it("shows a viewer the entries and their states with no button that changes them", async () => {
     fakeApi(routes(viewer, asViewer, readOnlyChain));
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     expect(await screen.findByRole("heading", { name: "Payments" })).toBeInTheDocument();
     const qwen = await entry("qwen3.5");
     expect(qwen).toHaveTextContent("openrouter / qwen/qwen3.5");
@@ -76,7 +78,7 @@ describe("TeamModels", () => {
 
   it("lets a maintainer add an entry with a write-only key, and forgets the key", async () => {
     const fake = fakeApi({ ...routes(), "POST /api/teams/2/models": { status: 201, body: { ...teamModelQwen, id: "t-new", name: "Mistral" } } });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     const form = await screen.findByRole("form", { name: "Add a model" });
     // Only an admin says which global entries teams may use.
     expect(within(form).queryByRole("switch")).not.toBeInTheDocument();
@@ -98,7 +100,7 @@ describe("TeamModels", () => {
 
   it("changes an entry's name and base URL with a PUT to the team's route", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/teams/2/models/t-qwen": { body: teamModelQwen } });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     await userEvent.click(within(await entry("qwen3.5")).getByRole("button", { name: "Edit qwen3.5" }));
     const form = screen.getByRole("form", { name: "Edit qwen3.5" });
     await userEvent.clear(within(form).getByLabelText("Name"));
@@ -111,7 +113,7 @@ describe("TeamModels", () => {
     const confirm = vi.fn(() => true);
     vi.stubGlobal("confirm", confirm);
     const fake = fakeApi({ ...routes(), "DELETE /api/teams/2/models/t-qwen": { status: 204 } });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     await userEvent.click(within(await entry("qwen3.5")).getByRole("button", { name: "Remove qwen3.5" }));
     expect(confirm).toHaveBeenCalledWith(
       "Remove qwen3.5? Its key is deleted, and it is taken out of these chains: team Payments, main/acme/payments.",
@@ -122,7 +124,7 @@ describe("TeamModels", () => {
   it("removes nothing when the confirmation is refused", async () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
     const fake = fakeApi(routes());
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     await userEvent.click(within(await entry("qwen3.5")).getByRole("button", { name: "Remove qwen3.5" }));
     expect(fake.find("DELETE", "/api/teams/2/models/t-qwen")).toHaveLength(0);
   });
@@ -131,7 +133,7 @@ describe("TeamModels", () => {
     const opusForTeams = { ...entrySonnet, id: "m-opus", name: "Claude Opus", model: "claude-opus" };
     const chain: ChainView = { ...chainTeam, choices: [choice(entryTeamQwen), choice(entrySonnet), choice(opusForTeams)] };
     const fake = fakeApi({ ...routes(maintainer, teamModelsPayments, chain), "PUT /api/teams/2/chain": { body: chain } });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     const card = await screen.findByRole("region", { name: "Team chain" });
     const pick = await within(card).findByRole("combobox", { name: "Entry to add" });
     expect(within(pick).getAllByRole("option").map((o) => o.textContent)).toEqual(["Choose an entry to add", "Claude Opus (global)"]);
@@ -155,7 +157,7 @@ describe("TeamModels", () => {
     // The server shows the global chain the team's repositories use.
     const none: ChainView = { ...chainGlobal, scope: "team", entries: [entryConfig, entrySonnet], choices: [choice(entryTeamQwen), choice(entrySonnet)] };
     const fake = fakeApi({ ...routes(maintainer, teamModelsPayments, none), "PUT /api/teams/2/chain": { body: chainTeam } });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     const card = await screen.findByRole("region", { name: "Team chain" });
     expect(await within(card).findByText("This team has no chain of its own: its repositories use the global chain.")).toBeInTheDocument();
     expect(within(card).getByText("openai/gpt-5")).toBeInTheDocument();
@@ -175,7 +177,7 @@ describe("TeamModels", () => {
       ...routes(maintainer, { ...teamModelsPayments, models: [marked] }),
       "DELETE /api/teams/2/models/t-qwen/mark": { status: 204 },
     });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     expect(await screen.findByRole("note", { name: "Marked entries" })).toHaveTextContent("qwen3.5: out of credit until 2026-11-21 14:00 UTC");
     await userEvent.click(within(await entry("qwen3.5")).getByRole("button", { name: "Clear mark of qwen3.5" }));
     expect(fake.find("DELETE", "/api/teams/2/models/t-qwen/mark")[0].headers.get("X-CSRF-Token")).toBe("csrf-maint");
@@ -187,21 +189,21 @@ describe("TeamModels", () => {
       ...routes(maintainer, teamModelsPayments, { ...chainTeam, entries: [marked, { ...entrySonnet, position: 2 }] }),
       "DELETE /api/teams/2/models/t-qwen/mark": { status: 204 },
     });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     const card = await screen.findByRole("region", { name: "Team chain" });
     await userEvent.click(await within(card).findByRole("button", { name: "Clear mark of qwen3.5" }));
     expect(fake.find("DELETE", "/api/teams/2/models/t-qwen/mark")).toHaveLength(1);
   });
 
   it("shows not found for a team the session doesn't see", async () => {
-    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/teams/9/models": { status: 404, body: { error: "not found" } } });
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/teams/9": { status: 404, body: { error: "not found" } } });
     renderApp("/teams/9");
     expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
   });
 
   it("shows a model's name as text, never as HTML", async () => {
     fakeApi(routes(maintainer, { ...teamModelsPayments, models: [{ ...teamModelQwen, name: "<b>x</b>" }] }));
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     expect(await entry("<b>x</b>")).toBeInTheDocument();
     expect(document.querySelector("main b b")).toBeNull();
   });
@@ -210,7 +212,7 @@ describe("TeamModels", () => {
 describe("TeamModels: no chain B", () => {
   it("has no chain B card, and asks for no panel chain", async () => {
     const fake = fakeApi(routes());
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=models");
     const card = await screen.findByRole("region", { name: "Team chain" });
     expect(await within(card).findByText("Claude Sonnet")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/\bchain B\b/i);

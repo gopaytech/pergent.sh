@@ -27,7 +27,7 @@ import SkillEditor, { NewSkill } from "./pages/SkillEditor";
 import SkillInstall from "./pages/SkillInstall";
 import Skills from "./pages/Skills";
 import SkillUpdates from "./pages/SkillUpdates";
-import TeamModels from "./pages/TeamModels";
+import Team from "./pages/Team";
 import Teams from "./pages/Teams";
 import Usage from "./pages/Usage";
 import UsageRepository from "./pages/UsageRepository";
@@ -142,7 +142,7 @@ export default function App() {
         <Route path="rules/view/:name" element={<RuleSetEditor />} />
         {/* The session's own teams; the admins' Teams page is /admin/teams. */}
         <Route path="teams" element={<MyTeams />} />
-        <Route path="teams/:id" element={<TeamModels />} />
+        <Route path="teams/:id" element={<Team />} />
         <Route
           path="admin"
           element={

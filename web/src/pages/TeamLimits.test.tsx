@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TeamLimitsView, TeamModelsView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { chainTeam, maintainer, myTeams, ssoAdmin, teamLimitsPayments, teamModelQwen, teamModelsPayments, viewer } from "../test/fixtures";
+import { chainTeam, maintainer, myTeams, ssoAdmin, teamLimitsPayments, teamModelQwen, teamModelsPayments, teamPagePayments, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -12,6 +12,7 @@ afterEach(() => vi.unstubAllGlobals());
 const routes = (me = maintainer, models: TeamModelsView = teamModelsPayments, limits: TeamLimitsView = teamLimitsPayments) => ({
   "GET /api/me": { body: me },
   "GET /api/me/teams": { body: myTeams },
+  "GET /api/teams/2": { body: { ...teamPagePayments, role: models.role } },
   "GET /api/teams/2/models": { body: models },
   "GET /api/teams/2/chain": { body: chainTeam },
   "GET /api/teams/2/limits": { body: limits },
@@ -22,7 +23,7 @@ const card = () => screen.findByRole("region", { name: "Model limits" });
 describe("TeamModels: model limits", () => {
   it("shows a maintainer the team's own limits to set, and an admin's limit read-only", async () => {
     fakeApi(routes());
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=limits");
     const c = await card();
     const own = await within(c).findByRole("group", { name: "qwen3.5 limit" });
     expect(own).toHaveTextContent("Tokens this month: 450 of 500");
@@ -42,7 +43,7 @@ describe("TeamModels: model limits", () => {
       "PUT /api/teams/2/models/t-qwen/limit": { status: 204 },
       "DELETE /api/teams/2/models/t-qwen/limit": { status: 204 },
     });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=limits");
     const own = await within(await card()).findByRole("group", { name: "qwen3.5 limit" });
     const input = within(own).getByLabelText("Limit of qwen3.5");
     const save = within(own).getByRole("button", { name: "Save the limit of qwen3.5" });
@@ -53,9 +54,8 @@ describe("TeamModels: model limits", () => {
     const [put] = fake.find("PUT", "/api/teams/2/models/t-qwen/limit");
     expect(put.body).toEqual({ monthlyTokens: 800 });
     expect(put.headers.get("X-CSRF-Token")).toBe("csrf-maint");
-    // The card and the team chain, whose tags move, are read again.
+    // The card is read again. The team chain, whose tags move, is on the Models tab: its cache is marked stale and read when that tab opens.
     await waitFor(() => expect(fake.find("GET", "/api/teams/2/limits").length).toBeGreaterThanOrEqual(2));
-    await waitFor(() => expect(fake.find("GET", "/api/teams/2/chain").length).toBeGreaterThanOrEqual(2));
     await userEvent.clear(input);
     await userEvent.click(save);
     await waitFor(() => expect(fake.find("DELETE", "/api/teams/2/models/t-qwen/limit")).toHaveLength(1));
@@ -66,7 +66,7 @@ describe("TeamModels: model limits", () => {
       ...routes(),
       "PUT /api/teams/2/models/t-qwen/limit": { status: 400, body: { error: "the server says no" } },
     });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=limits");
     const own = await within(await card()).findByRole("group", { name: "qwen3.5 limit" });
     const input = within(own).getByLabelText("Limit of qwen3.5");
     const save = within(own).getByRole("button", { name: "Save the limit of qwen3.5" });
@@ -86,7 +86,7 @@ describe("TeamModels: model limits", () => {
       ...routes(ssoAdmin, { ...teamModelsPayments, role: "admin" }),
       "PUT /api/admin/models/m-sonnet/team-limits/2": { status: 204 },
     });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=limits");
     const sonnet = await within(await card()).findByRole("group", { name: "Claude Sonnet limit" });
     expect(sonnet).not.toHaveTextContent("Set by an admin.");
     const input = within(sonnet).getByLabelText("Limit of Claude Sonnet");
@@ -103,7 +103,7 @@ describe("TeamModels: model limits", () => {
       ...routes(ssoAdmin, { ...teamModelsPayments, role: "admin" }),
       "DELETE /api/admin/models/m-sonnet/team-limits/2": { status: 204 },
     });
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=limits");
     const sonnet = await within(await card()).findByRole("group", { name: "Claude Sonnet limit" });
     await userEvent.clear(within(sonnet).getByLabelText("Limit of Claude Sonnet"));
     await userEvent.click(within(sonnet).getByRole("button", { name: "Save the limit of Claude Sonnet" }));
@@ -120,7 +120,7 @@ describe("TeamModels: model limits", () => {
       ],
     };
     fakeApi(routes(maintainer, teamModelsPayments, limits));
-    renderApp("/teams/2");
+    renderApp("/teams/2?tab=limits");
     const c = await card();
     expect(await within(c).findByRole("group", { name: "Claude Sonnet limit" })).toHaveTextContent("Model limit for all teams: room left");
     expect(within(c).getByRole("group", { name: "Claude Opus limit" })).not.toHaveTextContent("Model limit for all teams");
@@ -129,16 +129,18 @@ describe("TeamModels: model limits", () => {
   it("shows a viewer no card and asks for no limits", async () => {
     const asViewer: TeamModelsView = { ...teamModelsPayments, role: "viewer", canEdit: false, models: [{ ...teamModelQwen, baseURL: "" }] };
     const fake = fakeApi(routes(viewer, asViewer));
-    renderApp("/teams/2");
-    await screen.findByRole("region", { name: "Team chain" });
+    renderApp("/teams/2?tab=limits");
+    // A viewer has no Limits tab, so the address falls back to Repositories.
+    await screen.findByRole("heading", { name: "Payments" });
+    expect(screen.queryByRole("tab", { name: "Limits" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Model limits" })).not.toBeInTheDocument();
     expect(fake.find("GET", "/api/teams/2/limits")).toHaveLength(0);
   });
 
   it("shows nothing when the server says the session may not see the limits", async () => {
-    fakeApi({ ...routes(), "GET /api/teams/2/limits": { status: 403, body: { error: "only maintainers of this team see its model limits" } } });
-    renderApp("/teams/2");
-    await screen.findByRole("region", { name: "Team chain" });
+    const fake = fakeApi({ ...routes(), "GET /api/teams/2/limits": { status: 403, body: { error: "only maintainers of this team see its model limits" } } });
+    renderApp("/teams/2?tab=limits");
+    await waitFor(() => expect(fake.find("GET", "/api/teams/2/limits")).toHaveLength(1));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Model limits" })).not.toBeInTheDocument());
     expect(screen.queryByText("only maintainers of this team see its model limits")).not.toBeInTheDocument();
   });
