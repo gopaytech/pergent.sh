@@ -71,7 +71,7 @@ Admins change the global chain on the admin **Settings** page, under **Global ch
 
 ### The owner team
 
-An admin ticks **owner** on a team's entry for a repository, or for a whole instance, on the admin **Teams** page. The repository page's **Teams** section does not set owners. An admin can also pick an **Owner team** when switching a repository on with **Add repository**. The repository page shows `Owner team: <team>` under its name.
+An admin ticks **owner** on a team's entry for a repository, or for a whole instance, on the **Repositories** tab of the team's page (`/teams/<id>`). The repository page's **Teams** section does not set owners. An admin can also pick an **Owner team** when switching a repository on with **Add repository**. The repository page shows `Owner team: <team>` under its name.
 
 - Each level has one owner at most. A second one is refused: `payments/api already has owner Payments`, or `main (whole instance) already has owner Payments` for an instance.
 - The most specific owner wins: a repository's own entry, then its instance's.

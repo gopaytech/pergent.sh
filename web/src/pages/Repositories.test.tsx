@@ -103,6 +103,21 @@ describe("Repositories", () => {
       expect(post.body).toEqual({ project: "acme/payments", instance: "main", ownerTeam: teamPayments.id });
     });
 
+    it("reads the team lists and the owner team again after a switch-on with an owner team", async () => {
+      fakeApi(routes());
+      const { client } = renderApp("/repos?add=1");
+      const spy = vi.spyOn(client, "invalidateQueries");
+      const picker = await screen.findByRole("region", { name: "Add repository" });
+      await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+      await userEvent.selectOptions(await within(picker).findByLabelText("Owner team"), "Payments");
+      await userEvent.click(await within(picker).findByRole("button", { name: "Switch on acme/payments" }));
+      const keys = () => spy.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey: unknown[] }).queryKey));
+      await vi.waitFor(() => expect(keys()).toContain('["repositories"]'));
+      for (const k of ["[\"teams\"]", "[\"my-teams\"]", `["team",${teamPayments.id}]`]) {
+        expect(keys()).toContain(k);
+      }
+    });
+
     it("sends no ownerTeam with None", async () => {
       const fake = fakeApi(routes());
       renderApp("/repos?add=1");

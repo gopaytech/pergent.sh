@@ -205,6 +205,12 @@ function Picker() {
     onSuccess: (detail) => {
       client.invalidateQueries({ queryKey: ["repositories"] });
       client.invalidateQueries({ queryKey: ["available"] });
+      if (ownerTeam !== "") {
+        // The new owner changes what the team lists and covers.
+        client.invalidateQueries({ queryKey: ["teams"] });
+        client.invalidateQueries({ queryKey: ["my-teams"] });
+        client.invalidateQueries({ queryKey: ["team", Number(ownerTeam)] });
+      }
       navigate(paths.repo(detail.repo.instance, detail.repo.project));
     },
   });

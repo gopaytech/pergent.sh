@@ -64,7 +64,7 @@ Header: the team name, `Your role: <role>`, and for an admin, **Rename** and **R
 ### Saving
 
 - Every change on the Repositories and Members tabs sends `PUT /api/teams/{id}` with the team as the page last read it, plus that one change. The other tab's data is sent as read, so nothing is dropped.
-- An entry that is no longer switched on, or whose instance is being removed, is left out of the save, as today's editor does (`PUT` answers 400 `msgRepoNotOn` for it). The tab shows it with `(removed)` and a note that the next save drops it.
+- A repository entry that is no longer switched on, or a whole-instance entry whose instance is being removed, is left out of the save, as today's editor does (`PUT` answers 400 `msgRepoNotOn` for it). The tab shows it with `(removed)` and a note that the next save drops it.
 - Two admins editing one team at the same time: the last save wins, as today. A later change can add a version check (approach B).
 
 ### Usage tab

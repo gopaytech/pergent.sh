@@ -133,6 +133,13 @@ describe("Team Repositories tab", () => {
     });
   });
 
+  it("a refused save shows the server's text in an alert", async () => {
+    fakeApi({ ...routes(), "PUT /api/teams/2": { status: 409, body: { error: "acme/widgets already has owner Widgets" } } });
+    renderApp("/teams/2");
+    await userEvent.click(await screen.findByRole("button", { name: "Remove acme/payments" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("acme/widgets already has owner Widgets");
+  });
+
   it("a saved change reads the chain views again", async () => {
     fakeApi(routes());
     const { client } = renderApp("/teams/2");
@@ -141,7 +148,7 @@ describe("Team Repositories tab", () => {
     await userEvent.click(screen.getByRole("button", { name: "Remove acme/payments" }));
     const keys = () => spy.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey: unknown[] }).queryKey));
     await vi.waitFor(() => expect(keys()).toContain('["repo-chain"]'));
-    for (const k of ['["team-models",2]', '["team-chain",2]', '["team-limits",2]', '["repo-chain"]', '["repo-reviewers"]']) {
+    for (const k of ['["team-models",2]', '["team-chain",2]', '["team-limits",2]', '["team-repository-choices",2]', '["repo-chain"]', '["repo-reviewers"]']) {
       expect(keys()).toContain(k);
     }
   });

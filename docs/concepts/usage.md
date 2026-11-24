@@ -31,7 +31,7 @@ A team's page has a **Usage** tab. Only the team's maintainers and admins see it
 
 - It shows the tokens (input plus output) and reviews of the repositories the team owns, each day, each repository and each model, busiest first. Cache and reasoning are shown apart, as on the other pages.
 - A review counts on the owner team the repository had **when the review was written**. If a repository moves to another team, its old rows stay on the old team.
-- `Counts reviews since v0.19.0` shows when the period starts before the oldest review that has any owner team. Older reviews have no team, so they are not counted. It is checked over the whole instance: a team made after the upgrade gets no note.
+- `Counts reviews since v0.19.0` shows when the period starts before the oldest review that has any owner team. Older reviews have no team, so they are not counted. It is checked over all teams, not only this one, so a new team does not get the note just because it is new.
 
 ## Wasted tokens
 

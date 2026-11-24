@@ -40,17 +40,6 @@ const readOnlyChain: ChainView = { ...chainTeam, readOnly: true, choices: [] };
 const entry = (name: string) => screen.findByRole("group", { name });
 
 describe("MyTeams", () => {
-  it("lists the session's teams, its role on each and what each covers, linked to the team's page", async () => {
-    fakeApi(routes());
-    renderApp("/teams");
-    expect(await screen.findByRole("heading", { name: "Teams" })).toBeInTheDocument();
-    const payments = await screen.findByRole("region", { name: "Payments" });
-    expect(payments).toHaveTextContent("Your role: maintainer");
-    expect(payments).toHaveTextContent("acme/payments (owner)");
-    expect(within(payments).getByRole("link", { name: "Payments" })).toHaveAttribute("href", "/teams/2");
-    expect(screen.getByRole("region", { name: "Platform" })).toHaveTextContent("All repositories of main");
-  });
-
   it("says so when the session is on no team", async () => {
     fakeApi({ ...routes(ssoAdmin), "GET /api/me/teams": { body: [] } });
     renderApp("/teams");

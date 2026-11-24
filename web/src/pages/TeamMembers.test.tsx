@@ -158,6 +158,18 @@ describe("Team Members tab", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("on a refusal that is not a 409, it shows the server's text and adds no one", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "POST /api/admin/users": { status: 400, body: { error: "that email is not allowed" } },
+    });
+    renderApp("/teams/2?tab=members");
+    await userEvent.type(await screen.findByLabelText("Add by email"), "bad@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Add email" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("that email is not allowed");
+    expect(fake.find("PUT", "/api/teams/2")).toHaveLength(0);
+  });
+
   it("on a 409 for an account that is not found, it keeps the text, shows an error and makes no PUT", async () => {
     const fake = fakeApi({
       ...routes(),
