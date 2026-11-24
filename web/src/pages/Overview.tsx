@@ -5,13 +5,12 @@ import { Link } from "react-router";
 import { api, type OverviewView, type SetupView } from "../api";
 import { useMe } from "../layout/me";
 import { ErrorBox, Loading } from "../ui";
-import AttentionRows from "./Attention";
 import ReviewRows from "./ReviewRows";
 
 const periods = [7, 30, 90];
 
-// Overview is the landing page: the numbers of the last days, the recent
-// reviews and the setup problems.
+// Overview is the landing page: the numbers of the last days and the recent
+// reviews. A repository's setup problems are under its Setup checks tab.
 export default function Overview() {
   const me = useMe();
   const [days, setDays] = useState(7);
@@ -60,18 +59,12 @@ function Body({ view }: { view: OverviewView }) {
         <Stat k="Blocking findings" v={stats.blocking} d="reviews with blocking issues" />
         <Stat k="Failed reviews" v={stats.failed} d={stats.failed > 0 ? "see the reviews for why" : "none failed"} bad={stats.failed > 0} />
       </section>
-      <div className="grid">
-        <section className="card" aria-label="Recent reviews">
-          <h2>
-            Recent reviews <Link to="/reviews">View all →</Link>
-          </h2>
-          <ReviewRows items={view.recent} empty="No reviews yet." />
-        </section>
-        <section className="card attention" aria-label="Needs attention">
-          <h2>Needs attention</h2>
-          <AttentionRows items={view.attention} />
-        </section>
-      </div>
+      <section className="card" aria-label="Recent reviews">
+        <h2>
+          Recent reviews <Link to="/reviews">View all →</Link>
+        </h2>
+        <ReviewRows items={view.recent} empty="No reviews yet." />
+      </section>
     </>
   );
 }

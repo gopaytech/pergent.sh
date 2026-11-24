@@ -113,7 +113,7 @@ func (d *Dashboard) readinessChecklist(ctx context.Context, se Session, repo set
 	for _, s := range list {
 		in.LibrarySizes[s.Name] = s.Size
 	}
-	items, err := d.attention(ctx, se, byProject([]settings.Effective{repo}), repoKey(repo.Instance, repo.Project))
+	items, err := d.attention(ctx, byProject([]settings.Effective{repo}), repoKey(repo.Instance, repo.Project))
 	if err != nil {
 		return readiness.Checklist{}, err
 	}

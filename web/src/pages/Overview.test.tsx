@@ -9,7 +9,7 @@ import { renderApp } from "../test/render";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Overview", () => {
-  it("shows the numbers, recent reviews and what needs attention", async () => {
+  it("shows the numbers and the recent reviews, and no Needs attention panel", async () => {
     fakeApi({ "GET /api/me": { body: ssoAdmin }, "GET /api/overview?days=7": { body: overview } });
     renderApp("/");
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
@@ -30,11 +30,8 @@ describe("Overview", () => {
     expect(within(recent).getByText(/security-review found blocking issues/)).toBeInTheDocument();
     expect(within(recent).getByRole("link", { name: "View all →" })).toHaveAttribute("href", "/reviews");
 
-    const attention = screen.getByRole("region", { name: "Needs attention" });
-    expect(within(attention).getByText("acme/payments")).toBeInTheDocument();
-    expect(within(attention).getByText(/One approval is enough/)).toBeInTheDocument();
-    expect(within(attention).getByText("main")).toBeInTheDocument();
-    expect(within(attention).getByText("Token")).toHaveClass("pill");
+    expect(screen.queryByRole("region", { name: "Needs attention" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/needs attention/i)).not.toBeInTheDocument();
   });
 
   it("asks for another period", async () => {
@@ -86,14 +83,13 @@ describe("Overview", () => {
     expect(screen.queryByRole("region", { name: "Setup checklist" })).not.toBeInTheDocument();
   });
 
-  it("says when nothing needs attention", async () => {
+  it("says when there are no reviews yet", async () => {
     fakeApi({
       "GET /api/me": { body: ssoAdmin },
-      "GET /api/overview?days=7": { body: { ...overview, recent: [], attention: [] } },
+      "GET /api/overview?days=7": { body: { ...overview, recent: [] } },
     });
     renderApp("/");
     expect(await screen.findByText("No reviews yet.")).toBeInTheDocument();
-    expect(screen.getByText("Nothing needs attention.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "+ Add repository" })).toHaveAttribute("href", "/repos?add=1");
   });
 });

@@ -12,7 +12,7 @@ The reconcile of that one repository starts within seconds of the switch. The ho
 
 **While a repository is paused:**
 
-- It stays in the list, with its switch off and `Paused` in the Health column. It doesn't count toward "Needs attention" on the overview.
+- It stays in the list, with its switch off and `Paused` in the Health column. It is never marked `Needs attention`, whatever setup problems are left.
 - Whoever could see it before still sees it, and its reviews. Its settings stay editable by the same roles, and its page says `Paused` at the top.
 - Nothing starts a Job or acts on the platform for it. **Scan now** and **Start review** are hidden, and the API answers them and the review buttons (re-run, dismiss, restore) `409` with `the repository is paused`. A webhook for it is ignored and a comment command is dropped, as for a repository that is not switched on. Runs still queued for it are dropped when they come up for dispatch; a review that was already running is still posted, but never approved, as with approval turned off.
 - The bot's approvals on open merge requests and pull requests stay as they are. Nothing is posted on them.

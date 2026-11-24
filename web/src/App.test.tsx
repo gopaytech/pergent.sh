@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -55,7 +55,9 @@ describe("App shell", () => {
     await screen.findByRole("link", { name: "acme/payments" });
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "+ Add repository" })).not.toBeInTheDocument();
-    expect(screen.getByText(/^maint-user/)).toHaveTextContent("maint-user · user");
+    const account = screen.getByRole("region", { name: "Account" });
+    expect(within(account).getByText("maint-user")).toHaveAttribute("title", "maint-user");
+    expect(within(account).getByText("User")).toHaveClass("role");
     first.unmount();
 
     renderApp("/repos/main/acme/payments");

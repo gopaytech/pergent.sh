@@ -102,7 +102,7 @@ export default function RepositoryDetail() {
         {tab === "setup" && (
           <section className="card" aria-label="Setup checks">
             <h2>Setup checks</h2>
-            <AttentionRows items={view.attention} platform={repo.platform} linkRepos={false} />
+            <AttentionRows items={view.attention} />
           </section>
         )}
       </div>

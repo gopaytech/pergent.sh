@@ -67,16 +67,13 @@ const (
 
 // OverviewView is GET /api/overview?days=7 (days 1 to 90, default 7):
 // numbers over the runs started in the last days, the 10 most recently
-// updated reviews of the last 90 days and the setup problems of the
-// repositories the user can see (instance-wide ones and the library's own,
-// with no instance, only for admins). Setup is the setup checklist, for
+// updated reviews of the last 90 days. Setup is the setup checklist, for
 // admins only, and null once all four items are done (and for everyone
 // else).
 type OverviewView struct {
-	Stats     StatsView       `json:"stats"`
-	Recent    []ReviewSummary `json:"recent"`
-	Attention []AttentionView `json:"attention"`
-	Setup     *SetupView      `json:"setup"`
+	Stats  StatsView       `json:"stats"`
+	Recent []ReviewSummary `json:"recent"`
+	Setup  *SetupView      `json:"setup"`
 }
 
 // SetupView is what an admin still has to set up, one item each: an LLM
@@ -941,13 +938,10 @@ type SkillFetchResultView struct {
 	Error string `json:"error,omitempty"`
 }
 
-// AttentionView is one setup problem. Project is "" for a problem of the
-// whole instance (an expiring token). Client is the API client a problem is
-// about (failing callbacks), with Instance and Project "".
+// AttentionView is one setup problem of a repository.
 type AttentionView struct {
 	Instance  string    `json:"instance"`
 	Project   string    `json:"project"`
-	Client    string    `json:"client,omitempty"`
 	Kind      string    `json:"kind"`
 	Message   string    `json:"message"`
 	UpdatedAt time.Time `json:"updatedAt"`

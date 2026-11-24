@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChecklistItem, ReadinessView, ScanView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { overview, ssoAdmin, repoDetail, repoPayments, repoWidgets, reviewBlocking } from "../test/fixtures";
+import { ssoAdmin, repoDetail, repoPayments, repoWidgets, reviewBlocking } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -548,40 +548,5 @@ describe("Readiness", () => {
       .getAllByRole("tab")
       .map((t) => t.textContent);
     expect(names).toEqual(["Reviews", "Skill results", "Settings", "Past dismissals", "Skills & instructions", "Readiness", "Setup checks (1)"]);
-  });
-
-  it("links the 3 readiness Needs attention kinds to the Readiness tab, and the others to Setup checks", async () => {
-    const row = (project: string, kind: string, message: string) => ({
-      instance: "main",
-      project,
-      kind,
-      message,
-      updatedAt: new Date().toISOString(),
-    });
-    fakeApi({
-      "GET /api/me": { body: ssoAdmin },
-      "GET /api/overview?days=7": {
-        body: {
-          ...overview,
-          attention: [
-            row("acme/a", "no_skill_coverage", "No skill matches."),
-            row("acme/b", "inputs_over_budget", "Inputs are over 900 KiB."),
-            row("acme/c", "no_project_context", "No README."),
-            row("acme/d", "single_approval", "One approval."),
-          ],
-        },
-      },
-    });
-    renderApp("/");
-    const region = await screen.findByRole("region", { name: "Needs attention" });
-    for (const [project, tab] of [
-      ["acme/a", "readiness"],
-      ["acme/b", "readiness"],
-      ["acme/c", "readiness"],
-      ["acme/d", "setup"],
-    ]) {
-      expect(within(region).getByRole("link", { name: project })).toHaveAttribute("href", `/repos/main/${project}?tab=${tab}`);
-    }
-    expect(within(region).getByText("No skill matches.")).toBeInTheDocument();
   });
 });

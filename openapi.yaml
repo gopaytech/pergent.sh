@@ -933,11 +933,11 @@ paths:
     get:
       operationId: getOverview
       tags: [Overview and reviews]
-      summary: Numbers, recent reviews and setup problems
+      summary: Numbers and recent reviews
       description: |
-        Numbers over the runs started in the last `days`, the 10 most recently
-        updated reviews of the last 90 days, and the setup problems of the
-        repositories the user can see. `setup` is the setup checklist for
+        Numbers over the runs started in the last `days` and the 10 most
+        recently updated reviews of the last 90 days. A repository's setup
+        problems are in its own `attention`. `setup` is the setup checklist for
         admins only, and null once all four items are done (and for everyone
         else).
       x-pergent-access: session
@@ -6148,17 +6148,12 @@ components:
         defaults: {$ref: '#/components/schemas/DefaultsView'}
         llm: {$ref: '#/components/schemas/LLMView'}
     AttentionView:
-      description: One setup problem.
+      description: One setup problem of a repository.
       type: object
       required: [instance, project, kind, message, updatedAt]
       properties:
         instance: {type: string}
-        project:
-          type: string
-          description: '"" for a problem of the whole instance, or of an API client.'
-        client:
-          type: string
-          description: The API client the problem is about (`callback_failing`, admins only), with `instance` and `project` "". Left out otherwise.
+        project: {type: string}
         kind: {type: string}
         message: {type: string}
         updatedAt:
@@ -7315,15 +7310,12 @@ components:
     OverviewView:
       description: Body of GET /api/overview.
       type: object
-      required: [stats, recent, attention, setup]
+      required: [stats, recent, setup]
       properties:
         stats: {$ref: '#/components/schemas/StatsView'}
         recent:
           type: array
           items: {$ref: '#/components/schemas/ReviewSummary'}
-        attention:
-          type: array
-          items: {$ref: '#/components/schemas/AttentionView'}
         setup:
           oneOf:
           - $ref: '#/components/schemas/SetupView'

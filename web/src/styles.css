@@ -110,31 +110,53 @@ aside {
   margin: 14px 10px 4px;
 }
 
-.me .grow {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 .me {
   margin-top: auto;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 12px 10px 4px;
+  border-top: 1px solid var(--side-2);
   font-size: 13px;
 }
 
+.me .who {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.me .name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.me .meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.me .role,
+.me .meta-line > span[aria-hidden] {
+  opacity: 0.65;
+}
+
 .avatar {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   flex: none;
   border-radius: 50%;
   background: var(--avatar);
   display: grid;
   place-items: center;
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .me .error {
@@ -478,18 +500,16 @@ a.mr:hover {
   white-space: nowrap;
 }
 
-.attention .title a,
 .row .title a {
   color: var(--text);
   text-decoration: none;
 }
 
-.attention .title a:hover,
 .row .title a:hover {
   text-decoration: underline;
 }
 
-.attention .why {
+.row .why {
   font-size: 12px;
   color: var(--muted);
 }
@@ -725,13 +745,6 @@ pre {
 
 .down {
   color: var(--bad);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: 1.6fr 1fr;
-  gap: 16px;
-  align-items: start;
 }
 
 /* --- review detail --- */
@@ -1324,7 +1337,6 @@ details.built-in-doc pre.doc {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .grid,
   .layout,
   .set {
     grid-template-columns: 1fr;
@@ -1644,11 +1656,11 @@ pre.diff .diff-del {
   text-decoration: line-through;
 }
 
-/* --- dropdowns: the browser's own arrow sits on the edge; draw one with room --- */
+/* --- dropdowns: the browser's own arrow sits on the edge; draw one with room.
+   :not([multiple]) leaves a list box alone and outranks .table select and
+   .check select, so the compact ones keep the room on the right too. --- */
 
-select,
-select:disabled,
-select.btn {
+select:not([multiple]) {
   appearance: none;
   -webkit-appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
