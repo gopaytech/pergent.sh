@@ -650,7 +650,16 @@ func teamChanges(before, after store.Team, userName func(int64) string) []string
 	if len(names) > 0 {
 		parts = append(parts, "members "+strings.Join(names, " "))
 	}
-	repos := func(rs []store.TeamRepo) []RepoKey {
+	if !sameEntries(before.Repos, after.Repos) {
+		parts = append(parts, "repos")
+	}
+	return parts
+}
+
+// sameEntries reports whether a and b cover the same repositories and
+// instances (ignoring case and order); the owner ticks are not compared.
+func sameEntries(a, b []store.TeamRepo) bool {
+	keys := func(rs []store.TeamRepo) []RepoKey {
 		out := make([]RepoKey, 0, len(rs))
 		for _, r := range rs {
 			out = append(out, repoKey(r.Instance, r.Project))
@@ -658,10 +667,7 @@ func teamChanges(before, after store.Team, userName func(int64) string) []string
 		sortKeys(out)
 		return slices.Compact(out)
 	}
-	if !slices.Equal(repos(before.Repos), repos(after.Repos)) {
-		parts = append(parts, "repos")
-	}
-	return parts
+	return slices.Equal(keys(a), keys(b))
 }
 
 // roleByAccount is the role of each member by account ID; an account named

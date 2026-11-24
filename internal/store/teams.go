@@ -176,7 +176,18 @@ func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) erro
 		return false, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if ok, err := updateTeamTx(ctx, tx, id, apply); err != nil || !ok {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
+// updateTeamTx is UpdateTeam inside tx, which the caller commits or rolls
+// back: on an error or ok false, tx must be rolled back.
+func updateTeamTx(ctx context.Context, tx pgx.Tx, id int64, apply func(*Team) error) (ok bool, err error) {
 	var locked int64
 	err = tx.QueryRow(ctx, `SELECT id FROM teams WHERE id = $1 FOR UPDATE`, id).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -279,9 +290,6 @@ func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) erro
 			SELECT $1, i, p, o FROM unnest($2::text[], $3::text[], $4::boolean[]) AS u(i, p, o)`, id, instances, projects, owners); err != nil {
 			return false, err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, err
 	}
 	return true, nil
 }

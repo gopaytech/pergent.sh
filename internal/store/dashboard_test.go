@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -449,6 +450,147 @@ func TestInsertDashboardRepo(t *testing.T) {
 	if err != nil || r.CreatedBy != "alice" || r.Project != "acme/widgets" || r.Approve == nil || *r.Approve {
 		t.Errorf("row = %+v, %v", r, err)
 	}
+}
+
+// SwitchOnOwned switches a repository on (or resumes a paused one) and makes
+// a team its owner in one transaction; a refused owner or an unknown team
+// leaves everything as it was.
+func TestSwitchOnOwned(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	payments, _ := s.CreateTeam(ctx, "Payments", t0)
+	growth, _ := s.CreateTeam(ctx, "Growth", t0)
+	// Growth owns the whole of lab; a repository of lab can still get its own owner.
+	if err := setOwner(t, s, growth.ID, TeamRepo{Instance: "lab", Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+	pause := func(t *testing.T, project string) {
+		t.Helper()
+		if _, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: project, CreatedBy: "carol"}); err != nil {
+			t.Fatal(err)
+		}
+		if found, _, err := s.SetDashboardRepoEnabled(ctx, "main", project, false); err != nil || !found {
+			t.Fatalf("pause %s = %v, %v", project, found, err)
+		}
+	}
+	addRepos := func(t *testing.T, id int64, repos ...TeamRepo) {
+		t.Helper()
+		if _, err := s.UpdateTeam(ctx, id, func(tm *Team) error { tm.Repos = append(tm.Repos, repos...); return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hasEntry := func(t *testing.T, id int64, want TeamRepo) bool {
+		t.Helper()
+		tm, _, err := s.Team(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.Contains(tm.Repos, want)
+	}
+	row := func(t *testing.T, instance, project string) (DashboardRepo, bool) {
+		t.Helper()
+		r, found, err := s.AnyDashboardRepo(ctx, instance, project)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r, found
+	}
+
+	t.Run("new", func(t *testing.T) {
+		res, err := s.SwitchOnOwned(ctx, DashboardRepo{Instance: "main", Project: "acme/new", CreatedBy: "alice"}, payments.ID)
+		if err != nil || !res.Created || res.Resumed {
+			t.Fatalf("SwitchOnOwned = %+v, %v; want created", res, err)
+		}
+		if r, found := row(t, "main", "acme/new"); !found || !r.Enabled || r.CreatedBy != "alice" {
+			t.Errorf("row = %+v, %v", r, found)
+		}
+		owned := TeamRepo{Instance: "main", Project: "acme/new", Owner: true}
+		if !hasEntry(t, payments.ID, owned) {
+			t.Error("Payments does not own acme/new")
+		}
+		if slices.Contains(res.Before.Repos, owned) || !slices.Contains(res.After.Repos, owned) || res.After.Name != "Payments" {
+			t.Errorf("before = %+v, after = %+v", res.Before, res.After)
+		}
+	})
+	t.Run("paused", func(t *testing.T) {
+		pause(t, "Acme/Paused")
+		addRepos(t, payments.ID, TeamRepo{Instance: "main", Project: "Acme/Paused"})
+		addRepos(t, growth.ID, TeamRepo{Instance: "main", Project: "Acme/Paused"})
+		res, err := s.SwitchOnOwned(ctx, DashboardRepo{Instance: "main", Project: "acme/paused"}, payments.ID)
+		if err != nil || res.Created || !res.Resumed {
+			t.Fatalf("SwitchOnOwned = %+v, %v; want resumed", res, err)
+		}
+		if r, _ := row(t, "main", "acme/paused"); !r.Enabled || r.Project != "Acme/Paused" {
+			t.Errorf("row = %+v; want enabled, spelled as stored", r)
+		}
+		if !hasEntry(t, payments.ID, TeamRepo{Instance: "main", Project: "Acme/Paused", Owner: true}) {
+			t.Error("Payments' row was lost or not ticked")
+		}
+		if !hasEntry(t, growth.ID, TeamRepo{Instance: "main", Project: "Acme/Paused"}) {
+			t.Error("Growth's row was lost")
+		}
+	})
+	t.Run("already owner", func(t *testing.T) {
+		pause(t, "acme/mine")
+		addRepos(t, payments.ID, TeamRepo{Instance: "main", Project: "acme/mine", Owner: true})
+		res, err := s.SwitchOnOwned(ctx, DashboardRepo{Instance: "main", Project: "ACME/mine"}, payments.ID)
+		if err != nil || !res.Resumed {
+			t.Fatalf("SwitchOnOwned = %+v, %v; want resumed", res, err)
+		}
+		if !slices.Equal(res.Before.Repos, res.After.Repos) {
+			t.Errorf("before %+v, after %+v; want the same", res.Before.Repos, res.After.Repos)
+		}
+	})
+	t.Run("instance owner elsewhere", func(t *testing.T) {
+		res, err := s.SwitchOnOwned(ctx, DashboardRepo{Instance: "lab", Project: "acme/lab-repo"}, payments.ID)
+		if err != nil || !res.Created {
+			t.Fatalf("SwitchOnOwned = %+v, %v; want created", res, err)
+		}
+		if !hasEntry(t, payments.ID, TeamRepo{Instance: "lab", Project: "acme/lab-repo", Owner: true}) {
+			t.Error("Payments did not get the repository-level owner tick")
+		}
+		if !hasEntry(t, growth.ID, TeamRepo{Instance: "lab", Owner: true}) {
+			t.Error("Growth lost the instance owner tick")
+		}
+	})
+	t.Run("repository owner elsewhere", func(t *testing.T) {
+		pause(t, "acme/theirs")
+		addRepos(t, growth.ID, TeamRepo{Instance: "main", Project: "acme/theirs", Owner: true})
+		before, _, _ := s.Team(ctx, payments.ID)
+		_, err := s.SwitchOnOwned(ctx, DashboardRepo{Instance: "main", Project: "acme/theirs"}, payments.ID)
+		var taken *OwnerTakenError
+		if !errors.As(err, &taken) || taken.Team != "Growth" {
+			t.Fatalf("SwitchOnOwned = %v; want *OwnerTakenError of Growth", err)
+		}
+		if r, _ := row(t, "main", "acme/theirs"); r.Enabled {
+			t.Error("the repository was resumed although the owner was refused")
+		}
+		if after, _, _ := s.Team(ctx, payments.ID); !slices.Equal(before.Repos, after.Repos) {
+			t.Errorf("Payments changed: %+v -> %+v", before.Repos, after.Repos)
+		}
+	})
+	t.Run("already on", func(t *testing.T) {
+		if _, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/on"}); err != nil {
+			t.Fatal(err)
+		}
+		before, _, _ := s.Team(ctx, payments.ID)
+		res, err := s.SwitchOnOwned(ctx, DashboardRepo{Instance: "main", Project: "acme/on"}, payments.ID)
+		if err != nil || res.Created || res.Resumed {
+			t.Fatalf("SwitchOnOwned = %+v, %v; want neither created nor resumed", res, err)
+		}
+		if after, _, _ := s.Team(ctx, payments.ID); !slices.Equal(before.Repos, after.Repos) {
+			t.Errorf("Payments changed: %+v -> %+v", before.Repos, after.Repos)
+		}
+	})
+	t.Run("no team", func(t *testing.T) {
+		_, err := s.SwitchOnOwned(ctx, DashboardRepo{Instance: "main", Project: "acme/orphan"}, 999999)
+		if !errors.Is(err, ErrUnknownTeam) {
+			t.Fatalf("SwitchOnOwned = %v; want ErrUnknownTeam", err)
+		}
+		if _, found := row(t, "main", "acme/orphan"); found {
+			t.Error("a row was stored for an unknown team")
+		}
+	})
 }
 
 // UpdateDashboardRepo changes an existing row's settings and never creates

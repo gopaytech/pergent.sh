@@ -1371,6 +1371,15 @@ paths:
         pergent.sh sets up the webhook and clone credentials within seconds.
         A repository that is paused is resumed instead, with its settings, and
         the answer is 200.
+
+        With `ownerTeam`, the same transaction makes that team the
+        repository's owner: the team's entry for it gets the owner tick, or
+        the team gets a new entry with it. A paused repository keeps its team
+        rows. An `ownerTeam` that is not a team is 400, before the platform
+        is asked. When another team owns the repository's own entry the
+        answer is 409 and nothing changes: a paused repository stays paused.
+        An owner of the whole instance is not in the way. The change is
+        audited as `owner_set`, as from the team page.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -5555,6 +5564,9 @@ components:
         project:
           type: string
           maxLength: 1024
+        ownerTeam:
+          type: [integer, 'null']
+          description: The ID of the team to make the repository's owner in the same step. Left out or null for none.
     RerunRequest:
       type: object
       properties:
@@ -7486,7 +7498,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff, ownerTeam]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -7530,6 +7542,21 @@ components:
         builtInRulesOff:
           type: string
           description: Why reviews leave out the built-in rules a repository chooses, because `jobs.image` can't load only those; empty when it loads them.
+        ownerTeam:
+          description: The team that owns the repository (its own entry's owner, else its instance entry's). Null when there is none.
+          oneOf:
+            - {$ref: '#/components/schemas/OwnerTeamView'}
+            - {type: 'null'}
+    OwnerTeamView:
+      description: A repository's owner team, on its page.
+      type: object
+      required: [id, name, open]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        open:
+          type: boolean
+          description: Whether the session may open the team's page (an admin, or a member of the team).
     MultiReviewView:
       description: A repository's multi review, on its page. Never a model, a base URL or a key.
       type: object

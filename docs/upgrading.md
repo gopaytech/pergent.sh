@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **New read routes `GET /api/teams/{id}`, `GET /api/teams/{id}/repository-choices` and `GET /api/teams/{id}/usage`, and counts on `GET /api/me/teams`:** the first gives a team's members, entries and the session's role to members and admins. The second is the admin search for repositories to add to a team. Members' emails are for an admin only. The third is what the repositories a team owned used, for the team's maintainers and admins (a viewer gets 403). It counts only usage recorded since v0.19.0, which first stored the owner team. `GET /api/me/teams` has the new keys `memberCount`, `repoCount`, `instanceCount` and `ownedCount`. No migration and no new config key.
+- **`POST /api/repositories` takes an optional `ownerTeam`:** a team ID. The repository is switched on and that team becomes its owner in one transaction, audited as `owner_set`, as from the team page. A team that is not there is 400. When another team owns the repository's own entry, the call is 409 and a paused repository stays paused. A repository's page (`GET /api/repositories/{instance}/{project}`) has the new key `ownerTeam`: `{id, name, open}`, or null when it has no owner team. `open` is set for an admin and for a member of that team. A call without `ownerTeam` works as before.
 
 ## Upgrading to 0.21.0
 

@@ -545,6 +545,17 @@ type RepositoryDetailView struct {
 	// the repository chooses (jobs.image can't load only those); "" when it
 	// loads them.
 	BuiltInRulesOff string `json:"builtInRulesOff"`
+	// OwnerTeam is the team that owns the repository (its own entry's owner,
+	// else its instance entry's); nil when there is none.
+	OwnerTeam *OwnerTeamView `json:"ownerTeam"`
+}
+
+// OwnerTeamView is a repository's owner team on its page. Open is whether
+// the session may open the team's page: an admin, or a member of the team.
+type OwnerTeamView struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Open bool   `json:"open"`
 }
 
 // MultiReviewView is a repository's multi review on its page. On is

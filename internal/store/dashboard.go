@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -395,6 +396,23 @@ func nilIfEmpty(s []string) []string {
 // is written. The model r names is locked the same way; one that is not in
 // the list is ErrModelNotFound.
 func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (created bool, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if created, err = insertDashboardRepoTx(ctx, tx, r); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return created, nil
+}
+
+// insertDashboardRepoTx is InsertDashboardRepo inside tx, which the caller
+// commits or rolls back: on an error, tx must be rolled back.
+func insertDashboardRepoTx(ctx context.Context, tx pgx.Tx, r DashboardRepo) (created bool, err error) {
 	skills := nilIfEmpty(r.Skills)
 	links, err := linksParam(r.LinkedRepos)
 	if err != nil {
@@ -408,11 +426,6 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	if err != nil {
 		return false, err
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return false, err
 	}
@@ -443,10 +456,90 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 			return false, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, err
-	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// ErrUnknownTeam is returned by SwitchOnOwned for a team that isn't there
+// (it was removed meanwhile).
+var ErrUnknownTeam = errors.New("no such team")
+
+// SwitchOnResult is what SwitchOnOwned did. Created: a new row was stored;
+// Resumed: a paused row was switched on. Neither is set for a repository
+// that was on already, and then nothing was written. Before and After are
+// the owner team as it was and as it was stored.
+type SwitchOnResult struct {
+	Created, Resumed bool
+	Before, After    Team
+}
+
+// SwitchOnOwned switches r on and makes team teamID its owner, in one
+// transaction. A repository with no row is stored as InsertDashboardRepo
+// stores it; a paused one is resumed with its settings and its team rows.
+// Then the team's own entry for the repository (matched ignoring case) gets
+// the owner tick, or the team gets a new entry with it, spelled as the row
+// is stored; the team's other entries stay. A repository that is on
+// already is left as it is, and so is the team. A team that isn't there is
+// ErrUnknownTeam; another team's owner tick on the repository's own entry is
+// *OwnerTakenError (an owner of the whole instance is not in the way). On
+// any error nothing is written: a paused repository stays paused.
+func (s *Store) SwitchOnOwned(ctx context.Context, r DashboardRepo, teamID int64) (SwitchOnResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return SwitchOnResult{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	// The team first, as UpdateTeam locks it, so an unknown team writes nothing.
+	var locked int64
+	err = tx.QueryRow(ctx, `SELECT id FROM teams WHERE id = $1 FOR UPDATE`, teamID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SwitchOnResult{}, ErrUnknownTeam
+	}
+	if err != nil {
+		return SwitchOnResult{}, err
+	}
+	var res SwitchOnResult
+	if res.Created, err = insertDashboardRepoTx(ctx, tx, r); err != nil {
+		return SwitchOnResult{}, err
+	}
+	project := r.Project
+	if !res.Created {
+		err := tx.QueryRow(ctx, `UPDATE dashboard_repos SET enabled = true, updated_at = now()
+			WHERE instance = $1 AND lower(project) = lower($2) AND NOT enabled RETURNING project`,
+			r.Instance, r.Project).Scan(&project)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SwitchOnResult{}, nil // on already: nothing written
+		}
+		if err != nil {
+			return SwitchOnResult{}, err
+		}
+		res.Resumed = true
+	}
+	ok, err := updateTeamTx(ctx, tx, teamID, func(t *Team) error {
+		res.Before = *t
+		res.Before.Members, res.Before.Repos = slices.Clone(t.Members), slices.Clone(t.Repos)
+		i := slices.IndexFunc(t.Repos, func(tr TeamRepo) bool {
+			return tr.Instance == r.Instance && tr.Project != "" && strings.EqualFold(tr.Project, project)
+		})
+		if i >= 0 {
+			t.Repos[i].Owner = true
+		} else {
+			t.Repos = append(t.Repos, TeamRepo{Instance: r.Instance, Project: project, Owner: true})
+		}
+		res.After = *t
+		res.After.Members, res.After.Repos = slices.Clone(t.Members), slices.Clone(t.Repos)
+		return nil
+	})
+	if err != nil {
+		return SwitchOnResult{}, err
+	}
+	if !ok {
+		return SwitchOnResult{}, ErrUnknownTeam
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return SwitchOnResult{}, err
+	}
+	return res, nil
 }
 
 // UpdateDashboardRepo changes the settings of the dashboard repository

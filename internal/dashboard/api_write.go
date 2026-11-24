@@ -238,6 +238,9 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Project  string `json:"project"`
 		Instance string `json:"instance"`
+		// OwnerTeam, when set, is the team made the repository's owner in
+		// the same transaction.
+		OwnerTeam *int64 `json:"ownerTeam"`
 	}
 	if err := decodeStrict(r, &body); err != nil || strings.TrimSpace(body.Project) == "" || len(body.Project) > 1024 {
 		writeError(w, http.StatusBadRequest, msgBadProjectBody)
@@ -251,6 +254,19 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	if !d.knownInstance(instance) {
 		notFound(w)
 		return
+	}
+	if body.OwnerTeam != nil {
+		// Before the platform is asked: a team that isn't there is the
+		// client's mistake, whatever the bot reaches.
+		_, found, err := d.Store.Team(ctx, *body.OwnerTeam)
+		if err != nil {
+			d.failed(w, r, "reading the team", err)
+			return
+		}
+		if !found {
+			writeError(w, http.StatusBadRequest, msgNoTeam)
+			return
+		}
 	}
 
 	// The client's word isn't taken: the review bot or App must reach the
@@ -272,35 +288,67 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, msgConfigManaged)
 		return
 	}
-	created, err := d.Store.InsertDashboardRepo(ctx, store.DashboardRepo{
-		Instance: instance, Project: name, CreatedBy: se.Username})
-	if err != nil {
-		d.Log.Error("dashboard: switching a repository on failed", "instance", instance, "project", name,
-			"error", err.Error())
-		writeError(w, http.StatusInternalServerError, msgWriteFailed)
-		return
-	}
-	status := http.StatusCreated
-	if !created {
-		// A paused repository is resumed, with its settings; one switched
-		// on already is a conflict.
-		_, resumed, err := d.Store.SetDashboardRepoEnabled(ctx, instance, name, true)
-		if err != nil {
-			d.Log.Error("dashboard: resuming a repository failed", "instance", instance, "project", name,
+	row := store.DashboardRepo{Instance: instance, Project: name, CreatedBy: se.Username}
+	var created, resumed bool
+	var owned *store.SwitchOnResult
+	if body.OwnerTeam != nil {
+		// Switched on (or resumed) and owned in one transaction: a refused
+		// owner leaves a paused repository paused.
+		res, err := d.Store.SwitchOnOwned(ctx, row, *body.OwnerTeam)
+		var taken *store.OwnerTakenError
+		switch {
+		case errors.As(err, &taken):
+			writeError(w, http.StatusConflict, taken.Error())
+			return
+		case errors.Is(err, store.ErrUnknownTeam):
+			// Removed since it was checked.
+			writeError(w, http.StatusBadRequest, msgNoTeam)
+			return
+		case err != nil:
+			d.Log.Error("dashboard: switching a repository on with its owner team failed", "instance", instance,
+				"project", name, "team", *body.OwnerTeam, "error", err.Error())
+			writeError(w, http.StatusInternalServerError, msgWriteFailed)
+			return
+		}
+		created, resumed, owned = res.Created, res.Resumed, &res
+	} else {
+		var err error
+		if created, err = d.Store.InsertDashboardRepo(ctx, row); err != nil {
+			d.Log.Error("dashboard: switching a repository on failed", "instance", instance, "project", name,
 				"error", err.Error())
 			writeError(w, http.StatusInternalServerError, msgWriteFailed)
 			return
 		}
-		if !resumed {
-			writeError(w, http.StatusConflict, msgAlreadyOn)
-			return
+		if !created {
+			// A paused repository is resumed, with its settings.
+			if _, resumed, err = d.Store.SetDashboardRepoEnabled(ctx, instance, name, true); err != nil {
+				d.Log.Error("dashboard: resuming a repository failed", "instance", instance, "project", name,
+					"error", err.Error())
+				writeError(w, http.StatusInternalServerError, msgWriteFailed)
+				return
+			}
 		}
+	}
+	if !created && !resumed {
+		writeError(w, http.StatusConflict, msgAlreadyOn)
+		return
+	}
+	status := http.StatusCreated
+	if resumed {
 		status = http.StatusOK
 		d.Log.Info("dashboard: repository resumed", "instance", instance, "project", name, "by", se.Username)
 		d.audit(ctx, se, "repository_resumed", instance, name, "")
 	} else {
 		d.Log.Info("dashboard: repository switched on", "instance", instance, "project", name, "by", se.Username)
 		d.audit(ctx, se, "repository_on", instance, name, "")
+	}
+	if owned != nil {
+		// As a change on the team page: the entries, then the owner tick.
+		if !sameEntries(owned.Before.Repos, owned.After.Repos) {
+			d.Log.Info("dashboard: team changed", "team", owned.After.Name, "changed", "repos", "by", se.Username)
+			d.audit(ctx, se, "team_updated", instance, name, owned.After.Name+": repos")
+		}
+		d.auditOwners(ctx, se, owned.Before, owned.After)
 	}
 	d.reconcileSoon(instance, name)
 	repo, ok, err := d.Repos.Get(ctx, instance, name)
