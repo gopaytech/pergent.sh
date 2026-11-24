@@ -13,7 +13,7 @@ import {
 } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Pill, ago } from "../ui";
+import { Ago, ErrorBox, Loading, Pill } from "../ui";
 
 // waitingFirst puts the accounts on no team first, keeping the order of the
 // rest.
@@ -151,7 +151,7 @@ function Row({ user, lastLocalAdmin }: { user: UserView; lastLocalAdmin: boolean
         )}
       </td>
       <td>{user.teams.length === 0 ? <span className="meta">none</span> : user.teams.map((t) => t.name).join(", ")}</td>
-      <td>{user.lastSignInAt ? ago(user.lastSignInAt) : "never"}</td>
+      <td>{user.lastSignInAt ? <Ago t={user.lastSignInAt} /> : "never"}</td>
       <td className="num">
         {keep ? (
           <span className="meta" title={keep}>

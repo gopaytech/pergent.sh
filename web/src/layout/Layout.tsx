@@ -1,42 +1,43 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 
 import { api, type Me } from "../api";
+import { Icon, type IconName } from "../icons";
 import ChangePassword from "../pages/ChangePassword";
 import Waiting from "../pages/Waiting";
 import { ErrorBox, Loading, NotFound } from "../ui";
 import { MeContext, inAdminArea, useMe } from "./me";
 import SignOut from "./SignOut";
 
-type NavItem = { to: string; label: string; icon: string; end?: boolean; badge?: string };
+type NavItem = { to: string; label: string; icon: IconName; end?: boolean; badge?: string };
 
 // The user area: what a user sees, and an admin too.
 const userItems: NavItem[] = [
-  { to: "/", label: "Overview", icon: "🏠", end: true },
-  { to: "/repos", label: "Repositories", icon: "📁" },
-  { to: "/reviews", label: "Reviews", icon: "🔍" },
-  { to: "/skills", label: "Skills", icon: "🧩" },
-  { to: "/rules", label: "Rules", icon: "📏" },
+  { to: "/", label: "Overview", icon: "home", end: true },
+  { to: "/repos", label: "Repositories", icon: "repos" },
+  { to: "/reviews", label: "Reviews", icon: "reviews" },
+  { to: "/skills", label: "Skills", icon: "skills" },
+  { to: "/rules", label: "Rules", icon: "rules" },
   // Every account past the waiting page is on a team (an admin sees them all).
-  { to: "/teams", label: "Teams", icon: "👥" },
+  { to: "/teams", label: "Teams", icon: "teams" },
 ];
 
 // withAPIClients puts API clients right after Repositories: the review API's
 // clients are an admin's, so a user's menu never has the link.
 const withAPIClients = (items: NavItem[]): NavItem[] =>
-  items.flatMap((item) => (item.to === "/repos" ? [item, { to: "/api-clients", label: "API clients", icon: "🔗" }] : [item]));
+  items.flatMap((item) => (item.to === "/repos" ? [item, { to: "/api-clients", label: "API clients", icon: "clients" }] : [item]));
 
 // adminItems is the admin area; Users says how many accounts wait for a
 // team.
 const adminItems = (waitingUsers: number): NavItem[] => [
-  { to: "/admin", label: "Admin", icon: "🛡️", end: true },
-  { to: "/admin/users", label: "Users", icon: "👤", badge: waitingUsers > 0 ? `${waitingUsers} waiting` : undefined },
-  { to: "/admin/teams", label: "Teams", icon: "👥" },
-  { to: "/admin/integrations", label: "Integrations", icon: "🔌" },
-  { to: "/admin/settings", label: "Settings", icon: "⚙️" },
-  { to: "/admin/usage", label: "Usage", icon: "📈" },
-  { to: "/admin/audit", label: "Audit log", icon: "📜" },
+  { to: "/admin", label: "Admin", icon: "admin", end: true },
+  { to: "/admin/users", label: "Users", icon: "user", badge: waitingUsers > 0 ? `${waitingUsers} waiting` : undefined },
+  { to: "/admin/teams", label: "Teams", icon: "teams" },
+  { to: "/admin/integrations", label: "Integrations", icon: "integrations" },
+  { to: "/admin/settings", label: "Settings", icon: "settings" },
+  { to: "/admin/usage", label: "Usage", icon: "usage" },
+  { to: "/admin/audit", label: "Audit log", icon: "audit" },
 ];
 
 // roleLabel is what the menu calls the signed-in account.
@@ -58,7 +59,7 @@ function Nav({ items }: { items: NavItem[] }) {
           aria-label={item.badge ? `${item.label}, ${item.badge}` : undefined}
         >
           <span className="icon" aria-hidden="true">
-            {item.icon}
+            <Icon name={item.icon} />
           </span>
           {item.label}
           {item.badge && <span className="badge">{item.badge}</span>}
@@ -80,6 +81,9 @@ function initials(name: string) {
 // data back from a user, and AdminOnly shows a user the not-found page.
 export default function Layout() {
   const { pathname } = useLocation();
+  // On a phone the menu is folded behind a button; any move closes it.
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => setMenuOpen(false), [pathname]);
   const me = useQuery({
     queryKey: ["me"],
     queryFn: () => api.get<Me>("/api/me"),
@@ -92,11 +96,34 @@ export default function Layout() {
     // another must not do that by itself.
     refetchOnWindowFocus: (q) => q.state.data?.signIn !== "jwt",
   });
+  // The browser tab names the page: its h1 (without a status pill), then the
+  // product. Pages set their h1 when their data comes, so it is watched.
+  const loaded = me.isSuccess;
+  useEffect(() => {
+    const main = document.querySelector("main");
+    if (!main) return;
+    const name = () => {
+      const h1 = main.querySelector("h1");
+      if (!h1) return "";
+      const copy = h1.cloneNode(true) as HTMLElement;
+      copy.querySelectorAll(".pill").forEach((p) => p.remove());
+      return copy.textContent?.trim() ?? "";
+    };
+    const set = () => {
+      const page = name();
+      const title = page ? `${page} · pergent.sh` : "pergent.sh";
+      if (document.title !== title) document.title = title;
+    };
+    set();
+    const watch = new MutationObserver(set);
+    watch.observe(main, { subtree: true, childList: true, characterData: true });
+    return () => watch.disconnect();
+  }, [loaded]);
   if (me.isPending) return <Loading />;
   if (me.isError) {
     return (
       <main>
-        <ErrorBox error={me.error} />
+        <ErrorBox error={me.error} onRetry={() => void me.refetch()} />
       </main>
     );
   }
@@ -109,8 +136,27 @@ export default function Layout() {
   const admin = user.admin && inAdminArea(pathname);
   return (
     <MeContext.Provider value={user}>
-      <div className="shell">
-        <aside>
+      <div className={menuOpen ? "shell menu-open" : "shell"}>
+        {/* The bar a phone shows instead of the menu; hidden on a wide screen. */}
+        <header className="topbar">
+          <button
+            type="button"
+            className="menu-btn"
+            aria-expanded={menuOpen}
+            aria-controls="side-menu"
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            <Icon name={menuOpen ? "close" : "menu"} size={20} />
+            <span>Menu</span>
+          </button>
+          <div className="brand">
+            <div className="logo" aria-hidden="true">
+              🦉
+            </div>
+            pergent.sh
+          </div>
+        </header>
+        <aside id="side-menu">
           <div className="brand">
             <div className="logo" aria-hidden="true">
               🦉
@@ -123,7 +169,7 @@ export default function Layout() {
               <>
                 <Nav items={adminItems(user.waitingUsers)} />
                 <div className="section-label">Back to</div>
-                <Nav items={[{ to: "/", label: "User pages", icon: "↩️", end: true }]} />
+                <Nav items={[{ to: "/", label: "User pages", icon: "back", end: true }]} />
               </>
             ) : (
               <>
@@ -136,7 +182,7 @@ export default function Layout() {
                         {
                           to: "/admin",
                           label: "Admin area",
-                          icon: "🛡️",
+                          icon: "admin",
                           end: true,
                           badge: user.waitingUsers > 0 ? `${user.waitingUsers} waiting` : undefined,
                         },

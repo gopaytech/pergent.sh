@@ -1,6 +1,6 @@
 // Small pieces the pages share. Every bit of text from the API is passed to
 // React as a child, so it is shown as text: no HTML is ever built from it.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { ApiError, safeHref, type Outcome, type SecretView, type SkillSource } from "./api";
 
@@ -85,6 +85,16 @@ export function ago(t: string, now = Date.now()): string {
   if (h < 24) return `${h} h ago`;
   const d = Math.round(h / 24);
   return d === 1 ? "1 day ago" : `${d} days ago`;
+}
+
+// Ago is a time as "4 days ago", with the exact time on hover (and for a
+// screen reader, in the time element's datetime).
+export function Ago({ t }: { t: string }) {
+  return (
+    <time dateTime={t} title={utcText(t)}>
+      {ago(t)}
+    </time>
+  );
 }
 
 // utcText is a time as "2026-11-12 10:00 UTC", the same whatever the viewer's
@@ -221,11 +231,18 @@ export function Loading() {
   return <div className="loading">Loading…</div>;
 }
 
-export function ErrorBox({ error }: { error: unknown }) {
+// ErrorBox shows why something failed. With onRetry, a page's own read that
+// failed, it offers Try again, so the page is not a dead end.
+export function ErrorBox({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
   return (
     <div className="error" role="alert">
-      {message}
+      <span className="grow">{message}</span>
+      {onRetry && (
+        <button type="button" className="btn small" onClick={onRetry}>
+          Try again
+        </button>
+      )}
     </div>
   );
 }
@@ -242,14 +259,32 @@ export function Tabs<T extends string>({
   onChange: (t: T) => void;
   inCard?: boolean;
 }) {
+  // The keys of a tab list: Left and Right move to the tab before or after
+  // (around the ends), Home and End to the first and last. Only the chosen
+  // tab is in the Tab order, so Tab moves on to the panel.
+  const move = (e: KeyboardEvent<HTMLDivElement>) => {
+    const at = tabs.findIndex(([key]) => key === value);
+    const to =
+      e.key === "ArrowRight" ? (at + 1) % tabs.length
+        : e.key === "ArrowLeft" ? (at - 1 + tabs.length) % tabs.length
+          : e.key === "Home" ? 0
+            : e.key === "End" ? tabs.length - 1
+              : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    onChange(tabs[to][0]);
+    const buttons = e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    buttons[to]?.focus();
+  };
   return (
-    <div className={inCard ? "tabs in-card" : "tabs"} role="tablist">
+    <div className={inCard ? "tabs in-card" : "tabs"} role="tablist" onKeyDown={move}>
       {tabs.map(([key, label]) => (
         <button
           key={key}
           type="button"
           role="tab"
           aria-selected={key === value}
+          tabIndex={key === value ? 0 : -1}
           className={key === value ? "on" : undefined}
           onClick={() => onChange(key)}
         >

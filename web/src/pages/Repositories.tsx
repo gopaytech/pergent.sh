@@ -48,7 +48,7 @@ export default function Repositories() {
       </div>
       {adding && <Picker />}
       {repos.isPending && <Loading />}
-      {repos.isError && <ErrorBox error={repos.error} />}
+      {repos.isError && <ErrorBox error={repos.error} onRetry={() => void repos.refetch()} />}
       {repos.isSuccess &&
         (repos.data.length === 0 ? (
           <div className="card empty">No repositories yet.{me.admin && " Use + Add repository to switch one on."}</div>

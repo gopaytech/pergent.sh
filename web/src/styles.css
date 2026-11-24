@@ -22,6 +22,49 @@ input {
 
 /* --- shell --- */
 
+/* The phone's top bar: the menu button and the name. Hidden on a wide
+   screen, where the menu is always shown. */
+.topbar {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 31;
+  height: 52px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  background: var(--side);
+  color: #fff;
+}
+
+.topbar .brand {
+  padding: 0;
+  font-size: 15px;
+}
+
+.menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--side-3);
+  border-radius: 8px;
+  background: transparent;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.nav .icon {
+  display: inline-grid;
+  place-items: center;
+  opacity: 0.85;
+}
+
+.nav a.active .icon {
+  opacity: 1;
+}
+
 .shell {
   display: grid;
   grid-template-columns: 232px 1fr;
@@ -1327,9 +1370,44 @@ details.built-in-doc pre.doc {
     grid-template-columns: 1fr;
   }
 
+  /* The menu folds behind the top bar's button, so a page starts at the top
+     of the screen instead of under the whole menu. Rows keep their own
+     height: the page grid must not stretch the bar to fill the screen. */
+  .shell {
+    align-content: start;
+  }
+
+  .topbar {
+    display: flex;
+  }
+
+  /* A review's title wraps to a second line instead of being cut off. */
+  .review-row .title {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
   aside {
-    position: static;
+    display: none;
+  }
+
+  /* The top bar already shows the name. */
+  aside .brand {
+    display: none;
+  }
+
+  .menu-open aside {
+    display: flex;
+    position: fixed;
+    top: 52px;
+    left: 0;
+    right: 0;
+    bottom: 0;
     height: auto;
+    overflow-y: auto;
+    z-index: 30;
   }
 
   main {
@@ -1883,4 +1961,54 @@ a.stat:hover {
    counter) sits at the left, away from the buttons. */
 .actions-row.end > :first-child:not(button) {
   margin-right: auto;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* A row of tabs that does not fit scrolls sideways instead of squeezing the
+   labels onto two or three lines. */
+.tabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs button {
+  white-space: nowrap;
+  flex: none;
+}
+
+/* --- type scale ---
+   A clearer step between levels: the page title, a card's title, body text,
+   and secondary text, which was mostly 12px and hard to read. */
+h1 {
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+
+.meta,
+.set .help,
+.stat .k {
+  font-size: 12.5px;
+}
+
+.set .help {
+  line-height: 1.5;
+}
+
+/* The numbers on Overview and Usage are the point of those cards. */
+.stat .v {
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+
+/* The menu's group names read as words, not as shouted labels. */
+.section-label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  opacity: 0.6;
 }

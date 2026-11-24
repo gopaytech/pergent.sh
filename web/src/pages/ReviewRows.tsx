@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 
 import { paths, type ReviewSummary } from "../api";
-import { OutcomePill, ago, changeNumber, changeRef, platformName } from "../ui";
+import { Ago, OutcomePill, changeNumber, changeRef, platformName } from "../ui";
 
 // attemptsText says "2 attempts" for a review that fell back to a backup
 // model, and nothing for a review of one attempt.
@@ -22,7 +22,10 @@ export default function ReviewRows({ items, empty, inRepo }: { items: ReviewSumm
             <Link className="title" to={paths.review(r.instance, r.project, r.number)}>
               <span className="mr">{inRepo ? changeNumber(r.platform, r.number) : changeRef(r.platform, r.project, r.number)}</span> · {r.title}
             </Link>
-            <div className="meta">{[r.reason, attemptsText(r.attempts), ago(r.updatedAt)].filter(Boolean).join(" · ")}</div>
+            <div className="meta">
+              {[r.reason, attemptsText(r.attempts)].filter(Boolean).map((part) => `${part} · `)}
+              <Ago t={r.updatedAt} />
+            </div>
           </div>
           {!inRepo && <span className="plat">{platformName(r.platform)}</span>}
         </div>

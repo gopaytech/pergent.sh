@@ -32,7 +32,7 @@ export default function RepositoryDetail() {
   const [search, setSearch] = useSearchParams();
   if (project === "" || isStatus(detail.error, 404)) return <NotFound />;
   if (detail.isPending) return <Loading />;
-  if (detail.isError) return <ErrorBox error={detail.error} />;
+  if (detail.isError) return <ErrorBox error={detail.error} onRetry={() => void detail.refetch()} />;
 
   const view = detail.data;
   const { repo } = view;

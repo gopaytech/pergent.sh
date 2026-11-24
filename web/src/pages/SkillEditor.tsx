@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { api, isStatus, paths, type SkillDetail, type SkillVersion, type SkillVersionDetail } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, NotFound, Pill, SkillSourceText, ago, bytesText } from "../ui";
+import { Ago, ErrorBox, Loading, NotFound, Pill, SkillSourceText, bytesText } from "../ui";
 import { useUnsavedGuard } from "../unsaved";
 
 // maxSkillBytes is the most a skill may be (inputs.MaxSkillBytes, 128 KiB):
@@ -234,7 +234,7 @@ function Versions({ name, versions }: { name: string; versions: SkillVersion[] }
         <div className="row" key={v.version}>
           <b>v{v.version}</b>
           <span className="grow meta">
-            {ago(v.at)}
+            <Ago t={v.at} />
             {v.actor ? ` · ${v.actor}` : ""}
             {v.commit ? ` · commit ${v.commit.slice(0, 7)}` : ""}
           </span>

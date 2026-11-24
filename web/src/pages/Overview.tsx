@@ -41,7 +41,7 @@ export default function Overview() {
         </div>
       </div>
       {data.isPending && <Loading />}
-      {data.isError && <ErrorBox error={data.error} />}
+      {data.isError && <ErrorBox error={data.error} onRetry={() => void data.refetch()} />}
       {data.isSuccess && <Body view={data.data} days={days} />}
     </>
   );
