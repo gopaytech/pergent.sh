@@ -127,15 +127,53 @@ func TestRepositoryChoicesRoute(t *testing.T) {
 	te.addLab(te.admin)
 	base := teamURL(te.payments, "/repository-choices")
 
-	t.Run("the admin gets items", func(t *testing.T) {
-		v := decode[RepositoryChoicesView](t, te.get(te.admin, base), "GET choices", 200)
-		if v.Page != 1 || v.Items == nil {
-			t.Errorf("view = %+v", v)
-		}
+	// Payments has main/acme/payments and main/acme/widgets. main/acme/gadgets
+	// is paused and owned by Widgets.
+	te.pausedRepo("main", "acme/gadgets", nil)
+	te.editTeam(te.widgets, func(tm *store.Team) {
+		tm.Repos = append(tm.Repos, store.TeamRepo{Instance: "main", Project: "acme/gadgets", Owner: true})
+	})
+	keysOf := func(v RepositoryChoicesView) []string {
+		out := []string{}
 		for _, c := range v.Items {
-			if c.Instance == "main" && (c.Project == "acme/payments" || c.Project == "acme/widgets") {
-				t.Errorf("an entry on the team is offered: %+v", c)
+			out = append(out, c.Instance+"|"+c.Project)
+		}
+		return out
+	}
+
+	t.Run("the admin gets the instances and the repositories not on the team", func(t *testing.T) {
+		v := decode[RepositoryChoicesView](t, te.get(te.admin, base), "GET choices", 200)
+		want := []string{"gh|", "lab|", "main|", "gh|acme/widgets", "main|acme/gadgets"}
+		if got := keysOf(v); !reflect.DeepEqual(got, want) || v.Page != 1 || v.HasMore {
+			t.Fatalf("items = %v, page %d, hasMore %v; want %v", got, v.Page, v.HasMore, want)
+		}
+		g := v.Items[4]
+		if !g.Paused || g.OwnedBy == nil || g.OwnedBy.ID != te.widgets || g.OwnedBy.Name != "Widgets" {
+			t.Errorf("gadgets = %+v, owner %+v", g, g.OwnedBy)
+		}
+		if w := v.Items[3]; w.Paused || w.OwnedBy != nil {
+			t.Errorf("gh widgets = %+v", w)
+		}
+		if v.Items[2].OwnedBy != nil {
+			t.Errorf("main instance owner = %+v", v.Items[2].OwnedBy)
+		}
+	})
+	t.Run("search keeps the matches", func(t *testing.T) {
+		v := decode[RepositoryChoicesView](t, te.get(te.admin, base+"?search=GADG"), "GET search", 200)
+		if got := keysOf(v); !reflect.DeepEqual(got, []string{"main|acme/gadgets"}) {
+			t.Errorf("items = %v", got)
+		}
+	})
+	t.Run("an instance being removed is not offered", func(t *testing.T) {
+		te.reg.SetRemoving("lab")
+		v := decode[RepositoryChoicesView](t, te.get(te.admin, base), "GET choices", 200)
+		for _, c := range v.Items {
+			if c.Instance == "lab" {
+				t.Errorf("lab is offered: %+v", c)
 			}
+		}
+		if len(v.Items) != 4 {
+			t.Errorf("items = %v", keysOf(v))
 		}
 	})
 	for _, p := range []string{"0", "x"} {
