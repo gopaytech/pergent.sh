@@ -44,7 +44,7 @@ With **Only the author and maintainers use commands** on (the default), a commen
 - Maintainers and owners are GitLab Maintainer or Owner, and GitHub `maintain` or `admin`.
 - **Only the author and maintainers use commands** is on by default. It is a repository's setting in the dashboard (the repository's **Settings**, under Reviews), a default on the admin **Settings** page, and `repositories[].commands_author_and_maintainers_only` in the config. Dashboard buttons are not affected: they already need a maintainer or admin of the repository.
 - The author always can re-run and dismiss suggestions, in both modes, whatever their access. The author can never dismiss a blocking finding on their own change with a comment; a maintainer who is the author can in the dashboard, which knows no platform identity.
-- Every refusal about who may is written to the [audit log](dashboard.md#audit-log) as `command_refused`, in both modes: the gate, "no permission" and "author of the change". Ordinary mistakes (an unknown ID, a missing reason, a cap) and commands the 2-minute throttle leaves unanswered are not recorded.
+- Every refusal about who may is written to the [audit log](dashboard.md#audit-log) as `command_refused`, in both modes: the gate, "no permission" and "author of the change". A blocking dismissal by the change's author is "author of the change" whatever their access, since more access would not let them. Ordinary mistakes (an unknown ID, a missing reason, a cap) and commands the 2-minute throttle leaves unanswered are not recorded.
 - The author is the one the platform reports for the change, compared by user ID, never by username. When either ID is unknown the commenter is taken for the author, so a blocking dismissal is refused. For being let in as the author (the setting, re-runs, suggestion dismissals), an unknown ID is nobody.
 - The pergent.sh team roles apply to buttons only; a comment is judged by the platform alone.
 - On a change whose author the repository doesn't trust ([Trusted authors](trusted-authors.md)), `review` and `review failed` start the whole review and need write access: GitLab Developer or above, GitHub `write`, `maintain` or `admin`, also while **Only the author and maintainers use commands** is on. The author can't start it. Everything else follows the table.
@@ -86,8 +86,9 @@ A reply never says more than the commenter could see on the platform, and never 
 | `review failed` without a result per skill | 👍 | `the whole review failed, so all of it is re-run` |
 | `dismiss` of a dismissed finding | 👍 | `finding <id> is already dismissed` |
 | Someone who is neither the author nor a maintainer, with the setting on | 👎 | `Only the author of this PR and the repository's maintainers can use pergent commands.` (`MR` on GitLab), on their first refusal on a change; 👎 only after that |
-| No permission (also a blocking dismissal without Maintainer) | 👎 | `you don't have permission to do that here` |
-| The change's author dismisses a blocking finding | 👎 | `the author of a change can't dismiss its blocking findings` |
+| No permission | 👎 | `you don't have permission to do that here` |
+| A blocking dismissal by someone below maintainer who isn't the author | 👎 | `only a Maintainer or Owner of this project can dismiss a blocking finding` (GitHub: `only someone with maintain or admin access to this repository can dismiss a blocking finding`) |
+| The change's author dismisses a blocking finding, whatever their access | 👎 | `the author of an MR can't dismiss its blocking findings; ask a Maintainer or Owner of this project to dismiss it` (GitHub: `the author of a PR can't dismiss its blocking findings; ask someone with maintain or admin access to this repository to dismiss it`) |
 | Blocking dismissal without a reason | 👎 | ``dismissing a blocking finding needs a reason: `@<bot> dismiss <id> <reason>` `` |
 | The ID isn't in the latest review | 👎 | `no finding <id> in the latest review` |
 | A draft, in a repository that doesn't review drafts | 👎 | `drafts aren't reviewed in this repository` |

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/readiness"
@@ -686,7 +687,8 @@ var noiseWhys = []string{readiness.WhyGeneratedName, readiness.WhyBuildOutput, r
 // skills (dropping one would misstate the size). Otherwise a problem holding
 // a secret is withheld, noise paths and languages that are not plain are
 // dropped (a noise file is still counted), lists are capped and negative
-// numbers are 0.
+// numbers are 0. Built-in rule counts keep the rules pergent.sh knows, each
+// once, with a file.
 func cleanJobResult(r readiness.JobResult, secrets []string) (readiness.JobResult, bool) {
 	out := readiness.JobResult{
 		Version: r.Version, Commit: r.Commit,
@@ -754,6 +756,16 @@ func cleanJobResult(r readiness.JobResult, secrets []string) (readiness.JobResul
 		}
 		n.Skills = skills
 		out.Noise = append(out.Noise, n)
+	}
+
+	// A built-in rule is one of the names this pergent.sh knows, so no text of
+	// the Job's own is kept.
+	known := config.BuiltInRuleNames()
+	for _, b := range r.BuiltInRules {
+		if b.Files > 0 && slices.Contains(known, b.Name) &&
+			!slices.ContainsFunc(out.BuiltInRules, func(o readiness.BuiltInFit) bool { return o.Name == b.Name }) {
+			out.BuiltInRules = append(out.BuiltInRules, b)
+		}
 	}
 	return out, true
 }

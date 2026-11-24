@@ -81,7 +81,7 @@ func builtInRulesFor(chosen []string, image string) (send []string, note string)
 		return nil, ""
 	}
 	if ok, reason := config.BuiltInRulesListImage(image); !ok {
-		return nil, "The chosen built-in rules were left out: " + reason + "."
+		return nil, "The enabled built-in rules were left out: " + reason + "."
 	}
 	return slices.Clone(chosen), ""
 }

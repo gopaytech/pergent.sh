@@ -531,15 +531,25 @@ export type ChecklistItem = {
 
 export type ChecklistSection = { key: string; items: ChecklistItem[] };
 
+// BuiltInFit is a built-in rule and how many scanned files its globs match.
+export type BuiltInFit = { name: string; files: number };
+
 // Checklist is built from the latest finished scan; suggested names library
 // skills that fit the files and are not turned on, budget the bytes of skills
-// plus instructions.
-export type Checklist = { sections: ChecklistSection[]; suggested: string[]; budget: number };
+// plus instructions. suggestedBuiltInRules are the built-in rules that match
+// files and are not chosen, most files first.
+export type Checklist = {
+  sections: ChecklistSection[];
+  suggested: string[];
+  budget: number;
+  suggestedBuiltInRules: BuiltInFit[];
+};
 
 // ReadinessView is the Readiness tab. latest is the latest finished scan,
 // active the queued or running one; checklist is null until a scan has
 // finished. applyBase is today's library skill list: "Use these skills" saves
-// it plus the ticked suggestions.
+// it plus the ticked suggestions. applyBuiltInBase is the built-in rules
+// chosen now: "Use these built-in rules" saves it plus the ticked ones.
 export type ReadinessView = {
   latest: ScanView | null;
   active: ScanView | null;
@@ -548,6 +558,7 @@ export type ReadinessView = {
   configRepo: boolean;
   followsDefaults: boolean;
   applyBase: string[];
+  applyBuiltInBase: string[];
 };
 
 // PastDismissalView is a finding whose dismissals teach the repository's reviews
@@ -770,7 +781,9 @@ export type RuleEntry = { source: string; path: string; off: boolean; rule: stri
 // RulesView is a review's rule list; problem is why a review would fail on
 // its rules (entries is then empty).
 // builtIn names the built-in rules the repository chose; [] for none.
-export type RulesView = { builtIn: string[]; entries: RuleEntry[]; problem: string };
+// builtInEntries is each chosen built-in rule with its globs and text, in
+// pergent's order. Both are read at each request, not kept 5 minutes.
+export type RulesView = { builtIn: string[]; builtInEntries: BuiltInRule[]; entries: RuleEntry[]; problem: string };
 
 // RuleSet is one rule set of the library; source "config" is the config
 // file's, read-only here (version 0).

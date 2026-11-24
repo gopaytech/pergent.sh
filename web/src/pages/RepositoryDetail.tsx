@@ -94,7 +94,7 @@ export default function RepositoryDetail() {
             learning={view.settings.learnFromDismissals.value}
           />
         )}
-        {tab === "inputs" && <Inputs instance={repo.instance} project={repo.project} />}
+        {tab === "inputs" && <Inputs instance={repo.instance} project={repo.project} builtInsOff={view.builtInRulesOff} />}
         {/* A viewer has no Settings tab, where the model chain is: it is
             shown here, with what else a review would get. */}
         {tab === "inputs" && view.role === "viewer" && <RepoModelChain instance={repo.instance} project={repo.project} />}
@@ -193,7 +193,7 @@ function Waiting({
   );
 }
 
-function Inputs({ instance, project }: { instance: string; project: string }) {
+function Inputs({ instance, project, builtInsOff }: { instance: string; project: string; builtInsOff: string }) {
   const inputs = useQuery({
     queryKey: ["inputs", instance, project],
     queryFn: () => api.get<InputsView>(paths.apiRepoInputs(instance, project)),
@@ -229,26 +229,36 @@ function Inputs({ instance, project }: { instance: string; project: string }) {
         <h2>Instructions</h2>
         {v.instructions ? <pre className="doc">{v.instructions}</pre> : <div className="row empty-row">No instructions.</div>}
       </section>
-      {v.rules && <RuleList rules={v.rules} />}
+      {v.rules && <RuleList rules={v.rules} builtInsOff={builtInsOff} />}
     </>
   );
 }
 
-// RuleList is the path rule list a review would get: the repository's
-// .pergent/rules.yaml, then its rule sets, then the built-in rules. The first
-// entry that matches a file gives it its rule.
-function RuleList({ rules }: { rules: InputsView["rules"] }) {
+// RuleList is the path rule list a review would get, in match order: the
+// repository's .pergent/rules.yaml, then its rule sets, then the enabled
+// built-in rules, each a row that opens to its text. The first entry that
+// matches a file gives it its rule. builtInsOff is why reviews leave the
+// built-in rules out for now ("" when they don't).
+function RuleList({ rules, builtInsOff }: { rules: InputsView["rules"]; builtInsOff: string }) {
+  const fromRepo = rules.entries.filter((e) => e.source === "repo").length;
+  const fromSets = rules.entries.length - fromRepo;
+  const builtIns = rules.builtInEntries;
   return (
     <section className="card" aria-label="Rules">
       <h2>Rules</h2>
+      <div className="pad meta">
+        {fromRepo} repository · {fromSets} rule {fromSets === 1 ? "set" : "sets"} · {builtIns.length} built-in. The first entry
+        that matches a file gives it its rule.
+      </div>
       {rules.problem && (
         <div className="row">
           <span className="problem">{rules.problem}</span>
         </div>
       )}
-      {!rules.problem && rules.entries.length === 0 && <div className="row empty-row">No rules of the repository or its rule sets.</div>}
+      {builtInsOff !== "" && builtIns.length > 0 && <div className="pad problem">{builtInsOff}</div>}
+      {!rules.problem && rules.entries.length === 0 && builtIns.length === 0 && <div className="row empty-row">No rules.</div>}
       {rules.entries.map((e, i) => (
-        <details className="skill-doc" key={`${i}|${e.source}|${e.path}`}>
+        <details className="skill-doc" key={`${i}|${e.source}|${e.path}`} data-rule={`${e.source}|${e.path}`}>
           <summary className="skill">
             <b className="grow mono">{e.path}</b>
             {e.off && <span className="meta">off: no rule</span>}
@@ -257,7 +267,20 @@ function RuleList({ rules }: { rules: InputsView["rules"] }) {
           {!e.off && <pre className="doc">{e.rule}</pre>}
         </details>
       ))}
-      <div className="pad meta">{rules.builtIn.length > 0 ? `Then pergent's built-in rules: ${rules.builtIn.join(", ")}.` : "No built-in rules."}</div>
+      {builtIns.map((b) => (
+        <details className="skill-doc" key={`built-in|${b.name}`} data-rule={`built-in|${b.name}`}>
+          <summary className="skill">
+            <b>{b.name}</b>
+            <span className="grow built-in-paths">
+              {b.paths.map((p) => (
+                <code key={p}>{p}</code>
+              ))}
+            </span>
+            <span className="src">built-in</span>
+          </summary>
+          <pre className="doc">{b.rule}</pre>
+        </details>
+      ))}
     </section>
   );
 }

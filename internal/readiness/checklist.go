@@ -58,7 +58,8 @@ type ChecklistInput struct {
 	Library        []string   // the library list now: the repository's, or the defaults
 	RepoSkills     []string
 	LibrarySizes   map[string]int
-	SingleApproval bool // the live single_approval item is set
+	SingleApproval bool     // the live single_approval item is set
+	BuiltInRules   []string // the built-in rules the repository chose now
 }
 
 // Item is one line of the checklist. Reason is the couldn't-check reason or
@@ -82,11 +83,13 @@ type Section struct {
 
 // Checklist is the Readiness tab. Suggested names library skills that fit the
 // files and are not turned on. Budget is the size of skills plus instructions
-// (see Flags.BudgetKnown).
+// (see Flags.BudgetKnown). SuggestedBuiltInRules are the built-in rules that
+// match files and that the repository has not chosen, with their file counts.
 type Checklist struct {
-	Sections  []Section `json:"sections"`
-	Suggested []string  `json:"suggested"`
-	Budget    int       `json:"budget"`
+	Sections              []Section    `json:"sections"`
+	Suggested             []string     `json:"suggested"`
+	Budget                int          `json:"budget"`
+	SuggestedBuiltInRules []BuiltInFit `json:"suggestedBuiltInRules"`
 }
 
 // analysis is what both ComputeFlags and BuildChecklist read from a scan.
@@ -175,6 +178,7 @@ func BuildChecklist(in ChecklistInput) Checklist {
 	c.Budget = a.flags.Budget
 	if job != nil {
 		c.Suggested = suggested(job, a.effective)
+		c.SuggestedBuiltInRules = suggestedBuiltIns(job, in.BuiltInRules)
 	}
 	process := []Item{
 		finish(codeOwnersItem(fileOK("codeowners"))(job)),
@@ -527,6 +531,21 @@ func suggested(job *JobResult, effective []SkillFit) []string {
 	for _, f := range fits {
 		out = append(out, f.Name)
 	}
+	return out
+}
+
+// suggestedBuiltIns lists the built-in rules whose globs match files and that
+// are not in chosen, most files first, then by name.
+func suggestedBuiltIns(job *JobResult, chosen []string) []BuiltInFit {
+	var out []BuiltInFit
+	for _, f := range job.BuiltInRules {
+		if f.Files > 0 && !slices.Contains(chosen, f.Name) {
+			out = append(out, f)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Files > out[j].Files || (out[i].Files == out[j].Files && out[i].Name < out[j].Name)
+	})
 	return out
 }
 

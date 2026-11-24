@@ -60,10 +60,11 @@ func (d *Dashboard) repositoryReadiness(w http.ResponseWriter, r *http.Request, 
 	}
 	view := ReadinessView{
 		Latest: scanView(latest), Active: scanView(active),
-		CanScan:         se.Role(repo.Instance, repo.Project) >= RoleMaintainer && !repo.Paused,
-		ConfigRepo:      repo.Source == settings.SourceConfig,
-		FollowsDefaults: repo.Skills == nil,
-		ApplyBase:       nonNil(slices.Clone(library)),
+		CanScan:          se.Role(repo.Instance, repo.Project) >= RoleMaintainer && !repo.Paused,
+		ConfigRepo:       repo.Source == settings.SourceConfig,
+		FollowsDefaults:  repo.Skills == nil,
+		ApplyBase:        nonNil(slices.Clone(library)),
+		ApplyBuiltInBase: nonNil(slices.Clone(repo.BuiltInRules)),
 	}
 	if latest != nil {
 		c, err := d.readinessChecklist(ctx, se, repo, latest, library)
@@ -82,7 +83,7 @@ func (d *Dashboard) repositoryReadiness(w http.ResponseWriter, r *http.Request, 
 // library's skills now.
 func (d *Dashboard) readinessChecklist(ctx context.Context, se Session, repo settings.Effective, latest *store.ReadinessScan,
 	library []string) (readiness.Checklist, error) {
-	in := readiness.ChecklistInput{Library: library, RepoSkills: repo.RepoSkills}
+	in := readiness.ChecklistInput{Library: library, RepoSkills: repo.RepoSkills, BuiltInRules: repo.BuiltInRules}
 	if latest.Pod != nil {
 		var pod readiness.PodResult
 		if err := json.Unmarshal(latest.Pod, &pod); err != nil {
@@ -119,6 +120,16 @@ func (d *Dashboard) readinessChecklist(ctx context.Context, se Session, repo set
 	in.SingleApproval = slices.ContainsFunc(items, func(a AttentionView) bool { return a.Kind == kindSingleApproval })
 	c := readiness.BuildChecklist(in)
 	c.Suggested = nonNil(c.Suggested)
+	// A stored scan can name a rule this pergent.sh no longer has: saving it
+	// would be refused.
+	known := builtInRuleViews(d.builtInRules())
+	builtIns := []readiness.BuiltInFit{}
+	for _, f := range c.SuggestedBuiltInRules {
+		if slices.ContainsFunc(known, func(b BuiltInRuleView) bool { return b.Name == f.Name }) {
+			builtIns = append(builtIns, f)
+		}
+	}
+	c.SuggestedBuiltInRules = builtIns
 	return c, nil
 }
 

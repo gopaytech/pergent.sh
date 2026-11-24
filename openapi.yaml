@@ -6442,12 +6442,20 @@ components:
     RulesView:
       description: The path rule list a review would get. `problem` is why a review would fail on its rules.
       type: object
-      required: [builtIn, entries, problem]
+      required: [builtIn, builtInEntries, entries, problem]
       properties:
         builtIn:
           type: array
           items: {type: string}
           description: The built-in rules the repository chose, by name, in pergent's order; empty for none.
+        builtInEntries:
+          type: array
+          items: {$ref: '#/components/schemas/BuiltInRuleView'}
+          description: |
+            Each chosen built-in rule this pergent.sh knows, with its globs and
+            text, in pergent's order. It and `builtIn` are read from the
+            repository's settings at each request; the rest of the view is kept
+            5 minutes.
         entries:
           type: array
           items: {$ref: '#/components/schemas/RuleEntryView'}
@@ -7342,7 +7350,7 @@ components:
     ReadinessView:
       description: The Readiness tab.
       type: object
-      required: [latest, active, checklist, canScan, configRepo, followsDefaults, applyBase]
+      required: [latest, active, checklist, canScan, configRepo, followsDefaults, applyBase, applyBuiltInBase]
       properties:
         latest:
           oneOf:
@@ -7372,6 +7380,10 @@ components:
           type: array
           items: {type: string}
           description: 'Today''s list of library skills: the repository''s, or the default list.'
+        applyBuiltInBase:
+          type: array
+          items: {type: string}
+          description: The built-in rules the repository chose now. "Use these built-in rules" saves it plus the ticked ones.
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
@@ -8672,7 +8684,7 @@ components:
     readiness.Checklist:
       description: The Readiness tab.
       type: object
-      required: [sections, suggested, budget]
+      required: [sections, suggested, budget, suggestedBuiltInRules]
       properties:
         sections:
           type: array
@@ -8684,6 +8696,23 @@ components:
         budget:
           type: integer
           description: The size of skills plus instructions.
+        suggestedBuiltInRules:
+          type: array
+          items: {$ref: '#/components/schemas/readiness.BuiltInFit'}
+          description: |
+            Built-in rules whose globs match files of the scan and that the
+            repository has not chosen, most files first. Empty until a scan of
+            this version has run.
+    readiness.BuiltInFit:
+      description: |
+        How many files of the scanned commit one built-in rule matches. A file
+        counts when a review reads it (not binary, not generated), for every
+        rule whose globs match it.
+      type: object
+      required: [name, files]
+      properties:
+        name: {type: string}
+        files: {type: integer}
     readiness.Context:
       description: The project context found at the root of the checkout.
       type: object
@@ -8746,6 +8775,9 @@ components:
         noise:
           type: array
           items: {$ref: '#/components/schemas/readiness.NoiseFile'}
+        builtInRules:
+          type: array
+          items: {$ref: '#/components/schemas/readiness.BuiltInFit'}
       additionalProperties: true
     readiness.Language:
       description: A language over 10% of the source files.

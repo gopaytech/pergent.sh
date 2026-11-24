@@ -997,6 +997,7 @@ var openAPISchemas = map[string]schemaType{
 	"readiness.Context":       inputSchema(readiness.Context{}),
 	"readiness.SkillFit":      inputSchema(readiness.SkillFit{}),
 	"readiness.Language":      inputSchema(readiness.Language{}),
+	"readiness.BuiltInFit":    outputSchema(readiness.BuiltInFit{}),
 	"skillfetch.JobResult":    inputSchema(skillfetch.JobResult{}),
 	"store.FetchedFile":       inputSchema(store.FetchedFile{}),
 	"result.Result":           inputSchema(result.Result{}),

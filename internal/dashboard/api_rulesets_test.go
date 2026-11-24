@@ -74,6 +74,27 @@ func TestRuleSetNotesNameEachBuiltInOnce(t *testing.T) {
 	}
 }
 
+// The Rules card shows each chosen built-in rule, as the Built-in tab does, in
+// pergent's order whatever the order of the names. A name pergent doesn't
+// know has no row.
+func TestChosenBuiltInRules(t *testing.T) {
+	t.Parallel()
+	entries := []rule.Entry{
+		{Path: "**/*.ts", Rule: "ts", Source: rule.SourceBuiltIn, Name: "ts_js"},
+		{Path: "**/*.go", Rule: "go", Source: rule.SourceBuiltIn, Name: "go"},
+		{Path: "**/*.js", Rule: "ts", Source: rule.SourceBuiltIn, Name: "ts_js"},
+		{Path: "**/*.sql", Rule: "sql", Source: rule.SourceBuiltIn, Name: "sql"},
+	}
+	got := chosenBuiltInRules(entries, []string{"sql", "gone", "ts_js"})
+	want := []BuiltInRuleView{{Name: "ts_js", Paths: []string{"**/*.ts", "**/*.js"}, Rule: "ts"}, {Name: "sql", Paths: []string{"**/*.sql"}, Rule: "sql"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("chosen = %v, want %v", got, want)
+	}
+	if got := chosenBuiltInRules(entries, nil); got == nil || len(got) != 0 {
+		t.Errorf("none chosen = %#v, want an empty list", got)
+	}
+}
+
 // The Built-in tab is one row per rule, not per glob: a {a,b} glob is one
 // entry per choice, all with the same name and text, and the text is sent
 // once. Rows keep the order each name first matches in.

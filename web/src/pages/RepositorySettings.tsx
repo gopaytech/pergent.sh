@@ -1003,13 +1003,13 @@ function Form({
         </h2>
         <div className="pad meta">
           pergent's own path rules, after the repository's and the rule sets'. Each one adds its text to the runs on its files, so
-          choose only the ones you need. None by default.
+          enable only the ones you need. None is enabled by default.
         </div>
         {builtInsOff !== "" && <div className={d.builtInRules.length > 0 ? "pad problem" : "pad meta"}>{builtInsOff}</div>}
         {builtIns === "loading" && <Loading />}
         {builtIns === "error" && (
           <div className="pad meta">
-            The built-in rules can't be read now{d.builtInRules.length > 0 && `. Chosen: ${d.builtInRules.join(", ")}`}.
+            The built-in rules can't be read now{d.builtInRules.length > 0 && `. Enabled: ${d.builtInRules.join(", ")}`}.
           </div>
         )}
         {Array.isArray(builtIns) && (
