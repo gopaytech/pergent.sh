@@ -516,8 +516,8 @@ func TestEndToEndDashboard(t *testing.T) {
 	if !slices.Equal(recent, []string{paymentsPath + "#2", testProjectPath + "#1"}) {
 		t.Errorf("an admin's recent reviews = %v, want both", recent)
 	}
-	if len(overview.Attention) != 2 || overview.Stats.Reviews != 2 {
-		t.Errorf("an admin's attention = %+v, stats = %+v; want both repositories", overview.Attention, overview.Stats)
+	if overview.Stats.Reviews != 2 {
+		t.Errorf("an admin's stats = %+v; want both repositories", overview.Stats)
 	}
 	carol := e.signIn(t, carolEmail)
 	widgetsViewers := e.newTeam(t, operator, "widgets viewers")
@@ -526,9 +526,6 @@ func TestEndToEndDashboard(t *testing.T) {
 	e.getJSON(t, carol, "/api/overview", &overview)
 	if len(overview.Recent) != 1 || overview.Recent[0].Project != testProjectPath || overview.Recent[0].Number != 1 {
 		t.Errorf("carol's recent reviews = %+v, want only acme/widgets !1", overview.Recent)
-	}
-	if len(overview.Attention) != 1 || overview.Attention[0].Project != testProjectPath {
-		t.Errorf("carol's attention = %+v, want only acme/widgets", overview.Attention)
 	}
 	if overview.Stats.Reviews != 1 {
 		t.Errorf("carol's stats = %+v, want 1 review", overview.Stats)

@@ -1,5 +1,6 @@
 import type {
   APIClientRow,
+  AttentionView,
   ChainEntryView,
   ChainView,
   APIReviewDetail,
@@ -111,23 +112,16 @@ export const reviewBlocking: ReviewSummary = {
 export const overview: OverviewView = {
   stats: { reviews: 184, approved: 121, blocking: 37, failed: 4 },
   recent: [reviewApproved, reviewBlocking],
-  attention: [
-    {
-      instance: "main",
-      project: "acme/payments",
-      kind: "single_approval",
-      message: "One approval is enough to merge here, so pergent's approval alone can unlock it.",
-      updatedAt: minutesAgo(60),
-    },
-    {
-      instance: "main",
-      project: "",
-      kind: "token_expiry",
-      message: "The approve bot's token expires on 2026-11-09.",
-      updatedAt: minutesAgo(60),
-    },
-  ],
   setup: null,
+};
+
+// paymentsAttention is acme/payments' setup problem, under its Setup checks.
+export const paymentsAttention: AttentionView = {
+  instance: "main",
+  project: "acme/payments",
+  kind: "single_approval",
+  message: "One approval is enough to merge here, so pergent's approval alone can unlock it.",
+  updatedAt: minutesAgo(60),
 };
 
 export const noCan: Can = { rerun: false, dismissBlocking: false, dismissSuggestion: false, restore: false };
@@ -351,7 +345,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     ruleSets: { value: null, overridden: false },
     builtInRules: { value: [], overridden: false },
   },
-  attention: repo.health === "attention" ? [overview.attention[0]] : [],
+  attention: repo.health === "attention" ? [paymentsAttention] : [],
   waiting: [],
   instanceTrustedAuthorsOnly: "follow_visibility",
   model: "anthropic / claude-sonnet",

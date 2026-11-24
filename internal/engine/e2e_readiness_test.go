@@ -179,15 +179,13 @@ func TestReadinessScanEndToEnd(t *testing.T) {
 		}
 	}
 
-	// 6. Needs attention has no_project_context, and neither of the other 2
+	// 6. Setup checks have no_project_context, and neither of the other 2
 	// readiness items (security has no paths, so it covers the repository).
-	var overview dashboard.OverviewView
-	e.getJSON(t, admin, "/api/overview", &overview)
+	var detail dashboard.RepositoryDetailView
+	e.getJSON(t, admin, "/api/repositories/"+testInstance+"/"+gadgetsPath, &detail)
 	kinds := map[string]bool{}
-	for _, a := range overview.Attention {
-		if a.Instance == testInstance && strings.EqualFold(a.Project, gadgetsPath) {
-			kinds[a.Kind] = true
-		}
+	for _, a := range detail.Attention {
+		kinds[a.Kind] = true
 	}
 	if !kinds[attNoProjectContext] || kinds[attNoSkillCoverage] || kinds[attInputsOverBudget] {
 		t.Errorf("needs attention of acme/gadgets = %v, want no_project_context alone of the readiness items", kinds)

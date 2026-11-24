@@ -47,12 +47,6 @@ func TestPausedRepoHealthAndOverview(t *testing.T) {
 	if detail.Repo.On || !detail.Repo.Paused || detail.Repo.Health != healthPaused {
 		t.Errorf("paused detail = %+v", detail.Repo)
 	}
-	overview := getJSON[OverviewView](e, c, "/api/overview")
-	for _, a := range overview.Attention {
-		if a.Project == "acme/tools" {
-			t.Errorf("the overview's attention holds the paused repository: %+v", a)
-		}
-	}
 }
 
 // Whoever could see a repository while it ran still sees it, and its

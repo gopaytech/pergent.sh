@@ -72,15 +72,14 @@ export default function Readiness({ instance, project }: { instance: string; pro
   });
   const [note, setNote] = useState("");
 
-  // What a scan or a save changes elsewhere: the setup checks and the overview's
-  // Needs attention.
+  // What a scan or a save changes elsewhere: the setup checks and the
+  // repositories' health.
   const refreshAround = useCallback(() => {
     client.invalidateQueries({ queryKey: ["repo", instance] });
     client.invalidateQueries({ queryKey: ["repositories"] });
-    client.invalidateQueries({ queryKey: ["overview"] });
   }, [client, instance]);
 
-  // A scan that just ended may have raised or cleared Needs attention items.
+  // A scan that just ended may have raised or cleared setup checks.
   const wasActive = useRef(false);
   const isActive = readiness.data ? readiness.data.active !== null : undefined;
   useEffect(() => {
