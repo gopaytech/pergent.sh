@@ -1334,6 +1334,25 @@ type TeamEntryView struct {
 	Removed  bool   `json:"removed"`
 }
 
+// RepositoryChoicesView is GET /api/teams/{id}/repository-choices: one page of
+// what an admin may add to the team. The whole-instance entries are on page 1
+// only, before the repositories.
+type RepositoryChoicesView struct {
+	Items   []RepositoryChoiceView `json:"items"`
+	Page    int                    `json:"page"`
+	HasMore bool                   `json:"hasMore"`
+}
+
+// RepositoryChoiceView is one thing to add: a switched-on repository, or a
+// whole instance (Project ""). OwnedBy is the other team that owns it at the
+// same level, or null for none.
+type RepositoryChoiceView struct {
+	Instance string   `json:"instance"`
+	Project  string   `json:"project"`
+	Paused   bool     `json:"paused"`
+	OwnedBy  *TeamRef `json:"ownedBy"`
+}
+
 // TeamModelsView is GET /api/teams/{id}/models: the team's own entries.
 // Role is the session's on the team; CanEdit is whether it may add, change
 // and remove them (a maintainer or an admin).

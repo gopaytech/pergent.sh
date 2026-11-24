@@ -58,6 +58,7 @@ func (d *Dashboard) orgRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "GET /api/teams", d.teams)
 	d.adminRoute(mux, "POST /api/teams", d.createTeam)
 	d.adminRoute(mux, "PUT /api/teams/{id}", d.updateTeam)
+	d.adminRoute(mux, "GET /api/teams/{id}/repository-choices", d.teamRepositoryChoices)
 	d.adminRoute(mux, "DELETE /api/teams/{id}", d.deleteTeam)
 	d.adminRoute(mux, "GET /api/audit", d.auditLog)
 }

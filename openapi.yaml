@@ -3063,6 +3063,44 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}/repository-choices:
+    get:
+      operationId: listTeamRepositoryChoices
+      tags: [Organization]
+      summary: Repositories and instances to add to a team
+      description: |
+        Admins only; anyone else gets 404, and so does an unknown team. The
+        search behind **Add repository** on the team page. Page 1 starts with
+        the instances (each as a whole-instance entry, `project` empty), then
+        holds up to 50 switched-on repositories, paused ones included, sorted by
+        instance and path. Later pages hold repositories only. What the team
+        already has is left out, a repository in any case. `search` keeps the
+        instance names and paths that hold it, in any case. `ownedBy` is the
+        other team that owns the entry at the same level, or null. 400 for a
+        bad `page` or a `search` over 100 characters.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+        - name: search
+          in: query
+          description: Keep the instance names and repository paths that hold this.
+          schema:
+            type: string
+            maxLength: 100
+        - $ref: '#/components/parameters/AvailablePage'
+      responses:
+        '200':
+          description: One page of choices.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryChoicesView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/teams/{id}/models:
     get:
       operationId: listTeamModels
@@ -8265,6 +8303,33 @@ components:
         removed:
           type: boolean
           description: The repository is no longer switched on, or the instance is gone or being removed.
+    RepositoryChoicesView:
+      description: One page of what may be added to a team.
+      type: object
+      required: [items, page, hasMore]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/RepositoryChoiceView'}
+        page:
+          type: integer
+          minimum: 1
+        hasMore:
+          type: boolean
+          description: True when a later page holds more repositories.
+    RepositoryChoiceView:
+      description: A repository or a whole instance that may be added to a team.
+      type: object
+      required: [instance, project, paused, ownedBy]
+      properties:
+        instance: {type: string}
+        project: {type: string, description: Empty for a whole instance.}
+        paused: {type: boolean}
+        ownedBy:
+          description: The other team that owns it at the same level, or null.
+          oneOf:
+            - {$ref: '#/components/schemas/TeamRef'}
+            - {type: 'null'}
     TeamModelsView:
       description: A team's own entries.
       type: object

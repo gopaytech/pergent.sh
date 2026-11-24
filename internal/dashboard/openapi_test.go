@@ -946,6 +946,8 @@ var openAPISchemas = map[string]schemaType{
 	"MyTeamView":              outputSchema(MyTeamView{}),
 	"TeamPageView":            outputSchema(TeamPageView{}),
 	"TeamEntryView":           outputSchema(TeamEntryView{}),
+	"RepositoryChoicesView":   outputSchema(RepositoryChoicesView{}),
+	"RepositoryChoiceView":    outputSchema(RepositoryChoiceView{}),
 	"TeamModelsView":          outputSchema(TeamModelsView{}),
 	"TeamModelView":           outputSchema(TeamModelView{}),
 	"TeamLimitsView":          outputSchema(TeamLimitsView{}),

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **New read route `GET /api/teams/{id}`, and counts on `GET /api/me/teams`:** the route gives a team's members, entries and the session's role to members and admins. Members' emails are for an admin only. `GET /api/me/teams` has the new keys `memberCount`, `repoCount`, `instanceCount` and `ownedCount`. No migration and no new config key.
+- **New read routes `GET /api/teams/{id}` and `GET /api/teams/{id}/repository-choices`, and counts on `GET /api/me/teams`:** the first gives a team's members, entries and the session's role to members and admins. The second is the admin search for repositories to add to a team. Members' emails are for an admin only. `GET /api/me/teams` has the new keys `memberCount`, `repoCount`, `instanceCount` and `ownedCount`. No migration and no new config key.
 
 ## Upgrading to 0.21.0
 
