@@ -1,6 +1,6 @@
 # ⬆️ Upgrading
 
-## Unreleased
+## Upgrading to 0.20.0
 
 **A new repository setting, `blocking_status`, can keep pergent from blocking a merge with its status:** [How approval works](concepts/approval.md#blocking-status). It is `failed` or `neutral`, and `failed` is the default, so nothing changes until someone sets `neutral`. With `neutral` the `pergent` status is never red: blocking findings, a blocking CI job that did not pass, a review that could not be done and a review that could not be posted all get `neutral`, which is `success` on GitLab and a `neutral` Check Run on GitHub. The status description then ends with ` · not blocking merge`. The review still lists the blocking issues and is never approved.
 

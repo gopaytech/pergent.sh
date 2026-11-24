@@ -2,8 +2,19 @@ apiVersion: v1
 entries:
   pergent-sh:
   - apiVersion: v2
+    appVersion: v0.20.0
+    created: "2026-11-24T13:08:38.823672+07:00"
+    description: pergent.sh runs pergent code reviews on GitLab merge requests and
+      GitHub pull requests as Kubernetes Jobs
+    digest: c0bfd70bd57c17134a111ba8cb0e840a027d0b1dc4cf8a0a40fd0383813729fa
+    name: pergent-sh
+    type: application
+    urls:
+    - pergent-sh-0.20.0.tgz
+    version: 0.20.0
+  - apiVersion: v2
     appVersion: v0.19.0
-    created: "2026-11-23T23:02:08.918346+07:00"
+    created: "2026-11-24T13:08:38.822849+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: f91ac214ea47343b78014fa478ce5a3515457eaf26677b129843d0e97ac2e50d
@@ -14,7 +25,7 @@ entries:
     version: 0.19.0
   - apiVersion: v2
     appVersion: v0.18.0
-    created: "2026-11-23T23:02:08.918086+07:00"
+    created: "2026-11-24T13:08:38.822461+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 5c2b530c67472d2d7d74e715415b8edbb34e5b523917169f9d17ed6c550e9b1a
@@ -25,7 +36,7 @@ entries:
     version: 0.18.0
   - apiVersion: v2
     appVersion: v0.17.1
-    created: "2026-11-23T23:02:08.91775+07:00"
+    created: "2026-11-24T13:08:38.822117+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: a9f7fb107fc98081ca41d772962a872fde34366eb43b0e6ba79e4dd94f983030
@@ -36,7 +47,7 @@ entries:
     version: 0.17.1
   - apiVersion: v2
     appVersion: v0.17.0
-    created: "2026-11-23T23:02:08.916857+07:00"
+    created: "2026-11-24T13:08:38.82187+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 112e14c43919ea53cdd224e42908cd58b50eea512520c50ac086042e66ef4c62
@@ -47,7 +58,7 @@ entries:
     version: 0.17.0
   - apiVersion: v2
     appVersion: v0.16.0
-    created: "2026-11-23T23:02:08.916516+07:00"
+    created: "2026-11-24T13:08:38.821627+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: e263dbe065f7edc6a3268a4de9d26e83cd7f5df5979489f4d07f9855f8d4f8de
@@ -58,7 +69,7 @@ entries:
     version: 0.16.0
   - apiVersion: v2
     appVersion: v0.15.0
-    created: "2026-11-23T23:02:08.916244+07:00"
+    created: "2026-11-24T13:08:38.820582+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 2f5dc5bf3b5cbef83cd01f9835d5e84ec4f53d7fc18714de2cd18aeae6c0467a
@@ -69,7 +80,7 @@ entries:
     version: 0.15.0
   - apiVersion: v2
     appVersion: v0.14.0
-    created: "2026-11-23T23:02:08.915358+07:00"
+    created: "2026-11-24T13:08:38.820242+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 4a12f6a0b0699099d2ad137534ddb3536f00ce71919ccc30e2dec489f4d3fd3d
@@ -80,7 +91,7 @@ entries:
     version: 0.14.0
   - apiVersion: v2
     appVersion: v0.13.0
-    created: "2026-11-23T23:02:08.915003+07:00"
+    created: "2026-11-24T13:08:38.819646+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 22cb2d804a4c3213bad2ff856b65706300b70401ea65d62cba52fdb95c292620
@@ -91,7 +102,7 @@ entries:
     version: 0.13.0
   - apiVersion: v2
     appVersion: v0.12.0
-    created: "2026-11-23T23:02:08.914267+07:00"
+    created: "2026-11-24T13:08:38.819245+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: ebf691ef65f4bf10d96ed3cbcae1179ef62e74e4c5100687aede443cd6a2261d
@@ -102,7 +113,7 @@ entries:
     version: 0.12.0
   - apiVersion: v2
     appVersion: v0.11.0
-    created: "2026-11-23T23:02:08.913868+07:00"
+    created: "2026-11-24T13:08:38.818831+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 7890a7dfe2712558288360e8a81ec05d441538afd826a5f29f972ddb18c730c6
@@ -113,7 +124,7 @@ entries:
     version: 0.11.0
   - apiVersion: v2
     appVersion: v0.10.0
-    created: "2026-11-23T23:02:08.913546+07:00"
+    created: "2026-11-24T13:08:38.817967+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 480c6735a14b1899415eba5739f95366eecc6f2097408f65451575fdfdb16787
@@ -124,7 +135,7 @@ entries:
     version: 0.10.0
   - apiVersion: v2
     appVersion: v0.9.0
-    created: "2026-11-23T23:02:08.924782+07:00"
+    created: "2026-11-24T13:08:38.829833+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 9be9e869849d1fba0d4fe3d2e38ca9b5a0d34cfae0af7a8a25b1ccf8a4858780
@@ -135,7 +146,7 @@ entries:
     version: 0.9.0
   - apiVersion: v2
     appVersion: v0.8.2
-    created: "2026-11-23T23:02:08.924293+07:00"
+    created: "2026-11-24T13:08:38.829632+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: a76f652115d540a8f50532165213c748418380a86efe1d69de6590a19a7b5d46
@@ -146,7 +157,7 @@ entries:
     version: 0.8.2
   - apiVersion: v2
     appVersion: v0.8.1
-    created: "2026-11-23T23:02:08.924102+07:00"
+    created: "2026-11-24T13:08:38.829416+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: fd7531a80d02dd2d5b2ba100e7481423f83aa6c12a088b9fe0225f549b64fc1a
@@ -157,7 +168,7 @@ entries:
     version: 0.8.1
   - apiVersion: v2
     appVersion: v0.8.0
-    created: "2026-11-23T23:02:08.92391+07:00"
+    created: "2026-11-24T13:08:38.82791+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 3373c420ee6ec7f2735df476b266e3ad29dfc4f7ff3e7b6046f8a6983cfada62
@@ -168,7 +179,7 @@ entries:
     version: 0.8.0
   - apiVersion: v2
     appVersion: v0.7.1
-    created: "2026-11-23T23:02:08.923716+07:00"
+    created: "2026-11-24T13:08:38.827629+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 97c78e05d4e2556359bf2f5538ed88bd44ae555a98efc1ba16b35f43a1357fc1
@@ -179,7 +190,7 @@ entries:
     version: 0.7.1
   - apiVersion: v2
     appVersion: v0.7.0
-    created: "2026-11-23T23:02:08.923518+07:00"
+    created: "2026-11-24T13:08:38.827367+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 6aca34fb1056f835b6dff82fe32efe1b0ed0150ed3882967e091752a6a20ebe5
@@ -190,7 +201,7 @@ entries:
     version: 0.7.0
   - apiVersion: v2
     appVersion: v0.6.2
-    created: "2026-11-23T23:02:08.923322+07:00"
+    created: "2026-11-24T13:08:38.827178+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 0a4548ddb26e86691cbc178638d7571f2931d754eb803e4d268ee10a8e3ab4fd
@@ -201,7 +212,7 @@ entries:
     version: 0.6.2
   - apiVersion: v2
     appVersion: v0.6.0
-    created: "2026-11-23T23:02:08.923109+07:00"
+    created: "2026-11-24T13:08:38.826426+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: e1aec29ab96709ba6dbabfaaa06ddda3713c61bed9599fbc6f8b9e7f2141e727
@@ -212,7 +223,7 @@ entries:
     version: 0.6.0
   - apiVersion: v2
     appVersion: v0.5.4
-    created: "2026-11-23T23:02:08.922059+07:00"
+    created: "2026-11-24T13:08:38.826119+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 1db1cb5f9cb5faa81356edaaa60f0d6a9599a48476cdc1dc3a04ab922a59c08e
@@ -223,7 +234,7 @@ entries:
     version: 0.5.4
   - apiVersion: v2
     appVersion: v0.5.3
-    created: "2026-11-23T23:02:08.921768+07:00"
+    created: "2026-11-24T13:08:38.825827+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 5abb6388481e12cd6652901f6821716ca6a132dfab580ade09329ae0b5978112
@@ -234,7 +245,7 @@ entries:
     version: 0.5.3
   - apiVersion: v2
     appVersion: v0.5.2
-    created: "2026-11-23T23:02:08.921489+07:00"
+    created: "2026-11-24T13:08:38.825636+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 966eabf410ad90ed7478121a61d2fe51c1932aeae55b97b3ebfe230f83234cd6
@@ -245,7 +256,7 @@ entries:
     version: 0.5.2
   - apiVersion: v2
     appVersion: v0.5.1
-    created: "2026-11-23T23:02:08.921282+07:00"
+    created: "2026-11-24T13:08:38.825439+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: b3ff067c749e5362f0b6ce10ee4aa72544f1f3d6f8e044a1c254f4e4cf7fa473
@@ -256,7 +267,7 @@ entries:
     version: 0.5.1
   - apiVersion: v2
     appVersion: v0.5.0
-    created: "2026-11-23T23:02:08.919884+07:00"
+    created: "2026-11-24T13:08:38.825234+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: f45eda9cb9d238fe190cf90b11e51fa9670a1bc46c12870b240dac103ba940f0
@@ -267,7 +278,7 @@ entries:
     version: 0.5.0
   - apiVersion: v2
     appVersion: v0.4.0
-    created: "2026-11-23T23:02:08.919604+07:00"
+    created: "2026-11-24T13:08:38.824306+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 672e6e3bc2dd591a676385028afc3c02242afb9ddcd50a204bcbfec638599ff4
@@ -278,7 +289,7 @@ entries:
     version: 0.4.0
   - apiVersion: v2
     appVersion: v0.3.0
-    created: "2026-11-23T23:02:08.919292+07:00"
+    created: "2026-11-24T13:08:38.824003+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: e6c40407cab484e6cb4ad8a10094be7d5c02aee26761996baad5c8b72f2006a9
@@ -289,7 +300,7 @@ entries:
     version: 0.3.0
   - apiVersion: v2
     appVersion: v0.2.0
-    created: "2026-11-23T23:02:08.918573+07:00"
+    created: "2026-11-24T13:08:38.823412+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: cb3c3f4723d92d519704a74f2f7af34d66ebb5f95472597927f0b50e09a4dc0e
@@ -298,4 +309,4 @@ entries:
     urls:
     - pergent-sh-0.2.0.tgz
     version: 0.2.0
-generated: "2026-11-23T23:02:08.912479+07:00"
+generated: "2026-11-24T13:08:38.817274+07:00"
