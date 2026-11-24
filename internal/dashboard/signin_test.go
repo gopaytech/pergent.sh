@@ -939,17 +939,22 @@ func TestTestButtonSaysOnlyWhetherItWorked(t *testing.T) {
 	// The JWKS of the fake provider works.
 	o.d.idp = idpClient(o.f.srv.Client())
 	exactly("a working key set", post(fmt.Sprintf(`{"mode": "jwt", "jwksURL": %q}`, o.f.url()+"/jwks")), 200, true)
+	// A JWT issuer is only compared with iss, so a plain name does not stop
+	// the key set's test.
+	exactly("a plain JWT issuer", post(fmt.Sprintf(`{"mode": "jwt", "issuer": "main", "jwksURL": %q}`, o.f.url()+"/jwks")), 200, true)
 	// The discovery document must name the issuer it was asked for.
 	exactly("an issuer that is not the document's", post(fmt.Sprintf(`{"mode": "oidc", "issuer": %q}`, o.f.url()+"/")), 200, false)
 
 	// Bad requests say so in fixed words.
 	for name, body := range map[string]string{
-		"http issuer":   `{"mode": "oidc", "issuer": "http://idp.example.com"}`,
-		"http jwks":     `{"mode": "jwt", "jwksURL": "http://idp.example.com/keys"}`,
-		"unknown field": `{"nope": 1}`,
-		"not json":      `{`,
-		"unknown mode":  `{"mode": "saml", "issuer": "https://idp.example.com"}`,
-		"credentials":   `{"mode": "oidc", "issuer": "https://u:p@idp.example.com"}`,
+		"http issuer":      `{"mode": "oidc", "issuer": "http://idp.example.com"}`,
+		"http jwks":        `{"mode": "jwt", "jwksURL": "http://idp.example.com/keys"}`,
+		"unknown field":    `{"nope": 1}`,
+		"not json":         `{`,
+		"unknown mode":     `{"mode": "saml", "issuer": "https://idp.example.com"}`,
+		"credentials":      `{"mode": "oidc", "issuer": "https://u:p@idp.example.com"}`,
+		"plain oidc":       `{"mode": "oidc", "issuer": "main"}`,
+		"plain, http jwks": `{"mode": "jwt", "issuer": "main", "jwksURL": "http://idp.example.com/keys"}`,
 	} {
 		rec := post(body)
 		if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "idp.example.com") {
@@ -1319,11 +1324,13 @@ func TestSignInSettingsRoundTripThroughTheAPI(t *testing.T) {
 	if err := json.Unmarshal(e.get(nil, "/api/sign-in-options").Body.Bytes(), &inst); err != nil || inst.SSO == nil || inst.SSO.Label != "Google" {
 		t.Errorf("GET /api/sign-in-options sso = %+v, %v", inst.SSO, err)
 	}
-	// JWT's fields are stored too; the email claim defaults.
-	rec = e.putSignIn(c, map[string]any{"mode": "jwt", "issuer": "https://proxy.example.com", "audience": "pergent",
+	// JWT's fields are stored too; the email claim defaults. A JWT issuer is
+	// only compared with iss, so a plain name such as a Teleport cluster's is
+	// taken, and the new issuer needs no secret.
+	rec = e.putSignIn(c, map[string]any{"mode": "jwt", "issuer": "main", "audience": "pergent",
 		"jwksURL": "https://proxy.example.com/keys", "header": "X-Auth-Token"})
 	v = decode[SignInAdminView](t, rec, "PUT jwt", http.StatusOK)
-	if v.Mode != "jwt" || v.EmailClaim != "email" || v.Audience != "pergent" || v.JWKSURL != "https://proxy.example.com/keys" || v.Header != "X-Auth-Token" {
+	if v.Mode != "jwt" || v.Issuer != "main" || v.EmailClaim != "email" || v.Audience != "pergent" || v.JWKSURL != "https://proxy.example.com/keys" || v.Header != "X-Auth-Token" {
 		t.Errorf("jwt view = %+v", v)
 	}
 	var jwtInst struct {

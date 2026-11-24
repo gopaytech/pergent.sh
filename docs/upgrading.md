@@ -1,5 +1,13 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+**A JWT sign-in issuer no longer has to be a URL:** [Sign-in](concepts/dashboard.md#sign-in). In `jwt` mode the issuer is only compared with the token's `iss`, so any value with no spaces or control characters (at most 512 characters) is taken, such as a Teleport cluster name. This makes sign-in behind Teleport app access work (see **Behind Teleport** on that page). An OIDC issuer must still be an `https` URL, and so must the JWKS URL.
+
+- **The sign-in test button checks only the address it reads:** the issuer for OIDC, the JWKS URL for JWT. Its 400 for an address that is not `https` now says `the address to test must be an https URL: the issuer for OIDC, the JWKS URL for JWT`.
+- **No migration and no new config key.**
+- **Rolling back:** the previous release refuses a `jwt` issuer in the config file that is not an `https` URL, and does not start. Put a URL back first, or move the sign-in to the dashboard. A plain issuer saved on the **Integrations** page keeps working there, but the previous release refuses to save that page until the issuer is an `https` URL.
+
 ## Upgrading to 0.20.0
 
 **A new repository setting, `blocking_status`, can keep pergent from blocking a merge with its status:** [How approval works](concepts/approval.md#blocking-status). It is `failed` or `neutral`, and `failed` is the default, so nothing changes until someone sets `neutral`. With `neutral` the `pergent` status is never red: blocking findings, a blocking CI job that did not pass, a review that could not be done and a review that could not be posted all get `neutral`, which is `success` on GitLab and a `neutral` Check Run on GitHub. The status description then ends with ` · not blocking merge`. The review still lists the blocking issues and is never approved.

@@ -21,6 +21,7 @@ const (
 	msgNewIssuerSecret  = "a new issuer needs the client secret entered again: a stored secret is never sent to a new token endpoint"
 	msgBadTestBody      = `the body must be {} or {"mode": "oidc" or "jwt", "issuer", "jwksURL"}`
 	msgNothingToTest    = "set an issuer (OIDC) or a JWKS URL (JWT) first"
+	msgTestNotHTTPS     = "the address to test must be an https URL: the issuer for OIDC, the JWKS URL for JWT"
 	msgSecretTooLong    = "clientSecret must be at most 16 KiB"
 	googleIssuer        = "https://accounts.google.com"
 	defaultSignInLabel  = "SSO"
@@ -438,8 +439,10 @@ func (d *Dashboard) signInTest(w http.ResponseWriter, r *http.Request) string {
 		writeError(w, http.StatusBadRequest, msgNothingToTest)
 		return ""
 	}
-	if problems := (config.SignIn{Issuer: issuer, JWKSURL: jwks}).Problems(false); len(problems) > 0 {
-		writeError(w, http.StatusBadRequest, "the issuer and the JWKS URL must be https URLs")
+	// Only the address fetched is checked: a JWT issuer is a plain value,
+	// compared with iss and never fetched.
+	if config.CheckSignInURL(target, mode == config.SignInOIDC) != nil {
+		writeError(w, http.StatusBadRequest, msgTestNotHTTPS)
 		return ""
 	}
 	ok := false

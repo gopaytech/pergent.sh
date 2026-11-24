@@ -29,7 +29,8 @@ type SignIn struct {
 	Mode  string `yaml:"mode"`
 	Label string `yaml:"label"`
 	// Issuer is the OIDC provider's issuer URL (https), or the issuer a JWT
-	// must name.
+	// must name: any string, compared exactly with the token's iss (a
+	// Teleport cluster name, say).
 	Issuer   string `yaml:"issuer"`
 	ClientID string `yaml:"client_id"`
 	// ClientSecretEnv names the env var holding the OIDC client secret.
@@ -66,7 +67,9 @@ var (
 // what is wrong with s. fromFile is true for the config file, where an OIDC
 // sign-in names its secret's env var; the dashboard stores the secret
 // itself. A field is checked when it is set, whatever the mode; the mode
-// decides which are required.
+// decides which are required. The issuer is the one field the mode shapes:
+// OIDC reads discovery from it, so it must be an https URL, while JWT only
+// compares it with the token's iss, so there it is a plain value.
 func (s SignIn) Problems(fromFile bool) []string {
 	var out []string
 	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
@@ -79,17 +82,21 @@ func (s SignIn) Problems(fromFile bool) []string {
 	if n := utf8.RuneCountInString(s.Label); n > 64 || hasControl(s.Label) {
 		add("label must be at most 64 characters, with no control characters")
 	}
-	if s.Issuer != "" {
-		if err := checkSignInURL(s.Issuer, true); err != nil {
+	if s.Issuer != "" && s.Mode == SignInOIDC {
+		if err := CheckSignInURL(s.Issuer, true); err != nil {
 			add("issuer %v", err)
 		}
 	}
 	if s.JWKSURL != "" {
-		if err := checkSignInURL(s.JWKSURL, false); err != nil {
+		if err := CheckSignInURL(s.JWKSURL, false); err != nil {
 			add("jwks_url %v", err)
 		}
 	}
-	for field, v := range map[string]string{"client_id": s.ClientID, "audience": s.Audience} {
+	plain := map[string]string{"client_id": s.ClientID, "audience": s.Audience}
+	if s.Mode != SignInOIDC {
+		plain["issuer"] = s.Issuer
+	}
+	for field, v := range plain {
 		if len(v) > maxSignInField || hasControl(v) || strings.ContainsAny(v, " \t") {
 			add("%s must be at most %d characters, with no spaces or control characters", field, maxSignInField)
 		}
@@ -157,10 +164,10 @@ func (s SignIn) empty() bool {
 		len(s.AllowedDomains) == 0 && len(s.AllowedEmails) == 0
 }
 
-// checkSignInURL requires an absolute https URL with a host, no credentials
-// and no fragment; an issuer may also not have a query. It returns the end of
-// the sentence, "must be ...".
-func checkSignInURL(raw string, issuer bool) error {
+// CheckSignInURL requires an absolute https URL with a host, no credentials
+// and no fragment; an OIDC issuer (issuer true) may also not have a query. It
+// returns the end of the sentence, "must be ...".
+func CheckSignInURL(raw string, issuer bool) error {
 	const what = "must be an https URL with a host, without credentials or a fragment"
 	if len(raw) > 2048 {
 		return fmt.Errorf("must be at most 2048 characters")

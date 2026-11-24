@@ -1387,6 +1387,11 @@ func TestLoadSignIn(t *testing.T) {
 	if _, err := Load(writeConfig(t, jwt)); err != nil {
 		t.Errorf("Load of a jwt sign-in: %v", err)
 	}
+	// Teleport names its cluster as the issuer.
+	teleport := strings.Replace(jwt, "issuer: https://proxy.example.com", "issuer: main", 1)
+	if cfg, err := Load(writeConfig(t, teleport)); err != nil || cfg.Dashboard.SignIn.Issuer != "main" {
+		t.Errorf("Load of a jwt sign-in with a plain issuer: %v", err)
+	}
 	if loadGitHub(t).Dashboard.SignIn.Set() {
 		t.Error("SignIn.Set() without a sign_in block")
 	}
@@ -1463,6 +1468,41 @@ func TestSignInProblemsForTheDashboard(t *testing.T) {
 	bad := SignIn{Mode: SignInOIDC, Issuer: "http://x.example.com", ClientID: "has space"}
 	if p := bad.Problems(false); len(p) != 2 {
 		t.Errorf("Problems = %q, want two", p)
+	}
+}
+
+// In jwt mode the issuer is only compared with the token's iss, so it may be
+// any plain string, such as a Teleport cluster name; OIDC needs discovery, so
+// its issuer stays an https URL.
+func TestSignInIssuerByMode(t *testing.T) {
+	jwt := func(issuer string) SignIn {
+		return SignIn{Mode: SignInJWT, Issuer: issuer, Audience: "https://pergent.example.com", JWKSURL: "https://proxy.example.com/.well-known/jwks.json",
+			Header: "Teleport-Jwt-Assertion", EmailClaim: "username"}
+	}
+	for _, tt := range []struct {
+		name    string
+		s       SignIn
+		wantErr string // "" for no problem
+	}{
+		{"jwt plain name", jwt("main"), ""},
+		{"jwt https URL", jwt("https://proxy.example.com"), ""},
+		{"jwt URL with a query", jwt("https://proxy.example.com/?tenant=1"), ""},
+		{"jwt at the length limit", jwt(strings.Repeat("x", maxSignInField)), ""},
+		{"jwt too long", jwt(strings.Repeat("x", maxSignInField+1)), "issuer must be at most 512 characters"},
+		{"jwt with a space", jwt("my cluster"), "issuer must be at most 512 characters, with no spaces"},
+		{"jwt with a control character", jwt("main\n"), "with no spaces or control characters"},
+		{"oidc plain name", SignIn{Mode: SignInOIDC, Issuer: "main", ClientID: "x"}, "issuer must be an https URL"},
+		{"no mode, plain name", SignIn{Issuer: "main"}, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := strings.Join(tt.s.Problems(false), "; ")
+			if tt.wantErr == "" && p != "" {
+				t.Errorf("Problems = %q, want none", p)
+			}
+			if tt.wantErr != "" && !strings.Contains(p, tt.wantErr) {
+				t.Errorf("Problems = %q, want one containing %q", p, tt.wantErr)
+			}
+		})
 	}
 }
 

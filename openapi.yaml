@@ -4384,11 +4384,13 @@ paths:
       summary: Set how people sign in
       description: |
         Admins only; 409 when the config file sets `dashboard.sign_in`.
-        Issuer and JWKS URLs must be `https`. `clientSecret` is sealed and never
+        The JWKS URL and an OIDC issuer must be `https` URLs; a JWT issuer is any
+        value without spaces (at most 512 characters), compared exactly with the
+        token's `iss`. `clientSecret` is sealed and never
         returned; leave it out to keep the stored one, send `""` to remove it.
         OIDC needs one. Changing the mode or the issuer ends every OIDC and JWT
-        session (a local admin's stays), and changing the issuer needs the
-        client secret entered again: a stored secret is dropped when the issuer
+        session (a local admin's stays), and in OIDC mode changing the issuer
+        needs the client secret entered again: a stored secret is dropped when the issuer
         changes, so it is never sent to a new token endpoint. Emails are
         lower-cased (ASCII only) and domains too; lists hold at most 500 entries.
       x-pergent-access: admin
@@ -6636,7 +6638,7 @@ components:
         label: {type: string, maxLength: 64}
         issuer:
           type: string
-          description: An https URL.
+          description: An https URL in oidc mode. In jwt mode the exact `iss` a token must name, such as a Teleport cluster name.
         clientID: {type: string}
         clientSecret:
           type: [string, 'null']

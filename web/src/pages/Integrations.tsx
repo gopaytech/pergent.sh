@@ -781,7 +781,11 @@ function SignInEditor({ current, setSaved }: { current: SignInAdminView; setSave
       {jwt && (
         <>
           {field("header", "Header", "The request header that carries the token, such as X-Auth-Token.")}
-          {field("issuer", "Issuer", "An https address.")}
+          {field(
+            "issuer",
+            "Issuer",
+            "The token's iss, exactly. It need not be an address: behind Teleport it is the cluster name.",
+          )}
           {field("audience", "Audience", "A token meant for another app is refused.")}
           {field("jwksURL", "JWKS URL", "An https address.")}
           {field("emailClaim", "Email claim", "email when empty.")}
