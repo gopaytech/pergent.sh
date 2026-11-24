@@ -37,7 +37,7 @@ The status a review gets:
 ## What does not change
 
 - **Approval.** A blocking review, a review held back by CI, and a review that could not be done are never approved. An earlier approval of the same head is still withdrawn. A repository that needs pergent's approval to merge is still blocked by that approval rule.
-- **The comment.** It shows the same findings, the same CI line and the same failures.
+- **The comment.** It shows the same findings, the same CI line and the same failures. It gets no line about the setting: only the status description says the status was softened.
 - **The dashboard outcome.** A run with blocking findings is still **Blocking**, and one held back by CI is still **Blocked by CI**. The run page shows the platform status that was set (`neutral`), as it does for `failure_status: neutral` today.
 - **Other CI jobs.** A failed blocking CI job still fails the pipeline itself. Only pergent's own status stops repeating it.
 
@@ -76,6 +76,9 @@ Storage: a new migration adds `blocking_status text CHECK (blocking_status IN ('
 | `failure_status` | **Status when a review can't run** | "neutral" doesn't block merging when a review can't be done. On GitLab the status is success; the review is still not approved. Not used when the blocking status is neutral. |
 | `blocking_status` | **Status when a review finds blocking issues** | "neutral" never blocks merging: pergent's status is never red. The review still lists the blocking issues and is never approved. On GitLab the status is success. |
 
+- While the effective `blocking_status` is `neutral`, the `failure_status` field stays and shows the note `Not used: the blocking status is neutral`. It is not disabled, so an admin can set it before turning `blocking_status` back to `failed`.
+- The repository page shows, under its name next to `Multi review: off`, the line `Merge gate: off (blocking status is neutral)` while the effective value is `neutral`, to everyone who can see the page. The repository list does not show it.
+
 ## Code
 
 - `config`: the `BlockingStatus` field on a repository and on the defaults, the default `failed`, the load check.
@@ -83,7 +86,7 @@ Storage: a new migration adds `blocking_status text CHECK (blocking_status IN ('
 - `policy.Decide(o, failure, blocking)`: after the CI block (which today forces `failed`), a `blocking_status: neutral` maps every `failed` status to `neutral` and adds the suffix. `Approve` and `Kind` do not change. This is the one place the normal publish picks the status.
 - `engine/publish.go`: `publish` reads both settings and passes them. `gaveUpStatus` returns `neutral` when the read settings say `blocking_status: neutral`, before its other checks, and `failed` when they can't be read.
 - `dashboard`: the `blockingStatus` key on the repository settings and Global defaults APIs (`"failed"`, `"neutral"` or `null`), the admin-only check for both keys, the reset that leaves them, `openapi.yaml`.
-- `web`: the field on `RepositorySettings.tsx` (read-only for a maintainer) and `AdminSettings.tsx`, and the new labels for both.
+- `web`: the field on `RepositorySettings.tsx` (read-only for a maintainer, with `Only an admin changes this`) and `AdminSettings.tsx`, the new labels for both, the `Not used` note on `failure_status`, and the `Merge gate: off` line on the repository page.
 - Docs: `concepts/approval.md` (the status table), `concepts/ci-jobs.md` (the CI block with `blocking_status: neutral`), `concepts/dashboard.md` (the settings list, the config key list), `setup/github.md` (the Check Run conclusions), `upgrading.md` (the new setting and the breaking change).
 
 ## Tests
@@ -92,7 +95,18 @@ Storage: a new migration adds `blocking_status text CHECK (blocking_status IN ('
 - `engine`: `gaveUpStatus` with `blocking_status: neutral` on a run with blocking findings gives `neutral`; with settings that can't be read, `failed`. One publish test that sets `neutral` on GitLab and GitHub fakes for a blocking review, and checks it is not approved.
 - `settings` and `config`: the precedence (config, defaults, repository) and the load check.
 - `dashboard`: a maintainer gets 403 on `failureStatus` and on `blockingStatus`, an admin 200; a maintainer's reset leaves both; the audit entry.
-- `web`: the field is read-only for a maintainer and editable for an admin.
+- `web`: the field is read-only for a maintainer and editable for an admin; the `Not used` note shows only while `blocking_status` is `neutral`; the repository page shows `Merge gate: off` only then.
+
+## Decided questions (grilling, 2026-11-24)
+
+1. Settings that can't be read give `failed`, even on a `neutral` repository.
+2. A softened status gets the ` · not blocking merge` suffix.
+3. The review comment does not change.
+4. Maintainer overrides of `failure_status` made before the upgrade stay; the migration only adds columns.
+5. Maintainers see both settings read-only.
+6. Admins can set `blocking_status: neutral` as the global default.
+7. The repository page shows `Merge gate: off`; the repository list does not.
+8. `failure_status` keeps its field with a `Not used` note while `blocking_status` is `neutral`.
 
 ## Anti-goals
 
