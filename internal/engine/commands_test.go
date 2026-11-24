@@ -1514,7 +1514,7 @@ func TestAuthorComparedByID(t *testing.T) {
 		f.run()
 
 		f.wantReactions(1, c, eyes, down)
-		f.wantReplies(1, "the author of a change can't dismiss its blocking findings")
+		f.wantReplies(1, "the author of an MR can't dismiss its blocking findings; ask a Maintainer or Owner of this project to dismiss it")
 		if ds := f.dismissals(1); len(ds) != 0 {
 			t.Errorf("dismissals = %+v, want none", ds)
 		}
@@ -1534,7 +1534,7 @@ func TestUnknownAuthorCannotBeTold(t *testing.T) {
 	f.run()
 
 	f.wantReactions(1, c, eyes, down)
-	f.wantReplies(1, "the author of a change can't dismiss its blocking findings")
+	f.wantReplies(1, "the author of an MR can't dismiss its blocking findings; ask a Maintainer or Owner of this project to dismiss it")
 	if ds := f.dismissals(1); len(ds) != 0 {
 		t.Errorf("dismissals = %+v, want none", ds)
 	}
