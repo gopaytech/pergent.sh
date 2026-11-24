@@ -348,21 +348,21 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	got, err := s.RepoDefaults(ctx)
-	if err != nil || got.Approve != nil || got.ReviewDrafts != nil || got.FailureStatus != nil ||
+	if err != nil || got.Approve != nil || got.ReviewDrafts != nil || got.FailureStatus != nil || got.BlockingStatus != nil ||
 		got.JobTimeoutSeconds != nil || got.MaxTurns != nil || got.JobMemory != nil || got.InlineFindings != nil || got.CommandsAuthorAndMaintainersOnly != nil || got.IncrementalReviews != nil || got.LearnFromDismissals != nil || !got.UpdatedAt.IsZero() {
 		t.Fatalf("RepoDefaults when unset = %+v, %v; want the zero value", got, err)
 	}
 
 	yes, no := true, false
 	status, memory, timeout, turns := "neutral", "2Gi", 900, 60
-	in := RepoDefaults{Approve: &yes, ReviewDrafts: &no, FailureStatus: &status, JobTimeoutSeconds: &timeout, MaxTurns: &turns, JobMemory: &memory, InlineFindings: &no,
+	in := RepoDefaults{Approve: &yes, ReviewDrafts: &no, FailureStatus: &status, BlockingStatus: &status, JobTimeoutSeconds: &timeout, MaxTurns: &turns, JobMemory: &memory, InlineFindings: &no,
 		CommandsAuthorAndMaintainersOnly: &no, IncrementalReviews: &no, LearnFromDismissals: &no}
 	if err := s.PutRepoDefaults(ctx, in); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.RepoDefaults(ctx)
 	if err != nil || got.Approve == nil || !*got.Approve || got.ReviewDrafts == nil || *got.ReviewDrafts ||
-		got.FailureStatus == nil || *got.FailureStatus != "neutral" || got.JobTimeoutSeconds == nil || *got.JobTimeoutSeconds != 900 ||
+		got.FailureStatus == nil || *got.FailureStatus != "neutral" || got.BlockingStatus == nil || *got.BlockingStatus != "neutral" || got.JobTimeoutSeconds == nil || *got.JobTimeoutSeconds != 900 ||
 		got.MaxTurns == nil || *got.MaxTurns != 60 || got.JobMemory == nil || *got.JobMemory != "2Gi" ||
 		got.InlineFindings == nil || *got.InlineFindings || got.CommandsAuthorAndMaintainersOnly == nil || *got.CommandsAuthorAndMaintainersOnly ||
 		got.IncrementalReviews == nil || *got.IncrementalReviews || got.LearnFromDismissals == nil || *got.LearnFromDismissals ||
@@ -375,7 +375,7 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = s.RepoDefaults(ctx)
-	if got.Approve != nil || got.ReviewDrafts != nil || got.FailureStatus != nil || got.JobTimeoutSeconds != nil ||
+	if got.Approve != nil || got.ReviewDrafts != nil || got.FailureStatus != nil || got.BlockingStatus != nil || got.JobTimeoutSeconds != nil ||
 		got.MaxTurns != nil || got.InlineFindings != nil || got.CommandsAuthorAndMaintainersOnly != nil || got.IncrementalReviews != nil || got.LearnFromDismissals != nil || got.JobMemory == nil || *got.JobMemory != "2Gi" {
 		t.Fatalf("RepoDefaults after a second put = %+v", got)
 	}
@@ -383,6 +383,9 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 	bad := "maybe"
 	if err := s.PutRepoDefaults(ctx, RepoDefaults{FailureStatus: &bad}); err == nil {
 		t.Fatal("PutRepoDefaults accepted an unknown failure status")
+	}
+	if err := s.PutRepoDefaults(ctx, RepoDefaults{BlockingStatus: &bad}); err == nil {
+		t.Fatal("PutRepoDefaults accepted an unknown blocking status")
 	}
 	for _, n := range []int{4, 201} {
 		if err := s.PutRepoDefaults(ctx, RepoDefaults{MaxTurns: &n}); err == nil {

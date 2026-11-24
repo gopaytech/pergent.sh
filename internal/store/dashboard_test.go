@@ -34,7 +34,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 	if r.Instance != "main" || r.Project != "Acme/Widgets" || r.CreatedBy != "alice" {
 		t.Errorf("row = %+v", r)
 	}
-	if r.Approve == nil || *r.Approve || r.ReviewDrafts != nil || r.FailureStatus != nil ||
+	if r.Approve == nil || *r.Approve || r.ReviewDrafts != nil || r.FailureStatus != nil || r.BlockingStatus != nil ||
 		r.Skills != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil {
 		t.Errorf("nullable columns = %+v", r)
 	}
@@ -48,7 +48,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 	// replaced, the creator and creation time stay.
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{
 		Instance: "main", Project: "acme/widgets",
-		ReviewDrafts: ptrTo(false), FailureStatus: ptrTo("neutral"), Skills: []string{"security", "style"},
+		ReviewDrafts: ptrTo(false), FailureStatus: ptrTo("neutral"), BlockingStatus: ptrTo("neutral"), Skills: []string{"security", "style"},
 		JobTimeoutSeconds: ptrTo(1200), MaxTurns: ptrTo(60), JobMemory: ptrTo("6Gi"), InlineFindings: ptrTo(false), CreatedBy: "bob",
 		CommandsAuthorAndMaintainersOnly: ptrTo(false), IncrementalReviews: ptrTo(false), LearnFromDismissals: ptrTo(false),
 	}); err != nil {
@@ -59,6 +59,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	if u.Approve != nil || u.ReviewDrafts == nil || *u.ReviewDrafts || u.FailureStatus == nil || *u.FailureStatus != "neutral" ||
+		u.BlockingStatus == nil || *u.BlockingStatus != "neutral" ||
 		!slices.Equal(u.Skills, []string{"security", "style"}) || u.JobTimeoutSeconds == nil || *u.JobTimeoutSeconds != 1200 ||
 		u.MaxTurns == nil || *u.MaxTurns != 60 || u.JobMemory == nil || *u.JobMemory != "6Gi" ||
 		u.InlineFindings == nil || *u.InlineFindings || u.CommandsAuthorAndMaintainersOnly == nil || *u.CommandsAuthorAndMaintainersOnly ||
@@ -80,6 +81,9 @@ func TestDashboardReposCRUD(t *testing.T) {
 	// Bad values are refused by the table.
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "gh", Project: "acme/x", FailureStatus: ptrTo("maybe")}); err == nil {
 		t.Errorf("failure_status maybe was stored")
+	}
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "gh", Project: "acme/x", BlockingStatus: ptrTo("maybe")}); err == nil {
+		t.Errorf("blocking_status maybe was stored")
 	}
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "gh", Project: "acme/x", JobTimeoutSeconds: ptrTo(0)}); err == nil {
 		t.Errorf("job_timeout_seconds 0 was stored")
