@@ -119,6 +119,8 @@ function AddByEmail({ view, onKnown }: { view: TeamPageView; onKnown: (accountId
   const client = useQueryClient();
   const write = useWrite();
   const [email, setEmail] = useState("");
+  // note says why a 409 added nobody: the box is not cleared then.
+  const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
   const add = useMutation({
     mutationFn: async (body: AddUserBody): Promise<UserView | null> => {
       try {
@@ -135,13 +137,23 @@ function AddByEmail({ view, onKnown }: { view: TeamPageView; onKnown: (accountId
         client.invalidateQueries({ queryKey: ["my-teams"] });
         client.invalidateQueries({ queryKey: ["users"] });
         setEmail("");
+        setNote(null);
         return;
       }
       const fresh = await client.fetchQuery({ queryKey: ["users"], queryFn: () => api.get<UserView[]>("/api/users"), staleTime: 0 });
       const found = fresh.find((u) => u.email.toLowerCase() === body.email.toLowerCase());
+      if (found === undefined) {
+        setNote({ error: true, text: "This email is added already, but its account was not found." });
+        return;
+      }
       // Someone on the team already keeps their role.
-      if (found !== undefined && !view.members.some((m) => m.accountId === found.id)) onKnown(found.id);
+      if (view.members.some((m) => m.accountId === found.id)) {
+        setNote({ error: false, text: "Already on this team." });
+        return;
+      }
+      onKnown(found.id);
       setEmail("");
+      setNote(null);
     },
   });
   const submit = () => {
@@ -160,7 +172,10 @@ function AddByEmail({ view, onKnown }: { view: TeamPageView; onKnown: (accountId
         spellCheck={false}
         maxLength={254}
         value={email}
-        onChange={(e) => setEmail(e.target.value)}
+        onChange={(e) => {
+          setEmail(e.target.value);
+          setNote(null);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -172,6 +187,11 @@ function AddByEmail({ view, onKnown }: { view: TeamPageView; onKnown: (accountId
         Add email
       </button>
       <div className="meta">A new email makes the account now, as invited, and puts it on this team as a viewer. It can sign in whatever the allowed domains say.</div>
+      {note !== null && (
+        <div className={note.error ? "error" : "meta"} role={note.error ? "alert" : "status"}>
+          {note.text}
+        </div>
+      )}
       {add.isError && <ErrorBox error={add.error} />}
     </div>
   );

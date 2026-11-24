@@ -157,5 +157,30 @@ describe("Team Members tab", () => {
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+
+  it("on a 409 for an account that is not found, it keeps the text, shows an error and makes no PUT", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "POST /api/admin/users": { status: 409, body: { error: "this email is added already" } },
+    });
+    renderApp("/teams/2?tab=members");
+    await userEvent.type(await screen.findByLabelText("Add by email"), "ghost@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Add email" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("This email is added already, but its account was not found.");
+    expect(screen.getByLabelText("Add by email")).toHaveValue("ghost@example.com");
+    expect(fake.find("PUT", "/api/teams/2")).toHaveLength(0);
+  });
+
+  it("on a 409 for an account on the team already, it says so and makes no PUT", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "POST /api/admin/users": { status: 409, body: { error: "this email is added already" } },
+    });
+    renderApp("/teams/2?tab=members");
+    await userEvent.type(await screen.findByLabelText("Add by email"), "ana@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Add email" }));
+    expect(await screen.findByText("Already on this team.")).toBeInTheDocument();
+    expect(fake.find("PUT", "/api/teams/2")).toHaveLength(0);
+  });
 });
 
