@@ -274,7 +274,7 @@ func addGitHub(t *testing.T, env *testEnv, approveInstalled bool) *fakeGitHub {
 		TrustedAuthorsOnly: config.TrustOff,
 	})
 	cfg.Repositories = append(cfg.Repositories, config.Repository{
-		GitHub: ghInstance, Project: ghRepoPath, FailureStatus: config.FailureStatusFailed,
+		GitHub: ghInstance, Project: ghRepoPath, FailureStatus: config.FailureStatusFailed, BlockingStatus: config.BlockingStatusFailed,
 	})
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config with GitHub is invalid: %v", err)
