@@ -386,6 +386,58 @@ describe("RepositorySettings: Review deleted and renamed files", () => {
   });
 });
 
+describe("RepositorySettings: unsaved changes", () => {
+  const toggle = () => screen.findByRole("switch", { name: "Quiet reviews" });
+
+  it("offers Save in a bar only while something changed, and Discard puts the draft back", async () => {
+    fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const quiet = await toggle();
+    expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument();
+    await userEvent.click(quiet);
+    const bar = screen.getByRole("region", { name: "Unsaved changes" });
+    expect(bar).toHaveTextContent("You have unsaved changes to the settings above.");
+    await userEvent.click(within(bar).getByRole("button", { name: "Discard" }));
+    expect(quiet).not.toBeChecked();
+    expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument();
+  });
+
+  it("asks before another tab drops the changes, and keeps them when the person stays", async () => {
+    fakeApi(base);
+    const ask = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.click(await toggle());
+    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    expect(ask).toHaveBeenCalledWith("You have unsaved changes. Leave and lose them?");
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+    expect(await toggle()).toBeChecked();
+    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Reviews" })).toHaveAttribute("aria-selected", "true"));
+    ask.mockRestore();
+  });
+
+  it("keeps the draft when the settings are read again", async () => {
+    fakeApi(base);
+    const { client } = renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.click(await toggle());
+    await client.refetchQueries({ queryKey: ["repo"] });
+    expect(await toggle()).toBeChecked();
+    expect(screen.getByRole("region", { name: "Unsaved changes" })).toBeInTheDocument();
+  });
+
+  it("takes the person to a field the save refuses", async () => {
+    const fake = fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const steps = await screen.findByRole("textbox", { name: "Max steps" });
+    await userEvent.clear(steps);
+    await userEvent.type(steps, "999");
+    await userEvent.click(within(screen.getByRole("region", { name: "Unsaved changes" })).getByRole("button", { name: "Save" }));
+    expect(within(screen.getByRole("region", { name: "Unsaved changes" })).getByRole("alert")).toHaveTextContent(/Max steps/);
+    expect(steps).toHaveFocus();
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")).toHaveLength(0);
+  });
+});
+
 describe("RepositorySettings: CI jobs", () => {
   const payments = "/api/repositories/main/acme/payments";
   const settingsPath = `${payments}/settings`;
@@ -477,7 +529,9 @@ describe("RepositorySettings: CI jobs", () => {
     const box = await card();
     expect(within(box).getByText("overridden here")).toBeInTheDocument();
     expect(within(box).getByRole("textbox", { name: "How long to wait for CI" })).toHaveValue("45m");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    // Nothing changed: there is nothing to save, so no Save is offered.
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.getByText("All changes are saved.")).toBeInTheDocument();
     expect(fake.find("PUT", settingsPath)).toHaveLength(0);
     await userEvent.click(within(box).getByRole("button", { name: "Remove test" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));

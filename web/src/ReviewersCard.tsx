@@ -122,6 +122,11 @@ export default function ReviewersCard({ instance, project, first }: { instance: 
               onEdit={() => edit(r.number)}
               onCancel={() => setOpen(null)}
               onRemove={() => {
+                // It saves at once, unlike the chain edits: ask first, and say
+                // when it turns multi review off.
+                const last = v.reviewers.length === 1;
+                const question = `Remove reviewer ${r.number}? It saves now.${last ? " Multi review turns off, and the judge is no longer used." : ""}`;
+                if (!window.confirm(question)) return;
                 setOpen(null);
                 send(removeReviewer(draft, r.number));
               }}
@@ -236,7 +241,7 @@ function ChainGroup({
           </button>
         )}
         {!readOnly && onRemove && (
-          <button type="button" className="btn small" aria-label={`Remove ${name.toLowerCase()}`} disabled={busy} onClick={onRemove}>
+          <button type="button" className="btn small danger" aria-label={`Remove ${name.toLowerCase()}`} disabled={busy} onClick={onRemove}>
             Remove
           </button>
         )}

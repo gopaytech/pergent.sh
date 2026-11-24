@@ -312,7 +312,7 @@ function RemoveClient({ client }: { client: APIClientView }) {
       <div className="meta">This cannot be undone.</div>
       {remove.isError && <ErrorBox error={remove.error} />}
       <div className="actions-row">
-        <button type="button" className="btn" disabled={remove.isPending} onClick={confirmRemove}>
+        <button type="button" className="btn danger" disabled={remove.isPending} onClick={confirmRemove}>
           Remove client
         </button>
       </div>
@@ -420,7 +420,7 @@ function KeyRow({ client, apiKey: k }: { client: string; apiKey: APIKeyView }) {
       <td className="nowrap">{k.expiresAt ? utcText(k.expiresAt) : "never"}</td>
       <td className="nowrap">{k.lastUsedAt ? utcText(k.lastUsedAt) : "never"}</td>
       <td>
-        <button type="button" className="btn small" disabled={revoke.isPending} onClick={confirmRevoke}>
+        <button type="button" className="btn small danger" disabled={revoke.isPending} onClick={confirmRevoke}>
           Revoke
         </button>
         {revoke.isError && <ErrorBox error={revoke.error} />}

@@ -186,7 +186,7 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
       {remove.isError && <ErrorBox error={remove.error} />}
       {!locked && (
         <div className="foot">
-          <button type="button" className="btn small" disabled={remove.isPending} onClick={confirmRemove}>
+          <button type="button" className="btn small danger" disabled={remove.isPending} onClick={confirmRemove}>
             Remove
           </button>
         </div>
@@ -726,9 +726,20 @@ function SignInEditor({ current, setSaved }: { current: SignInAdminView; setSave
   // What the test reads: the typed address, or when it is blank the saved one.
   const typedTarget = (jwt ? f.jwksURL : f.issuer).trim();
   const savedTarget = jwt ? current.jwksURL : current.issuer;
+  // A new mode or issuer ends every SSO session: say so once more, as a
+  // question, before it happens.
+  const body = bodyOf(f);
+  const endsSessions = current.mode !== "" && (body.mode !== current.mode || body.issuer !== current.issuer);
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    save.mutate(bodyOf(f));
+    if (endsSessions) {
+      const question =
+        body.mode === ""
+          ? "Turn SSO sign-in off? Every SSO session ends, yours too if you signed in that way, and only local admins can sign in."
+          : `Change the sign-in ${body.mode !== current.mode ? "mode" : "issuer"}? Every SSO session ends, yours too if you signed in that way.`;
+      if (!window.confirm(question)) return;
+    }
+    save.mutate(body);
   };
   const field = (k: keyof SignInForm, label: string, help?: string) => (
     <>
@@ -823,7 +834,9 @@ function SignInEditor({ current, setSaved }: { current: SignInAdminView; setSave
           </div>
         </>
       )}
-      <div className="meta">Changing the mode or the issuer ends every SSO session, yours too if you signed in that way.</div>
+      {endsSessions && (
+        <div className="meta warn-text">Saving this mode or issuer ends every SSO session, yours too if you signed in that way.</div>
+      )}
       {save.isError && <ErrorBox error={save.error} />}
       <TestResult test={test} />
       <div className="actions-row">

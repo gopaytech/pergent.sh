@@ -93,7 +93,7 @@ function TeamModelRow({ team, m, canEdit }: { team: number; m: TeamModelView; ca
           <button type="button" className="btn small" aria-label={`Edit ${m.name}`} disabled={remove.isPending} onClick={() => setEditing(true)}>
             Edit
           </button>
-          <button type="button" className="btn small" aria-label={`Remove ${m.name}`} disabled={remove.isPending} onClick={confirmRemove}>
+          <button type="button" className="btn small danger" aria-label={`Remove ${m.name}`} disabled={remove.isPending} onClick={confirmRemove}>
             Remove
           </button>
         </div>
@@ -167,6 +167,7 @@ function TeamChain({ team }: { team: number }) {
               choices={chain.data.choices}
               readOnly={false}
               busy={save.isPending}
+              onCancel={() => setStarting(false)}
               onSave={(entries) => save.mutate(entries)}
               onClear={(e) => clear.mutate(e)}
             />

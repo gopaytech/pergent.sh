@@ -181,7 +181,10 @@ aside {
 
 main {
   padding: 24px 32px;
-  overflow: auto;
+  /* clip, not auto: auto would make main the scroll box that sticky items
+     (the save bar) measure against, and it never scrolls. Wide tables scroll
+     in their own .card.scroll. */
+  overflow-x: clip;
   min-width: 0;
 }
 
@@ -1818,4 +1821,37 @@ select:not([multiple]) {
 
 .card.scroll .table td.num.meta {
   min-width: 240px;
+}
+
+/* A button that deletes, removes, revokes or resets: red, so it never looks
+   like Save. */
+.btn.danger {
+  color: var(--bad);
+  border-color: #e9b7ba;
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: var(--bad-soft);
+}
+
+.foot.start {
+  justify-content: flex-start;
+}
+
+/* The bar a long form saves from: it stays at the bottom of the window while
+   the draft differs from what is saved. */
+.save-bar {
+  position: sticky;
+  bottom: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0;
+  padding: 10px 12px 10px 16px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(29, 29, 38, 0.14);
+  font-size: 13px;
 }

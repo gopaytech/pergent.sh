@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -539,6 +539,36 @@ describe("Integrations: Sign-in", () => {
       allowedEmails: ["friend@example.org"],
     });
     expect(put.body).not.toHaveProperty("clientSecret");
+  });
+
+  it("asks before a save that ends every SSO session, and saves nothing when told no", async () => {
+    const fake = fakeApi({ ...routes(signInOIDC), "PUT /api/admin/sign-in": { body: signInNone } });
+    const ask = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(within(box).queryByText(/ends every SSO session/)).not.toBeInTheDocument();
+    await userEvent.selectOptions(within(box).getByLabelText("Mode"), "");
+    expect(within(box).getByText(/ends every SSO session/)).toBeInTheDocument();
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    expect(ask).toHaveBeenLastCalledWith(
+      "Turn SSO sign-in off? Every SSO session ends, yours too if you signed in that way, and only local admins can sign in.",
+    );
+    expect(fake.find("PUT", "/api/admin/sign-in")).toHaveLength(0);
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(fake.find("PUT", "/api/admin/sign-in")).toHaveLength(1));
+    ask.mockRestore();
+  });
+
+  it("asks nothing for a save that keeps the mode and issuer", async () => {
+    const fake = fakeApi({ ...routes(signInOIDC), "PUT /api/admin/sign-in": { body: signInOIDC } });
+    const ask = vi.spyOn(window, "confirm");
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.type(within(box).getByLabelText("Allowed domains"), "{Enter}more.example");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(fake.find("PUT", "/api/admin/sign-in")).toHaveLength(1));
+    expect(ask).not.toHaveBeenCalled();
+    ask.mockRestore();
   });
 
   it("sends a typed secret once, clears the field and never shows it", async () => {

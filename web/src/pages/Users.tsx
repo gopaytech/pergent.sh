@@ -75,7 +75,11 @@ export default function Users() {
               </thead>
               <tbody>
                 {waitingFirst(users.data).map((u) => (
-                  <Row key={u.id} user={u} />
+                  <Row
+                    key={u.id}
+                    user={u}
+                    lastLocalAdmin={u.kind === "password" && users.data.filter((x) => x.kind === "password" && x.role === "admin").length === 1}
+                  />
                 ))}
               </tbody>
             </table>
@@ -85,7 +89,9 @@ export default function Users() {
   );
 }
 
-function Row({ user }: { user: UserView }) {
+// lastLocalAdmin is true for the one local admin left: the server refuses to
+// remove it, so the page offers no Remove for it.
+function Row({ user, lastLocalAdmin }: { user: UserView; lastLocalAdmin: boolean }) {
   const client = useQueryClient();
   const write = useWrite();
   const me = useMe();
@@ -107,6 +113,15 @@ function Row({ user }: { user: UserView }) {
     mutationFn: (role: "admin" | "user") => write<void>("PUT", `/api/admin/users/${user.id}/role`, { role }),
     onSuccess: refresh,
   });
+  // Why Remove is off for this row, or "" when it is offered.
+  const keep = self ? "You can't remove your own account." : lastLocalAdmin ? "The last local admin can't be removed." : "";
+  const changeRole = (role: "admin" | "user") => {
+    const question =
+      role === "admin"
+        ? `Make ${user.username} an admin? They can change every setting, the models and their keys.`
+        : `Make ${user.username} a user? They lose the admin pages at once.`;
+    if (window.confirm(question)) setRole.mutate(role);
+  };
   const confirmRemove = () => {
     if (window.confirm(`Remove ${user.username}? Their sessions end and they leave every team.`)) remove.mutate();
   };
@@ -126,7 +141,7 @@ function Row({ user }: { user: UserView }) {
             aria-label={`Role of ${user.username}`}
             value={user.role}
             disabled={setRole.isPending}
-            onChange={(e) => setRole.mutate(e.target.value as "admin" | "user")}
+            onChange={(e) => changeRole(e.target.value as "admin" | "user")}
           >
             <option value="user">user</option>
             <option value="admin">admin</option>
@@ -138,9 +153,21 @@ function Row({ user }: { user: UserView }) {
       <td>{user.teams.length === 0 ? <span className="meta">none</span> : user.teams.map((t) => t.name).join(", ")}</td>
       <td>{user.lastSignInAt ? ago(user.lastSignInAt) : "never"}</td>
       <td className="num">
-        <button type="button" className="btn small" disabled={remove.isPending} onClick={confirmRemove}>
-          Remove
-        </button>
+        {keep ? (
+          <span className="meta" title={keep}>
+            {self ? "you" : "last local admin"}
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="btn small danger"
+            aria-label={`Remove ${user.username}`}
+            disabled={remove.isPending}
+            onClick={confirmRemove}
+          >
+            Remove
+          </button>
+        )}
       </td>
     </tr>
   );

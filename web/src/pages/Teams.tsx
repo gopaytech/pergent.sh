@@ -98,7 +98,7 @@ function TeamCard({ team }: { team: TeamView }) {
       <h2>
         <Link to={paths.team(team.id)}>{team.name}</Link>
         <span className="actions-row">
-          <button type="button" className="btn small" disabled={remove.isPending} onClick={confirmRemove}>
+          <button type="button" className="btn small danger" disabled={remove.isPending} onClick={confirmRemove}>
             Remove
           </button>
         </span>

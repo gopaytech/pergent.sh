@@ -55,6 +55,7 @@ export default function ChainEditor({
   busy,
   label = "Model chain",
   note,
+  onCancel,
   onSave,
   onClear,
 }: {
@@ -68,6 +69,9 @@ export default function ChainEditor({
   label?: string;
   // note is the caller's word on the last save, shown beside Save chain.
   note?: string;
+  // onCancel, when given, puts a Cancel beside Save chain: for an editor
+  // that was opened by a button, so it can be closed again.
+  onCancel?: () => void;
   onSave: (entries: ChainRef[]) => void;
   onClear: (entry: ChainEntryView) => void;
 }) {
@@ -180,6 +184,11 @@ export default function ChainEditor({
             <span className="meta grow" role="status">
               {note}
             </span>
+          )}
+          {onCancel && (
+            <button type="button" className="btn" disabled={busy} onClick={onCancel}>
+              Cancel
+            </button>
           )}
           <button
             type="button"

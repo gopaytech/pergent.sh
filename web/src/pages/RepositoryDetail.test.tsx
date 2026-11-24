@@ -1128,7 +1128,12 @@ describe("RepositoryDetail", () => {
       expect(within(first).getByRole("link", { name: "acme/payments !7" })).toHaveAttribute("href", "/reviews/main/acme/payments/7");
       expect(screen.getByText("Name it better")).toBeInTheDocument();
 
-      await userEvent.click(within(first).getByRole("button", { name: "Stop using" }));
+      const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
+      await userEvent.click(within(first).getByRole("button", { name: "Stop using the dismissals of Request body is used before validation" }));
+      expect(ask).toHaveBeenCalledWith(
+        'Stop using the dismissals of "Request body is used before validation"? Later reviews are no longer told about them. This can\'t be undone here.',
+      );
+      ask.mockRestore();
       const posts = fake.find("POST", `${listPath}/stop`);
       expect(posts).toHaveLength(1);
       expect(posts[0].body).toEqual({ fingerprint: "a1b2c3d4e5f6" });
@@ -1149,7 +1154,7 @@ describe("RepositoryDetail", () => {
       expect(await screen.findByText(/Learn from dismissals is off, so reviews aren't told about these\./)).toBeInTheDocument();
       expect(screen.queryByText(/Reviews of this repository are told about them/)).not.toBeInTheDocument();
       // Stop using is still there: it ends the lesson for when the setting is turned on again.
-      expect(screen.getAllByRole("button", { name: "Stop using" })).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: /^Stop using the dismissals of / })).toHaveLength(2);
     });
 
     it("says reviews are told when it is on", async () => {

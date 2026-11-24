@@ -6,6 +6,7 @@ import { api, isStatus, paths, type SkillDetail, type SkillVersion, type SkillVe
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, NotFound, Pill, SkillSourceText, ago, bytesText } from "../ui";
+import { useUnsavedGuard } from "../unsaved";
 
 // maxSkillBytes is the most a skill may be (inputs.MaxSkillBytes, 128 KiB):
 // the counter warns and Save waits; the server checks again.
@@ -32,12 +33,14 @@ export function NewSkill() {
   const [name, setName] = useState("");
   const [content, setContent] = useState("");
   const [addToDefaults, setAddToDefaults] = useState(false);
+  const allow = useUnsavedGuard(name !== "" || content !== "");
   const create = useMutation({
     mutationFn: () => write("POST", "/api/admin/skills", { name: name.trim(), content, addToDefaults }),
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ["skills"] });
       // The default list may have changed: repositories show it.
       void client.invalidateQueries({ queryKey: ["repositories"] });
+      allow();
       navigate("/skills");
     },
   });
@@ -125,6 +128,8 @@ function SkillPage({ skill, reload }: { skill: SkillDetail; reload: () => Promis
   const [draft, setDraft] = useState(skill.content);
   const [note, setNote] = useState("");
   const editable = me.admin && skill.source === null;
+  const dirty = editable && draft !== base.content;
+  useUnsavedGuard(dirty);
   const save = useMutation({
     mutationFn: (body: { content: string; version: number }) =>
       write<{ version: number }>("PUT", paths.apiAdminSkill(skill.name), body),
@@ -187,6 +192,7 @@ function SkillPage({ skill, reload }: { skill: SkillDetail; reload: () => Promis
               Save
             </button>
             <SizeCounter text={draft} />
+            {dirty && <span className="meta">Unsaved changes</span>}
           </div>
           {note && (
             <div className="note" role="status">

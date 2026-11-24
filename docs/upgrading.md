@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Unsaved changes are kept and asked about.** A repository's **Settings** tab, the skill and rule set editors, and the new skill and rule set pages ask before a link, a tab, Back or a reload drops a draft. On **Settings**, Save sits in a bar at the bottom of the window while something changed, with **Discard**; a refetch no longer wipes the draft; and a value the save refuses takes you to its field. A team's **Cancel** asks when the team changed.
+- **More confirmations.** Saving a new sign-in mode or issuer (it ends every SSO session), removing a reviewer, changing a user's role and **Stop using** a past dismissal now ask first. Your own account and the last local admin have no **Remove**.
+- **Destructive buttons are red:** Remove, Delete, Revoke and **Reset to defaults**. **Make a team chain** has a **Cancel**.
 - **The admin Settings page starts folded.** Each card (Repository defaults, Comment footer, Models, Global chain) shows its title and a one-line summary, and opens on a click. Each model is one line with its provider, model and tokens this month; its details and controls open on a click. The model list no longer shows which chains name a model: **Remove** still names them before it removes one.
 - **Add model is a button on the Models card**, which opens the form inside the card. The separate **Add a model** card is gone from that page.
 - **Every Save button is on the right**, in the card's bottom bar. A monthly token limit's **Save** waits for a change, and Enter saves it too.
