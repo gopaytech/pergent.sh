@@ -54,6 +54,7 @@ export default function ChainEditor({
   allowEmpty,
   busy,
   label = "Model chain",
+  note,
   onSave,
   onClear,
 }: {
@@ -65,6 +66,8 @@ export default function ChainEditor({
   busy?: boolean;
   // label names the list: each chain of the Reviewers card has its own.
   label?: string;
+  // note is the caller's word on the last save, shown beside Save chain.
+  note?: string;
   onSave: (entries: ChainRef[]) => void;
   onClear: (entry: ChainEntryView) => void;
 }) {
@@ -169,16 +172,23 @@ export default function ChainEditor({
             </button>
           </div>
           {tooLong && <div className="problem">A chain holds at most {maxChain} entries. Remove one to save.</div>}
-          <div className="actions-row">
-            <button
-              type="button"
-              className="btn primary small"
-              disabled={!canSave}
-              onClick={() => onSave(draft.filter((e) => !e.fixed).map((e) => ({ source: e.source, id: e.id })))}
-            >
-              Save chain
-            </button>
-          </div>
+        </div>
+      )}
+      {!readOnly && (
+        <div className="foot">
+          {note && (
+            <span className="meta grow" role="status">
+              {note}
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!canSave}
+            onClick={() => onSave(draft.filter((e) => !e.fixed).map((e) => ({ source: e.source, id: e.id })))}
+          >
+            Save chain
+          </button>
         </div>
       )}
     </div>

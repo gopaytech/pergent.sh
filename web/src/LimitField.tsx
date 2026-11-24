@@ -42,21 +42,27 @@ export default function LimitField({
     setProblem("");
     save.mutate(n);
   };
+  // Save waits for a change; Enter in the input saves too.
+  const changed = text.trim() !== quotaText(limit);
   return (
-    <div>
-      <div className="search">
-        <label>
-          Monthly token limit{" "}
-          <input
-            type="text"
-            inputMode="numeric"
-            aria-label={label}
-            placeholder="no limit"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-          />
-        </label>
-        <button type="button" className="btn small" aria-label={saveLabel} disabled={save.isPending} onClick={submit}>
+    <div className="limit-field">
+      <div className="name">Monthly token limit</div>
+      <div className="inline-field">
+        <input
+          type="text"
+          inputMode="numeric"
+          aria-label={label}
+          placeholder="no limit"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (changed) submit();
+            }
+          }}
+        />
+        <button type="button" className="btn small" aria-label={saveLabel} disabled={save.isPending || !changed} onClick={submit}>
           Save
         </button>
       </div>
