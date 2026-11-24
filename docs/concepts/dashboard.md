@@ -184,7 +184,7 @@ Everything an account may see or do comes from its role and the teams it is on, 
 
   | Tab | Who sees it | What it holds | Who changes it |
   | --- | --- | --- | --- |
-  | Repositories | Members, admins | The team's entries: a repository, or `All repositories of <instance>`, each with `owner`, `paused` or `removed`. | Admins |
+  | Repositories | Members, admins | The team's entries: a repository, or `All repositories of <instance>`, each with `owner`, `paused` or `removed`. A removed entry says `The next save drops it.` An admin also sees an owner tick and **Remove** on each entry, and **Add repository**: it lists nothing until you type a search and press **Search**, then shows 50 results at a time (**Load more** reads the next 50). A result owned by another team shows `owned by <team>` and its owner tick is off. Each change is one save of the team; the members stay as they were. A change moves which models and chains a repository uses, so the Models tab and the repository chains read again. | Admins |
   | Members | Members, admins | Each member's username and role. | Admins |
   | Models | Members, admins | The team's own models, its **Team chain** and **Add model**. While any entry has a mark, the banner `Reviews skip these entries until the mark ends or someone clears it.` Nobody sees a key; a viewer sees no base URL. | Maintainers of the team, admins |
   | Limits | Maintainers, admins | The **Model limits** card: each team entry's limit and its tokens this month, and each global entry an admin limited for the team. Only an admin changes a global entry's limit there ([Model and team limits](token-quota.md#model-and-team-limits)). | Maintainers, admins |

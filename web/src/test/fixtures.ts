@@ -35,6 +35,7 @@ import type {
   TeamLimitsView,
   TeamModelsView,
   TeamModelView,
+  RepositoryChoicesView,
   TeamPageView,
   TeamView,
   UsageOverviewView,
@@ -1213,3 +1214,19 @@ export const reviewersWith = (extra: ChainEntryView[][], judge: ChainEntryView[]
   reviewers: extra.map((e, i) => ({ number: i + 2, chain: reviewerChain(...e) })),
   judge: reviewerChain(...judge),
 });
+
+// Page 1 and page 2 of the choices for the search "pay" on Payments: the second
+// result is owned by another team, and page 1 says there is more.
+export const teamChoicesPay: RepositoryChoicesView = {
+  items: [
+    { instance: "main", project: "acme/payments-api", paused: false, ownedBy: null },
+    { instance: "main", project: "acme/payroll", paused: true, ownedBy: { id: 3, name: "Widgets" } },
+  ],
+  page: 1,
+  hasMore: true,
+};
+export const teamChoicesPay2: RepositoryChoicesView = {
+  items: [{ instance: "side", project: "acme/paybox", paused: false, ownedBy: null }],
+  page: 2,
+  hasMore: false,
+};

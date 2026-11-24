@@ -37,6 +37,13 @@ export function useTeamSave(v: TeamPageView) {
       client.invalidateQueries({ queryKey: ["teams"] });
       client.invalidateQueries({ queryKey: ["users"] });
       client.invalidateQueries({ queryKey: ["me"] });
+      // The owner ticks and the repositories move which models and chains a
+      // repository uses.
+      client.invalidateQueries({ queryKey: ["team-models", v.team.id] });
+      client.invalidateQueries({ queryKey: ["team-limits", v.team.id] });
+      client.invalidateQueries({ queryKey: ["team-chain", v.team.id] });
+      client.invalidateQueries({ queryKey: ["repo-chain"] });
+      client.invalidateQueries({ queryKey: ["repo-reviewers"] });
     },
   });
 }

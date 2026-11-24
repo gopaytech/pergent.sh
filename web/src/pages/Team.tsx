@@ -7,6 +7,7 @@ import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, NotFound, Tabs } from "../ui";
 import TeamLimits from "./TeamLimits";
 import TeamModelsTab from "./TeamModels";
+import TeamRepositories from "./TeamRepositories";
 import { useTeamSave } from "./teamSave";
 
 // Team is one team's page in the user area: its repositories, members,
@@ -48,7 +49,7 @@ export default function Team() {
       {v.canEdit && <AdminActions v={v} />}
       <Tabs<TeamTab> tabs={tabs} value={tab} onChange={(t) => setSearch(t === "repositories" ? {} : { tab: t }, { replace: true })} />
       <div role="tabpanel">
-        {tab === "repositories" && <Placeholder name="Repositories" />}
+        {tab === "repositories" && <TeamRepositories view={v} />}
         {tab === "members" && <Placeholder name="Members" />}
         {tab === "models" && <TeamModelsTab team={v.team.id} />}
         {tab === "limits" && <TeamLimits team={v.team.id} role={v.role} canEdit={maintains} />}
