@@ -478,7 +478,7 @@ function Defaults({ v }: { v: DefaultsView }) {
           <div>
             <div className="name">Max steps</div>
             <div className="help">
-              Steps each opencode run may take before pergent stops it; each step can call several tools.
+              Steps each review run may take before pergent stops it; each step can call several tools.
               <FromConfig field="Max steps" pinned={pinned("maxTurns")} shown={String(cfg.maxTurns)} disabled={save.isPending} onUse={() => setSteps(String(cfg.maxTurns))} />
             </div>
           </div>

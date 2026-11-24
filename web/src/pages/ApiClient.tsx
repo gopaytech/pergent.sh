@@ -19,6 +19,7 @@ import { ErrorBox, Loading, NotFound, Tabs, utcText } from "../ui";
 import ClientReviews from "./ApiClientReviews";
 import { clientsKey } from "./ApiClients";
 import { ClientFields, inLibraryOrder, type ClientFieldsValue } from "./ApiClientFields";
+import { useUrlParam } from "../urlState";
 
 type Tab = "reviews" | "settings" | "keys";
 
@@ -49,7 +50,7 @@ export default function ApiClient() {
 }
 
 function ClientPage({ client, refreshError }: { client: APIClientView; refreshError: unknown }) {
-  const [tab, setTab] = useState<Tab>("reviews");
+  const [tab, setTab] = useUrlParam<Tab>("tab", "reviews", ["reviews", "settings", "keys"]);
   const [shown, setShown] = useState<Shown[]>([]);
   const nextID = useRef(0);
   const show = useCallback((s: Omit<Shown, "id">) => {

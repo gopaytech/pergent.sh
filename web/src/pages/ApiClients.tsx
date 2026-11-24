@@ -45,10 +45,10 @@ export default function ApiClients() {
               <thead>
                 <tr>
                   <th>Client</th>
-                  <th>Keys</th>
-                  <th>Reviews this month</th>
-                  <th>Failed this month</th>
-                  <th>Tokens this month</th>
+                  <th className="num">Keys</th>
+                  <th className="num">Reviews this month</th>
+                  <th className="num">Failed this month</th>
+                  <th className="num">Tokens this month</th>
                 </tr>
               </thead>
               <tbody>
@@ -57,10 +57,10 @@ export default function ApiClients() {
                     <td>
                       <Link to={paths.clientPage(c.name)}>{c.name}</Link>
                     </td>
-                    <td>{c.keys}</td>
-                    <td>{c.reviewsThisMonth}</td>
-                    <td>{c.failedThisMonth}</td>
-                    <td>{c.tokensThisMonth.toLocaleString("en-US")}</td>
+                    <td className="num">{c.keys}</td>
+                    <td className="num">{c.reviewsThisMonth}</td>
+                    <td className="num">{c.failedThisMonth}</td>
+                    <td className="num">{c.tokensThisMonth.toLocaleString("en-US")}</td>
                   </tr>
                 ))}
               </tbody>

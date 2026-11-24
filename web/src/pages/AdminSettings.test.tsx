@@ -149,7 +149,7 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue("600");
     expect(within(form).getByLabelText("Max steps")).toHaveValue("40");
     expect(
-      within(form).getByText("Steps each opencode run may take before pergent stops it; each step can call several tools."),
+      within(form).getByText("Steps each review run may take before pergent stops it; each step can call several tools."),
     ).toBeInTheDocument();
     expect(within(form).getByLabelText("Memory limit")).toHaveValue("");
     expect(within(form).getByLabelText("Re-run cap per MR/PR (per day)")).toHaveValue(10);

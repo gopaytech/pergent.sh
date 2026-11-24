@@ -91,11 +91,11 @@ export function NewSkill() {
           Add to default skills
         </label>
         <div className="meta">A repository that sets no skills of its own uses the default skills.</div>
-        <div className="actions-row">
+        <div className="actions-row end">
+          <SizeCounter text={content} />
           <button type="submit" className="btn primary" disabled={create.isPending || sizeOf(content) > maxSkillBytes}>
             Create skill
           </button>
-          <SizeCounter text={content} />
         </div>
         {create.isError && <ErrorBox error={create.error} />}
       </form>
@@ -183,7 +183,9 @@ function SkillPage({ skill, reload }: { skill: SkillDetail; reload: () => Promis
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
           />
-          <div className="actions-row">
+          <div className="actions-row end">
+            <SizeCounter text={draft} />
+            {dirty && <span className="meta">Unsaved changes</span>}
             <button
               type="submit"
               className="btn primary"
@@ -191,8 +193,6 @@ function SkillPage({ skill, reload }: { skill: SkillDetail; reload: () => Promis
             >
               Save
             </button>
-            <SizeCounter text={draft} />
-            {dirty && <span className="meta">Unsaved changes</span>}
           </div>
           {note && (
             <div className="note" role="status">

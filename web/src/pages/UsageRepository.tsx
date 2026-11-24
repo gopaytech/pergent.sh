@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 import { Link, useParams } from "react-router";
 
 import { api, isStatus, paths, safeHref, type UsageNamedView, type UsageRepositoryView } from "../api";
 import { ErrorBox, ExternalLink, Loading, NotFound, count } from "../ui";
-import { CsvLink, DailyTable, dash, EmptyRow, PeriodSelect, UsageCells, UsageHead, UsageNotes, reviewsText, sourceText } from "./usageParts";
+import { CsvLink, DailyTable, dash, EmptyRow, PeriodSelect, periods, UsageCells, UsageHead, UsageNotes, reviewsText, sourceText } from "./usageParts";
+import { useUrlParam } from "../urlState";
 
 // when is an RFC 3339 time as "2026-10-30 14:02 UTC" (the API sends UTC).
 const when = (at: string) => `${at.slice(0, 16).replace("T", " ")} UTC`;
@@ -23,7 +23,7 @@ export default function UsageRepository() {
   const params = useParams();
   const instance = params.instance ?? "";
   const project = params["*"] ?? "";
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useUrlParam<number>("days", 30, periods);
   const data = useQuery({
     queryKey: ["usage", instance, project, days],
     queryFn: () => api.get<UsageRepositoryView>(paths.apiRepoUsage(instance, project, days)),

@@ -1,16 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 import { Link } from "react-router";
 
 import { api, paths, type UsageClientView, type UsageOverviewView } from "../api";
 import { ErrorBox, Loading, Pill, count } from "../ui";
-import { apartText, CsvLink, DailyTable, EmptyRow, PeriodSelect, total, UsageCells, UsageHead, UsageNotes } from "./usageParts";
+import { apartText, CsvLink, DailyTable, EmptyRow, PeriodSelect, periods, total, UsageCells, UsageHead, UsageNotes } from "./usageParts";
+import { useUrlParam } from "../urlState";
 
 // Usage is where the model tokens went across every repository and API client,
 // for admins: the totals, each repository with what global and team keys
 // paid, each client with its tenants and each day. The numbers are text only.
 export default function Usage() {
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useUrlParam<number>("days", 30, periods);
   const data = useQuery({
     queryKey: ["usage", days],
     queryFn: () => api.get<UsageOverviewView>(paths.apiUsage(days)),

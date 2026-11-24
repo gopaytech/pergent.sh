@@ -1,9 +1,9 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { useState } from "react";
 
 import { api, paths, type SkillResultView, type SkillTokensView } from "../api";
 import { useMe } from "../layout/me";
 import { ErrorBox, Loading, Pill, count } from "../ui";
+import { useUrlParam } from "../urlState";
 
 const periods: (30 | 90)[] = [30, 90];
 const dayMs = 24 * 3600 * 1000;
@@ -22,7 +22,7 @@ function editedText(editedAt: string, now = Date.now()): string {
 // skill cost on the same changes.
 export default function SkillResults({ instance, project }: { instance: string; project: string }) {
   const admin = useMe().admin;
-  const [days, setDays] = useState<30 | 90>(30);
+  const [days, setDays] = useUrlParam<30 | 90>("days", 30, [30, 90]);
   const list = useQuery({
     queryKey: ["skill-results", instance, project, days],
     queryFn: () => api.get<SkillResultView[]>(paths.apiRepoSkillResults(instance, project, days)),
@@ -58,7 +58,7 @@ export default function SkillResults({ instance, project }: { instance: string; 
         (list.data.length === 0 ? (
           <section className="card" aria-label="Skill results">
             <h2>Skill results</h2>
-            <div className="row empty-row">No results for this period. Numbers start with changes merged after the release that added this tab.</div>
+            <div className="row empty-row">No merged or closed changes in this period yet.</div>
           </section>
         ) : (
           <section className="card scroll" aria-label="Skill results">

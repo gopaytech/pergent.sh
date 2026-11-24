@@ -17,6 +17,7 @@ import {
 import { useWrite } from "../layout/write";
 import RunLog from "../RunLog";
 import { ErrorBox, Loading, NotFound, Pill, Tabs, count, utcText, type Tone } from "../ui";
+import { useUrlParam } from "../urlState";
 
 const statuses: Record<APIStatus, [Tone, string]> = {
   queued: ["grey", "Queued"],
@@ -52,7 +53,7 @@ type Tab = "review" | "logs";
 // here runs a review again: the API's caller sends a change to review again.
 export default function ApiReview() {
   const { id = "" } = useParams();
-  const [tab, setTab] = useState<Tab>("review");
+  const [tab, setTab] = useUrlParam<Tab>("tab", "review", ["review", "logs"]);
   const review = useQuery({
     queryKey: ["api-review", id],
     queryFn: () => api.get<APIReviewDetail>(paths.apiAdminReview(id)),
@@ -375,7 +376,7 @@ function StopControl({ view, f }: { view: APIReviewDetail; f: APIFinding }) {
   return (
     <div className="finding-actions">
       <button type="button" className="btn small" disabled={stop.isPending} onClick={() => stop.mutate("")}>
-        Stop
+        Restore
       </button>
       {stop.isError && <ErrorBox error={stop.error} />}
     </div>

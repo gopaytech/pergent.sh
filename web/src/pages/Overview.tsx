@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 import { Link } from "react-router";
 
 import { api, type OverviewView, type SetupView } from "../api";
 import { useMe } from "../layout/me";
 import { ErrorBox, Loading } from "../ui";
 import ReviewRows from "./ReviewRows";
+import { useUrlParam } from "../urlState";
 
 const periods = [7, 30, 90];
 
@@ -13,7 +13,7 @@ const periods = [7, 30, 90];
 // reviews. A repository's setup problems are under its Setup checks tab.
 export default function Overview() {
   const me = useMe();
-  const [days, setDays] = useState(7);
+  const [days, setDays] = useUrlParam<number>("days", 7, periods);
   const data = useQuery({
     queryKey: ["overview", days],
     queryFn: () => api.get<OverviewView>(`/api/overview?days=${days}`),

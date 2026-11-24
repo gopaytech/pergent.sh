@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { Link } from "react-router";
 
 import { ApiError, api, paths, type BuiltInRule, type RuleSet, type SkillInUse } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { ErrorBox, ExternalLink, Loading, Pill, Tabs, ago } from "../ui";
+import { useUrlParam } from "../urlState";
 
 // Rules lists the rule library: named rule sets of path rules, which a
 // repository chooses and orders on its Settings tab, and pergent's built-in
@@ -13,7 +13,7 @@ import { ErrorBox, ExternalLink, Loading, Pill, Tabs, ago } from "../ui";
 // set of the config file is read-only here.
 export default function Rules() {
   const me = useMe();
-  const [tab, setTab] = useState<"sets" | "builtIn">("sets");
+  const [tab, setTab] = useUrlParam<"sets" | "built-in">("tab", "sets", ["sets", "built-in"]);
   return (
     <div className="narrow">
       <div className="top">
@@ -31,10 +31,10 @@ export default function Rules() {
           </div>
         )}
       </div>
-      <Tabs<"sets" | "builtIn">
+      <Tabs<"sets" | "built-in">
         tabs={[
           ["sets", "Rule sets"],
-          ["builtIn", "Built-in"],
+          ["built-in", "Built-in"],
         ]}
         value={tab}
         onChange={setTab}

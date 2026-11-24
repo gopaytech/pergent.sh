@@ -90,11 +90,11 @@ export function NewRuleSet() {
           <textarea id="rule-set-text" className="skill-text" spellCheck={false} value={content} onChange={(e) => setContent(e.target.value)} required />
           <div className="meta">{formatHelp}</div>
         </div>
-        <div className="actions-row">
+        <div className="actions-row end">
+          <SizeCounter text={content} />
           <button type="submit" className="btn primary" disabled={create.isPending || sizeOf(content) > maxRuleSetBytes}>
             Create rule set
           </button>
-          <SizeCounter text={content} />
         </div>
         {create.isError && <ErrorBox error={create.error} />}
       </form>
@@ -160,7 +160,9 @@ function RuleSetPage({ set }: { set: RuleSetDetail }) {
           <label htmlFor="rule-set-text">Rules</label>
           <textarea id="rule-set-text" className="skill-text" spellCheck={false} value={draft} onChange={(e) => setDraft(e.target.value)} />
           <div className="meta">{formatHelp}</div>
-          <div className="actions-row">
+          <div className="actions-row end">
+            <SizeCounter text={draft} />
+            {dirty && <span className="meta">Unsaved changes</span>}
             <button
               type="submit"
               className="btn primary"
@@ -168,8 +170,6 @@ function RuleSetPage({ set }: { set: RuleSetDetail }) {
             >
               Save
             </button>
-            <SizeCounter text={draft} />
-            {dirty && <span className="meta">Unsaved changes</span>}
           </div>
           {saved && (
             <div className="note" role="status">

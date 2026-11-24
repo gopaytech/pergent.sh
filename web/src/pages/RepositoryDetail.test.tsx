@@ -235,7 +235,7 @@ describe("RepositoryDetail", () => {
     const row = steps.closest(".set") as HTMLElement;
     expect(within(row).getByText("default")).toHaveClass("badge", "cfg");
     expect(
-      within(row).getByText("Steps each opencode run may take before pergent stops it; each step can call several tools."),
+      within(row).getByText("Steps each review run may take before pergent stops it; each step can call several tools."),
     ).toBeInTheDocument();
   });
 
@@ -968,7 +968,7 @@ describe("RepositoryDetail", () => {
 
     it("says when there is nothing yet", async () => {
       renderAt("/repos/main/acme/payments?tab=skill-results", { ...base, [`GET ${listPath}`]: { body: [] } });
-      expect(await screen.findByText("No results for this period. Numbers start with changes merged after the release that added this tab.")).toBeInTheDocument();
+      expect(await screen.findByText("No merged or closed changes in this period yet.")).toBeInTheDocument();
       expect(screen.queryByRole("table")).not.toBeInTheDocument();
     });
 
@@ -1507,5 +1507,15 @@ describe("RepositoryDetail: switching on a paused repository", () => {
     const note = await screen.findByRole("note", { name: "Paused" });
     expect(note).toHaveTextContent("An admin can switch it on again.");
     expect(within(note).queryByRole("button", { name: "Switch on" })).not.toBeInTheDocument();
+  });
+});
+
+describe("RepositoryDetail: tabs in the address", () => {
+  it("puts each tab in the address", async () => {
+    renderAt("/repos/main/acme/payments", base);
+    await userEvent.click(await screen.findByRole("tab", { name: "Skills & instructions" }));
+    expect(screen.getByTestId("location")).toHaveTextContent("/repos/main/acme/payments?tab=inputs");
+    await userEvent.click(screen.getByRole("tab", { name: "Setup checks (1)" }));
+    expect(screen.getByTestId("location")).toHaveTextContent("?tab=setup");
   });
 });

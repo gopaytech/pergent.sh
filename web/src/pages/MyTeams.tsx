@@ -25,7 +25,7 @@ export default function MyTeams() {
       {teams.isError && <ErrorBox error={teams.error} />}
       {teams.isSuccess &&
         (teams.data.length === 0 ? (
-          <div className="card empty">No team yet.</div>
+          <div className="card empty">You are on no team yet, so you see no repositories. Ask an admin to add you to one.</div>
         ) : (
           teams.data.map((t) => (
             <section className="card" aria-label={t.name} key={t.id}>

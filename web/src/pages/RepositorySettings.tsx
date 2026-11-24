@@ -1117,7 +1117,7 @@ function Form({
         <Setting
           name="Max steps"
           overridden={settings.maxTurns.overridden}
-          help="Steps each opencode run may take before pergent stops it; each step can call several tools."
+          help="Steps each review run may take before pergent stops it; each step can call several tools."
         >
           <input
             type="text"

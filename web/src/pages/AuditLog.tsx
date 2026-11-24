@@ -68,7 +68,7 @@ export default function AuditLog() {
             {log.hasNextPage && (
               <div className="foot">
                 <button type="button" className="btn" disabled={log.isFetchingNextPage} onClick={() => log.fetchNextPage()}>
-                  Older
+                  Load more
                 </button>
               </div>
             )}

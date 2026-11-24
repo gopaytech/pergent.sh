@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Tabs and periods are kept in the address.** A review page's tab, an API client's and an API review's tab, the **Rules** tab (`?tab=built-in`), and the period on **Overview**, **Skill results** and **Usage** survive a reload, Back and a shared link. A repository's tabs now add a history entry, so Back opens the tab before.
+- **Save is on the right, after Cancel,** in the remaining forms: sign-in, add instance, add user, a team, and the skill and rule set editors.
+- **Words:** "Not approved" is grey, not the green of an approval; an API review's **Stop** is **Restore**; the audit log's **Older** is **Load more**. Empty states say what to do: no team, no matching reviews (with **Clear the filters**), no skill results yet. Help text no longer names opencode or a bare Helm key.
 - **A review page leads with its findings.** Skills and Findings come first; CI jobs and the multi review's reviewers follow them, and on a phone the findings come before the run history. A finding's file and line link to the code at the commit reviewed, on GitLab or GitHub. **Re-run failed only** shows only when the newest run has a failed skill. On an older run, a line says findings are dismissed on the newest finished run. The multi review table scrolls on a phone instead of being cut off.
 - **Numbers open what is behind them.** Each number on **Overview** opens the reviews behind it, over the same days, and so does **View all**. On **Repositories**, **Needs attention** opens the repository's **Setup checks**, and a failed count opens those failed reviews.
 - **A repository's header is one line,** with the multi review and merge gate in it. An admin switches a paused repository on from its **Paused** note. **Readiness** on a paused repository says why it is not scanned.
