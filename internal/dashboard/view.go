@@ -503,7 +503,7 @@ type Last7View struct {
 // linkedReposEnabled (whether the impact check across linked repositories
 // is on; off by default), linkedRepos (the repository's links, at most 3, each
 // {target, watched, canBlock}: kept while the setting is off; shown to admins
-// only, an empty list to anyone else), failureStatus, skills (null: the default list of skills; otherwise the library skills
+// only, an empty list to anyone else), failureStatus, blockingStatus, skills (null: the default list of skills; otherwise the library skills
 // reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR,
@@ -983,9 +983,12 @@ type DefaultsView struct {
 	// CommentLayout is the shape of the review comment, as "block:state"
 	// entries in order. A repository that sets none gets this one: the layout
 	// saved here, else the built-in layout. It is never empty.
-	CommentLayout     []string `json:"commentLayout"`
-	FailureStatus     string   `json:"failureStatus"`
-	JobTimeoutSeconds int64    `json:"jobTimeoutSeconds"`
+	CommentLayout []string `json:"commentLayout"`
+	FailureStatus string   `json:"failureStatus"`
+	// BlockingStatus is the status of a review with blocking issues,
+	// "failed" or "neutral" (never a failed status).
+	BlockingStatus    string `json:"blockingStatus"`
+	JobTimeoutSeconds int64  `json:"jobTimeoutSeconds"`
 	// MaxTurns is the step limit of each opencode run.
 	MaxTurns int `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
@@ -1006,7 +1009,7 @@ type DefaultsView struct {
 	// Pinned says which defaults were saved here and so no longer follow the
 	// config, by JSON key (approve, reviewDrafts, inlineFindings,
 	// commandsAuthorAndMaintainersOnly, incrementalReviews,
-	// learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
+	// learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, failureStatus, blockingStatus, jobTimeoutSeconds, maxTurns, jobMemory,
 	// rerunLimitPerMR, rerunLimitPerRepo). Every key is present.
 	Pinned map[string]bool `json:"pinned"`
 }
@@ -1031,6 +1034,7 @@ type DefaultValues struct {
 	// is always the built-in one.
 	CommentLayout     []string `json:"commentLayout"`
 	FailureStatus     string   `json:"failureStatus"`
+	BlockingStatus    string   `json:"blockingStatus"`
 	JobTimeoutSeconds int64    `json:"jobTimeoutSeconds"`
 	MaxTurns          int      `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
@@ -1097,8 +1101,9 @@ type LLMView struct {
 //     admin changes it, else 403; GitHub repositories only; 400 with the reason
 //     when a rule fails: itself, twice, a bad glob, a target more private than
 //     the repository, a target the review App can't read or in another
-//     installation, and 502 when GitHub can't tell, with nothing saved), failureStatus ("failed" or
-//     "neutral"), skills (a non-empty list of library skill names, or
+//     installation, and 502 when GitHub can't tell, with nothing saved), failureStatus and
+//     blockingStatus ("failed" or "neutral"; only an admin changes them, else
+//     403, and a maintainer's reset leaves them), skills (a non-empty list of library skill names, or
 //     null for the default list; a name the library lacks is 400 `skill
 //     "x" is not in the skill library`, and so is a list whose texts come to
 //     more than 900 KiB), repoSkills (the names of detected repository
