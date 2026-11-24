@@ -527,7 +527,7 @@ func TestAuthorCannotDismissBlocking(t *testing.T) {
 	f.run()
 
 	f.wantReactions(1, c, eyes, down)
-	f.wantReplies(1, "the author of a change can't dismiss its blocking findings")
+	f.wantReplies(1, "the author of an MR can't dismiss its blocking findings; ask a Maintainer or Owner of this project to dismiss it")
 	if ds := f.dismissals(1); len(ds) != 0 {
 		t.Errorf("dismissals = %+v, want none", ds)
 	}
@@ -576,7 +576,7 @@ func TestDeveloperDismissesSuggestionOnly(t *testing.T) {
 		f.run()
 
 		f.wantReactions(1, c, eyes, down)
-		f.wantReplies(1, "you don't have permission to do that here")
+		f.wantReplies(1, "only a Maintainer or Owner of this project can dismiss a blocking finding")
 		if ds := f.dismissals(1); len(ds) != 0 {
 			t.Errorf("dismissals = %+v, want none", ds)
 		}
@@ -1514,7 +1514,7 @@ func TestAuthorComparedByID(t *testing.T) {
 		f.run()
 
 		f.wantReactions(1, c, eyes, down)
-		f.wantReplies(1, "the author of a change can't dismiss its blocking findings")
+		f.wantReplies(1, "the author of an MR can't dismiss its blocking findings; ask a Maintainer or Owner of this project to dismiss it")
 		if ds := f.dismissals(1); len(ds) != 0 {
 			t.Errorf("dismissals = %+v, want none", ds)
 		}
@@ -1534,7 +1534,7 @@ func TestUnknownAuthorCannotBeTold(t *testing.T) {
 	f.run()
 
 	f.wantReactions(1, c, eyes, down)
-	f.wantReplies(1, "the author of a change can't dismiss its blocking findings")
+	f.wantReplies(1, "the author of an MR can't dismiss its blocking findings; ask a Maintainer or Owner of this project to dismiss it")
 	if ds := f.dismissals(1); len(ds) != 0 {
 		t.Errorf("dismissals = %+v, want none", ds)
 	}
@@ -1629,7 +1629,7 @@ func TestDismissByIDUsesTheHighestSeverityOfTheFingerprint(t *testing.T) {
 		f.run()
 
 		f.wantReactions(1, c, eyes, down)
-		f.wantReplies(1, "you don't have permission to do that here")
+		f.wantReplies(1, "only a Maintainer or Owner of this project can dismiss a blocking finding")
 	})
 	t.Run("a maintainer dismisses it as blocking", func(t *testing.T) {
 		f := newCommandFixture(t)
@@ -2013,7 +2013,7 @@ func TestThreadDismissBlockingByAuthorRefused(t *testing.T) {
 
 	f.wantReactions(1, c, eyes, down)
 	f.wantReplies(1)
-	f.wantThreadReplies(threadDiscussion, replyAuthor)
+	f.wantThreadReplies(threadDiscussion, replyAuthorBlocking("gitlab"))
 	if ds := f.dismissals(1); len(ds) != 0 {
 		t.Errorf("dismissals = %+v, want none", ds)
 	}
@@ -2582,7 +2582,7 @@ func TestAuthorBlockingDismissStillRefusedAndAudited(t *testing.T) {
 	f.run()
 
 	f.wantReactions(1, c, eyes, down)
-	f.wantReplies(1, replyAuthor)
+	f.wantReplies(1, replyAuthorBlocking("gitlab"))
 	if ds := f.dismissals(1); len(ds) != 0 {
 		t.Errorf("dismissals = %+v, want none", ds)
 	}
@@ -2594,7 +2594,7 @@ func TestAuthorBlockingDismissStillRefusedAndAudited(t *testing.T) {
 }
 
 // A blocking dismissal by someone without maintainer access is refused as
-// "no permission" and audited, with the switch off.
+// "no permission" and audited, with the switch off. The reply says who can.
 func TestBlockingDismissWithoutMaintainAccessAudited(t *testing.T) {
 	t.Parallel()
 	f := newCommandFixture(t)
@@ -2605,12 +2605,56 @@ func TestBlockingDismissWithoutMaintainAccessAudited(t *testing.T) {
 	f.run()
 
 	f.wantReactions(1, c, eyes, down)
-	f.wantReplies(1, replyNoPermission)
+	f.wantReplies(1, replyBlockingNeedsMaintainer("gitlab"))
 	rs := f.refusals()
 	if len(rs) != 1 {
 		t.Fatalf("%d command_refused entries, want 1", len(rs))
 	}
 	f.wantRefusal(rs[0], "dev (gitlab main)", 1, "dismiss")
+}
+
+// The author of a change with Developer access dismisses a blocking finding:
+// the reply is the author's rule, not a bare "no permission", since gaining
+// Maintainer wouldn't let them either.
+func TestBlockingDismissByDeveloperAuthorGetsAuthorReply(t *testing.T) {
+	t.Parallel()
+	f := newCommandFixture(t)
+	f.gate(true)
+	f.authorID = userDeveloper
+	f.serveMR(1, false)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+	c := f.say(1, "dev", "dismiss", "abc123", "not ours", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1, replyAuthorBlocking("gitlab"))
+	if ds := f.dismissals(1); len(ds) != 0 {
+		t.Errorf("dismissals = %+v, want none", ds)
+	}
+	rs := f.refusals()
+	if len(rs) != 1 {
+		t.Fatalf("%d command_refused entries, want 1", len(rs))
+	}
+	f.wantRefusal(rs[0], "dev (gitlab main)", 1, "dismiss")
+}
+
+func TestBlockingDismissReplies(t *testing.T) {
+	for _, tc := range []struct{ platform, maintainer, author string }{
+		{"gitlab",
+			"only a Maintainer or Owner of this project can dismiss a blocking finding",
+			"the author of an MR can't dismiss its blocking findings; ask a Maintainer or Owner of this project to dismiss it"},
+		{"github",
+			"only someone with maintain or admin access to this repository can dismiss a blocking finding",
+			"the author of a PR can't dismiss its blocking findings; ask someone with maintain or admin access to this repository to dismiss it"},
+	} {
+		if got := replyBlockingNeedsMaintainer(tc.platform); got != tc.maintainer {
+			t.Errorf("%s: maintainer reply = %q, want %q", tc.platform, got, tc.maintainer)
+		}
+		if got := replyAuthorBlocking(tc.platform); got != tc.author {
+			t.Errorf("%s: author reply = %q, want %q", tc.platform, got, tc.author)
+		}
+	}
 }
 
 // Ordinary mistakes are not audited.

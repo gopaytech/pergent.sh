@@ -276,7 +276,7 @@ func TestEndToEndCommands(t *testing.T) {
 	c := e.say(t, dev, userDeveloper, "@pergent-review dismiss "+id+" not a real problem")
 	e.answer(t)
 	e.wantReactions(t, c, eyes, down)
-	e.wantReplies(t, "you don't have permission to do that here")
+	e.wantReplies(t, "only a Maintainer or Owner of this project can dismiss a blocking finding")
 	if ds := mustDismissals(t, env); len(ds) != 0 {
 		t.Fatalf("dismissals after a developer's command = %+v, want none", ds)
 	}
@@ -285,7 +285,7 @@ func TestEndToEndCommands(t *testing.T) {
 	c = e.say(t, maya, userAuthor, "@pergent-review dismiss "+id+" it is fine")
 	e.answer(t)
 	e.wantReactions(t, c, eyes, down)
-	e.wantReplies(t, "you don't have permission to do that here", "the author of a change can't dismiss its blocking findings")
+	e.wantReplies(t, "only a Maintainer or Owner of this project can dismiss a blocking finding", "the author of an MR can't dismiss its blocking findings; ask a Maintainer or Owner of this project to dismiss it")
 
 	// A word that is not a command is told what the bot understands, and
 	// restoring is not one of them: it is a dashboard button.

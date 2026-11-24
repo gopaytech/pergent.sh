@@ -70,7 +70,6 @@ var (
 // reduced to hex digits first (replyID).
 const (
 	replyNoPermission  = "you don't have permission to do that here"
-	replyAuthor        = "the author of a change can't dismiss its blocking findings"
 	replyDraft         = "drafts aren't reviewed in this repository"
 	replyNothingFailed = "nothing failed"
 	replyWholeFailed   = "the whole review failed, so all of it is re-run"
@@ -102,6 +101,32 @@ const whyBotUnknown = "pergent.sh can't say whether the author is a bot"
 // platform calls a change (changeTerm).
 func replyOnlyAuthorAndMaintainers(term string) string {
 	return "Only the author of this " + term + " and the repository's maintainers can use pergent commands."
+}
+
+// maintainerTerm is who may dismiss a blocking finding, as the platform calls
+// them.
+func maintainerTerm(platform string) string {
+	if changeTerm(platform) == "PR" {
+		return "someone with maintain or admin access to this repository"
+	}
+	return "a Maintainer or Owner of this project"
+}
+
+// replyBlockingNeedsMaintainer refuses a blocking dismissal to a commenter
+// below maintainer access, and says who can.
+func replyBlockingNeedsMaintainer(platform string) string {
+	return "only " + maintainerTerm(platform) + " can dismiss a blocking finding"
+}
+
+// replyAuthorBlocking refuses a blocking dismissal to the change's author,
+// whatever their access, and says who to ask.
+func replyAuthorBlocking(platform string) string {
+	term := changeTerm(platform)
+	article := "a"
+	if term == "MR" {
+		article = "an"
+	}
+	return "the author of " + article + " " + term + " can't dismiss its blocking findings; ask " + maintainerTerm(platform) + " to dismiss it"
 }
 
 // whoMayOutcome reports whether outcome is a refusal because of who the
@@ -824,13 +849,14 @@ func threadReason(arg, id, reason string) string {
 func (c *commandRun) dismissFinding(ctx context.Context, f result.Finding, reviewed store.Run, rawReason, id string, inThread bool) (verdict, error) {
 	reason := actions.CleanReason(rawReason)
 	if f.Severity != "suggestion" {
-		// Anything but a suggestion is dismissed as a blocking finding.
+		// Anything but a suggestion is dismissed as a blocking finding. The
+		// author is told first: more access would not let them.
 		f.Severity = "blocking"
 		switch {
-		case c.access < forge.AccessMaintain:
-			return refused(whyNoPermission, replyNoPermission), nil
 		case c.isAuthor():
-			return refused(whyAuthorOfChange, replyAuthor), nil
+			return refused(whyAuthorOfChange, replyAuthorBlocking(c.cmd.Platform)), nil
+		case c.access < forge.AccessMaintain:
+			return refused(whyNoPermission, replyBlockingNeedsMaintainer(c.cmd.Platform)), nil
 		case reason == "":
 			return refused("reason needed", replyNeedsReason(c.plat.Forge.Mention(), inThread)), nil
 		}
