@@ -635,7 +635,8 @@ describe("Repositories: owner, search, filter, sort", () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/repositories": { body: three }, "GET /api/admin/instances": { body: [instanceGitLab] } });
     const first = renderApp("/repos");
     const widgets = (await screen.findByRole("link", { name: "acme/widgets" })).closest("tr") as HTMLElement;
-    expect(within(widgets).getByRole("link", { name: "⚠ No owner" })).toHaveAttribute("href", "/repos/main/acme/widgets?tab=settings");
+    expect(within(widgets).getByRole("link", { name: "No owner" })).toHaveAttribute("href", "/admin/teams");
+    expect(within(widgets).getByRole("link", { name: "No owner" })).toHaveAttribute("title", "Set the owner with the owner tick on a team's Repositories tab");
     first.unmount();
     fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: three } });
     renderApp("/repos");
@@ -653,6 +654,15 @@ describe("Repositories: owner, search, filter, sort", () => {
     expect(location()).toHaveTextContent("team=none");
     expect(names()).toEqual(["acme/tools", "acme/widgets"]);
     expect(screen.queryByText(/has no owner\./)).not.toBeInTheDocument();
+  });
+
+  it("shows the No owner filter without the search text", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, "GET /api/repositories": { body: three }, "GET /api/admin/instances": { body: [instanceGitLab] } });
+    renderApp("/repos?q=zzz");
+    await userEvent.click(await screen.findByRole("link", { name: "Show it" }));
+    expect(location()).toHaveTextContent("team=none");
+    expect(location()).not.toHaveTextContent("q=");
+    expect(names()).toEqual(["acme/tools", "acme/widgets"]);
   });
 
   it("searches the path, ignoring case, and survives odd characters", async () => {

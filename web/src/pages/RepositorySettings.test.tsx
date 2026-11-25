@@ -76,6 +76,18 @@ describe("RepositorySettings: Teams", () => {
     expect(within(box).getByRole("checkbox", { name: /Platform/ })).toBeChecked();
   });
 
+  it("reads the repository list, the repository and the user's teams again after a save", async () => {
+    fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/teams": { body: repoTeams } });
+    const { client } = renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const box = await teamsSection();
+    await userEvent.click(await within(box).findByRole("checkbox", { name: /Platform/ }));
+    await userEvent.click(within(box).getByRole("button", { name: "Save teams" }));
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ["repositories"] }));
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["repo", "main", "acme/payments"] });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["my-teams"] });
+  });
+
   it("can take the repository off every team", async () => {
     const fake = fakeApi({
       ...base,

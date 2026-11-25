@@ -94,7 +94,17 @@ export default function Repositories() {
       { replace: true },
     );
   };
+  // Opening or closing the picker is a step in the history, so Back closes it.
+  const toggleAdd = () =>
+    setParams((old) => {
+      const next = new URLSearchParams(old);
+      if (adding) next.delete("add");
+      else next.set("add", "1");
+      return next;
+    });
+  // The No owner filter alone: a search text could hide every repository.
   const showNoOwner = new URLSearchParams(params);
+  showNoOwner.delete("q");
   showNoOwner.set("team", "none");
   return (
     <>
@@ -104,17 +114,7 @@ export default function Repositories() {
           <div className="sub">The repositories pergent reviews that you can see</div>
         </div>
         {canAdd && (
-          <button type="button" className="btn primary" onClick={() =>
-              setParams(
-                (old) => {
-                  const next = new URLSearchParams(old);
-                  if (adding) next.delete("add");
-                  else next.set("add", "1");
-                  return next;
-                },
-                { replace: true },
-              )
-            }>
+          <button type="button" className="btn primary" onClick={toggleAdd}>
             + Add repository
           </button>
         )}
@@ -122,7 +122,7 @@ export default function Repositories() {
       {me.admin && repos.isSuccess && noOwner > 0 && team !== "none" && (
         <div className="owner-line">
           <span className="warn-text">⚠</span> {noOwner === 1 ? "1 repository has no owner." : `${noOwner} repositories have no owner.`}{" "}
-          <Link to={`?${showNoOwner.toString()}`}>{noOwner === 1 ? "Show it" : "Show them"}</Link>
+          <Link replace to={`?${showNoOwner.toString()}`}>{noOwner === 1 ? "Show it" : "Show them"}</Link>
         </div>
       )}
       {adding && <Picker />}
@@ -250,15 +250,15 @@ function Row({ repo, admin, removing }: { repo: RepositoryView; admin: boolean; 
 
 // OwnerCell is the owner team of a repository. A closed team is plain text,
 // since its page is not open to the user. No owner is a warning for an admin,
-// who can set one, and a quiet "None" for anyone else.
+// who can set one on the Teams page, and a quiet "None" for anyone else.
 function OwnerCell({ repo, admin }: { repo: RepositoryView; admin: boolean }) {
   const owner = repo.ownerTeam;
   if (owner === null) {
     return (
       <td className="owner">
         {admin ? (
-          <Link className="warn-text" to={`${paths.repo(repo.instance, repo.project)}?tab=settings`}>
-            ⚠ No owner
+          <Link className="warn-text" to="/admin/teams" title="Set the owner with the owner tick on a team's Repositories tab">
+            <span aria-hidden="true">⚠</span> No owner
           </Link>
         ) : (
           <span className="meta">None</span>
