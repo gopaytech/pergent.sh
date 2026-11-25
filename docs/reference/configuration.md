@@ -17,9 +17,11 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `gitlab[].approve_with_review_bot` | one of `approve_token_env` and `approve_with_review_bot` | `true` to let the review bot's own user approve too, with no approve token. See [Requirements](../setup/install.md#-requirements) for what this gives up. |
 | `gitlab[].webhook_secret_env` | required | Name of the env var with the webhook secret. GitLab sends it as `X-Gitlab-Token`. |
 | `gitlab[].trusted_authors_only` | `follow_visibility` | The default of the instance's repositories for [Trusted authors](../concepts/trusted-authors.md): `follow_visibility` (on for a public project, off for an internal or private one), `on` or `off` (every author reviewed). |
+| `gitlab[].teams_may_onboard` | `false` | `true` lets maintainers of any team switch on repositories the review bot reaches, claim ones with no owner, and resume or remove their team's. Admins always can. See [Roles](../concepts/roles.md#the-switch). |
 | `gitlab[].monthly_token_quota` | none (unlimited) | The instance's [monthly token quota](../concepts/token-quota.md): a whole number of tokens (input plus output) per UTC month, 1 to 1000000000000000. When it is used up, no review starts on the instance until the first push after the 1st, or until an admin starts one. Set here, it wins over the dashboard and shows there read-only. |
 | `github[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. One instance is one pair of Apps and covers every organization they are installed on. |
 | `github[].trusted_authors_only` | `follow_visibility` | As `gitlab[].trusted_authors_only`: on for a public repository, off for a private one. |
+| `github[].teams_may_onboard` | `false` | As `gitlab[].teams_may_onboard`. |
 | `github[].monthly_token_quota` | none (unlimited) | As `gitlab[].monthly_token_quota`. |
 | `github[].api_url` | `https://api.github.com` | GitHub's REST API. Only GitHub.com is supported: another `https` URL (GitHub Enterprise Server) is accepted but untested. |
 | `github[].review_app.app_id` | required | The review App's numeric App ID. |
