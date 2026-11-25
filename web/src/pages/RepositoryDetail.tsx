@@ -13,6 +13,7 @@ import RepoModelChain from "./RepoModelChain";
 import ReviewList from "./ReviewList";
 import SettingsTab from "./RepositorySettings";
 import SkillResults from "./SkillResults";
+import Markdown from "../MarkdownLazy";
 
 type Tab = "reviews" | "skill-results" | "settings" | "past-dismissals" | "inputs" | "readiness" | "setup";
 
@@ -260,7 +261,7 @@ function Inputs({ instance, project, builtInsOff }: { instance: string; project:
               {s.problem && <span className="problem">{s.problem}</span>}
               {s.source !== "" && <span className="src">{skillOrigin(s.source, s.version)}</span>}
             </summary>
-            {!s.problem && <pre className="doc">{s.content}</pre>}
+            {!s.problem && <Markdown text={s.content} />}
             {safeHref(s.url) && (
               <div className="pad meta">
                 <ExternalLink href={s.url}>View file</ExternalLink>
@@ -271,7 +272,13 @@ function Inputs({ instance, project, builtInsOff }: { instance: string; project:
       </section>
       <section className="card" aria-label="Instructions">
         <h2>Instructions</h2>
-        {v.instructions ? <pre className="doc">{v.instructions}</pre> : <div className="row empty-row">No instructions.</div>}
+        {v.instructions ? (
+          <div className="pad-top">
+            <Markdown text={v.instructions} />
+          </div>
+        ) : (
+          <div className="row empty-row">No instructions.</div>
+        )}
       </section>
       {v.rules && <RuleList rules={v.rules} builtInsOff={builtInsOff} />}
     </>
@@ -308,7 +315,7 @@ function RuleList({ rules, builtInsOff }: { rules: InputsView["rules"]; builtIns
             {e.off && <span className="meta">off: no rule</span>}
             <span className="src">{e.source}</span>
           </summary>
-          {!e.off && <pre className="doc">{e.rule}</pre>}
+          {!e.off && <Markdown text={e.rule} />}
         </details>
       ))}
       {builtIns.map((b) => (
@@ -322,7 +329,7 @@ function RuleList({ rules, builtInsOff }: { rules: InputsView["rules"]; builtIns
             </span>
             <span className="src">built-in</span>
           </summary>
-          <pre className="doc">{b.rule}</pre>
+          <Markdown text={b.rule} />
         </details>
       ))}
     </section>

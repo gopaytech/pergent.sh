@@ -95,8 +95,8 @@ describe("BuiltInRulePicker", () => {
   it("opens a row to show the rule's text", async () => {
     render(<Host value={["go"]} />);
     const go = screen.getByRole("listitem", { name: "go" });
-    const text = within(go).getByText("Check the errors.");
-    expect(text.tagName).toBe("PRE");
+    // The text is rendered markdown, which loads on its own: wait for it.
+    const text = await within(go).findByText("Check the errors.", { selector: ".md p" });
     expect(text.closest("details")).not.toHaveAttribute("open");
     await userEvent.click(within(go).getByText("go"));
     expect(text.closest("details")).toHaveAttribute("open");
