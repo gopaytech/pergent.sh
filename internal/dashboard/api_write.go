@@ -332,9 +332,15 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, msgUseClaim)
 			return
 		}
-		_, instanceOwner, err := d.Store.InstanceOwners(ctx, instance)
+		byPath, instanceOwner, err := d.Store.InstanceOwners(ctx, instance)
 		if err != nil {
 			d.failed(w, r, "reading the owners", err)
+			return
+		}
+		// A stale tick of its own beats the instance's owner: another
+		// team's repository is not taken over.
+		if own := byPath[strings.ToLower(name)]; own != "" && !strings.EqualFold(own, ownerName) {
+			writeError(w, http.StatusForbidden, "owned by "+own)
 			return
 		}
 		if instanceOwner != "" {
@@ -556,16 +562,19 @@ func (d *Dashboard) targetRepo(w http.ResponseWriter, r *http.Request, suffix st
 // reconcile). A resume while its instance is being removed is 409.
 func (d *Dashboard) setEnabled(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
+	need := RoleAdmin
 	if !se.Admin {
 		// Pause works with the switch off: only the gate without it.
 		if !d.maintainerGateAnySwitch(w, r, r.PathValue("instance")) {
 			return
 		}
-		writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
+		need = RoleViewer
+	}
+	repo, ok := d.target(w, r, "", need)
+	if !ok {
 		return
 	}
-	repo, ok := d.target(w, r, "", RoleAdmin)
-	if !ok {
+	if !se.Admin && !d.requireOwnerMaintainer(w, r, repo) {
 		return
 	}
 	var body struct {
@@ -573,6 +582,10 @@ func (d *Dashboard) setEnabled(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeStrict(r, &body); err != nil || body.Enabled == nil {
 		writeError(w, http.StatusBadRequest, msgBadEnabled)
+		return
+	}
+	if !se.Admin && *body.Enabled && !d.teamsMayOnboard(repo.Instance) {
+		writeError(w, http.StatusForbidden, msgTeamsMayNotOnboard)
 		return
 	}
 	enabled := *body.Enabled
@@ -634,15 +647,18 @@ func refusePaused(w http.ResponseWriter, repo settings.Effective) bool {
 // deploy token off the platform and deletes its project's record.
 func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
+	need := RoleAdmin
 	if !se.Admin {
 		if !d.maintainerGate(w, r, r.PathValue("instance")) {
 			return
 		}
-		writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
+		need = RoleViewer
+	}
+	repo, ok := d.target(w, r, "", need)
+	if !ok {
 		return
 	}
-	repo, ok := d.target(w, r, "", RoleAdmin)
-	if !ok {
+	if !se.Admin && !d.requireOwnerMaintainer(w, r, repo) {
 		return
 	}
 	found, err := d.Store.RemoveDashboardRepo(ctx, repo.Instance, repo.Project)

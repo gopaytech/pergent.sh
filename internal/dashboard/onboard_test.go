@@ -3,6 +3,7 @@ package dashboard
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
@@ -65,7 +66,7 @@ func TestMaintainerOnboard(t *testing.T) {
 	v := e.team("V", []store.TeamMember{{AccountID: alice, Role: store.RoleViewer}})
 	b := e.team("B", []store.TeamMember{{AccountID: bob, Role: store.RoleMaintainer}}, store.TeamRepo{Instance: "gh", Owner: true})
 	e.cat["main"].set("acme/new", "acme/dash", "acme/paused", "acme/plain", "acme/widgets")
-	e.cat["gh"].set("acme/mine", "acme/theirs")
+	e.cat["gh"].set("acme/mine", "acme/theirs", "acme/stale")
 	e.dashboardRepo("main", "acme/dash", nil)
 	e.pausedRepo("main", "acme/paused", nil)
 	ac, bc := e.aliceSession(), e.sessionFor(bob)
@@ -140,6 +141,20 @@ func TestMaintainerOnboard(t *testing.T) {
 			t.Errorf("audit = %v; want repository_on alone", got)
 		}
 	})
+	t.Run("a stale owner of its own on an off repository", func(t *testing.T) {
+		// C's tick on an off repository of B's instance: B may not take it.
+		e.team("C", nil, store.TeamRepo{Instance: "gh", Project: "acme/stale", Owner: true})
+		rec := e.send(bc, "POST", "/api/repositories", onboardBody("gh", "acme/stale", b))
+		if rec.Code != http.StatusForbidden || errorOf(t, rec) != "owned by C" {
+			t.Errorf("POST = %d %s; want 403 %q", rec.Code, rec.Body, "owned by C")
+		}
+		if _, found := e.storedRepo("gh", "acme/stale"); found {
+			t.Error("acme/stale was switched on")
+		}
+		if got := e.storedTeam(b).Repos; !slices.Equal(got, []store.TeamRepo{{Instance: "gh", Owner: true}}) {
+			t.Errorf("B's repos = %+v; want the instance entry alone", got)
+		}
+	})
 	t.Run("a viewer", func(t *testing.T) {
 		viewer := e.sessionFor(e.sso("viewer@example.com"))
 		e.team("W", viewerMembers(e.sso("viewer@example.com")))
@@ -161,4 +176,118 @@ func TestMaintainerOnboardSwitchOff(t *testing.T) {
 	if _, found := e.storedRepo("main", "acme/new"); found {
 		t.Error("a repository was stored with the switch off")
 	}
+}
+
+// ownTeams is the two-team setup of the owner-maintainer tests: A owns
+// main/acme/gadgets, B covers it, ann maintains A and ben maintains B.
+type ownTeams struct {
+	a, b     int64
+	ann, ben *http.Cookie
+}
+
+func ownSetup(e *env) ownTeams {
+	ann, ben := e.sso("ann@example.com"), e.sso("ben@example.com")
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	return ownTeams{
+		a: e.team("A", []store.TeamMember{{AccountID: ann, Role: store.RoleMaintainer}},
+			store.TeamRepo{Instance: "main", Project: "acme/gadgets", Owner: true}),
+		b: e.team("B", []store.TeamMember{{AccountID: ben, Role: store.RoleMaintainer}},
+			store.TeamRepo{Instance: "main", Project: "acme/gadgets"}),
+		ann: e.sessionFor(ann), ben: e.sessionFor(ben),
+	}
+}
+
+const gadgets = "/api/admin/repositories/main/acme/gadgets"
+
+// A maintainer of the owner team pauses and resumes with the switch on.
+func TestOwnerMaintainerPausesAndResumes(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	o := ownSetup(e)
+	rec := e.send(o.ann, "PUT", gadgets, enabledBody(false))
+	if detail := decode[RepositoryDetailView](t, rec, "pause", http.StatusOK); detail.Repo.On {
+		t.Error("the repository is still on after a pause")
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.Enabled {
+		t.Error("the repository is not paused")
+	}
+	e.send(o.ann, "PUT", gadgets, enabledBody(true))
+	if r, _ := e.storedRepo("main", "acme/gadgets"); !r.Enabled {
+		t.Error("the repository is not resumed")
+	}
+	if got := e.auditActionsOf("acme/gadgets"); !slices.Equal(got, []string{"repository_paused", "repository_resumed"}) {
+		t.Errorf("audit = %v; want the pause and the resume", got)
+	}
+}
+
+// A maintainer of a team that only covers the repository gets 403 on pause
+// and remove, and nothing changes.
+func TestCoveringMaintainerCannotPause(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	o := ownSetup(e)
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"pause":  e.send(o.ben, "PUT", gadgets, enabledBody(false)),
+		"remove": e.send(o.ben, "DELETE", gadgets, ""),
+	} {
+		if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgNotOwnerMaintainer {
+			t.Errorf("%s = %d %s; want 403 %q", name, rec.Code, rec.Body, msgNotOwnerMaintainer)
+		}
+	}
+	if r, found := e.storedRepo("main", "acme/gadgets"); !found || !r.Enabled {
+		t.Errorf("the repository = %+v, %v; want it still on", r, found)
+	}
+}
+
+// With the switch off the owner's maintainer still pauses, but resume and
+// remove are 403 and the repository and its owner stay.
+func TestSwitchOffLimits(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	o := ownSetup(e)
+	wantCode(t, e.send(o.ann, "PUT", gadgets, enabledBody(false)), "pause", http.StatusOK)
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"resume": e.send(o.ann, "PUT", gadgets, enabledBody(true)),
+		"remove": e.send(o.ann, "DELETE", gadgets, ""),
+	} {
+		if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgTeamsMayNotOnboard {
+			t.Errorf("%s = %d %s; want 403 %q", name, rec.Code, rec.Body, msgTeamsMayNotOnboard)
+		}
+	}
+	if r, found := e.storedRepo("main", "acme/gadgets"); !found || r.Enabled {
+		t.Errorf("the repository = %+v, %v; want it kept and paused", r, found)
+	}
+	if owner, found, err := e.st.OwnerTeam(ctx, "main", "acme/gadgets"); err != nil || !found || owner != o.a {
+		t.Errorf("owner = %d, %v, %v; want A", owner, found, err)
+	}
+}
+
+// A remove by the owner's maintainer deletes every team entry for the
+// repository; then any maintainer may onboard it again.
+func TestOwnerMaintainerRemoves(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	o := ownSetup(e)
+	e.cat["main"].set("acme/gadgets")
+	wantCode(t, e.send(o.ann, "DELETE", gadgets, ""), "remove", http.StatusOK)
+	if _, found := e.storedRepo("main", "acme/gadgets"); found {
+		t.Error("the repository is still stored")
+	}
+	for name, id := range map[string]int64{"A": o.a, "B": o.b} {
+		if got := e.storedTeam(id).Repos; len(got) != 0 {
+			t.Errorf("%s's repos = %+v; want none", name, got)
+		}
+	}
+	rec := e.send(o.ben, "POST", "/api/repositories", onboardBody("main", "acme/gadgets", o.b))
+	wantCode(t, rec, "onboard by B", http.StatusCreated)
+}
+
+// A maintainer of the instance's owner team pauses a repository of it.
+func TestInstanceOwnerMaintainerPauses(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	bob := e.sso("bob@example.com")
+	e.team("B", []store.TeamMember{{AccountID: bob, Role: store.RoleMaintainer}}, store.TeamRepo{Instance: "gh", Owner: true})
+	e.dashboardRepo("gh", "acme/mine", nil)
+	wantCode(t, e.send(e.sessionFor(bob), "PUT", "/api/admin/repositories/gh/acme/mine", enabledBody(false)), "pause", http.StatusOK)
 }

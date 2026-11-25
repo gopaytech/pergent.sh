@@ -1582,10 +1582,12 @@ paths:
       tags: [Repositories]
       summary: Remove a repository for good
       description: |
-        Admins, and maintainers on an instance that lets teams onboard (403
-        `only maintainers of the owner team and admins can do this` until a
-        later change opens it; 404 for a user who maintains no team). Works on a repository switched on
-        or paused. Its settings and its team links are deleted; pergent.sh
+        Admins, and maintainers of the repository's owner team on an
+        instance that lets teams onboard (403 `teams may not onboard
+        repositories on this instance` with the switch off; 403 `only
+        maintainers of the owner team and admins can do this` for a team
+        that only covers it; 404 for a user who maintains no team). Works on
+        a repository switched on or paused. Its settings and its team links are deleted; pergent.sh
         removes its webhook and clone credentials, and its dismissals,
         commands, inline threads and finding fates. To stop reviews and keep
         all that, pause it instead (`PUT /api/admin/repositories/{instance}/{project}`).
@@ -1616,10 +1618,12 @@ paths:
       tags: [Repositories]
       summary: Pause or resume a repository
       description: |
-        Admins, and maintainers on an instance that lets teams onboard (403
-        `only maintainers of the owner team and admins can do this` until a
-        later change opens it; 404 for a user who maintains no team).
-        `{"enabled": false}` pauses a
+        Admins, and maintainers of the repository's owner team (403 `only
+        maintainers of the owner team and admins can do this` for a team that
+        only covers it; 404 for a user who maintains no team). A pause works
+        with the switch off; a resume needs an instance that lets teams
+        onboard (403 `teams may not onboard repositories on this instance`
+        otherwise). `{"enabled": false}` pauses a
         repository of the dashboard: it stays with every setting, nothing
         reviews it, and pergent.sh takes its webhook and clone credentials off
         the platform within seconds; its dismissals and review history stay.
@@ -6383,7 +6387,7 @@ components:
           enum: [gitlab, github]
         state:
           type: string
-          enum: [off, paused, 'on']
+          enum: ['off', paused, 'on']
           description: Whether the repository is switched on, paused or not set up.
         ownerTeam:
           type: string

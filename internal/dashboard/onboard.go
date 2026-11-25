@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -61,6 +62,21 @@ func (d *Dashboard) ownerMaintainer(ctx context.Context, se Session, instance, p
 	}
 	ok, err = d.maintainsTeam(ctx, se, owner)
 	return owner, ok, err
+}
+
+// requireOwnerMaintainer answers 403 msgNotOwnerMaintainer, and returns
+// false, unless the session maintains repo's owner team. A team that only
+// covers the repository is refused. Callers check se.Admin first.
+func (d *Dashboard) requireOwnerMaintainer(w http.ResponseWriter, r *http.Request, repo settings.Effective) bool {
+	_, ok, err := d.ownerMaintainer(r.Context(), session(r), repo.Instance, repo.Project)
+	if err != nil {
+		d.failed(w, r, "reading the owner team", err)
+		return false
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
+	}
+	return ok
 }
 
 // maintainerGate lets a non-admin go on only when it maintains some team and
