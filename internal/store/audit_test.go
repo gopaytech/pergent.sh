@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,6 +34,61 @@ func TestAuditLogPaging(t *testing.T) {
 	}
 	if page[0].ActorID != nil || page[0].Instance != "" || page[0].Detail != "" {
 		t.Fatalf("entry without an actor ID or target = %+v", page[0])
+	}
+}
+
+func TestSearchAudit(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	for i, e := range []AuditEntry{
+		{Actor: "alice", Action: "command_refused", Instance: "main", Project: "acme/widgets", Detail: "mr=12 command=dismiss"},
+		{Actor: "bob (password)", Action: "user_added", Detail: "carol@example.com"},
+		{Actor: "alice", Action: "settings_updated", Instance: "main", Project: "acme/gadgets", Detail: "skills"},
+		{Actor: "dave", Action: "team_updated", Detail: "100%_done"},
+	} {
+		e.At = t0.Add(time.Duration(i) * time.Minute)
+		if err := s.Audit(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	actions := func(text string, before int64) []string {
+		t.Helper()
+		got, err := s.SearchAudit(ctx, before, text, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, e := range got {
+			out = append(out, e.Action)
+		}
+		return out
+	}
+	for _, c := range []struct {
+		text string
+		want []string
+	}{
+		{"", []string{"team_updated", "settings_updated", "user_added", "command_refused"}},
+		{"ALICE", []string{"settings_updated", "command_refused"}},
+		{"command refused", []string{"command_refused"}},
+		{"main/acme/widgets", []string{"command_refused"}},
+		{"acme/", []string{"settings_updated", "command_refused"}},
+		{"carol@", []string{"user_added"}},
+		{"password", []string{"user_added"}},
+		{"%", []string{"team_updated"}},
+		{"_done", []string{"team_updated"}},
+		{"nobody", nil},
+	} {
+		if got := actions(c.text, 0); strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("SearchAudit(%q) = %v, want %v", c.text, got, c.want)
+		}
+	}
+	// The search pages like the log: older than before.
+	all, err := s.SearchAudit(ctx, 0, "alice", 1)
+	if err != nil || len(all) != 1 {
+		t.Fatal(all, err)
+	}
+	if got := actions("alice", all[0].ID); strings.Join(got, ",") != "command_refused" {
+		t.Errorf("SearchAudit(alice, before newest) = %v", got)
 	}
 }
 

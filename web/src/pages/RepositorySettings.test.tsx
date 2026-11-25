@@ -51,7 +51,7 @@ const teamsSection = () => screen.findByRole("region", { name: "Teams" });
 describe("RepositorySettings: Teams", () => {
   it("shows an admin every team, ticked when it lists the repository, and the whole-instance ones as such", async () => {
     fakeApi(base);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await teamsSection();
     await within(box).findByRole("checkbox", { name: /Payments/ });
     expect(within(box).getByRole("checkbox", { name: /Payments/ })).toBeChecked();
@@ -65,7 +65,7 @@ describe("RepositorySettings: Teams", () => {
   it("saves the ticked teams with a PUT and says so", async () => {
     const saved = { teams: repoTeams.teams.map((t) => (t.id === 3 ? { ...t, direct: true } : t)) };
     const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/teams": { body: saved } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await teamsSection();
     await userEvent.click(await within(box).findByRole("checkbox", { name: /Platform/ }));
     await userEvent.click(within(box).getByRole("button", { name: "Save teams" }));
@@ -81,7 +81,7 @@ describe("RepositorySettings: Teams", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/teams": { body: { teams: repoTeams.teams.map((t) => ({ ...t, direct: false })) } },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await teamsSection();
     await userEvent.click(await within(box).findByRole("checkbox", { name: /Payments/ }));
     await userEvent.click(within(box).getByRole("button", { name: "Save teams" }));
@@ -93,7 +93,7 @@ describe("RepositorySettings: Teams", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/teams": { status: 400, body: { error: "every team must be a team that exists" } },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await teamsSection();
     await userEvent.click(await within(box).findByRole("checkbox", { name: /Platform/ }));
     await userEvent.click(within(box).getByRole("button", { name: "Save teams" }));
@@ -102,7 +102,7 @@ describe("RepositorySettings: Teams", () => {
 
   it("is there for a repository the config sets up, whose settings are locked", async () => {
     fakeApi(base);
-    renderApp("/repos/main/acme/widgets?tab=settings");
+    renderApp("/repos/main/acme/widgets?tab=settings", { unfolded: true });
     const box = await teamsSection();
     expect(await within(box).findByRole("checkbox", { name: /Payments/ })).toBeEnabled();
     expect(screen.getByText(/listed in pergent.sh's config/)).toBeInTheDocument();
@@ -110,7 +110,7 @@ describe("RepositorySettings: Teams", () => {
 
   it("points to Teams when there is none", async () => {
     fakeApi({ ...base, "GET /api/repositories/main/acme/payments/teams": { body: { teams: [] } } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await teamsSection();
     expect(await within(box).findByText(/No team yet/)).toBeInTheDocument();
     expect(within(box).getByRole("link", { name: /Teams/ })).toHaveAttribute("href", "/admin/teams");
@@ -122,7 +122,7 @@ describe("RepositorySettings: Teams", () => {
       "GET /api/me": { body: viewer },
       "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "maintainer") },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await screen.findByRole("switch", { name: "Approve clean reviews" });
     expect(screen.queryByRole("region", { name: "Teams" })).not.toBeInTheDocument();
     expect(fake.calls.filter((c) => c.url.endsWith("/teams"))).toHaveLength(0);
@@ -151,7 +151,7 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
 
   it("has no model menu any more, and sends no model in the settings", async () => {
     const fake = fakeApi(routes(repoDetail(repoPayments)));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("switch", { name: "Quiet reviews" }));
     expect(screen.queryByRole("combobox", { name: "Model" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -160,7 +160,7 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
 
   it("shows the chain the repository inherits and where it comes from", async () => {
     fakeApi(routes(repoDetail(repoPayments)));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     expect(await within(box).findByText("Inherited from the chain of its owner team, Payments.")).toBeInTheDocument();
     expect(names(box)).toEqual(["qwen3.5", "Claude Sonnet"]);
@@ -170,13 +170,13 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
 
   it("says when the repository inherits the global chain", async () => {
     fakeApi(routes(repoDetail(repoPayments), ssoAdmin, { ...chainRepoInherit, source: "global", team: "" }));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     expect(await within(await card()).findByText("Inherited from the global chain.")).toBeInTheDocument();
   });
 
   it("gives the repository its own chain, starting from the one in effect, with a PUT of the entries", async () => {
     const fake = fakeApi({ ...routes(repoDetail(repoPayments)), [`PUT ${chainPath}`]: { body: chainRepoCustom } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     await edit(box);
     await userEvent.click(within(box).getByRole("button", { name: "Remove Claude Sonnet" }));
@@ -201,7 +201,7 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
       ...routes(repoDetail(repoPayments), ssoAdmin, chainRepoCustom),
       [`POST ${chainPath}/reset`]: { body: chainRepoInherit },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     expect(await within(box).findByText("This repository has its own chain.")).toBeInTheDocument();
     await edit(box);
@@ -216,7 +216,7 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
     const config = { ...entryConfig, position: 2 };
     const chain: ChainView = { ...chainRepoCustom, entries: [{ ...entryOpus, position: 1 }, config], choices: [choice(entryOpus), choice(entryConfig)] };
     const fake = fakeApi({ ...routes(repoDetail(repoPayments), ssoAdmin, chain), [`PUT ${chainPath}`]: { body: chain } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     await edit(box);
     await userEvent.click(await within(box).findByRole("button", { name: "Move openai/gpt-5 up" }));
@@ -232,7 +232,7 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
   it("flags the entries an admin saved that a maintainer may not keep", async () => {
     const chain: ChainView = { ...chainRepoCustom, entries: [{ ...entryOpus, position: 1 }, { ...entryTeamQwen, position: 2 }], choices: [choice(entryTeamQwen)] };
     fakeApi(routes(repoDetail(repoPayments, "maintainer"), viewer, chain));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     expect(await within(box).findByText("An admin saved this chain.")).toBeInTheDocument();
     await edit(box);
@@ -246,13 +246,15 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
       ...routes(repoDetail(repoPayments, "maintainer"), viewer, { ...chainRepoCustom, readOnly: true, choices: [] }),
       [`GET ${payments}/reviewers`]: { body: { ...reviewersNone, readOnly: true } },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     expect(await within(box).findByText("This repository has its own chain.")).toBeInTheDocument();
-    expect(within(box).queryByRole("button")).not.toBeInTheDocument();
+    // The only button is the card's fold.
+    const changes = (el: HTMLElement) => within(el).queryAllByRole("button").filter((b) => !b.hasAttribute("data-fold"));
+    expect(changes(box)).toHaveLength(0);
     const reviewers = screen.getByRole("region", { name: "Reviewers" });
     expect(await within(reviewers).findByText("Only admins and maintainers of the repository's owner team change its reviewers.")).toBeInTheDocument();
-    expect(within(reviewers).queryByRole("button")).not.toBeInTheDocument();
+    expect(changes(reviewers)).toHaveLength(0);
   });
 
   it("shows a viewer the chain, read-only, on the Skills & instructions tab", async () => {
@@ -272,7 +274,7 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
       ...routes(repoDetail(repoPayments), ssoAdmin, { ...chainRepoCustom, entries: [marked] }),
       "DELETE /api/admin/models/m-opus/mark": { status: 204 },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await within(await card()).findByRole("button", { name: "Clear mark of Claude Opus" }));
     expect(fake.find("DELETE", "/api/admin/models/m-opus/mark")).toHaveLength(1);
   });
@@ -284,7 +286,7 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
       "GET /api/me/teams": { body: myTeams },
       "DELETE /api/teams/2/models/t-qwen/mark": { status: 204 },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await within(await card()).findByRole("button", { name: "Clear mark of qwen3.5" }));
     await vi.waitFor(() => expect(fake.find("DELETE", "/api/teams/2/models/t-qwen/mark")).toHaveLength(1));
   });
@@ -292,7 +294,7 @@ describe("RepositorySettings: reviewer 1, the model chain", () => {
   it("says in a maintainer's reset confirmation that the chain stays", async () => {
     fakeApi(routes(repoDetail(repoPayments, "maintainer"), viewer));
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("who is trusted, the token quota and the status settings"));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("The model chain stays as it is."));
@@ -313,7 +315,7 @@ describe("RepositorySettings: the status settings", () => {
 
   it("lets an admin set the blocking status, and sends only that", async () => {
     const fake = fakeApi(routes(repoDetail(repoPayments)));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     expect(await blocking()).toHaveValue("failed");
     expect(await blocking()).toBeEnabled();
     expect(await failure()).toBeEnabled();
@@ -331,7 +333,7 @@ describe("RepositorySettings: the status settings", () => {
     const detail = repoDetail(repoPayments, "maintainer");
     detail.settings.blockingStatus = { value: "neutral", overridden: true };
     const fake = fakeApi(routes(detail, viewer));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     expect(await blocking()).toHaveValue("neutral");
     expect(await blocking()).toBeDisabled();
     expect(await failure()).toBeDisabled();
@@ -345,7 +347,7 @@ describe("RepositorySettings: the status settings", () => {
   it("says in a maintainer's reset confirmation that the status settings stay", async () => {
     fakeApi(routes(repoDetail(repoPayments, "maintainer"), viewer));
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("the status settings"));
     confirm.mockRestore();
@@ -358,7 +360,7 @@ describe("RepositorySettings: Review deleted and renamed files", () => {
 
   it("shows the switch after Quiet reviews, off, with its help text", async () => {
     fakeApi(base);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const toggle = await screen.findByRole("switch", { name: "Review deleted and renamed files" });
     expect(toggle).not.toBeChecked();
     expect(screen.getByText(help)).toBeInTheDocument();
@@ -371,7 +373,7 @@ describe("RepositorySettings: Review deleted and renamed files", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/settings": { body: repoDetail(repoPayments) },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("switch", { name: "Review deleted and renamed files" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ checkDeleted: true });
@@ -381,7 +383,7 @@ describe("RepositorySettings: Review deleted and renamed files", () => {
     const own = repoDetail(repoPayments);
     own.settings.checkDeleted = { value: true, overridden: true };
     fakeApi({ ...base, "GET /api/repositories/main/acme/payments": { body: own } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     expect(await screen.findByRole("switch", { name: "Review deleted and renamed files" })).toBeChecked();
   });
 });
@@ -391,7 +393,7 @@ describe("RepositorySettings: unsaved changes", () => {
 
   it("offers Save in a bar only while something changed, and Discard puts the draft back", async () => {
     fakeApi(base);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const quiet = await toggle();
     expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument();
     await userEvent.click(quiet);
@@ -405,7 +407,7 @@ describe("RepositorySettings: unsaved changes", () => {
   it("asks before another tab drops the changes, and keeps them when the person stays", async () => {
     fakeApi(base);
     const ask = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await toggle());
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
     expect(ask).toHaveBeenCalledWith("You have unsaved changes. Leave and lose them?");
@@ -418,7 +420,7 @@ describe("RepositorySettings: unsaved changes", () => {
 
   it("keeps the draft when the settings are read again", async () => {
     fakeApi(base);
-    const { client } = renderApp("/repos/main/acme/payments?tab=settings");
+    const { client } = renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await toggle());
     await client.refetchQueries({ queryKey: ["repo"] });
     expect(await toggle()).toBeChecked();
@@ -427,13 +429,55 @@ describe("RepositorySettings: unsaved changes", () => {
 
   it("takes the person to a field the save refuses", async () => {
     const fake = fakeApi(base);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const steps = await screen.findByRole("textbox", { name: "Max steps" });
     await userEvent.clear(steps);
     await userEvent.type(steps, "999");
     await userEvent.click(within(screen.getByRole("region", { name: "Unsaved changes" })).getByRole("button", { name: "Save" }));
     expect(within(screen.getByRole("region", { name: "Unsaved changes" })).getByRole("alert")).toHaveTextContent(/Max steps/);
     expect(steps).toHaveFocus();
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")).toHaveLength(0);
+  });
+});
+
+describe("RepositorySettings: folded cards", () => {
+  // fold is the button in a card's title that folds and opens it.
+  const fold = (card: string) => within(screen.getByRole("region", { name: card })).getAllByRole("button")[0];
+
+  it("opens Reviews and folds every other card, each with a summary", async () => {
+    fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    expect(await screen.findByRole("switch", { name: "Approve clean reviews" })).toBeVisible();
+    expect(fold("Review settings")).toHaveAttribute("aria-expanded", "true");
+    expect(fold("Review settings")).toHaveTextContent(/blocking issues: (failed|neutral)/);
+    for (const card of ["CI jobs", "Comment layout", "Skills used for this repository", "Built-in rules", "Review Job"]) {
+      expect(fold(card)).toHaveAttribute("aria-expanded", "false");
+    }
+    expect(fold("CI jobs")).toHaveTextContent("none chosen");
+    expect(fold("Built-in rules")).toHaveTextContent("none enabled");
+    expect(fold("Review Job")).toHaveTextContent(/timeout \d+s · \d+ steps/);
+    expect(await screen.findByRole("button", { name: /^Reviewers/ })).toHaveAttribute("aria-expanded", "false");
+    // A folded card's fields are hidden until it is opened.
+    expect(screen.queryByRole("textbox", { name: "Max steps" })).not.toBeInTheDocument();
+    await userEvent.click(fold("Review Job"));
+    expect(screen.getByRole("textbox", { name: "Max steps" })).toBeVisible();
+  });
+
+  it("keeps an edit in a card that is folded again, and opens the card when the save refuses its field", async () => {
+    const fake = fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await screen.findByRole("switch", { name: "Approve clean reviews" });
+    await userEvent.click(fold("Review Job"));
+    const steps = screen.getByRole("textbox", { name: "Max steps" });
+    await userEvent.clear(steps);
+    await userEvent.type(steps, "999");
+    expect(fold("Review Job")).toHaveTextContent("999 steps");
+    await userEvent.click(fold("Review Job"));
+    expect(screen.queryByRole("textbox", { name: "Max steps" })).not.toBeInTheDocument();
+    await userEvent.click(within(screen.getByRole("region", { name: "Unsaved changes" })).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(steps).toHaveFocus());
+    expect(fold("Review Job")).toHaveAttribute("aria-expanded", "true");
+    expect(steps).toHaveValue("999");
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")).toHaveLength(0);
   });
 });
@@ -456,7 +500,7 @@ describe("RepositorySettings: CI jobs", () => {
 
   it("shows the card with the default wait and no job, for a maintainer too", async () => {
     fakeApi({ ...routes(repoDetail(repoPayments, "maintainer")), "GET /api/me": { body: viewer } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     expect(within(box).getByRole("textbox", { name: "How long to wait for CI" })).toHaveValue("30m");
     expect(within(box).getByText("No CI job yet.")).toBeInTheDocument();
@@ -465,7 +509,7 @@ describe("RepositorySettings: CI jobs", () => {
 
   it("suggests the names the server lists, and takes free text", async () => {
     const fake = fakeApi(routes(repoDetail(repoPayments)));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     await userEvent.click(within(box).getByRole("button", { name: "Add a job" }));
     await waitFor(() => expect(box.querySelectorAll("datalist option")).toHaveLength(2));
@@ -477,7 +521,7 @@ describe("RepositorySettings: CI jobs", () => {
 
   it("gives no unknown-name warning when the names could not be read", async () => {
     fakeApi(routes(repoDetail(repoPayments), { [`GET ${payments}/ci-job-names`]: { status: 502, body: { error: "no" } } }));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     await userEvent.click(within(box).getByRole("button", { name: "Add a job" }));
     await userEvent.type(within(box).getByRole("combobox", { name: "Job name" }), "deploy-docs");
@@ -486,7 +530,7 @@ describe("RepositorySettings: CI jobs", () => {
 
   it("sends ciJobs, and only that, when a job is added", async () => {
     const fake = fakeApi(routes(repoDetail(repoPayments)));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     await userEvent.click(within(box).getByRole("button", { name: "Add a job" }));
     await userEvent.type(within(box).getByRole("combobox", { name: "Job name" }), " test ");
@@ -509,7 +553,7 @@ describe("RepositorySettings: CI jobs", () => {
       "GET /api/repositories/hub/acme/gadgets/ci-job-names": { body: { names: [] } },
       "GET /api/admin/linkable?instance=hub&repo=acme%2Fgadgets&search=": { body: { items: [], truncated: false } },
     });
-    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    renderApp("/repos/hub/acme/gadgets?tab=settings", { unfolded: true });
     const box = await card();
     await userEvent.click(within(box).getByRole("button", { name: "Add a job" }));
     await userEvent.type(within(box).getByRole("combobox", { name: "Job name" }), "scan");
@@ -525,7 +569,7 @@ describe("RepositorySettings: CI jobs", () => {
   it("sends null when the last job is removed, and nothing when nothing changed", async () => {
     const own = withJobs(repoDetail(repoPayments), "45m", [{ name: "test", read: "status", blocksApproval: true }]);
     const fake = fakeApi(routes(own));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     expect(within(box).getByText("overridden here")).toBeInTheDocument();
     expect(within(box).getByRole("textbox", { name: "How long to wait for CI" })).toHaveValue("45m");
@@ -541,7 +585,7 @@ describe("RepositorySettings: CI jobs", () => {
   it("shows the wait of a repository that has no job, and sends a changed wait with its jobs only", async () => {
     const own = withJobs(repoDetail(repoPayments), "45m", [{ name: "test", read: "status", blocksApproval: false }]);
     const fake = fakeApi(routes(own));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     const wait = within(box).getByRole("textbox", { name: "How long to wait for CI" });
     await userEvent.clear(wait);
@@ -555,7 +599,7 @@ describe("RepositorySettings: CI jobs", () => {
   it("is read-only for a repository the config sets up, and asks for no names", async () => {
     const widgets = withJobs(repoDetail(repoWidgets), "10m", [{ name: "build", read: "log", blocksApproval: true }]);
     const fake = fakeApi({ ...base, "GET /api/repositories/main/acme/widgets": { body: widgets } });
-    renderApp("/repos/main/acme/widgets?tab=settings");
+    renderApp("/repos/main/acme/widgets?tab=settings", { unfolded: true });
     const box = await card();
     expect(within(box).getByText("managed by config")).toBeInTheDocument();
     expect(within(box).getByRole("textbox", { name: "How long to wait for CI" })).toBeDisabled();
@@ -571,7 +615,7 @@ describe("RepositorySettings: path rules", () => {
 
   it("chooses rule sets in order and sends them", async () => {
     const fake = fakeApi({ ...base, "GET /api/rule-sets": { body: ruleSets }, [`PUT ${settingsPath}`]: { body: repoDetail(repoPayments) } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const card = await screen.findByRole("region", { name: "Rule sets used for this repository" });
     await userEvent.click(within(card).getByRole("radio", { name: "Choose rule sets" }));
     await userEvent.selectOptions(await within(card).findByRole("combobox", { name: "Add a rule set" }), "go-api");
@@ -588,7 +632,7 @@ describe("RepositorySettings: path rules", () => {
       "GET /api/rule-sets": { body: ruleSets },
       [`PUT ${settingsPath}`]: { body: repoDetail(repoPayments) },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const card = await screen.findByRole("region", { name: "Rule sets used for this repository" });
     await userEvent.click(await within(card).findByRole("button", { name: "Remove go-api" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -605,7 +649,7 @@ describe("RepositorySettings: path rules", () => {
       "GET /api/built-in-rules": { body: builtInRules },
       [`PUT ${settingsPath}`]: { body: repoDetail(repoPayments) },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     // None by default.
     const card = await screen.findByRole("region", { name: "Built-in rules" });
     expect(await within(card).findByText("0 of 2 enabled")).toBeInTheDocument();
@@ -626,7 +670,7 @@ describe("RepositorySettings: path rules", () => {
       "GET /api/built-in-rules": { body: builtInRules },
       [`PUT ${settingsPath}`]: { body: repoDetail(repoPayments) },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const card = await screen.findByRole("region", { name: "Built-in rules" });
     expect(await within(card).findByRole("checkbox", { name: "Built-in rule ts_js" })).toBeChecked();
     expect(within(card).getByText("overridden here")).toBeInTheDocument();
@@ -639,7 +683,7 @@ describe("RepositorySettings: path rules", () => {
     const detail = repoDetail(repoPayments);
     detail.builtInRulesOff = "Reviews get no built-in rules for now: no review image can load only the enabled built-in rules yet.";
     fakeApi({ ...base, [`GET /api/repositories/main/acme/payments`]: { body: detail }, "GET /api/built-in-rules": { body: builtInRules } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const card = await screen.findByRole("region", { name: "Built-in rules" });
     const note = await within(card).findByText(/Reviews get no built-in rules for now/);
     // Only a note while none is enabled; a problem once one is.

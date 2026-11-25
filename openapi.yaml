@@ -3425,6 +3425,9 @@ paths:
         Admins only. 100 entries at most, newest first, older than `before`
         when given. `next` is the `before` of the page after, 0 at the end of
         the log. Every admin sees every entry. `detail` never holds a secret.
+        With `q`, only the entries whose actor, action (its underscores read
+        as spaces too), `instance/project` or detail hold it, ignoring case;
+        `next` then pages within those.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -3436,6 +3439,12 @@ paths:
             type: integer
             format: int64
             minimum: 1
+        - name: q
+          in: query
+          description: Text to look for, trimmed. Empty matches every entry.
+          schema:
+            type: string
+            maxLength: 200
       responses:
         '200':
           description: One page.

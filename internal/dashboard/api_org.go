@@ -33,6 +33,7 @@ const (
 	msgMembers        = "members must be accounts that sign in with SSO"
 	msgRepoNotOn      = "every repository must be switched on, or name a whole instance with project \"\""
 	msgBadBefore      = "before must be the ID of an audit entry"
+	msgAuditQLong     = "q must be at most 200 characters"
 	msgDeleteSelf     = "you can't remove your own account"
 	msgOwnRole        = "you can't change your own role"
 	msgBadAccountRole = `the body must be {"role": "admin" or "user"}`
@@ -897,7 +898,13 @@ func (d *Dashboard) auditLog(w http.ResponseWriter, r *http.Request) {
 		}
 		before = n
 	}
-	entries, err := d.Store.AuditLog(ctx, before, auditPageSize)
+	// q narrows the log to the entries that hold it (see store.SearchAudit).
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if utf8.RuneCountInString(q) > 200 {
+		writeError(w, http.StatusBadRequest, msgAuditQLong)
+		return
+	}
+	entries, err := d.Store.SearchAudit(ctx, before, q, auditPageSize)
 	if err != nil {
 		d.failed(w, r, "reading the audit log", err)
 		return

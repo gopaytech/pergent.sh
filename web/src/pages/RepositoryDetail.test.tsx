@@ -176,7 +176,7 @@ describe("RepositoryDetail", () => {
 
   it("disables a config-managed repository's settings", async () => {
     const fake = fakeApi(base);
-    renderApp("/repos/main/acme/widgets?tab=settings");
+    renderApp("/repos/main/acme/widgets?tab=settings", { unfolded: true });
     expect(await screen.findAllByText("managed by config")).not.toHaveLength(0);
     // A config repository can't choose, but its skills are shown.
     await screen.findByRole("switch", { name: "Skill code-review" });
@@ -210,7 +210,7 @@ describe("RepositoryDetail", () => {
       },
     };
     const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: saved } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("switch", { name: "Approve clean reviews" }));
     const timeout = screen.getByRole("textbox", { name: "Timeout (seconds)" });
     await userEvent.clear(timeout);
@@ -229,7 +229,7 @@ describe("RepositoryDetail", () => {
 
   it("shows Max steps with its help text and whether it is overridden", async () => {
     fakeApi(base);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const steps = await screen.findByRole("textbox", { name: "Max steps" });
     expect(steps).toHaveValue("40");
     const row = steps.closest(".set") as HTMLElement;
@@ -242,7 +242,7 @@ describe("RepositoryDetail", () => {
   it("saves a changed Max steps and shows it overridden", async () => {
     const saved = { ...payments, settings: { ...payments.settings, maxTurns: { value: 120, overridden: true } } };
     const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: saved } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const steps = await screen.findByRole("textbox", { name: "Max steps" });
     await userEvent.clear(steps);
     await userEvent.type(steps, "120");
@@ -255,7 +255,7 @@ describe("RepositoryDetail", () => {
 
   it("sends an emptied Max steps as null, the default", async () => {
     const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: payments } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.clear(await screen.findByRole("textbox", { name: "Max steps" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ maxTurns: null });
@@ -263,7 +263,7 @@ describe("RepositoryDetail", () => {
 
   it.each(["4", "201", "abc", "40.5"])("refuses Max steps %s without asking the server", async (text) => {
     const fake = fakeApi(base);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const steps = await screen.findByRole("textbox", { name: "Max steps" });
     await userEvent.clear(steps);
     await userEvent.type(steps, text);
@@ -276,7 +276,7 @@ describe("RepositoryDetail", () => {
 
   it.each(["abc", "59", "7201", "90.5"])("refuses Timeout %s without asking the server", async (text) => {
     const fake = fakeApi(base);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const timeout = await screen.findByRole("textbox", { name: "Timeout (seconds)" });
     await userEvent.clear(timeout);
     await userEvent.type(timeout, text);
@@ -287,7 +287,7 @@ describe("RepositoryDetail", () => {
 
   it("sends an emptied Timeout as null, the default", async () => {
     const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: payments } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.clear(await screen.findByRole("textbox", { name: "Timeout (seconds)" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ jobTimeoutSeconds: null });
@@ -295,7 +295,7 @@ describe("RepositoryDetail", () => {
 
   it("shows the re-run caps, editable by an admin of the repository", async () => {
     fakeApi(base);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const perMR = await screen.findByRole("spinbutton", { name: "Re-run cap per MR/PR (per day)" });
     const perRepo = screen.getByRole("spinbutton", { name: "Re-run cap per repository (per day)" });
     expect(perMR).toHaveValue(10);
@@ -313,7 +313,7 @@ describe("RepositoryDetail", () => {
       settings: { ...payments.settings, rerunLimitPerRepo: { value: 200, overridden: true } },
     };
     const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: saved } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const perRepo = await screen.findByRole("spinbutton", { name: "Re-run cap per repository (per day)" });
     await userEvent.clear(perRepo);
     await userEvent.type(perRepo, "200");
@@ -329,7 +329,7 @@ describe("RepositoryDetail", () => {
 
   it("sends an emptied re-run cap as null, the default", async () => {
     const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: payments } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.clear(await screen.findByRole("spinbutton", { name: "Re-run cap per MR/PR (per day)" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ rerunLimitPerMR: null });
@@ -337,7 +337,7 @@ describe("RepositoryDetail", () => {
 
   it.each(["0", "1001", "2.5"])("refuses the re-run cap %s without asking the server", async (value) => {
     const fake = fakeApi(base);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const perMR = await screen.findByRole("spinbutton", { name: "Re-run cap per MR/PR (per day)" });
     await userEvent.clear(perMR);
     await userEvent.type(perMR, value);
@@ -351,7 +351,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const toggle = await screen.findByRole("switch", { name: "Inline findings" });
     expect(toggle).toBeChecked();
     expect(
@@ -371,7 +371,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const toggle = await screen.findByRole("switch", { name: "Only the author and maintainers use commands" });
     expect(toggle).toBeChecked();
     expect(
@@ -393,7 +393,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const toggle = await screen.findByRole("switch", { name: "Incremental reviews" });
     expect(toggle).toBeChecked();
     expect(screen.getByText("After a push, review only the files changed since the last review.")).toBeInTheDocument();
@@ -411,7 +411,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const toggle = await screen.findByRole("switch", { name: "Learn from dismissals" });
     expect(toggle).toBeChecked();
     expect(screen.getByText("Later reviews are told what people with write access rejected, and why.")).toBeInTheDocument();
@@ -429,7 +429,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const toggle = await screen.findByRole("switch", { name: "Quiet reviews" });
     expect(toggle).not.toBeChecked();
     expect(
@@ -449,7 +449,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const section = await screen.findByRole("region", { name: "Comment layout" });
     expect(within(section).getAllByRole("listitem").map((r) => within(r).getByRole("combobox").getAttribute("aria-label"))).toEqual([
       "Summary state",
@@ -471,7 +471,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const section = await screen.findByRole("region", { name: "Comment layout" });
     await userEvent.click(within(section).getByRole("button", { name: "Move Files up" }));
     await userEvent.click(within(section).getByRole("button", { name: "Move Files down" }));
@@ -489,7 +489,7 @@ describe("RepositoryDetail", () => {
       "GET /api/repositories/main/acme/payments": { body: own },
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const section = await screen.findByRole("region", { name: "Comment layout" });
     expect(within(section).getAllByRole("listitem")).toHaveLength(5);
     await userEvent.click(within(section).getByRole("button", { name: "Reset to default" }));
@@ -505,7 +505,7 @@ describe("RepositoryDetail", () => {
       "GET /api/repositories/main/acme/payments": { body: asMaintainer },
       "PUT /api/repositories/main/acme/payments/settings": { body: asMaintainer },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const perMR = await screen.findByRole("spinbutton", { name: "Re-run cap per MR/PR (per day)" });
     const perRepo = screen.getByRole("spinbutton", { name: "Re-run cap per repository (per day)" });
     expect(perMR).toHaveAttribute("readonly");
@@ -524,7 +524,7 @@ describe("RepositoryDetail", () => {
     const asMaintainer = repoDetail(repoPayments, "maintainer");
     fakeApi({ ...base, "GET /api/repositories/main/acme/payments": { body: asMaintainer } });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("The re-run caps stay as they are"));
     confirm.mockRestore();
@@ -533,7 +533,7 @@ describe("RepositoryDetail", () => {
   it("doesn't say so to an admin, whose reset covers the caps", async () => {
     fakeApi(base);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
     expect(confirm).toHaveBeenCalledWith("Put every setting of this repository back to its default? The model chain stays as it is.");
     confirm.mockRestore();
@@ -541,7 +541,7 @@ describe("RepositoryDetail", () => {
 
   it("disables the re-run caps of a config-managed repository", async () => {
     fakeApi(base);
-    renderApp("/repos/main/acme/widgets?tab=settings");
+    renderApp("/repos/main/acme/widgets?tab=settings", { unfolded: true });
     await screen.findAllByText("managed by config");
     expect(screen.getByRole("spinbutton", { name: "Re-run cap per MR/PR (per day)" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "Re-run cap per repository (per day)" })).toBeDisabled();
@@ -552,7 +552,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/settings": { status: 400, body: { error: "jobMemory must be at least 256Mi" } },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const memory = await screen.findByRole("textbox", { name: "Memory limit" });
     await userEvent.clear(memory);
     await userEvent.type(memory, "1Mi");
@@ -566,7 +566,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "POST /api/repositories/main/acme/payments/settings/reset": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
     const [post] = fake.find("POST", "/api/repositories/main/acme/payments/settings/reset");
     expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
@@ -582,7 +582,7 @@ describe("RepositoryDetail", () => {
         },
       },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const skills = await screen.findByRole("region", { name: "Skills used for this repository" });
     const defaultsRadio = within(skills).getByRole("radio", { name: "Use the default skills (code-review)" });
     expect(defaultsRadio).toBeChecked();
@@ -610,7 +610,7 @@ describe("RepositoryDetail", () => {
       "GET /api/repositories/main/acme/payments": { body: chosen },
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     expect(await screen.findByRole("radio", { name: "Choose skills" })).toBeChecked();
     await userEvent.click(screen.getByRole("radio", { name: /Use the default skills/ }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -622,7 +622,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "GET /api/skills": { body: librarySkills.map((s) => ({ ...s, inDefaults: false })) },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     expect(await screen.findByRole("radio", { name: "Use the default skills (none)" })).toBeChecked();
     expect(screen.getByText(/no default skills/i)).toBeInTheDocument();
   });
@@ -635,7 +635,7 @@ describe("RepositoryDetail", () => {
         body: { ...payments, settings: { ...payments.settings, repoSkills: { value: ["agent-rules"], overridden: true } } },
       },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const section = await screen.findByRole("region", { name: "Skills in the repository" });
     const agent = await within(section).findByRole("switch", { name: "Repository skill agent-rules" });
     expect(agent).not.toBeChecked();
@@ -664,7 +664,7 @@ describe("RepositoryDetail", () => {
       },
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     expect(await screen.findByRole("switch", { name: "Repository skill lint" })).toBeChecked();
     const vanished = screen.getByRole("switch", { name: "Repository skill vanished" });
     expect(vanished).toBeChecked();
@@ -683,7 +683,7 @@ describe("RepositoryDetail", () => {
       },
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const section = await screen.findByRole("region", { name: "Skills in the repository" });
     expect(await within(section).findByText(/could not read the repository's skills/)).toBeInTheDocument();
     await userEvent.click(await screen.findByRole("switch", { name: "Review drafts" }));
@@ -862,7 +862,7 @@ describe("RepositoryDetail", () => {
       "GET /api/repositories/main/ACME/Payments": { body: payments },
       "PUT /api/repositories/main/acme/payments/settings": { body: saved },
     });
-    renderApp("/repos/main/ACME/Payments?tab=settings");
+    renderApp("/repos/main/ACME/Payments?tab=settings", { unfolded: true });
     const drafts = await screen.findByRole("switch", { name: "Review drafts" });
     expect(within(drafts.closest(".set") as HTMLElement).getByText("default")).toBeInTheDocument();
     await userEvent.click(drafts);
@@ -882,7 +882,7 @@ describe("RepositoryDetail", () => {
       "GET /api/repositories/main/acme/payments": { body: stale },
       "PUT /api/repositories/main/acme/payments/settings": { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     expect(await screen.findByText(/old-skill is no longer in the library/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("switch", { name: "Skill security-review" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -899,7 +899,7 @@ describe("RepositoryDetail", () => {
       "PUT /api/repositories/main/acme/payments/settings": () =>
         puts++ === 0 ? { status: 403, body: { error: "missing or wrong CSRF token", code: "csrf" } } : { body: payments },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("switch", { name: "Review drafts" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Saved.")).toBeInTheDocument();
@@ -912,7 +912,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "PUT /api/repositories/main/acme/payments/settings": { status: 403, body: { error: "only admins can do this" } },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("switch", { name: "Review drafts" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("only admins can do this");
@@ -1238,7 +1238,7 @@ describe("RepositorySettings: Linked repositories", () => {
   it("saves the switch and a new link with the paths it watches, and nothing else", async () => {
     const saved = withLinks(true);
     const fake = fakeApi({ ...routes, [`PUT ${settingsPath}`]: { body: saved } });
-    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    renderApp("/repos/hub/acme/gadgets?tab=settings", { unfolded: true });
     const box = await section();
     await userEvent.click(within(box).getByRole("switch", { name: "Linked repositories" }));
     await userEvent.click(await within(box).findByRole("button", { name: "Add acme/api" }));
@@ -1258,7 +1258,7 @@ describe("RepositorySettings: Linked repositories", () => {
       "GET /api/repositories/hub/acme/gadgets": { body: off },
       [`PUT ${settingsPath}`]: { body: off },
     });
-    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    renderApp("/repos/hub/acme/gadgets?tab=settings", { unfolded: true });
     const box = await section();
     expect(within(box).getByText(/ignored until/)).toBeInTheDocument();
     expect(within(box).getByRole("textbox", { name: "Watched paths of acme/api" })).toHaveValue("render/**");
@@ -1276,7 +1276,7 @@ describe("RepositorySettings: Linked repositories", () => {
       "GET /api/repositories/hub/acme/gadgets": { body: on },
       [`PUT ${settingsPath}`]: { body: gadgets },
     });
-    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    renderApp("/repos/hub/acme/gadgets?tab=settings", { unfolded: true });
     const box = await section();
     await userEvent.click(within(box).getByRole("button", { name: "Remove acme/api" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -1291,7 +1291,7 @@ describe("RepositorySettings: Linked repositories", () => {
         body: { error: "acme/lib: a public repository can't link an internal one: the linked repository must be as open or more open" },
       },
     });
-    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    renderApp("/repos/hub/acme/gadgets?tab=settings", { unfolded: true });
     const box = await section();
     await userEvent.click(await within(box).findByRole("button", { name: "Add acme/lib" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -1305,7 +1305,7 @@ describe("RepositorySettings: Linked repositories", () => {
       "GET /api/repositories/hub/acme/gadgets": { body: asMaintainer },
       [`PUT ${settingsPath}`]: { body: asMaintainer },
     });
-    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    renderApp("/repos/hub/acme/gadgets?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("switch", { name: "Review drafts" }));
     expect(screen.queryByRole("region", { name: "Linked repositories" })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Linked repositories" })).not.toBeInTheDocument();
@@ -1316,7 +1316,7 @@ describe("RepositorySettings: Linked repositories", () => {
 
   it("says GitLab repositories can't have links, with no controls", async () => {
     const fake = fakeApi(base);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await section();
     expect(box).toHaveTextContent("GitHub repositories only");
     expect(within(box).queryByRole("switch")).not.toBeInTheDocument();
@@ -1327,7 +1327,7 @@ describe("RepositorySettings: Linked repositories", () => {
     const fromConfig = repoDetail({ ...repoGadgets, source: "config" });
     fromConfig.settings.linkedRepos = { value: [{ target: "acme/api", watched: [], canBlock: true }], overridden: true };
     const fake = fakeApi({ ...routes, "GET /api/repositories/hub/acme/gadgets": { body: fromConfig } });
-    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    renderApp("/repos/hub/acme/gadgets?tab=settings", { unfolded: true });
     const box = await section();
     expect(within(box).getByRole("switch", { name: "Linked repositories" })).toBeDisabled();
     expect(within(box).getByRole("textbox", { name: "Watched paths of acme/api" })).toBeDisabled();
@@ -1338,7 +1338,7 @@ describe("RepositorySettings: Linked repositories", () => {
   it("says in a maintainer's reset confirmation that the links stay", async () => {
     fakeApi({ ...routes, "GET /api/repositories/hub/acme/gadgets": { body: repoDetail(repoGadgets, "maintainer") } });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    renderApp("/repos/hub/acme/gadgets?tab=settings", { unfolded: true });
     await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("linked repositories"));
     confirm.mockRestore();
@@ -1414,7 +1414,7 @@ describe("RepositoryDetail while paused, and Remove", () => {
   it("puts Remove in the last card of the Settings tab of a paused repository", async () => {
     renderAt("/repos/main/acme/tools?tab=settings", pausedRoutes);
     const card = await removeCard();
-    expect(within(card).getByRole("heading", { name: "Remove repository" })).toBeInTheDocument();
+    expect(within(card).getByRole("heading", { name: /^Remove repository/ })).toBeInTheDocument();
     expect(card).toHaveTextContent(
       "Its settings and team links are deleted, and its webhook and clone credentials are removed. This cannot be undone.",
     );
@@ -1435,7 +1435,7 @@ describe("RepositoryDetail while paused, and Remove", () => {
       "DELETE /api/repositories/main/acme/tools": { body: { ...tools, repo: { ...repoToolsPaused, paused: false } } },
       "GET /api/repositories": { body: [] },
     });
-    renderApp("/repos/main/acme/tools?tab=settings");
+    renderApp("/repos/main/acme/tools?tab=settings", { unfolded: true });
     await userEvent.click(within(await removeCard()).getByRole("button", { name: "Remove repository" }));
     expect(confirm).toHaveBeenCalledWith(
       "Remove acme/tools from pergent? Its settings and team links are deleted, and its webhook and clone credentials are removed. This can't be undone.",
@@ -1447,7 +1447,7 @@ describe("RepositoryDetail while paused, and Remove", () => {
   it("sends nothing when the Remove confirm is cancelled", async () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
     const fake = fakeApi(pausedRoutes);
-    renderApp("/repos/main/acme/tools?tab=settings");
+    renderApp("/repos/main/acme/tools?tab=settings", { unfolded: true });
     await userEvent.click(within(await removeCard()).getByRole("button", { name: "Remove repository" }));
     expect(fake.find("DELETE", "/api/repositories/main/acme/tools")).toHaveLength(0);
   });
@@ -1475,7 +1475,7 @@ describe("RepositoryDetail while paused, and Remove", () => {
 describe("RepositoryDetail code graph", () => {
   it("shows no code graph card on the settings tab", async () => {
     fakeApi({ ...base, "GET /api/repositories/main/acme/payments": { body: { ...payments, graph: { ...payments.graph, available: true } } } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     expect(await screen.findByRole("tab", { name: "Settings" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Code graph" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: /code graph/i })).not.toBeInTheDocument();
@@ -1484,7 +1484,7 @@ describe("RepositoryDetail code graph", () => {
 
 function renderAt(path: string, routes: Parameters<typeof fakeApi>[0]) {
   fakeApi(routes);
-  return renderApp(path);
+  return renderApp(path, { unfolded: path.includes("tab=settings") });
 }
 
 describe("RepositoryDetail: switching on a paused repository", () => {

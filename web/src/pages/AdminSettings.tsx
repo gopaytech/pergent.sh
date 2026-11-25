@@ -155,7 +155,8 @@ function defaultsSummary(v: DefaultsView) {
 function Defaults({ v }: { v: DefaultsView }) {
   const client = useQueryClient();
   const write = useWrite();
-  const [open, setOpen] = useState(false);
+  // Open at first: it is what an admin comes to this page for.
+  const [open, setOpen] = useState(true);
   const [approve, setApprove] = useState(v.approve);
   const [reviewDrafts, setReviewDrafts] = useState(v.reviewDrafts);
   const [inlineFindings, setInlineFindings] = useState(v.inlineFindings);

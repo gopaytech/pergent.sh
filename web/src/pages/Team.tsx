@@ -88,7 +88,7 @@ function AdminActions({ v }: { v: TeamPageView }) {
     save.mutate({ name: name.trim() }, { onSuccess: () => setRenaming(false) });
   };
   return (
-    <div className="stack">
+    <div className="stack team-actions">
       <div className="actions-row">
         <button type="button" className="btn small" onClick={() => setRenaming(!renaming)}>
           Rename
