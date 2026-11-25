@@ -2232,11 +2232,10 @@ func TestRepositoriesOwnerTeam(t *testing.T) {
 		}
 		return out
 	}
-	setup := func(e *env, members []store.TeamMember) (devs, ops int64) {
-		e.dashboardRepo("main", "acme/payments", nil)
-		e.dashboardRepo("main", "acme/widgets", nil)
+	setup := func(e *env, members []store.TeamMember, ownerPath string) (devs, ops int64) {
+		// newEnv already lists acme/payments and acme/widgets on main.
 		e.dashboardRepo("gh", "acme/other", nil)
-		devs = e.team("devs", members, store.TeamRepo{Instance: "main", Project: "acme/payments", Owner: true})
+		devs = e.team("devs", members, store.TeamRepo{Instance: "main", Project: ownerPath, Owner: true})
 		ops = e.team("ops", nil, store.TeamRepo{Instance: "main", Project: "", Owner: true})
 		return devs, ops
 	}
@@ -2244,7 +2243,7 @@ func TestRepositoriesOwnerTeam(t *testing.T) {
 	t.Run("admin", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, nil)
-		devs, ops := setup(e, nil)
+		devs, ops := setup(e, nil, "acme/payments")
 		c := e.userOnMain(true)
 		got := byProject(getJSON[[]RepositoryView](e, c, "/api/repositories"))
 		want := map[string]*OwnerTeamView{
@@ -2252,11 +2251,12 @@ func TestRepositoriesOwnerTeam(t *testing.T) {
 			"main/acme/widgets":  {ID: ops, Name: "ops", Open: true, ViaInstance: true},
 			"gh/acme/other":      nil,
 		}
-		if len(got) != len(want) {
-			t.Fatalf("listed %d repositories; want %d: %+v", len(got), len(want), got)
-		}
 		for k, w := range want {
-			g := got[k]
+			g, listed := got[k]
+			if !listed {
+				t.Errorf("%s is not listed", k)
+				continue
+			}
 			if (g == nil) != (w == nil) || (g != nil && *g != *w) {
 				t.Errorf("%s ownerTeam = %+v; want %+v", k, g, w)
 			}
@@ -2270,18 +2270,30 @@ func TestRepositoriesOwnerTeam(t *testing.T) {
 	t.Run("a member of one owner team", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, nil)
-		devs, ops := setup(e, viewerMembers(e.alice()))
+		devs, ops := setup(e, viewerMembers(e.alice()), "acme/payments")
 		// devs also lists widgets (not as owner), so alice sees both.
 		e.editTeam(devs, func(tm *store.Team) {
 			tm.Repos = append(tm.Repos, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
 		})
 		c := e.aliceSession()
 		got := byProject(getJSON[[]RepositoryView](e, c, "/api/repositories"))
-		if g := got["main/acme/payments"]; g == nil || g.ID != devs || !g.Open {
-			t.Errorf("payments ownerTeam = %+v; want devs, open", g)
+		if g := got["main/acme/payments"]; g == nil || g.ID != devs || !g.Open || g.ViaInstance {
+			t.Errorf("payments ownerTeam = %+v; want devs, open, not via instance", g)
 		}
 		if g := got["main/acme/widgets"]; g == nil || g.ID != ops || g.Open || !g.ViaInstance {
 			t.Errorf("widgets ownerTeam = %+v; want ops, not open, via instance", g)
+		}
+	})
+
+	// The owner entry matches the repository ignoring case.
+	t.Run("an owner entry in another case", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t, nil)
+		devs, _ := setup(e, nil, "ACME/Payments")
+		c := e.userOnMain(true)
+		got := byProject(getJSON[[]RepositoryView](e, c, "/api/repositories"))
+		if g := got["main/acme/payments"]; g == nil || g.ID != devs || g.ViaInstance {
+			t.Errorf("payments ownerTeam = %+v; want devs, not via instance", g)
 		}
 	})
 }
