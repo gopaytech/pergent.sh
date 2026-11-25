@@ -1,5 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 
 import {
@@ -31,6 +31,7 @@ import { parseQuota, quotaProblem, quotaText } from "../quota";
 import RuleSetPicker from "../RuleSetPicker";
 import { blockingHelp, blockingLabel, failureHelp, failureLabel, notUsedNote } from "../statusSettings";
 import { ErrorBox, Loading, Switch, bytesText } from "../ui";
+import { useUnsavedGuard } from "../unsaved";
 import RepoModelChain from "./RepoModelChain";
 
 // SettingsTab edits a repository's settings (maintainers and admins only;
@@ -54,6 +55,16 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
     queryFn: () => api.get<InputsView>(paths.apiRepoInputs(repo.instance, repo.project)),
   });
   const [note, setNote] = useState("");
+  // The form's draft differs from what is saved: leaving asks first, and a
+  // new answer from the server (a refetch, another tab's save) waits until
+  // the draft is saved or dropped instead of wiping it.
+  const [dirty, setDirty] = useState(false);
+  useUnsavedGuard(dirty);
+  const settingsKey = JSON.stringify(view.settings);
+  const [formKey, setFormKey] = useState(settingsKey);
+  useEffect(() => {
+    if (!dirty) setFormKey(settingsKey);
+  }, [settingsKey, dirty]);
   // Linked repositories are an admin's, on a GitHub repository the dashboard
   // sets up: only then is the list of repositories to link asked for.
   const canSetLinks = view.role === "admin";
@@ -77,6 +88,9 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
 
   const done = (detail: RepositoryDetailView, message: string) => {
     client.setQueryData(queryKey, detail);
+    // Saved: the form starts again from the answer.
+    setDirty(false);
+    setFormKey(JSON.stringify(detail.settings));
     client.invalidateQueries({ queryKey: ["repositories"] });
     // The server dropped its kept read of the repository's skills.
     client.invalidateQueries({ queryKey: ["inputs", repo.instance, repo.project] });
@@ -103,8 +117,9 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
   return (
     <>
       <Form
-        // A new answer from the server starts the form again from it.
-        key={JSON.stringify(view.settings)}
+        // A new answer from the server starts the form again from it, once
+        // nothing is left unsaved (see formKey).
+        key={formKey}
         settings={view.settings}
         library={library.data}
         ruleLibrary={ruleLibrary.isSuccess ? ruleLibrary.data : null}
@@ -143,6 +158,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         }
         onSearch={setSearch}
         busy={busy}
+        onDirty={setDirty}
         onSave={(body) => save.mutate(body)}
         onReset={() => {
           // Only an admin's reset covers the re-run caps.
@@ -202,7 +218,7 @@ function RemoveRepository({ instance, project }: { instance: string; project: st
       </div>
       {remove.isError && <ErrorBox error={remove.error} />}
       <div className="actions-row">
-        <button type="button" className="btn" disabled={remove.isPending} onClick={ask}>
+        <button type="button" className="btn danger" disabled={remove.isPending} onClick={ask}>
           Remove repository
         </button>
       </div>
@@ -406,6 +422,7 @@ function Form({
   linkable,
   onSearch,
   busy,
+  onDirty,
   onSave,
   onReset,
 }: {
@@ -433,6 +450,8 @@ function Form({
   linkable: LinkableState;
   onSearch: (text: string) => void;
   busy: boolean;
+  // onDirty hears whether the draft differs from what is saved.
+  onDirty: (dirty: boolean) => void;
   onSave: (body: SettingsUpdate) => void;
   onReset: () => void;
 }) {
@@ -478,7 +497,22 @@ function Form({
   const [newAuthor, setNewAuthor] = useState("");
   const [d, setD] = useState<Draft>(initial);
   const [problem, setProblem] = useState("");
-  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((old) => ({ ...old, [k]: v }));
+  // A change clears the last refusal: it was about the draft before it.
+  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => {
+    setProblem("");
+    setD((old) => ({ ...old, [k]: v }));
+  };
+  const dirty = !locked && JSON.stringify(d) !== JSON.stringify(initial);
+  useEffect(() => onDirty(dirty), [dirty, onDirty]);
+  // refuse says why the draft can't be saved, and takes the person to the
+  // field it is about: the save bar is far from most of them.
+  const refuse = (text: string, field?: string) => {
+    setProblem(text);
+    if (!field) return;
+    const el = document.querySelector<HTMLElement>(`[aria-label="${field}"]`);
+    el?.scrollIntoView?.({ block: "center" });
+    el?.focus();
+  };
   // Skills the repository names that the library no longer has: shown,
   // but never sent back (the API would refuse them).
   const gone = skillsNow.filter((s) => !library.includes(s));
@@ -525,7 +559,7 @@ function Form({
     if (canSetQuota && settings.monthlyTokenQuota && d.monthlyTokenQuota.trim() !== initial.monthlyTokenQuota) {
       const quota = parseQuota(d.monthlyTokenQuota);
       if (quota === undefined) {
-        setProblem(quotaProblem);
+        refuse(quotaProblem, "Monthly token quota");
         return;
       }
       if (quota !== settings.monthlyTokenQuota.value) body.monthlyTokenQuota = quota;
@@ -558,7 +592,7 @@ function Form({
       // Choosing names the list, even when it holds what the default list does.
       const kept = library.filter((s) => d.skills.includes(s));
       if (kept.length === 0) {
-        setProblem("Keep at least one library skill on.");
+        refuse("Keep at least one library skill on.");
         return;
       }
       body.skills = kept;
@@ -572,7 +606,7 @@ function Form({
       // The order matters: the first entry that matches a file wins.
       const kept = ruleLibrary === null ? d.ruleSets : d.ruleSets.filter((n) => ruleLibrary.some((x) => x.name === n));
       if (kept.length === 0) {
-        setProblem("Choose at least one rule set, or use the default rule sets.");
+        refuse("Choose at least one rule set, or use the default rule sets.");
         return;
       }
       body.ruleSets = kept;
@@ -585,7 +619,7 @@ function Form({
     if (d.jobTimeoutSeconds.trim() !== initial.jobTimeoutSeconds) {
       const t = d.jobTimeoutSeconds.trim();
       if (t !== "" && (!/^\d+$/.test(t) || Number(t) < 60 || Number(t) > 7200)) {
-        setProblem("The timeout is a whole number of seconds, from 60 to 7200.");
+        refuse("The timeout is a whole number of seconds, from 60 to 7200.", "Timeout (seconds)");
         return;
       }
       body.jobTimeoutSeconds = t === "" ? null : Number(t);
@@ -593,7 +627,7 @@ function Form({
     if (d.maxTurns.trim() !== initial.maxTurns) {
       const t = d.maxTurns.trim();
       if (t !== "" && (!/^\d+$/.test(t) || Number(t) < 5 || Number(t) > 200)) {
-        setProblem(stepsProblem);
+        refuse(stepsProblem, "Max steps");
         return;
       }
       body.maxTurns = t === "" ? null : Number(t);
@@ -608,14 +642,14 @@ function Form({
         if (d[key].trim() === initial[key]) continue;
         const v = capBody(d[key]);
         if (v === undefined) {
-          setProblem(capProblem);
+          refuse(capProblem, key === "rerunLimitPerMR" ? "Re-run cap per MR/PR (per day)" : "Re-run cap per repository (per day)");
           return;
         }
         body[key] = v;
       }
     }
     if (Object.keys(body).length === 0) {
-      setProblem("Nothing changed.");
+      refuse("Nothing changed.");
       return;
     }
     setProblem("");
@@ -1146,18 +1180,44 @@ function Form({
           <div className="pad meta">Only admins of this repository change its re-run caps.</div>
         )}
         {!locked && (
-          <div className="foot">
-            {problem && <span className="meta problem">{problem}</span>}
-            <button type="button" className="btn" disabled={busy} onClick={onReset}>
+          <div className="foot start">
+            <button type="button" className="btn danger" disabled={busy} onClick={onReset}>
               Reset to defaults
             </button>
-            <button type="button" className="btn primary" disabled={busy} onClick={submit}>
-              Save
-            </button>
+            {!dirty && !problem && <span className="meta">All changes are saved.</span>}
           </div>
         )}
         {locked && <div className="foot meta">This repository is listed in pergent.sh's config; change it there.</div>}
       </section>
+      {/* Save sits in a bar that stays at the bottom of the window while the
+          draft differs from what is saved, so it is never 4000px away. It
+          covers the cards above; the model chain, Reviewers and Teams below
+          save on their own. */}
+      {!locked && (dirty || problem !== "") && (
+        <div className="save-bar" role="region" aria-label="Unsaved changes">
+          {problem ? (
+            <span className="problem grow" role="alert">
+              {problem}
+            </span>
+          ) : (
+            <span className="grow">You have unsaved changes to the settings above.</span>
+          )}
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => {
+              setD(initial);
+              setProblem("");
+            }}
+          >
+            Discard
+          </button>
+          <button type="button" className="btn primary" disabled={busy} onClick={submit}>
+            Save
+          </button>
+        </div>
+      )}
     </>
   );
 }

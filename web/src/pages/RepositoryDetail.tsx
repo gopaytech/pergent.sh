@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
 import { api, isStatus, paths, safeHref, type InputsView, type MultiReviewView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
@@ -50,25 +51,35 @@ export default function RepositoryDetail() {
         <Link to="/repos">Repositories</Link> / {repo.project}
       </div>
       <h1>{repo.project}</h1>
+      {/* One line of facts, so the tabs start near the top. */}
       <div className="sub spaced">
-        {platformName(repo.platform)} · {repo.instance} ·{" "}
-        {repo.source === "config" ? "managed by config" : repo.paused ? "paused in the dashboard" : "switched on in the dashboard"}
+        {(
+          [
+            ["platform", platformName(repo.platform)],
+            ["instance", repo.instance],
+            ["state", repo.source === "config" ? "managed by config" : repo.paused ? "paused in the dashboard" : "switched on in the dashboard"],
+            [
+              "owner",
+              view.ownerTeam ? (
+                <>
+                  Owner team:{" "}
+                  {view.ownerTeam.open ? <Link to={paths.team(view.ownerTeam.id)}>{view.ownerTeam.name}</Link> : view.ownerTeam.name}
+                </>
+              ) : null,
+            ],
+            ["multi", multiReviewText(view.multiReview)],
+            ["gate", view.settings.blockingStatus.value === "neutral" ? "Merge gate: off (blocking status is neutral)" : null],
+          ] as [string, ReactNode][]
+        )
+          .filter(([, fact]) => fact !== null)
+          .map(([key, fact], i) => (
+            <span key={key}>
+              {i > 0 && " · "}
+              <span>{fact}</span>
+            </span>
+          ))}
       </div>
-      {view.ownerTeam && (
-        <div className="sub spaced">
-          Owner team: {view.ownerTeam.open ? <Link to={paths.team(view.ownerTeam.id)}>{view.ownerTeam.name}</Link> : view.ownerTeam.name}
-        </div>
-      )}
-      <div className="sub spaced">{multiReviewText(view.multiReview)}</div>
-      {view.settings.blockingStatus.value === "neutral" && <div className="sub spaced">Merge gate: off (blocking status is neutral)</div>}
-      {repo.paused && (
-        <div className="alert" role="note" aria-label="Paused">
-          <span className="prose">
-            <strong>Paused:</strong> pergent doesn't review this repository, and its settings are kept. An admin switches it on again
-            under Repositories.
-          </span>
-        </div>
-      )}
+      {repo.paused && <Paused instance={repo.instance} project={repo.project} admin={view.role === "admin"} queryKey={queryKey} />}
       {view.role === "admin" && view.quota && (
         <div className="quota" role="group" aria-label="Token usage this month">
           <QuotaLine label="This repository" ariaLabel="Repository token quota" use={view.quota.repository} />
@@ -103,7 +114,7 @@ export default function RepositoryDetail() {
         {/* A viewer has no Settings tab, where the model chain is: it is
             shown here, with what else a review would get. */}
         {tab === "inputs" && view.role === "viewer" && <RepoModelChain instance={repo.instance} project={repo.project} />}
-        {tab === "readiness" && <Readiness instance={repo.instance} project={repo.project} />}
+        {tab === "readiness" && <Readiness instance={repo.instance} project={repo.project} paused={repo.paused} />}
         {tab === "setup" && (
           <section className="card" aria-label="Setup checks">
             <h2>Setup checks</h2>
@@ -111,6 +122,34 @@ export default function RepositoryDetail() {
           </section>
         )}
       </div>
+    </div>
+  );
+}
+
+// Paused says the repository is paused; an admin switches it on from here,
+// as the switch on Repositories does.
+function Paused({ instance, project, admin, queryKey }: { instance: string; project: string; admin: boolean; queryKey: unknown[] }) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const resume = useMutation({
+    mutationFn: () => write<RepositoryDetailView>("PUT", paths.apiAdminRepo(instance, project), { enabled: true }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey });
+      client.invalidateQueries({ queryKey: ["repositories"] });
+    },
+  });
+  return (
+    <div className="alert" role="note" aria-label="Paused">
+      <span className="prose grow">
+        <strong>Paused:</strong> pergent doesn't review this repository, and its settings are kept.
+        {!admin && " An admin can switch it on again."}
+      </span>
+      {admin && (
+        <button type="button" className="btn small" disabled={resume.isPending} onClick={() => resume.mutate()}>
+          Switch on
+        </button>
+      )}
+      {resume.isError && <ErrorBox error={resume.error} />}
     </div>
   );
 }

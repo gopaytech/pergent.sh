@@ -6,6 +6,7 @@ import { api, isStatus, paths, type RuleSetDetail, type RuleSetWritten } from ".
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, NotFound, Pill, bytesText } from "../ui";
+import { useUnsavedGuard } from "../unsaved";
 
 // maxRuleSetBytes is the most a rule set may be (pergent's rule.MaxFileBytes,
 // 64 KB): the counter warns and Save waits; the server checks again.
@@ -47,10 +48,12 @@ export function NewRuleSet() {
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [content, setContent] = useState(example);
+  const allow = useUnsavedGuard(name !== "" || content !== example);
   const create = useMutation({
     mutationFn: () => write<RuleSetWritten>("POST", "/api/admin/rule-sets", { name: name.trim(), content }),
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ["rule-sets"] });
+      allow();
       navigate(paths.ruleSet(name.trim()));
     },
   });
@@ -118,6 +121,8 @@ function RuleSetPage({ set }: { set: RuleSetDetail }) {
   const [base, setBase] = useState({ version: set.version, content: set.content });
   const [draft, setDraft] = useState(set.content);
   const [saved, setSaved] = useState<RuleSetWritten | null>(null);
+  const dirty = draft !== base.content;
+  useUnsavedGuard(dirty);
   const config = set.source === "config";
   const editable = me.admin && !config;
   const save = useMutation({
@@ -164,6 +169,7 @@ function RuleSetPage({ set }: { set: RuleSetDetail }) {
               Save
             </button>
             <SizeCounter text={draft} />
+            {dirty && <span className="meta">Unsaved changes</span>}
           </div>
           {saved && (
             <div className="note" role="status">

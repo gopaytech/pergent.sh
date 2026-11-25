@@ -88,7 +88,13 @@ describe("ReviewersCard", () => {
     const fake = fakeApi({ ...routes(four), [`PUT ${reviewersPath}`]: { body: reviewersWith([[entrySonnet], [entryConfig, entryOpus]], [entryOpus]) } });
     renderApp("/repos/main/acme/payments?tab=settings");
     const box = await card();
+    // It saves at once, so it asks first; told no, nothing is sent.
+    const ask = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
     await userEvent.click(await within(box).findByRole("button", { name: "Remove reviewer 2" }));
+    expect(ask).toHaveBeenLastCalledWith("Remove reviewer 2? It saves now.");
+    expect(fake.find("PUT", reviewersPath)).toHaveLength(0);
+    await userEvent.click(within(box).getByRole("button", { name: "Remove reviewer 2" }));
+    ask.mockRestore();
     expect(fake.find("PUT", reviewersPath)[0].body).toEqual({
       reviewers: [[ref(entrySonnet)], [ref(entryConfig), ref(entryOpus)]],
       judge: [ref(entryOpus)],
@@ -101,7 +107,11 @@ describe("ReviewersCard", () => {
     const fake = fakeApi({ ...routes(two), [`PUT ${reviewersPath}`]: { body: reviewersNone } });
     renderApp("/repos/main/acme/payments?tab=settings");
     const box = await card();
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
     await userEvent.click(await within(box).findByRole("button", { name: "Remove reviewer 2" }));
+    // The last extra reviewer: the question says multi review turns off.
+    expect(ask).toHaveBeenCalledWith("Remove reviewer 2? It saves now. Multi review turns off, and the judge is no longer used.");
+    ask.mockRestore();
     expect(fake.find("PUT", reviewersPath)[0].body).toEqual({ reviewers: [], judge: [] });
     expect(await within(box).findByText("Saved.")).toBeInTheDocument();
     expect(within(box).queryByRole("group", { name: "Judge" })).not.toBeInTheDocument();

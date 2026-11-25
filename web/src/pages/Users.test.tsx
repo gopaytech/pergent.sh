@@ -179,7 +179,13 @@ describe("Users", () => {
     renderApp("/admin/users");
     const select = await within(await findRow("dev-user@example.com")).findByLabelText("Role of dev-user@example.com");
     expect(select).toHaveValue("user");
+    // It saves at once, so it asks first.
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
     await userEvent.selectOptions(select, "admin");
+    expect(ask).toHaveBeenCalledWith(
+      "Make dev-user@example.com an admin? They can change every setting, the models and their keys.",
+    );
+    ask.mockRestore();
     const [put] = fake.find("PUT", "/api/admin/users/5/role");
     expect(put.body).toEqual({ role: "admin" });
     expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
@@ -210,7 +216,7 @@ describe("Users", () => {
       "DELETE /api/users/7": { status: 204 },
     });
     renderApp("/admin/users");
-    await userEvent.click(within(await findRow("newcomer@example.com")).getByRole("button", { name: "Remove" }));
+    await userEvent.click(within(await findRow("newcomer@example.com")).getByRole("button", { name: /^Remove / }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("newcomer@example.com"));
     const [del] = fake.find("DELETE", "/api/users/7");
     expect(del.headers.get("X-CSRF-Token")).toBe("csrf-123");
@@ -222,20 +228,37 @@ describe("Users", () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
     const fake = fakeApi({ "GET /api/me": { body: operator }, "GET /api/users": { body: users } });
     renderApp("/admin/users");
-    await userEvent.click(within(await findRow("newcomer@example.com")).getByRole("button", { name: "Remove" }));
+    await userEvent.click(within(await findRow("newcomer@example.com")).getByRole("button", { name: /^Remove / }));
     expect(fake.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
   });
 
-  it("shows why an account can't be removed", async () => {
-    vi.stubGlobal("confirm", vi.fn(() => true));
+  it("offers no Remove on your own account, and says why", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, "GET /api/users": { body: users } });
+    renderApp("/admin/users");
+    const own = await findRow("admin");
+    expect(within(own).queryByRole("button", { name: /^Remove/ })).not.toBeInTheDocument();
+    expect(within(own).getByTitle("You can't remove your own account.")).toHaveTextContent("you");
+  });
+
+  it("offers no Remove on the last local admin, and says why", async () => {
     fakeApi({
-      "GET /api/me": { body: operator },
+      "GET /api/me": { body: { ...operator, kind: "sso", username: "sso-admin", email: "sso-admin@example.com" } },
       "GET /api/users": { body: users },
-      "DELETE /api/users/1": { status: 409, body: { error: "the last local admin can't be removed" } },
     });
     renderApp("/admin/users");
-    await userEvent.click(within(await findRow("admin")).getByRole("button", { name: "Remove" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("the last local admin can't be removed");
+    const last = await findRow("admin");
+    expect(within(last).queryByRole("button", { name: /^Remove/ })).not.toBeInTheDocument();
+    expect(within(last).getByTitle("The last local admin can't be removed.")).toHaveTextContent("last local admin");
+  });
+
+  it("asks before a role change, and changes nothing when told no", async () => {
+    const fake = fakeApi({ "GET /api/me": { body: operator }, "GET /api/users": { body: users } });
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderApp("/admin/users");
+    await userEvent.selectOptions(await within(await findRow("dev-user@example.com")).findByLabelText("Role of dev-user@example.com"), "admin");
+    expect(ask).toHaveBeenCalled();
+    ask.mockRestore();
+    expect(fake.find("PUT", "/api/admin/users/5/role")).toHaveLength(0);
   });
 
   it("lets an admin add a local admin and shows the generated password once", async () => {

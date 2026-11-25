@@ -59,7 +59,9 @@ const itemTitle: Record<string, string> = {
 // Readiness is a repository's readiness scan: what the last scan found, with
 // why it matters and the fix, and Scan now for maintainers and admins. Every
 // string in it comes from a scan and is shown as text.
-export default function Readiness({ instance, project }: { instance: string; project: string }) {
+// paused: a paused repository is not scanned, and the page says so instead
+// of offering a scan it can't run.
+export default function Readiness({ instance, project, paused = false }: { instance: string; project: string; paused?: boolean }) {
   const client = useQueryClient();
   const write = useWrite();
   const key = ["readiness", instance, project];
@@ -134,7 +136,15 @@ export default function Readiness({ instance, project }: { instance: string; pro
       </section>
       {apply.isError && <ErrorBox error={apply.error} />}
       {v.checklist === null ? (
-        <div className="card empty">{scanning ? "The first scan is running." : "Scan this repository to see what it needs."}</div>
+        <div className="card empty">
+          {scanning
+            ? "The first scan is running."
+            : v.canScan
+              ? "Scan this repository to see what it needs."
+              : paused
+                ? "This repository is paused, so it is not scanned. Switch it on to scan it."
+                : "Not scanned yet. A maintainer or an admin of this repository can scan it."}
+        </div>
       ) : (
         <>
           <Checklist

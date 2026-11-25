@@ -98,7 +98,7 @@ function SkillRow({ skill, admin }: { skill: LibrarySkill; admin: boolean }) {
             <button type="button" className="btn small" onClick={() => setCopying(!copying)}>
               Copy
             </button>
-            <button type="button" className="btn small" disabled={remove.isPending} onClick={confirmDelete}>
+            <button type="button" className="btn small danger" disabled={remove.isPending} onClick={confirmDelete}>
               Delete
             </button>
           </span>

@@ -111,9 +111,24 @@ function Row({ repo, admin, removing }: { repo: RepositoryView; admin: boolean; 
       )}
       <td className="num">{repo.last7.reviews}</td>
       <td className="num">{repo.last7.approved}</td>
-      <td className="num">{repo.last7.failed}</td>
+      <td className="num">
+        {repo.last7.failed > 0 ? (
+          <Link to={`/reviews?project=${encodeURIComponent(repo.project)}&outcome=failed&days=7`} aria-label={`${repo.last7.failed} failed reviews of ${repo.project}`}>
+            {repo.last7.failed}
+          </Link>
+        ) : (
+          repo.last7.failed
+        )}
+      </td>
       <td>
-        <Health health={repo.health} />
+        {repo.health === "attention" ? (
+          // The problem is on the repository's Setup checks tab.
+          <Link to={`${paths.repo(repo.instance, repo.project)}?tab=setup`} aria-label={`Setup checks of ${repo.project}`}>
+            <Health health={repo.health} />
+          </Link>
+        ) : (
+          <Health health={repo.health} />
+        )}
       </td>
     </tr>
   );

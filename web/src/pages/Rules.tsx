@@ -88,7 +88,7 @@ function RuleSetRow({ set, admin }: { set: RuleSet; admin: boolean }) {
             <Link to={paths.ruleSet(set.name)} className="btn small">
               Edit
             </Link>
-            <button type="button" className="btn small" disabled={remove.isPending} onClick={confirmDelete}>
+            <button type="button" className="btn small danger" disabled={remove.isPending} onClick={confirmDelete}>
               Delete
             </button>
           </span>

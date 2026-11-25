@@ -1,4 +1,4 @@
-import { act, screen, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -141,7 +141,11 @@ describe("SkillEditor: one skill", () => {
     const { client, go } = renderApp("/skills/view/code-review");
     await userEvent.type(await screen.findByLabelText("Skill text"), "my draft");
     client.setQueryData(["skill", "style-guide"], other);
-    act(() => go("/skills/view/style-guide"));
+    // The draft is not saved: leaving asks first.
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await act(async () => go("/skills/view/style-guide"));
+    await waitFor(() => expect(ask).toHaveBeenCalledWith("You have unsaved changes. Leave and lose them?"));
+    ask.mockRestore();
     expect(await screen.findByRole("heading", { name: /style-guide/ })).toBeInTheDocument();
     const text = screen.getByLabelText("Skill text");
     expect(text).toHaveValue("Be kind.\n");

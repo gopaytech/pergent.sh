@@ -42,26 +42,34 @@ export default function Overview() {
       </div>
       {data.isPending && <Loading />}
       {data.isError && <ErrorBox error={data.error} />}
-      {data.isSuccess && <Body view={data.data} />}
+      {data.isSuccess && <Body view={data.data} days={days} />}
     </>
   );
 }
 
-function Body({ view }: { view: OverviewView }) {
+function Body({ view, days }: { view: OverviewView; days: number }) {
   const { stats } = view;
   const pct = stats.reviews > 0 ? Math.round((stats.approved / stats.reviews) * 100) : 0;
+  // Each number opens the reviews behind it, over the same days.
+  const reviews = (outcome?: string) => `/reviews?${outcome ? `outcome=${outcome}&` : ""}days=${days}`;
   return (
     <>
       {view.setup && <Checklist setup={view.setup} />}
       <section className="stats" aria-label="Numbers">
-        <Stat k="Reviews" v={stats.reviews} d="not counting superseded or skipped runs" />
-        <Stat k="Approved by pergent" v={stats.approved} d={`${pct}% of reviews`} />
-        <Stat k="Blocking findings" v={stats.blocking} d="reviews with blocking issues" />
-        <Stat k="Failed reviews" v={stats.failed} d={stats.failed > 0 ? "see the reviews for why" : "none failed"} bad={stats.failed > 0} />
+        <Stat k="Reviews" v={stats.reviews} d="not counting superseded or skipped runs" to={reviews()} />
+        <Stat k="Approved by pergent" v={stats.approved} d={`${pct}% of reviews`} to={reviews("approved")} />
+        <Stat k="Blocking findings" v={stats.blocking} d="reviews with blocking issues" to={reviews("blocking")} />
+        <Stat
+          k="Failed reviews"
+          v={stats.failed}
+          d={stats.failed > 0 ? "open them to see why" : "none failed"}
+          bad={stats.failed > 0}
+          to={stats.failed > 0 ? reviews("failed") : undefined}
+        />
       </section>
       <section className="card" aria-label="Recent reviews">
         <h2>
-          Recent reviews <Link to="/reviews">View all →</Link>
+          Recent reviews <Link to={reviews()}>View all →</Link>
         </h2>
         <ReviewRows items={view.recent} empty="No reviews yet." />
       </section>
@@ -97,12 +105,20 @@ function Checklist({ setup }: { setup: SetupView }) {
   );
 }
 
-function Stat({ k, v, d, bad }: { k: string; v: number; d: string; bad?: boolean }) {
-  return (
-    <div className="stat">
+// Stat is one number; with to, the whole card opens the reviews behind it.
+function Stat({ k, v, d, bad, to }: { k: string; v: number; d: string; bad?: boolean; to?: string }) {
+  const body = (
+    <>
       <div className="k">{k}</div>
       <div className="v">{v}</div>
       <div className={bad ? "d down" : "d meta"}>{d}</div>
-    </div>
+    </>
+  );
+  return to ? (
+    <Link className="stat" to={to} aria-label={`${k}: ${v}. Open these reviews`}>
+      {body}
+    </Link>
+  ) : (
+    <div className="stat">{body}</div>
   );
 }

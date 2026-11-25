@@ -894,7 +894,7 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
               </button>
             )}
             {!m.default && (
-              <button type="button" className="btn small" aria-label={`Remove ${m.name}`} disabled={busy} onClick={confirmRemove}>
+              <button type="button" className="btn small danger" aria-label={`Remove ${m.name}`} disabled={busy} onClick={confirmRemove}>
                 Remove
               </button>
             )}

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
-import { MemoryRouter, useLocation, useNavigate } from "react-router";
+import { RouterProvider, createMemoryRouter, useLocation, useNavigate } from "react-router";
 
 import App from "../App";
 
@@ -25,13 +25,25 @@ export function renderApp(path: string) {
     defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } },
   });
   const nav = { go: (to: string) => void to };
+  // A data router as main.tsx has, so useBlocker works in tests too.
+  const router = createMemoryRouter(
+    [
+      {
+        path: "*",
+        element: (
+          <>
+            <App />
+            <Location />
+            <Go into={nav} />
+          </>
+        ),
+      },
+    ],
+    { initialEntries: [path] },
+  );
   const result = render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[path]}>
-        <App />
-        <Location />
-        <Go into={nav} />
-      </MemoryRouter>
+      <RouterProvider router={router} />
     </QueryClientProvider>,
   );
   return { ...result, client, go: (to: string) => nav.go(to) };

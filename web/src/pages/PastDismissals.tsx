@@ -63,7 +63,17 @@ export default function PastDismissals({
                 {r.by} · {ago(r.at)} · <Link to={paths.review(instance, project, r.number)}>{changeRef(platform, project, r.number)}</Link>
               </div>
             </div>
-            <button type="button" className="btn small" disabled={stop.isPending} onClick={() => stop.mutate(r.fingerprint)}>
+            <button
+              type="button"
+              className="btn small"
+              aria-label={`Stop using the dismissals of ${r.title}`}
+              disabled={stop.isPending}
+              onClick={() => {
+                if (window.confirm(`Stop using the dismissals of "${r.title}"? Later reviews are no longer told about them. This can't be undone here.`)) {
+                  stop.mutate(r.fingerprint);
+                }
+              }}
+            >
               Stop using
             </button>
           </div>
