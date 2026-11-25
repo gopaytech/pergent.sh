@@ -1855,3 +1855,22 @@ select:not([multiple]) {
   box-shadow: 0 6px 20px rgba(29, 29, 38, 0.14);
   font-size: 13px;
 }
+
+/* On a phone the review page is one column: the findings come before the
+   run history and the run's facts. */
+@media (max-width: 900px) {
+  .layout > div:last-child {
+    order: -1;
+  }
+}
+
+/* A number card that opens the reviews behind it. */
+a.stat {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+a.stat:hover {
+  border-color: var(--accent);
+}

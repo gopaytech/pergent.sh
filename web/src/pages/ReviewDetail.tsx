@@ -51,6 +51,17 @@ const triggers: Record<string, string> = {
   rerun: "re-run",
 };
 
+// codeLink is the address of a file's line at a commit on GitLab or GitHub,
+// read from the change's own address (".../-/merge_requests/12" or
+// ".../pull/12"); null when that address is not one of those.
+export function codeLink(changeURL: string, sha: string, file: string, line: number | null): string | null {
+  const m = /^(https?:\/\/.+?)(?:\/-\/merge_requests\/\d+|\/pull\/\d+)\/?$/.exec(changeURL);
+  if (!m || !sha || !file) return null;
+  const path = file.split("/").map(encodeURIComponent).join("/");
+  const blob = changeURL.includes("/-/merge_requests/") ? "/-/blob/" : "/blob/";
+  return `${m[1]}${blob}${sha}/${path}${line ? `#L${line}` : ""}`;
+}
+
 // splitChange reads "{project}/{number}" from the route's rest.
 function splitChange(rest: string): { project: string; number: number } | null {
   const i = rest.lastIndexOf("/");
@@ -112,7 +123,7 @@ function Review({ view }: { view: ReviewDetailView }) {
             <ExternalLink href={header.webURL}>open in {platform} ↗</ExternalLink>
           </div>
         </div>
-        {can.rerun && <RerunButtons header={header} />}
+        {can.rerun && <RerunButtons header={header} newest={runs[0]?.id} />}
       </div>
       <div className="layout">
         <div>
@@ -168,8 +179,12 @@ const rerunNote: Record<RerunStatus, string> = {
 
 // RerunButtons start the review again, whole or only its failed skills.
 // What the server answers (a cap, a closed change) is shown as text.
-function RerunButtons({ header }: { header: ReviewHeader }) {
+function RerunButtons({ header, newest }: { header: ReviewHeader; newest: string | undefined }) {
   const rerun = useReviewAction<{ failed: boolean }>(header, "rerun");
+  // "Re-run failed only" is offered when the newest run has a failed skill:
+  // with none, the server would answer that nothing failed.
+  const latest = useRun(newest ?? "");
+  const someFailed = latest.data?.skills.some((s) => s.verdict === "failed") ?? false;
   const note = rerun.isSuccess ? (rerunNote[rerun.data.status as RerunStatus] ?? "") : "";
   return (
     <div className="review-actions">
@@ -177,9 +192,11 @@ function RerunButtons({ header }: { header: ReviewHeader }) {
         <button type="button" className="btn primary" disabled={rerun.isPending} onClick={() => rerun.mutate({ failed: false })}>
           Re-run review
         </button>
-        <button type="button" className="btn" disabled={rerun.isPending} onClick={() => rerun.mutate({ failed: true })}>
-          Re-run failed only
-        </button>
+        {someFailed && (
+          <button type="button" className="btn" disabled={rerun.isPending} onClick={() => rerun.mutate({ failed: true })}>
+            Re-run failed only
+          </button>
+        )}
       </div>
       {note && (
         <div className="meta" role="status">
@@ -213,7 +230,7 @@ function RunItem({ run, selected }: { run: RunSummary; selected: boolean }) {
 }
 
 function useRun(id: string) {
-  return useQuery({ queryKey: ["run", id], queryFn: () => api.get<RunDetailView>(paths.apiRun(id)) });
+  return useQuery({ queryKey: ["run", id], queryFn: () => api.get<RunDetailView>(paths.apiRun(id)), enabled: id !== "" });
 }
 
 const statusTone: Record<string, Tone> = {
@@ -488,7 +505,8 @@ function MultiReview({ runId, review }: { runId: string; review: RunMultiReviewV
   }
   const judge = review.judge;
   return (
-    <section className="card" aria-label="Multi review">
+    // scroll: 7 columns don't fit a phone; they scroll instead of being cut.
+    <section className="card scroll" aria-label="Multi review">
       <h2>Multi review</h2>
       <table className="table" aria-label="Reviewers">
         <thead>
@@ -605,10 +623,12 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
     .sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
   // A skill that failed reported nothing: its findings are missing, not zero.
   const failed = view.skills.filter((s) => s.verdict === "failed").map((s) => s.name);
+  // Where a finding's line is on GitLab or GitHub, at the commit reviewed.
+  const link = (f: Located) => codeLink(allowed.header.webURL, view.run.head, f.file, f.line ?? null);
+  // Findings first: they are what the page is for. CI jobs and the multi
+  // review's reviewers come after them.
   return (
     <>
-      {(view.ciJobs !== null || view.ciDeadline !== null) && <CIJobs jobs={view.ciJobs ?? []} deadline={view.ciDeadline} />}
-      {view.multiReview && <MultiReview runId={id} review={view.multiReview} />}
       <section className="card" aria-label="Skills">
         <h2>Skills</h2>
         {view.skills.length === 0 && (
@@ -659,8 +679,17 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
                   </button>
                 </div>
               )}
+              {actions === null && (allowed.can.dismissBlocking || allowed.can.dismissSuggestion) && findings.length > 0 && (
+                <div className="pad meta">Findings are dismissed on the newest finished run. Open it in the history to dismiss one.</div>
+              )}
               {findings.map((f, i) => (
-                <Finding key={`${f.skill}/${f.id}/${i}`} f={f} blocking={f.severity !== "suggestion" || blockingFPs.has(f.fingerprint)} actions={actions} />
+                <Finding
+                  key={`${f.skill}/${f.id}/${i}`}
+                  f={f}
+                  href={link(f)}
+                  blocking={f.severity !== "suggestion" || blockingFPs.has(f.fingerprint)}
+                  actions={actions}
+                />
               ))}
               {view.skills
                 .filter((s) => s.dismissed.length > 0)
@@ -670,7 +699,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
                       Dismissed in {s.name} ({s.dismissed.length})
                     </h3>
                     {s.dismissed.map((f, i) => (
-                      <DismissedFinding key={`${f.id}/${i}`} f={{ ...f, skill: s.name }} actions={actions} />
+                      <DismissedFinding key={`${f.id}/${i}`} f={{ ...f, skill: s.name }} href={link({ ...f, skill: s.name })} actions={actions} />
                     ))}
                   </div>
                 ))}
@@ -681,18 +710,22 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
           {tab === "logs" && <RunLog logPath={paths.apiRunLog(id)} diagnosticsPath={paths.apiRunDiagnostics(id)} />}
         </div>
       </div>
+      {(view.ciJobs !== null || view.ciDeadline !== null) && <CIJobs jobs={view.ciJobs ?? []} deadline={view.ciDeadline} />}
+      {view.multiReview && <MultiReview runId={id} review={view.multiReview} />}
     </>
   );
 }
 
-function FindingBody({ f }: { f: Located }) {
+// FindingBody is a finding's text; href, when known, links its file and
+// line to the code at the commit reviewed.
+function FindingBody({ f, href }: { f: Located; href: string | null }) {
+  const where = `${f.file}${f.line ? `:${f.line}` : ""}`;
   return (
     <>
       <Pill tone={f.severity === "blocking" ? "bad" : "grey"}>{f.severity}</Pill> <span className="t">{f.title}</span>{" "}
       <span className="mono meta">{f.id}</span>
       <div className="loc">
-        {f.file}
-        {f.line ? `:${f.line}` : ""} · {f.skill}
+        {href ? <ExternalLink href={href}>{where}</ExternalLink> : where} · {f.skill}
       </div>
       {f.explanation && <p className="prose">{f.explanation}</p>}
       {f.suggestedFix && (
@@ -709,12 +742,12 @@ function FindingBody({ f }: { f: Located }) {
 // may dismiss one of its severity. blocking is the severity the server will
 // dismiss it at: that of the most severe report of its fingerprint. A finding
 // with no fingerprint can't be named, so it can't be dismissed.
-function Finding({ f, blocking, actions }: { f: Located; blocking: boolean; actions: RunActions | null }) {
+function Finding({ f, href, blocking, actions }: { f: Located; href: string | null; blocking: boolean; actions: RunActions | null }) {
   const may =
     actions !== null && f.fingerprint !== "" && (blocking ? actions.can.dismissBlocking : actions.can.dismissSuggestion);
   return (
     <div className="finding">
-      <FindingBody f={f} />
+      <FindingBody f={f} href={href} />
       {may && <DismissControl f={f} blocking={blocking} actions={actions} />}
     </div>
   );
@@ -778,11 +811,11 @@ function DismissControl({ f, blocking, actions }: { f: Located; blocking: boolea
 
 // DismissedFinding is a finding set aside: who did it and why, and Restore
 // when the session may. by and reason are text people wrote.
-function DismissedFinding({ f, actions }: { f: Located; actions: RunActions | null }) {
+function DismissedFinding({ f, href, actions }: { f: Located; href: string | null; actions: RunActions | null }) {
   const d = f.dismissed;
   return (
     <div className="finding">
-      <FindingBody f={f} />
+      <FindingBody f={f} href={href} />
       {d && (
         <div className="dismissal">
           <div className="meta">

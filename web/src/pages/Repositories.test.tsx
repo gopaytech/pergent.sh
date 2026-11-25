@@ -392,3 +392,17 @@ describe("Repositories", () => {
     }
   });
 });
+
+describe("Repositories: links from the numbers", () => {
+  it("links Needs attention to the Setup checks tab, and a failed count to those reviews", async () => {
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: [repoPayments, repoWidgets] } });
+    renderApp("/repos");
+    expect(await screen.findByRole("link", { name: "Setup checks of acme/payments" })).toHaveAttribute("href", "/repos/main/acme/payments?tab=setup");
+    expect(screen.getByRole("link", { name: "2 failed reviews of acme/payments" })).toHaveAttribute(
+      "href",
+      "/reviews?project=acme%2Fpayments&outcome=failed&days=7",
+    );
+    // No failure, no link.
+    expect(screen.queryByRole("link", { name: /failed reviews of acme\/widgets/ })).not.toBeInTheDocument();
+  });
+});

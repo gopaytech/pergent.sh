@@ -503,8 +503,22 @@ describe("ReviewDetail buttons", () => {
     await waitFor(() => expect(fake.find("GET", `/api/runs/${newest}`).length).toBeGreaterThanOrEqual(2));
   });
 
+  // A newest run with a failed skill: only then is "Re-run failed only" offered.
+  const failedRun = (): RunDetailView => {
+    const run = structuredClone(runDetail);
+    run.skills[0] = { ...run.skills[0], verdict: "failed" };
+    return run;
+  };
+
+  it("offers no failed-only re-run when no skill failed", async () => {
+    fakeApi(base(allCan));
+    renderAppAt();
+    expect(await screen.findByRole("button", { name: "Re-run review" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Re-run failed only" })).not.toBeInTheDocument();
+  });
+
   it("re-runs only the failed skills", async () => {
-    const fake = fakeApi({ ...base(allCan), ["POST " + rerunUrl]: { status: 202, body: { status: "queued" } } });
+    const fake = fakeApi({ ...base(allCan, failedRun()), ["POST " + rerunUrl]: { status: 202, body: { status: "queued" } } });
     renderAppAt();
     await userEvent.click(await screen.findByRole("button", { name: "Re-run failed only" }));
     expect(fake.find("POST", rerunUrl)[0].body).toEqual({ failed: true });
@@ -515,7 +529,7 @@ describe("ReviewDetail buttons", () => {
     ["nothing failed", "Nothing failed, so nothing was re-run."],
     ["whole review", "The whole review failed, so all of it is re-run."],
   ])("explains the answer %s", async (status, text) => {
-    fakeApi({ ...base(allCan), ["POST " + rerunUrl]: { status: 202, body: { status } } });
+    fakeApi({ ...base(allCan, failedRun()), ["POST " + rerunUrl]: { status: 202, body: { status } } });
     renderAppAt();
     await userEvent.click(await screen.findByRole("button", { name: "Re-run failed only" }));
     expect(await screen.findByText(text)).toBeInTheDocument();
@@ -1072,5 +1086,24 @@ describe("ReviewDetail: multi review", () => {
     expect(screen.queryByRole("region", { name: "Multi review" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Review panel" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Multi review off/)).not.toBeInTheDocument();
+  });
+});
+
+describe("ReviewDetail: findings first, linked to the code", () => {
+  it("links a finding's file and line to the commit reviewed", async () => {
+    renderAndWait();
+    const link = (await screen.findAllByRole("link", { name: "internal/refund/handler.go:88" }))[0];
+    expect(link).toHaveAttribute(
+      "href",
+      `https://gitlab.example.com/acme/payments/-/blob/${runDetail.run.head}/internal/refund/handler.go#L88`,
+    );
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  it("puts the findings before the CI jobs", async () => {
+    renderAndWait({ ...runDetail, ciJobs: [], ciDeadline: null });
+    const findings = await screen.findByRole("tab", { name: /^Findings/ });
+    const ci = screen.getByRole("region", { name: "CI jobs" });
+    expect(findings.compareDocumentPosition(ci) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
