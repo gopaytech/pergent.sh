@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -558,6 +559,35 @@ func TestAuditPages(t *testing.T) {
 	if empty.Code != http.StatusOK || body(empty) != `{"entries":[],"next":0}` {
 		t.Errorf("GET before the first = %d %s; want no entries, next 0", empty.Code, empty.Body)
 	}
+}
+
+// q narrows the log to the entries that hold it, and pages within them.
+func TestAuditSearch(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	c := e.userOnMain(true)
+	e.addAudit(store.AuditEntry{Actor: "carol", Action: "repository_on", Instance: "main", Project: "acme/widgets"})
+	e.exec(`INSERT INTO audit_log (at, actor, action, instance, project)
+		SELECT now(), 'dave', 'settings_reset', 'main', 'acme/payments' FROM generate_series(1, 120)`)
+	e.addAudit(store.AuditEntry{Actor: "carol", Action: "command_refused", Instance: "main", Project: "acme/widgets", Detail: "mr=12"})
+
+	got := decode[AuditPageView](t, e.get(c, "/api/audit?q="+url.QueryEscape(" Acme/Widgets ")), "GET q", http.StatusOK)
+	if len(got.Entries) != 2 || got.Entries[0].Action != "command_refused" || got.Entries[1].Action != "repository_on" || got.Next != 0 {
+		t.Fatalf("q=acme/widgets = %+v; want its 2 entries, newest first, and no next page", got)
+	}
+	got = decode[AuditPageView](t, e.get(c, "/api/audit?q="+url.QueryEscape("command refused")), "GET q words", http.StatusOK)
+	if len(got.Entries) != 1 || got.Entries[0].Action != "command_refused" {
+		t.Fatalf("q=command refused = %+v; want the action read as words", got)
+	}
+	first := decode[AuditPageView](t, e.get(c, "/api/audit?q=dave"), "GET q page", http.StatusOK)
+	if len(first.Entries) != 100 || first.Next == 0 {
+		t.Fatalf("q=dave: %d entries, next %d; want a full page and a next", len(first.Entries), first.Next)
+	}
+	rest := decode[AuditPageView](t, e.get(c, "/api/audit?q=dave&before="+strconv.FormatInt(first.Next, 10)), "GET q older", http.StatusOK)
+	if len(rest.Entries) != 20 || rest.Next != 0 || slices.ContainsFunc(rest.Entries, func(a AuditView) bool { return a.Actor != "dave" }) {
+		t.Fatalf("q=dave older: %d entries, next %d; want the other 20 of dave's", len(rest.Entries), rest.Next)
+	}
+	wantCode(t, e.get(c, "/api/audit?q="+strings.Repeat("x", 201)), "GET long q", http.StatusBadRequest)
 }
 
 // team_updated names the members added and removed and a role changed, by

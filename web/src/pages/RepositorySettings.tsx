@@ -25,6 +25,7 @@ import {
 import BuiltInRulePicker from "../BuiltInRulePicker";
 import CIJobsEditor, { tidyCIJobs } from "../CIJobsEditor";
 import CommentLayoutEditor from "../CommentLayoutEditor";
+import { FoldCard, countText, openFoldOf } from "../Fold";
 import LinkedReposEditor, { tidyLinks, type LinkableState } from "../LinkedReposEditor";
 import { useWrite } from "../layout/write";
 import { parseQuota, quotaProblem, quotaText } from "../quota";
@@ -178,7 +179,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
       {reset.isError && <ErrorBox error={reset.error} />}
       {/* The model chain is not a setting: it has its own routes, and the
           config does not set it, so it is there for every repository. */}
-      <RepoModelChain instance={repo.instance} project={repo.project} />
+      <RepoModelChain instance={repo.instance} project={repo.project} defaultOpen={false} />
       {/* Which teams cover a repository is an admin's to say, also for a
           repository the config sets up: it is not one of its settings. */}
       {view.role === "admin" && <RepoTeams instance={repo.instance} project={repo.project} />}
@@ -211,18 +212,19 @@ function RemoveRepository({ instance, project }: { instance: string; project: st
       remove.mutate();
   };
   return (
-    <section className="card pad stack" aria-label="Remove repository">
-      <h2>Remove repository</h2>
-      <div className="meta">
-        Its settings and team links are deleted, and its webhook and clone credentials are removed. This cannot be undone.
+    <FoldCard label="Remove repository" title="Remove repository" summary="delete it from pergent for good">
+      <div className="pad stack">
+        <div className="meta">
+          Its settings and team links are deleted, and its webhook and clone credentials are removed. This cannot be undone.
+        </div>
+        {remove.isError && <ErrorBox error={remove.error} />}
+        <div className="actions-row">
+          <button type="button" className="btn danger" disabled={remove.isPending} onClick={ask}>
+            Remove repository
+          </button>
+        </div>
       </div>
-      {remove.isError && <ErrorBox error={remove.error} />}
-      <div className="actions-row">
-        <button type="button" className="btn danger" disabled={remove.isPending} onClick={ask}>
-          Remove repository
-        </button>
-      </div>
-    </section>
+    </FoldCard>
   );
 }
 
@@ -235,10 +237,11 @@ function RepoTeams({ instance, project }: { instance: string; project: string })
   const [saved, setSaved] = useState(false);
   const teams = useQuery({ queryKey: key, queryFn: () => api.get<RepoTeamsView>(paths.apiRepoTeams(instance, project)) });
   return (
-    <section className="card" aria-label="Teams">
-      <h2>
-        <span>Teams</span>
-      </h2>
+    <FoldCard
+      label="Teams"
+      title="Teams"
+      summary={teams.isSuccess ? teamsSummary(teams.data) : undefined}
+    >
       {teams.isPending && <Loading />}
       {teams.isError && <ErrorBox error={teams.error} />}
       {teams.isSuccess &&
@@ -258,7 +261,7 @@ function RepoTeams({ instance, project }: { instance: string; project: string })
             setSaved={setSaved}
           />
         ))}
-    </section>
+    </FoldCard>
   );
 }
 
@@ -330,6 +333,31 @@ function RepoTeamsForm({
     </form>
   );
 }
+
+// The one-line summaries of the folded cards, read from the draft, so a
+// folded card still says what it holds, edits included.
+const reviewsSummary = (d: Draft) =>
+  `${d.approve ? "approves clean reviews" : "never approves"} · blocking issues: ${d.blockingStatus === "neutral" ? "neutral" : "failed"}`;
+
+const ciSummary = (c: CIJobs) => {
+  const n = c.jobs.filter((j) => j.name.trim() !== "").length;
+  return n === 0 ? "none chosen" : `${countText(n, "job")}${c.wait ? `, waits up to ${c.wait}` : ""}`;
+};
+
+const linksSummary = (d: Draft) =>
+  d.linkedReposEnabled ? countText(d.linkedRepos.length, "linked repository", "linked repositories") : "off";
+
+const jobSummary = (d: Draft) =>
+  [d.jobTimeoutSeconds.trim() && `timeout ${d.jobTimeoutSeconds.trim()}s`, d.maxTurns.trim() && `${d.maxTurns.trim()} steps`, d.jobMemory.trim() && `memory ${d.jobMemory.trim()}`]
+    .filter(Boolean)
+    .join(" · ");
+
+// teamsSummary names the teams that cover the repository, itself or its
+// whole instance.
+const teamsSummary = (v: RepoTeamsView) => {
+  const on = v.teams.filter((t) => t.direct || t.wholeInstance).map((t) => t.name);
+  return on.length === 0 ? "no team" : on.join(", ");
+};
 
 type Draft = {
   approve: boolean;
@@ -510,8 +538,14 @@ function Form({
     setProblem(text);
     if (!field) return;
     const el = document.querySelector<HTMLElement>(`[aria-label="${field}"]`);
-    el?.scrollIntoView?.({ block: "center" });
-    el?.focus();
+    const show = () => {
+      el?.scrollIntoView?.({ block: "center" });
+      el?.focus();
+    };
+    // A field in a folded card is hidden: open the card, then show the field
+    // once it is drawn.
+    if (openFoldOf(el)) setTimeout(show, 0);
+    else show();
   };
   // Skills the repository names that the library no longer has: shown,
   // but never sent back (the API would refuse them).
@@ -659,14 +693,19 @@ function Form({
   const managed = locked && <span className="badge cfg">managed by config</span>;
   return (
     <>
-      <section className="card" aria-label="Review settings">
+      <FoldCard
+        label="Review settings"
+        title={<>Reviews {managed}</>}
+        summary={reviewsSummary(d)}
+        defaultOpen
+      >
         {attention.map((m) => (
           <div className="alert" key={m}>
             <span aria-hidden="true">⚠️</span>
             <span className="prose">{m}</span>
           </div>
         ))}
-        <h2>Reviews {managed}</h2>
+        
         <Setting
           name="Approve clean reviews"
           overridden={settings.approve.overridden}
@@ -874,24 +913,28 @@ function Form({
             onChange={(v) => set("checkDeleted", v)}
           />
         </Setting>
-      </section>
+      </FoldCard>
 
-      <section className="card" aria-label="CI jobs">
-        <h2>
-          CI jobs <Badge overridden={settings.ciJobs.overridden} /> {managed}
-        </h2>
+      <FoldCard
+        label="CI jobs"
+        title={<>CI jobs <Badge overridden={settings.ciJobs.overridden} /> {managed}</>}
+        summary={ciSummary(d.ciJobs)}
+      >
+        
         <div className="pad meta">
           Choose the CI jobs a review waits for. A blocking job that has not passed holds approval back. A job read as log or report
           also gives the review its output.
         </div>
         <CIJobsEditor value={d.ciJobs} onChange={(v) => set("ciJobs", v)} names={ciNames} github={platform === "github"} disabled={disabled} />
-      </section>
+      </FoldCard>
 
       {canSetLinks && (
-        <section className="card" aria-label="Linked repositories">
-          <h2>
-            Linked repositories <Badge overridden={settings.linkedReposEnabled.overridden || settings.linkedRepos.overridden} /> {managed}
-          </h2>
+        <FoldCard
+        label="Linked repositories"
+        title={<>Linked repositories <Badge overridden={settings.linkedReposEnabled.overridden || settings.linkedRepos.overridden} /> {managed}</>}
+        summary={platform === "github" ? linksSummary(d) : "GitHub only"}
+      >
+          
           {platform === "github" ? (
             <LinkedReposEditor
               enabled={d.linkedReposEnabled}
@@ -906,13 +949,15 @@ function Form({
           ) : (
             <div className="pad meta">Linked repositories work on GitHub repositories only, for now.</div>
           )}
-        </section>
+        </FoldCard>
       )}
 
-      <section className="card" aria-label="Comment layout">
-        <h2>
-          Comment layout <Badge overridden={settings.commentLayout.overridden} /> {managed}
-        </h2>
+      <FoldCard
+        label="Comment layout"
+        title={<>Comment layout <Badge overridden={settings.commentLayout.overridden} /> {managed}</>}
+        summary={d.commentLayout === null ? "the default blocks" : countText(d.commentLayout.length, "block") + " shown"}
+      >
+        
         <div className="pad meta">
           The blocks of the review comment, in order. A block that is not shown is left out. Quiet reviews and the size limit
           can still cut what a block shows.
@@ -924,12 +969,14 @@ function Form({
           disabled={disabled}
           onChange={(v) => set("commentLayout", v)}
         />
-      </section>
+      </FoldCard>
 
-      <section className="card" aria-label="Skills used for this repository">
-        <h2>
-          Skills used for this repository <Badge overridden={settings.skills.overridden} /> {managed}
-        </h2>
+      <FoldCard
+        label="Skills used for this repository"
+        title={<>Skills used for this repository <Badge overridden={settings.skills.overridden} /> {managed}</>}
+        summary={d.skillsMode === "default" ? `the default skills (${defaultSkills.length})` : countText(d.skills.length, "skill") + " chosen"}
+      >
+        
         <div className="skill">
           <label className="grow">
             <input
@@ -983,12 +1030,14 @@ function Form({
             removes {gone.length === 1 ? "it" : "them"} from this repository.
           </div>
         )}
-      </section>
+      </FoldCard>
 
-      <section className="card" aria-label="Rule sets used for this repository">
-        <h2>
-          Rule sets used for this repository <Badge overridden={settings.ruleSets?.overridden ?? false} /> {managed}
-        </h2>
+      <FoldCard
+        label="Rule sets used for this repository"
+        title={<>Rule sets used for this repository <Badge overridden={settings.ruleSets?.overridden ?? false} /> {managed}</>}
+        summary={d.ruleSetsMode === "default" ? `the default rule sets (${defaultRuleSets.length})` : countText(d.ruleSets.length, "rule set") + " chosen"}
+      >
+        
         <div className="skill">
           <label className="grow">
             <input
@@ -1029,12 +1078,14 @@ function Form({
           After the repository's own .pergent/rules.yaml, in this order. The first entry that matches a file gives it its rule;
           a rule never says what is blocking.
         </div>
-      </section>
+      </FoldCard>
 
-      <section className="card" aria-label="Built-in rules">
-        <h2>
-          Built-in rules <Badge overridden={settings.builtInRules?.overridden ?? false} /> {managed}
-        </h2>
+      <FoldCard
+        label="Built-in rules"
+        title={<>Built-in rules <Badge overridden={settings.builtInRules?.overridden ?? false} /> {managed}</>}
+        summary={d.builtInRules.length === 0 ? "none enabled" : `${d.builtInRules.length} enabled: ${d.builtInRules.join(", ")}`}
+      >
+        
         <div className="pad meta">
           pergent's own path rules, after the repository's and the rule sets'. Each one adds its text to the runs on its files, so
           enable only the ones you need. None is enabled by default.
@@ -1049,10 +1100,14 @@ function Form({
         {Array.isArray(builtIns) && (
           <BuiltInRulePicker rules={builtIns} selected={d.builtInRules} disabled={disabled} onChange={(v) => set("builtInRules", v)} />
         )}
-      </section>
+      </FoldCard>
 
-      <section className="card" aria-label="Skills in the repository">
-        <h2>Skills in the repository {managed}</h2>
+      <FoldCard
+        label="Skills in the repository"
+        title={<>Skills in the repository {managed}</>}
+        summary={d.repoSkills.length === 0 ? ".pergent/skills only" : `.pergent/skills and ${countText(d.repoSkills.length, "skill")} turned on`}
+      >
+        
         <div className="skill">
           <span className="grow">
             <b>.pergent/skills</b>
@@ -1096,10 +1151,14 @@ function Form({
           A skill in a repository folder replaces a library skill of the same name. Only the SKILL.md text of a skill is used:
           its other files are ignored.
         </div>
-      </section>
+      </FoldCard>
 
-      <section className="card" aria-label="Review Job">
-        <h2>Review Job {managed}</h2>
+      <FoldCard
+        label="Review Job"
+        title={<>Review Job {managed}</>}
+        summary={jobSummary(d)}
+      >
+        
         <Setting
           name="Timeout"
           overridden={settings.jobTimeoutSeconds.overridden}
@@ -1188,7 +1247,7 @@ function Form({
           </div>
         )}
         {locked && <div className="foot meta">This repository is listed in pergent.sh's config; change it there.</div>}
-      </section>
+      </FoldCard>
       {/* Save sits in a bar that stays at the bottom of the window while the
           draft differs from what is saved, so it is never 4000px away. It
           covers the cards above; the model chain, Reviewers and Teams below

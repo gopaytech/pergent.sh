@@ -1,5 +1,13 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+- **The audit log has a search and reads more easily.** The search looks through the whole log on the server, by who, what, repository or detail, and stays in the address (`?q=`). Entries are grouped by day, with the time on each row. The action is a coloured label: red for what removed something, amber for what was refused or failed. A repository links to its page, a command's change links to its review, and a commit SHA is cut to 8 characters, with the whole SHA on hover.
+- **`GET /api/audit` takes `q`:** text to look for in the actor, the action (with each `_` also read as a space), `instance/project` and the detail, ignoring case, 200 characters at most. `next` pages within the matches. No migration.
+- **A repository's Settings tab starts folded.** **Reviews** is open; every other card (CI jobs, linked repositories, comment layout, skills, rule sets, built-in rules, repository skills, Review Job, Reviewers, Teams, Remove repository) shows its title and a one-line summary, and opens on a click. A folded card keeps what was typed in it, and a value the save refuses opens its card.
+- **The admin Settings page opens Repository defaults** at first; the other cards stay folded.
+- **A team's Members tab shows each name again.** The role dropdown had taken the whole row and covered the name and email. Rename and Remove team keep a gap above the tabs.
+
 ## Upgrading to 0.22.0
 
 **The dashboard is easier and safer to use, and a team has its own page.** No migration and no new config key: an upgrade needs no step, and rolling back to 0.21.0 needs none either.

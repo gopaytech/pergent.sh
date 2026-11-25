@@ -17,8 +17,10 @@ const inheritText = (c: ChainView) =>
 // and the judge are the card's (ReviewersCard). Everyone who sees the
 // repository sees it; an admin and a maintainer of its owner team change it
 // (the server says which: readOnly).
-export default function RepoModelChain({ instance, project }: { instance: string; project: string }) {
-  return <ReviewersCard instance={instance} project={project} first={<ReviewerOne instance={instance} project={project} />} />;
+export default function RepoModelChain({ instance, project, defaultOpen }: { instance: string; project: string; defaultOpen?: boolean }) {
+  return (
+    <ReviewersCard instance={instance} project={project} defaultOpen={defaultOpen} first={<ReviewerOne instance={instance} project={project} />} />
+  );
 }
 
 // ReviewerOne is reviewer 1: the model chain in effect, with Edit. Editing

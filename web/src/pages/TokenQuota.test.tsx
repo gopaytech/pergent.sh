@@ -47,7 +47,7 @@ const pageRoutes = (detail: RepositoryDetailView) => ({
 describe("Token quota: repository settings", () => {
   it("sends the repository quota, stripped of separators", async () => {
     const fake = fakeApi(settingsRoutes(repoDetail(repoPayments)));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const input = await screen.findByLabelText("Monthly token quota");
     expect(screen.getByText("Tokens per calendar month (UTC), input plus output. Empty: limited only by the instance's quota.")).toBeInTheDocument();
     await userEvent.type(input, "5,000,000");
@@ -58,7 +58,7 @@ describe("Token quota: repository settings", () => {
 
   it("sends null when emptied", async () => {
     const fake = fakeApi(settingsRoutes(withQuota(repoDetail(repoPayments), 10)));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const input = await screen.findByLabelText("Monthly token quota");
     expect(input).toHaveValue("10");
     await userEvent.clear(input);
@@ -69,7 +69,7 @@ describe("Token quota: repository settings", () => {
 
   it("refuses a non-number", async () => {
     const fake = fakeApi(settingsRoutes(repoDetail(repoPayments)));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.type(await screen.findByLabelText("Monthly token quota"), "5M");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(/whole number/)).toBeInTheDocument();
@@ -81,7 +81,7 @@ describe("Token quota: repository settings", () => {
     // only) must not show it to a maintainer.
     const detail = { ...withQuota(repoDetail(repoPayments, "maintainer"), 10), quota: { repository: { used: 5, limit: 10 }, instance: { used: 5, limit: null } } };
     fakeApi(settingsRoutes(detail));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await screen.findByLabelText("Trusted authors only");
     expect(screen.queryByLabelText("Monthly token quota")).not.toBeInTheDocument();
     expect(screen.queryByRole("meter")).not.toBeInTheDocument();
@@ -95,7 +95,7 @@ describe("Token quota: repository settings", () => {
       "GET /api/repositories/main/acme/widgets/inputs": { body: noInputs },
       "GET /api/repositories/main/acme/widgets/teams": { body: { teams: [] } },
     });
-    renderApp("/repos/main/acme/widgets?tab=settings");
+    renderApp("/repos/main/acme/widgets?tab=settings", { unfolded: true });
     expect(await screen.findByLabelText("Monthly token quota")).toBeDisabled();
   });
 });

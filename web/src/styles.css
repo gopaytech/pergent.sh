@@ -1573,6 +1573,13 @@ legend {
   font-size: 12px;
 }
 
+/* A select in a row (a member's role) keeps its own width: at 100% it took
+   the whole row and covered the name beside it. */
+.row > select {
+  width: auto;
+  flex: none;
+}
+
 /* A role beside a ticked member or team keeps its own width. */
 .check select {
   width: auto;
@@ -2152,4 +2159,61 @@ h1 {
 .md li:has(> input[type="checkbox"]) {
   list-style: none;
   margin-left: -1.2em;
+}
+
+/* --- the audit log: a day per group, details that wrap --- */
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.table.audit td {
+  vertical-align: top;
+}
+
+.table.audit .day-row th {
+  background: var(--soft);
+  color: var(--text);
+  font-size: 12.5px;
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.table.audit td.detail {
+  min-width: 220px;
+  max-width: 420px;
+  overflow-wrap: anywhere;
+}
+
+.table.audit .meta {
+  font-weight: 400;
+}
+
+.audit-kvs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.audit-kv .k {
+  color: var(--muted);
+}
+
+.audit-kv abbr {
+  text-decoration: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.table.audit td.mr a {
+  text-decoration: none;
+}
+
+.table.audit td.mr a:hover {
+  text-decoration: underline;
+}
+
+/* The team page's Rename and Remove team keep a gap above the tabs. */
+.team-actions {
+  margin-bottom: 14px;
 }
