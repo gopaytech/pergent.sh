@@ -16,7 +16,22 @@ import {
 } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
+import { SortHeader, compareRows, useTableSort } from "../TableSort";
 import { ErrorBox, Loading, Pill, Switch, platformName } from "../ui";
+import { useSearchText } from "../useSearchText";
+
+// The columns the list sorts by, and the ones that start with the biggest first.
+const SORT_KEYS = ["name", "reviews", "approved", "failed"] as const;
+type SortKey = (typeof SORT_KEYS)[number];
+const NUMERIC_KEYS: readonly SortKey[] = ["reviews", "approved", "failed"];
+
+// sortValue is what a row is ordered by under a column.
+function sortValue(r: RepositoryView, key: SortKey): string | number {
+  if (key === "reviews") return r.last7.reviews;
+  if (key === "approved") return r.last7.approved;
+  if (key === "failed") return r.last7.failed;
+  return r.project;
+}
 
 // Repositories lists the repositories pergent reviews, or has paused, that
 // the user can see. Admins add them (the picker) and pause and resume them
@@ -36,6 +51,51 @@ export default function Repositories() {
     enabled: me.admin,
   });
   const removing = new Set((instances.data ?? []).filter((i) => i.removing).map((i) => i.name));
+
+  const [typed, setTyped, q] = useSearchText();
+  const [sort, onSort] = useTableSort<SortKey>(SORT_KEYS, "name", NUMERIC_KEYS);
+  const all = useMemo(() => repos.data ?? [], [repos.data]);
+  // The teams of the list itself, by name. A ?team= that is not one of them,
+  // and not "none", counts as All teams.
+  const teams = useMemo(() => {
+    const byId = new Map<number, string>();
+    for (const r of all) if (r.ownerTeam) byId.set(r.ownerTeam.id, r.ownerTeam.name);
+    return [...byId].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [all]);
+  const teamParam = params.get("team") ?? "";
+  const team = teamParam === "none" || teams.some(([id]) => String(id) === teamParam) ? teamParam : "";
+  const needle = q.toLowerCase();
+  const shown = all
+    .filter((r) => needle === "" || r.project.toLowerCase().includes(needle))
+    .filter((r) => team === "" || (team === "none" ? r.ownerTeam === null : String(r.ownerTeam?.id) === team))
+    .sort((a, b) => compareRows(a, b, (r) => sortValue(r, sort.key), sort.desc, (r) => r.project));
+  const filtering = needle !== "" || team !== "";
+  // Repositories being reviewed now that no team owns. Paused ones are not counted.
+  const noOwner = all.filter((r) => r.ownerTeam === null && r.on).length;
+  const setTeam = (value: string) =>
+    setParams(
+      (old) => {
+        const next = new URLSearchParams(old);
+        if (value === "") next.delete("team");
+        else next.set("team", value);
+        return next;
+      },
+      { replace: true },
+    );
+  const clearFilters = () => {
+    setTyped("");
+    setParams(
+      (old) => {
+        const next = new URLSearchParams(old);
+        next.delete("q");
+        next.delete("team");
+        return next;
+      },
+      { replace: true },
+    );
+  };
+  const showNoOwner = new URLSearchParams(params);
+  showNoOwner.set("team", "none");
   return (
     <>
       <div className="top">
@@ -44,11 +104,27 @@ export default function Repositories() {
           <div className="sub">The repositories pergent reviews that you can see</div>
         </div>
         {canAdd && (
-          <button type="button" className="btn primary" onClick={() => setParams(adding ? {} : { add: "1" })}>
+          <button type="button" className="btn primary" onClick={() =>
+              setParams(
+                (old) => {
+                  const next = new URLSearchParams(old);
+                  if (adding) next.delete("add");
+                  else next.set("add", "1");
+                  return next;
+                },
+                { replace: true },
+              )
+            }>
             + Add repository
           </button>
         )}
       </div>
+      {me.admin && repos.isSuccess && noOwner > 0 && team !== "none" && (
+        <div className="owner-line">
+          <span className="warn-text">⚠</span> {noOwner === 1 ? "1 repository has no owner." : `${noOwner} repositories have no owner.`}{" "}
+          <Link to={`?${showNoOwner.toString()}`}>{noOwner === 1 ? "Show it" : "Show them"}</Link>
+        </div>
+      )}
       {adding && <Picker />}
       {repos.isPending && <Loading />}
       {repos.isError && <ErrorBox error={repos.error} onRetry={() => void repos.refetch()} />}
@@ -57,24 +133,58 @@ export default function Repositories() {
           <div className="card empty">No repositories yet.{canAdd && " Use + Add repository to switch one on."}</div>
         ) : (
           <div className="card scroll">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Repository</th>
-                  <th>Platform</th>
-                  {me.admin && <th>Review</th>}
-                  <th className="num">Reviews (7 days)</th>
-                  <th className="num">Approved</th>
-                  <th className="num">Failed</th>
-                  <th>Health</th>
-                </tr>
-              </thead>
-              <tbody>
-                {repos.data.map((r) => (
-                  <Row key={`${r.instance}/${r.project}`} repo={r} admin={me.admin} removing={removing.has(r.instance)} />
+            <div className="pad search">
+              <input
+                type="search"
+                aria-label="Search repositories"
+                placeholder="Search by name"
+                maxLength={200}
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+              />
+              <select aria-label="Team" value={team} onChange={(e) => setTeam(e.target.value)}>
+                <option value="">All teams</option>
+                <option value="none">No owner</option>
+                {teams.map(([id, name]) => (
+                  <option key={id} value={String(id)}>
+                    {name}
+                  </option>
                 ))}
-              </tbody>
-            </table>
+              </select>
+              {filtering && (
+                <span className="meta">
+                  {shown.length} of {all.length} shown
+                </span>
+              )}
+            </div>
+            {shown.length === 0 ? (
+              <div className="pad empty">
+                No repository matches.{" "}
+                <button type="button" className="btn" onClick={clearFilters}>
+                  Clear
+                </button>
+              </div>
+            ) : (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <SortHeader label="Repository" sortKey="name" sort={sort} onSort={onSort} />
+                    <th>Owner team</th>
+                    <th>Platform</th>
+                    {me.admin && <th>Review</th>}
+                    <SortHeader label="Reviews (7 days)" sortKey="reviews" sort={sort} onSort={onSort} num />
+                    <SortHeader label="Approved" sortKey="approved" sort={sort} onSort={onSort} num />
+                    <SortHeader label="Failed" sortKey="failed" sort={sort} onSort={onSort} num />
+                    <th>Health</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((r) => (
+                    <Row key={`${r.instance}/${r.project}`} repo={r} admin={me.admin} removing={removing.has(r.instance)} />
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         ))}
     </>
@@ -99,6 +209,7 @@ function Row({ repo, admin, removing }: { repo: RepositoryView; admin: boolean; 
         {config && <span className="badge cfg">managed by config</span>}
         {toggle.isError && <ErrorBox error={toggle.error} />}
       </td>
+      <OwnerCell repo={repo} admin={admin} />
       <td>
         <span className="plat">{platformName(repo.platform)}</span>
       </td>
@@ -134,6 +245,31 @@ function Row({ repo, admin, removing }: { repo: RepositoryView; admin: boolean; 
         )}
       </td>
     </tr>
+  );
+}
+
+// OwnerCell is the owner team of a repository. A closed team is plain text,
+// since its page is not open to the user. No owner is a warning for an admin,
+// who can set one, and a quiet "None" for anyone else.
+function OwnerCell({ repo, admin }: { repo: RepositoryView; admin: boolean }) {
+  const owner = repo.ownerTeam;
+  if (owner === null) {
+    return (
+      <td className="owner">
+        {admin ? (
+          <Link className="warn-text" to={`${paths.repo(repo.instance, repo.project)}?tab=settings`}>
+            ⚠ No owner
+          </Link>
+        ) : (
+          <span className="meta">None</span>
+        )}
+      </td>
+    );
+  }
+  return (
+    <td className="owner" title={owner.viaInstance ? `Owns every repository on ${repo.instance}` : undefined}>
+      {owner.open ? <Link to={paths.team(owner.id)}>{owner.name}</Link> : owner.name}
+    </td>
   );
 }
 

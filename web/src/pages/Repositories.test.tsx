@@ -591,3 +591,109 @@ describe("Repositories: links from the numbers", () => {
     expect(screen.queryByRole("link", { name: /failed reviews of acme\/widgets/ })).not.toBeInTheDocument();
   });
 });
+
+describe("Repositories: owner, search, filter, sort", () => {
+  const three = [repoPayments, repoWidgets, repoToolsPaused];
+  const names = () =>
+    screen
+      .getAllByRole("link", { name: /^acme\// })
+      .filter((l) => l.classList.contains("mr"))
+      .map((l) => l.textContent);
+  const location = () => screen.getByTestId("location");
+
+  it("shows the owner team: a link when open, text when closed, a hint for an instance owner", async () => {
+    const closed = { ...repoWidgets, ownerTeam: { id: 2, name: "ops", open: false, viaInstance: true } };
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: [repoPayments, closed] } });
+    renderApp("/repos");
+    const payments = (await screen.findByRole("link", { name: "acme/payments" })).closest("tr") as HTMLElement;
+    expect(within(payments).getByRole("link", { name: "payments" })).toHaveAttribute("href", "/teams/1");
+    const widgets = screen.getByRole("link", { name: "acme/widgets" }).closest("tr") as HTMLElement;
+    expect(within(widgets).queryByRole("link", { name: "ops" })).not.toBeInTheDocument();
+    expect(within(widgets).getByText("ops").closest("td")).toHaveAttribute("title", "Owns every repository on main");
+  });
+
+  it("marks no owner as a warning link for an admin and as None for others", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, "GET /api/repositories": { body: three }, "GET /api/admin/instances": { body: [instanceGitLab] } });
+    const first = renderApp("/repos");
+    const widgets = (await screen.findByRole("link", { name: "acme/widgets" })).closest("tr") as HTMLElement;
+    expect(within(widgets).getByRole("link", { name: "⚠ No owner" })).toHaveAttribute("href", "/repos/main/acme/widgets?tab=settings");
+    first.unmount();
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: three } });
+    renderApp("/repos");
+    const row = (await screen.findByRole("link", { name: "acme/widgets" })).closest("tr") as HTMLElement;
+    expect(within(row).getByText("None")).toBeInTheDocument();
+    expect(row).not.toHaveTextContent("⚠");
+    expect(screen.queryByText(/has no owner|have no owner/)).not.toBeInTheDocument();
+  });
+
+  it("tells an admin how many active repositories have no owner and links to the No owner filter", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, "GET /api/repositories": { body: three }, "GET /api/admin/instances": { body: [instanceGitLab] } });
+    renderApp("/repos");
+    expect(await screen.findByText(/1 repository has no owner\./)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: "Show it" }));
+    expect(location()).toHaveTextContent("team=none");
+    expect(names()).toEqual(["acme/tools", "acme/widgets"]);
+    expect(screen.queryByText(/has no owner\./)).not.toBeInTheDocument();
+  });
+
+  it("searches the path, ignoring case, and survives odd characters", async () => {
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: three } });
+    renderApp("/repos");
+    await screen.findByRole("link", { name: "acme/payments" });
+    expect(screen.queryByText(/shown/)).not.toBeInTheDocument();
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search repositories" }), "PAY");
+    await vi.waitFor(() => expect(names()).toEqual(["acme/payments"]));
+    expect(screen.getByText("1 of 3 shown")).toBeInTheDocument();
+    expect(location()).toHaveTextContent("q=PAY");
+    await userEvent.clear(screen.getByRole("searchbox", { name: "Search repositories" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search repositories" }), "(");
+    expect(await screen.findByText("No repository matches.")).toBeInTheDocument();
+  });
+
+  it("clears an empty match back to all rows with no q or team", async () => {
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: three } });
+    renderApp("/repos?q=%25&team=1");
+    expect(await screen.findByText("No repository matches.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(names()).toHaveLength(3);
+    expect(location()).not.toHaveTextContent("q=");
+    expect(location()).not.toHaveTextContent("team=");
+  });
+
+  it("filters by team from the list itself", async () => {
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: three } });
+    renderApp("/repos");
+    await screen.findByRole("link", { name: "acme/payments" });
+    const select = screen.getByRole("combobox", { name: "Team" });
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["All teams", "No owner", "payments"]);
+    await userEvent.selectOptions(select, "payments");
+    expect(location()).toHaveTextContent("team=1");
+    expect(names()).toEqual(["acme/payments"]);
+  });
+
+  it("treats an unknown ?team= as All teams", async () => {
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: three } });
+    renderApp("/repos?team=99");
+    await screen.findByRole("link", { name: "acme/payments" });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveDisplayValue("All teams");
+    expect(names()).toHaveLength(3);
+  });
+
+  it("sorts by Reviews, biggest first, then reverses", async () => {
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: three } });
+    renderApp("/repos");
+    await screen.findByRole("link", { name: "acme/payments" });
+    await userEvent.click(screen.getByRole("button", { name: /^Reviews/ }));
+    expect(names()).toEqual(["acme/payments", "acme/widgets", "acme/tools"]);
+    await userEvent.click(screen.getByRole("button", { name: /^Reviews/ }));
+    expect(names()).toEqual(["acme/tools", "acme/widgets", "acme/payments"]);
+  });
+
+  it("keeps the search when + Add repository opens", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, "GET /api/repositories": { body: three }, "GET /api/admin/instances": { body: [instanceGitLab] } });
+    renderApp("/repos?q=pay");
+    await userEvent.click(await screen.findByRole("button", { name: "+ Add repository" }));
+    expect(location()).toHaveTextContent("q=pay");
+    expect(location()).toHaveTextContent("add=1");
+  });
+});

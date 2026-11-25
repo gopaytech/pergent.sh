@@ -2235,3 +2235,15 @@ h1 {
   margin-left: 4px;
   font-size: 9px;
 }
+
+/* The owner team column of the repository list: a long name wraps. */
+td.owner {
+  max-width: 220px;
+  overflow-wrap: anywhere;
+}
+
+/* The line above the repository list that counts repositories with no owner. */
+.owner-line {
+  font-size: 13px;
+  margin: 0 0 12px;
+}
