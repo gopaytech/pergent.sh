@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -202,6 +203,38 @@ func TestTrustedAuthorsRoundTrip(t *testing.T) {
 	}
 	if found, err := s.SetInstanceTrustMode(ctx, "nope", "on"); err != nil || found {
 		t.Errorf("unknown instance = %v, %v; want not found", found, err)
+	}
+}
+
+// An instance's teams-may-onboard switch is off for a new one, and
+// SetInstanceTeamsMayOnboard turns it on and off.
+func TestSetInstanceTeamsMayOnboard(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	if err := s.CreateInstance(ctx, InstanceRow{Name: "lab", Platform: "gitlab"}, nil, t0); err != nil {
+		t.Fatal(err)
+	}
+	row, _, err := s.InstanceRow(ctx, "lab")
+	if err != nil || row.TeamsMayOnboard {
+		t.Fatalf("new instance switch = %v, %v; want off", row.TeamsMayOnboard, err)
+	}
+	if found, err := s.SetInstanceTeamsMayOnboard(ctx, "lab", true); err != nil || !found {
+		t.Fatalf("SetInstanceTeamsMayOnboard = %v, %v", found, err)
+	}
+	if row, _, _ := s.InstanceRow(ctx, "lab"); !row.TeamsMayOnboard {
+		t.Error("switch is off after turning it on")
+	}
+	if found, err := s.SetInstanceTeamsMayOnboard(ctx, "nope", true); err != nil || found {
+		t.Errorf("unknown instance = %v, %v; want not found", found, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE instances SET removing = true WHERE name = 'lab'`); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := s.SetInstanceTeamsMayOnboard(ctx, "lab", false); !errors.Is(err, ErrRemoving) || !found {
+		t.Errorf("removing instance = %v, %v; want found, ErrRemoving", found, err)
+	}
+	if row, _, _ := s.InstanceRow(ctx, "lab"); !row.TeamsMayOnboard {
+		t.Error("a removing instance changed")
 	}
 }
 

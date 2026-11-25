@@ -3690,6 +3690,35 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/instances/{name}/teams-onboard:
+    put:
+      operationId: setInstanceTeamsOnboard
+      tags: [Instances and settings]
+      summary: Let teams onboard repositories of an instance
+      description: |
+        Admins only. When on, the maintainers of a team may switch on
+        repositories of the instance and claim them for their team; off (the
+        default), only admins onboard. An instance of the config (set
+        `teams_may_onboard` there), or one being removed, is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstancePathName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InstanceTeamsOnboardRequest'}
+      responses:
+        '204': {description: Set.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/instances/{name}/token-quota:
     put:
       operationId: setInstanceTokenQuota
@@ -6118,6 +6147,12 @@ components:
         mode:
           type: string
           enum: [follow_visibility, 'on', 'off']
+    InstanceTeamsOnboardRequest:
+      type: object
+      required: [on]
+      additionalProperties: false
+      properties:
+        on: {type: boolean}
     TrustedAuthor:
       description: A user on a repository's allowlist, matched by ID; username is the name it had when added.
       type: object
@@ -6651,13 +6686,16 @@ components:
     InstanceAdminView:
       description: One instance.
       type: object
-      required: [name, trustedAuthorsOnly, monthlyTokenQuota, tokensThisMonth, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, secrets]
+      required: [name, trustedAuthorsOnly, teamsMayOnboard, monthlyTokenQuota, tokensThisMonth, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, secrets]
       properties:
         name: {type: string}
         trustedAuthorsOnly:
           type: string
           enum: [follow_visibility, 'on', 'off']
           description: The default of the instance's repositories.
+        teamsMayOnboard:
+          type: boolean
+          description: Set when a team's maintainers may onboard repositories of the instance and claim them.
         monthlyTokenQuota:
           type: [integer, 'null']
           description: The instance's token quota per UTC month, null for none.

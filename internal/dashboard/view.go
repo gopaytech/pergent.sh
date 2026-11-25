@@ -1478,6 +1478,10 @@ type AuditView struct {
 //     replaces what it names, checks the whole, connects again. An address
 //     or App ID that differs is 400; an instance of the config is 409.
 //     200, InstanceAdminView.
+//   - PUT /api/admin/instances/{name}/teams-onboard {"on": bool}: lets a
+//     team's maintainers onboard repositories of the instance and claim them
+//     (or not). 204; 400 without "on"; 409 for an instance of the config
+//     (set `teams_may_onboard` there) or one being removed.
 //   - PUT /api/admin/instances/{name}/token-quota {"monthlyTokenQuota": n|null}:
 //     the instance's token quota per UTC month (a whole number from 1 to
 //     1000000000000000, or null for none; else 400). 204; 409 for an instance
@@ -1575,6 +1579,9 @@ type InstanceAdminView struct {
 	// TrustedAuthorsOnly is the default of the instance's repositories:
 	// "follow_visibility", "on" or "off".
 	TrustedAuthorsOnly string `json:"trustedAuthorsOnly"`
+	// TeamsMayOnboard is set when a team's maintainers may onboard
+	// repositories of the instance and claim them.
+	TeamsMayOnboard bool `json:"teamsMayOnboard"`
 	// MonthlyTokenQuota is the instance's token quota per UTC month; null
 	// for none. TokensThisMonth is what its reviews used this month.
 	MonthlyTokenQuota *int64 `json:"monthlyTokenQuota"`

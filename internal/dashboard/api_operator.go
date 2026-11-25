@@ -49,6 +49,7 @@ const (
 	msgImmutable         = "an instance's address and App IDs can't change: remove it and add it again"
 	msgConfigInstance    = "this instance is managed by the config file; change it there"
 	msgInstanceRemoving  = "this instance is being removed"
+	msgBadTeamsOnboard   = `the body must be {"on": true or false}`
 	msgBadTrustMode      = `the body must be {"mode": "follow_visibility" | "on" | "off"}`
 	msgNothingToChange   = `nothing to change: give "secrets"`
 
@@ -67,6 +68,7 @@ func (d *Dashboard) operatorRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "POST /api/admin/instances", d.addInstance)
 	d.adminRoute(mux, "PUT /api/admin/instances/{name}", d.updateInstance)
 	d.adminRoute(mux, "PUT /api/admin/instances/{name}/trusted-authors", d.putInstanceTrust)
+	d.adminRoute(mux, "PUT /api/admin/instances/{name}/teams-onboard", d.putInstanceTeamsOnboard)
 	d.adminRoute(mux, "PUT /api/admin/instances/{name}/token-quota", d.putInstanceQuota)
 	d.adminRoute(mux, "DELETE /api/admin/instances/{name}", d.removeInstance)
 	d.adminRoute(mux, "GET /api/admin/instances/{name}/repositories", d.instanceRepositories)
@@ -169,7 +171,7 @@ func approverOfRow(row store.InstanceRow) string {
 // env var holds a value; a dashboard instance's when the sealed value opens.
 func (d *Dashboard) instanceView(ctx context.Context, inst instances.Instance) (InstanceAdminView, error) {
 	v := InstanceAdminView{Name: inst.Name, Platform: inst.Platform, Source: string(inst.Source), Removing: inst.Removing,
-		TrustedAuthorsOnly: inst.TrustedAuthorsOnly, MonthlyTokenQuota: inst.MonthlyTokenQuota,
+		TrustedAuthorsOnly: inst.TrustedAuthorsOnly, MonthlyTokenQuota: inst.MonthlyTokenQuota, TeamsMayOnboard: inst.TeamsMayOnboard,
 		WebhookURL: config.WebhookURL(d.cfg.PublicURL, inst.Platform, inst.Name),
 		Approver:   approverOf(inst), Secrets: map[string]SecretView{}}
 	switch {
@@ -579,6 +581,52 @@ func (d *Dashboard) putInstanceTrust(w http.ResponseWriter, r *http.Request) {
 	d.registry.SetTrustMode(name, in.Mode)
 	d.Log.Info("dashboard: instance updated", "instance", name, "trusted_authors_only", in.Mode, "by", se.Username)
 	d.audit(ctx, se, "instance_updated", name, "", "trusted_authors_only="+in.Mode)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// putInstanceTeamsOnboard turns a dashboard instance's teams-may-onboard
+// switch on or off: 204, or 409 for a config instance (its switch is in the
+// config file) or one being removed.
+func (d *Dashboard) putInstanceTeamsOnboard(w http.ResponseWriter, r *http.Request) {
+	se, name := session(r), r.PathValue("name")
+	inst, ok := d.registry.Get(name)
+	if !ok {
+		notFound(w)
+		return
+	}
+	if inst.Source == instances.SourceConfig {
+		writeError(w, http.StatusConflict, msgConfigInstance)
+		return
+	}
+	var in struct {
+		On *bool `json:"on"`
+	}
+	if err := decodeStrict(r, &in); err != nil || in.On == nil {
+		writeError(w, http.StatusBadRequest, msgBadTeamsOnboard)
+		return
+	}
+	ctx := r.Context()
+	found, err := d.Store.SetInstanceTeamsMayOnboard(ctx, name, *in.On)
+	if errors.Is(err, store.ErrRemoving) {
+		writeError(w, http.StatusConflict, msgInstanceRemoving)
+		return
+	}
+	if err != nil {
+		d.Log.Error("dashboard: setting an instance's teams-may-onboard failed", "instance", name, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	if !found {
+		notFound(w)
+		return
+	}
+	d.registry.SetTeamsMayOnboard(name, *in.On)
+	detail := "teams_may_onboard=off"
+	if *in.On {
+		detail = "teams_may_onboard=on"
+	}
+	d.Log.Info("dashboard: instance updated", "instance", name, "teams_may_onboard", *in.On, "by", se.Username)
+	d.audit(ctx, se, "instance_updated", name, "", detail)
 	w.WriteHeader(http.StatusNoContent)
 }
 

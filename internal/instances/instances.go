@@ -69,6 +69,9 @@ type Instance struct {
 	// MonthlyTokenQuota is the instance's token budget per UTC calendar
 	// month (nil: none). The registry never shares it with its source.
 	MonthlyTokenQuota *int64
+	// TeamsMayOnboard is set when a team's maintainers may onboard
+	// repositories of the instance and claim them; off, only admins onboard.
+	TeamsMayOnboard bool
 }
 
 // HasOAuth reports whether people can sign in to the dashboard through the
@@ -250,6 +253,13 @@ func (r *Registry) SetTrustMode(name, mode string) (Instance, bool) {
 	return r.change(name, func(inst *Instance) { inst.TrustedAuthorsOnly = trustMode(mode) })
 }
 
+// SetTeamsMayOnboard sets the teams-may-onboard switch of the instance of the
+// dashboard called name, in place, and returns it; ok is false when there is
+// none.
+func (r *Registry) SetTeamsMayOnboard(name string, on bool) (Instance, bool) {
+	return r.change(name, func(inst *Instance) { inst.TeamsMayOnboard = on })
+}
+
 // SetTokenQuota sets the monthly token quota of the instance of the dashboard
 // called name, in place (nil clears it), and returns it; ok is false when
 // there is none.
@@ -297,13 +307,13 @@ func (r *Registry) config(name string) (Instance, bool) {
 func (r *Registry) fromGitLab(inst config.Instance) Instance {
 	return Instance{Name: inst.Name, Platform: config.PlatformGitLab, Source: SourceConfig,
 		GitLab: &inst, OAuthClientID: envValue(inst.OAuthClientIDEnv), TrustedAuthorsOnly: trustMode(inst.TrustedAuthorsOnly),
-		MonthlyTokenQuota: cloneQuota(inst.MonthlyTokenQuota)}
+		MonthlyTokenQuota: cloneQuota(inst.MonthlyTokenQuota), TeamsMayOnboard: inst.TeamsMayOnboard}
 }
 
 func (r *Registry) fromGitHub(inst config.GitHubInstance) Instance {
 	return Instance{Name: inst.Name, Platform: config.PlatformGitHub, Source: SourceConfig,
 		GitHub: &inst, OAuthClientID: envValue(inst.OAuthClientIDEnv), TrustedAuthorsOnly: trustMode(inst.TrustedAuthorsOnly),
-		MonthlyTokenQuota: cloneQuota(inst.MonthlyTokenQuota)}
+		MonthlyTokenQuota: cloneQuota(inst.MonthlyTokenQuota), TeamsMayOnboard: inst.TeamsMayOnboard}
 }
 
 // trustMode is m, or config.TrustFollowVisibility when m is empty.
@@ -334,7 +344,7 @@ func envValue(name string) string {
 func FromRow(row store.InstanceRow) Instance {
 	inst := Instance{Name: row.Name, Platform: row.Platform, Source: SourceDashboard,
 		Removing: row.Removing, OAuthClientID: row.OAuthClientID, TrustedAuthorsOnly: trustMode(row.TrustedAuthorsOnly),
-		MonthlyTokenQuota: cloneQuota(row.MonthlyTokenQuota)}
+		MonthlyTokenQuota: cloneQuota(row.MonthlyTokenQuota), TeamsMayOnboard: row.TeamsMayOnboard}
 	if row.Platform == config.PlatformGitHub {
 		gh := &config.GitHubInstance{Name: row.Name, APIURL: row.APIURL, ReviewApp: config.App{AppID: row.ReviewAppID}}
 		switch {
