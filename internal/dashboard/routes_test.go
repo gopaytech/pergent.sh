@@ -22,13 +22,43 @@ import (
 // Handler registered through adminRoute.
 func adminRoutesOf(t *testing.T) []string {
 	t.Helper()
+	d := dashboardWithRoutes(t)
+	return slices.Clone(d.adminRoutes)
+}
+
+// dashboardWithRoutes builds a dashboard with no store and runs Handler.
+func dashboardWithRoutes(t *testing.T) *Dashboard {
+	t.Helper()
 	cfg := &config.Config{Dashboard: config.Dashboard{URL: dashboardURL}}
 	d, err := New(Options{Config: cfg, SecretKey: testKey(t)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	d.Handler()
-	return slices.Clone(d.adminRoutes)
+	return d
+}
+
+// The 4 repository routes maintainers may use are registered through
+// teamRoute, not adminRoute.
+func TestTeamRoutesRecorded(t *testing.T) {
+	d := dashboardWithRoutes(t)
+	want := []string{
+		"GET /api/repositories/available",
+		"POST /api/repositories",
+		"PUT /api/admin/repositories/{instance}/{rest...}",
+		"DELETE /api/repositories/{instance}/{rest...}",
+	}
+	got := slices.Clone(d.teamRoutes)
+	sort.Strings(got)
+	sort.Strings(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("teamRoute recorded\n%v\nwant\n%v", got, want)
+	}
+	for _, p := range want {
+		if slices.Contains(d.adminRoutes, p) {
+			t.Errorf("%s is in adminRoutes too", p)
+		}
+	}
 }
 
 // The admin API is registered one way, so a route cannot skip the check: the
@@ -38,7 +68,7 @@ func adminRoutesOf(t *testing.T) []string {
 // Auth.RequireAdmin is named nowhere but in adminRoute.
 func TestAdminRoutesAreRegisteredOnlyThroughTheHelper(t *testing.T) {
 	registered := adminRoutesOf(t)
-	if len(registered) < 30 || !slices.Contains(registered, "GET /api/users") || !slices.Contains(registered, "GET /api/repositories/available") {
+	if len(registered) < 30 || !slices.Contains(registered, "GET /api/users") || !slices.Contains(registered, "GET /api/admin/linkable") {
 		t.Fatalf("adminRoute recorded %d routes: %v", len(registered), registered)
 	}
 	sort.Strings(registered)

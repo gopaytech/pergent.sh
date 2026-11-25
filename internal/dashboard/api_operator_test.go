@@ -739,6 +739,11 @@ func TestOnlyAdminsTouchInstances(t *testing.T) {
 		{"PUT", "/api/admin/defaults", `{}`},
 	} {
 		for name, c := range map[string]*http.Cookie{"viewer": viewer, "waiting": waiting} {
+			if name == "waiting" && strings.HasPrefix(tc.target, "/api/repositories/") {
+				// A team route: the waiting gate answers first.
+				wantWaiting(t, e.get(c, tc.target), tc.target)
+				continue
+			}
 			var rec *httptest.ResponseRecorder
 			if tc.method == "GET" {
 				rec = e.get(c, tc.target)

@@ -205,6 +205,10 @@ func gateOf(nodes ...ast.Node) string {
 // is registered with.
 const adminRouteHelper = "adminRoute"
 
+// teamRouteHelper is the Dashboard method that registers a route admins and
+// maintainers use: a session route whose handler checks who may do what.
+const teamRouteHelper = "teamRoute"
+
 type routeHelper struct {
 	lit    *ast.FuncLit
 	prefix string // "GET " for get := func(pattern ...) { mux.Handle("GET "+pattern, ...) }
@@ -300,7 +304,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 	}
 	for _, decl := range file.Decls {
 		// The one helper admin routes go through: its callers are read below.
-		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name.Name == adminRouteHelper {
+		if fd, ok := decl.(*ast.FuncDecl); ok && (fd.Name.Name == adminRouteHelper || fd.Name.Name == teamRouteHelper) {
 			continue
 		}
 		muxes := muxVars(decl)
@@ -412,17 +416,21 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 				unresolved = append(unresolved, where(call.Pos())+": a route pattern this test can't read")
 				return true
 			}
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == adminRouteHelper {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == adminRouteHelper || sel.Sel.Name == teamRouteHelper) {
+				access := "admin"
+				if sel.Sel.Name == teamRouteHelper {
+					access = "session"
+				}
 				if len(call.Args) != 3 {
-					unresolved = append(unresolved, where(call.Pos())+": "+adminRouteHelper+" is called with something other than (mux, pattern, handler)")
+					unresolved = append(unresolved, where(call.Pos())+": "+sel.Sel.Name+" is called with something other than (mux, pattern, handler)")
 					return true
 				}
 				lit, ok := stringLit(call.Args[1])
 				if !ok {
-					unresolved = append(unresolved, where(call.Pos())+": "+adminRouteHelper+" is called with a pattern that is not a string literal")
+					unresolved = append(unresolved, where(call.Pos())+": "+sel.Sel.Name+" is called with a pattern that is not a string literal")
 					return true
 				}
-				add(lit, "admin", call.Pos())
+				add(lit, access, call.Pos())
 				return true
 			}
 			if id, ok := call.Fun.(*ast.Ident); ok {
@@ -781,6 +789,15 @@ func (d *D) adminRoute(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 }`)
 	if len(unresolved) != 0 || len(routes) != 2 || routes[0].Access != "admin" || routes[1].Access != "admin" {
 		t.Errorf("admin routes: %v, unresolved %v; want GET /m and GET /n, both admin", routes, unresolved)
+	}
+	// The team helper registers session routes; its own body is not read.
+	routes, unresolved = scanSource(t, `package x
+func (d *D) routes(mux *http.ServeMux) { d.teamRoute(mux, "GET /t", d.t) }
+func (d *D) teamRoute(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+	mux.Handle(pattern, d.Auth.Require(h))
+}`)
+	if len(unresolved) != 0 || len(routes) != 1 || routes[0].Pattern != "GET /t" || routes[0].Access != "session" {
+		t.Errorf("team routes: %v, unresolved %v; want GET /t as a session route", routes, unresolved)
 	}
 	_, unresolved = scanSource(t, `package x
 func f(d *D, mux *http.ServeMux, p string) { d.adminRoute(mux, p, h) }`)

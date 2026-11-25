@@ -186,8 +186,9 @@ func TestUserOnNoTeamIsWaiting(t *testing.T) {
 		}
 	}
 	wantWaiting(t, e.get(c, "/test/session"), "GET /test/session")
-	wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "GET /api/repositories/available", http.StatusNotFound)
-	wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/widgets"}`), "POST /api/repositories", http.StatusNotFound)
+	// Team routes: a user on no team gets the waiting gate before the handler.
+	wantWaiting(t, e.get(c, "/api/repositories/available?instance=main"), "GET /api/repositories/available")
+	wantWaiting(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/widgets"}`), "POST /api/repositories")
 	wantWaiting(t, e.send(c, "PUT", "/api/repositories/main/acme/widgets/settings", `{"approve":false}`), "PUT settings")
 
 	e.clock.advance(time.Hour)
@@ -508,8 +509,8 @@ func TestMaintainerCanEditSettings(t *testing.T) {
 		t.Errorf("approve = %v, want false", r.Approve)
 	}
 	wantCode(t, e.send(c, "POST", "/api/repositories/main/acme/gadgets/settings/reset", ""), "maintainer reset", http.StatusOK)
-	wantCode(t, e.send(c, "DELETE", "/api/repositories/main/acme/gadgets", ""), "maintainer switch off", http.StatusNotFound)
-	wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "maintainer picker", http.StatusNotFound)
+	wantCode(t, e.send(c, "DELETE", "/api/repositories/main/acme/gadgets", ""), "maintainer switch off", http.StatusForbidden)
+	wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "maintainer picker", http.StatusForbidden)
 	wantCode(t, e.send(c, "PUT", "/api/repositories/main/acme/gadgets/settings", `{"rerunLimitPerMR":5}`), "maintainer re-run caps", http.StatusForbidden)
 	if _, found := e.storedRepo("main", "acme/gadgets"); !found {
 		t.Fatal("the maintainer switched acme/gadgets off")

@@ -227,6 +227,9 @@ type Dashboard struct {
 	// adminRoutes are the patterns Handler registered through adminRoute: a
 	// test walks them to prove each is not found for a user.
 	adminRoutes []string
+	// teamRoutes are the patterns Handler registered through teamRoute: admins
+	// and maintainers use them, each handler checks which.
+	teamRoutes []string
 }
 
 // New builds the dashboard. The config must have dashboard.url.
@@ -297,6 +300,7 @@ func New(o Options) (*Dashboard, error) {
 func (d *Dashboard) Handler() http.Handler {
 	mux := http.NewServeMux()
 	d.adminRoutes = nil
+	d.teamRoutes = nil
 	mux.HandleFunc("POST /auth/logout", d.Auth.logout)
 	mux.HandleFunc("GET /auth/csrf", d.Auth.loginCSRF)
 	mux.HandleFunc("POST /auth/password", d.Auth.passwordSignIn)
@@ -307,7 +311,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.Handle("GET /api/me", d.Auth.Require(http.HandlerFunc(d.me)))
 	d.writeRoutes(mux)
 	d.orgRoutes(mux)
-	d.teamRoutes(mux)
+	d.teamAPIRoutes(mux)
 	d.commandRoutes(mux)
 	d.operatorRoutes(mux)
 	d.readRoutes(mux)

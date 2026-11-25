@@ -77,15 +77,16 @@ var (
 
 // writeRoutes adds the write API to mux: every route behind a session
 // (Auth.Require checks X-CSRF-Token); switching on, pausing, resuming and
-// removing and the picker are admin routes (adminRoute: 404 for anyone
-// else), a repository's settings are for its maintainers and admins (403
+// removing and the picker are team routes (teamRoute: admins, and the
+// maintainers of an owner team where an instance lets teams onboard; each
+// handler gates its non-admins), a repository's settings are for its maintainers and admins (403
 // otherwise).
 func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
-	d.adminRoute(mux, "GET /api/repositories/available", d.available)
+	d.teamRoute(mux, "GET /api/repositories/available", d.available)
 	d.adminRoute(mux, "GET /api/admin/linkable", d.linkable)
-	d.adminRoute(mux, "POST /api/repositories", d.switchOn)
-	d.adminRoute(mux, "PUT /api/admin/repositories/{instance}/{rest...}", d.setEnabled)
-	d.adminRoute(mux, "DELETE /api/repositories/{instance}/{rest...}", d.removeRepo)
+	d.teamRoute(mux, "POST /api/repositories", d.switchOn)
+	d.teamRoute(mux, "PUT /api/admin/repositories/{instance}/{rest...}", d.setEnabled)
+	d.teamRoute(mux, "DELETE /api/repositories/{instance}/{rest...}", d.removeRepo)
 	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPut)))
 	mux.Handle("POST /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPost)))
 	// The instance alone is 404, not a redirect to the {rest...} routes.
@@ -102,6 +103,13 @@ func (d *Dashboard) available(w http.ResponseWriter, r *http.Request) {
 	instance := r.URL.Query().Get("instance")
 	if instance == "" {
 		writeError(w, http.StatusBadRequest, msgNameInstance)
+		return
+	}
+	if !session(r).Admin {
+		if !d.maintainerGate(w, r, instance) {
+			return
+		}
+		writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
 		return
 	}
 	d.listAvailable(w, r, instance)
@@ -249,6 +257,13 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	instance := body.Instance
 	if instance == "" {
 		writeError(w, http.StatusBadRequest, msgNameInstance)
+		return
+	}
+	if !se.Admin {
+		if !d.maintainerGate(w, r, instance) {
+			return
+		}
+		writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
 		return
 	}
 	if !d.knownInstance(instance) {
@@ -474,6 +489,14 @@ func (d *Dashboard) targetRepo(w http.ResponseWriter, r *http.Request, suffix st
 // reconcile). A resume while its instance is being removed is 409.
 func (d *Dashboard) setEnabled(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
+	if !se.Admin {
+		// Pause works with the switch off: only the gate without it.
+		if !d.maintainerGateAnySwitch(w, r, r.PathValue("instance")) {
+			return
+		}
+		writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
+		return
+	}
 	repo, ok := d.target(w, r, "", RoleAdmin)
 	if !ok {
 		return
@@ -544,6 +567,13 @@ func refusePaused(w http.ResponseWriter, repo settings.Effective) bool {
 // deploy token off the platform and deletes its project's record.
 func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
+	if !se.Admin {
+		if !d.maintainerGate(w, r, r.PathValue("instance")) {
+			return
+		}
+		writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
+		return
+	}
 	repo, ok := d.target(w, r, "", RoleAdmin)
 	if !ok {
 		return

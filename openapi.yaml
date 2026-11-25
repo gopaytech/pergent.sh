@@ -1362,7 +1362,9 @@ paths:
       tags: [Repositories]
       summary: Switch a repository on
       description: |
-        Admins only. The repository is checked on its own, not against the
+        Admins, and maintainers on an instance that lets teams onboard (403
+        `only maintainers of the owner team and admins can do this` until a
+        later change opens it). The repository is checked on its own, not against the
         picker's lists: the instance's review bot (GitLab: Maintainer or
         above) or App (GitHub: installed) must reach it, else 404 whether it
         is on or not (404 also for an instance that is not there); then 409
@@ -1380,7 +1382,7 @@ paths:
         answer is 409 and nothing changes: a paused repository stays paused.
         An owner of the whole instance is not in the way. The change is
         audited as `owner_set`, as from the team page.
-      x-pergent-access: admin
+      x-pergent-access: session
       security:
         - sessionCookie: []
           csrfToken: []
@@ -1413,7 +1415,9 @@ paths:
       tags: [Repositories]
       summary: Repositories that can be switched on (the picker)
       description: |
-        Admins only: one page of the repositories of one instance that its
+        Admins, and maintainers on an instance that lets teams onboard (a
+        maintainer is 403 until a later change opens it): one page of the
+        repositories of one instance that its
         review bot or App reaches and that are not switched on (the same list
         as `GET /api/admin/instances/{name}/repositories`). A page holds 50
         at most. On GitLab a page is one request to GitLab in its ID order (so no
@@ -1426,7 +1430,7 @@ paths:
         long (5000) or too slow (20 s) to read whole (GitHub only). 400
         without an `instance` or with a bad `page`, 404 for an instance that
         is not there.
-      x-pergent-access: admin
+      x-pergent-access: session
       security:
         - sessionCookie: []
       parameters:
@@ -1562,14 +1566,16 @@ paths:
       tags: [Repositories]
       summary: Remove a repository for good
       description: |
-        Admins only (404 for anyone else). Works on a repository switched on
+        Admins, and maintainers on an instance that lets teams onboard (403
+        `only maintainers of the owner team and admins can do this` until a
+        later change opens it; 404 for a user who maintains no team). Works on a repository switched on
         or paused. Its settings and its team links are deleted; pergent.sh
         removes its webhook and clone credentials, and its dismissals,
         commands, inline threads and finding fates. To stop reviews and keep
         all that, pause it instead (`PUT /api/admin/repositories/{instance}/{project}`).
         A repository set up in the config file is 409: remove it from the
         config.
-      x-pergent-access: admin
+      x-pergent-access: session
       x-pergent-pattern: DELETE /api/repositories/{instance}/{rest...}
       security:
         - sessionCookie: []
@@ -1594,7 +1600,10 @@ paths:
       tags: [Repositories]
       summary: Pause or resume a repository
       description: |
-        Admins only (404 for anyone else). `{"enabled": false}` pauses a
+        Admins, and maintainers on an instance that lets teams onboard (403
+        `only maintainers of the owner team and admins can do this` until a
+        later change opens it; 404 for a user who maintains no team).
+        `{"enabled": false}` pauses a
         repository of the dashboard: it stays with every setting, nothing
         reviews it, and pergent.sh takes its webhook and clone credentials off
         the platform within seconds; its dismissals and review history stay.
@@ -1602,7 +1611,7 @@ paths:
         queues a readiness scan. Asking for the state it is in changes
         nothing. 409 for a repository set up in the config file, and for a
         resume while its instance is being removed.
-      x-pergent-access: admin
+      x-pergent-access: session
       x-pergent-pattern: PUT /api/admin/repositories/{instance}/{rest...}
       security:
         - sessionCookie: []
