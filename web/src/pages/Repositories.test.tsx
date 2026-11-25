@@ -333,12 +333,13 @@ describe("Repositories", () => {
   });
 
   describe("the picker for maintainers", () => {
-    const row = (project: string, state: "off" | "paused" | "on", ownerTeam = "") => ({
+    const row = (project: string, state: "off" | "paused" | "on", ownerTeam = "", config = false) => ({
       instance: "main",
       project,
       platform: "gitlab",
       state,
       ownerTeam,
+      config,
     });
     const page = (items: unknown[], instanceOwner = "") => ({ items, page: 1, hasMore: false, truncated: false, instanceOwner });
     const payments = { ...myTeams[0] };
@@ -405,6 +406,13 @@ describe("Repositories", () => {
       fakeApi(routes([row("acme/payments", "paused")]));
       const picker = await open();
       expect(await within(picker).findByRole("button", { name: "Claim acme/payments" })).toBeInTheDocument();
+    });
+
+    it("says managed by the config file, with no Claim, for a config row without an owner", async () => {
+      fakeApi(routes([row("acme/payments", "on", "", true)]));
+      const picker = await open();
+      expect(await within(picker).findByText("managed by the config file")).toBeInTheDocument();
+      expect(within(picker).queryByRole("button", { name: "Claim acme/payments" })).not.toBeInTheDocument();
     });
 
     it("Resume: a paused row owned by the maintainer's team puts it back with PUT enabled", async () => {

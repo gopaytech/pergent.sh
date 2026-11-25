@@ -178,8 +178,8 @@ func TestAvailablePagesOnThePlatform(t *testing.T) {
 		if i == 49 {
 			want = stateOn
 		}
-		if it.Instance != "gl" || it.Platform != "gitlab" || it.State != want {
-			t.Fatalf("item %d = %+v; want state %s", i, it, want)
+		if it.Instance != "gl" || it.Platform != "gitlab" || it.State != want || it.Config != (i == 49) {
+			t.Fatalf("item %d = %+v; want state %s, config only on the config repository", i, it, want)
 		}
 	}
 

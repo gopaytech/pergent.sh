@@ -1526,7 +1526,7 @@ export type AuditPageView = { entries: AuditView[]; next: number };
 // its owner team's name ("" for none); instanceOwner is the team that owns
 // the whole instance ("" for none).
 export type AvailableView = {
-  items: { instance: string; project: string; platform: Platform; state: "off" | "paused" | "on"; ownerTeam: string }[];
+  items: { instance: string; project: string; platform: Platform; state: "off" | "paused" | "on"; ownerTeam: string; config: boolean }[];
   instanceOwner: string;
   page: number;
   hasMore: boolean;

@@ -786,8 +786,10 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 	states := map[string]string{}
+	configured := map[string]bool{}
 	for _, e := range all {
 		if e.Instance == name {
+			configured[lower(e.Project)] = e.Source == settings.SourceConfig
 			states[lower(e.Project)] = stateOn
 			if e.Paused {
 				states[lower(e.Project)] = statePaused
@@ -813,7 +815,7 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 		if owner == "" {
 			owner = instanceOwner
 		}
-		view.Items = append(view.Items, AvailableRepo{Instance: name, Project: p, Platform: platform, State: state, OwnerTeam: owner})
+		view.Items = append(view.Items, AvailableRepo{Instance: name, Project: p, Platform: platform, State: state, OwnerTeam: owner, Config: configured[lower(p)]})
 	}
 
 	if cat, ok := d.catalogs.Get(name); ok {

@@ -1202,6 +1202,9 @@ type AvailableRepo struct {
 	// OwnerTeam is the name of the owner team, its own or the instance's;
 	// "" for none.
 	OwnerTeam string `json:"ownerTeam"`
+	// Config is true when the config file sets the repository up: a
+	// maintainer cannot claim it.
+	Config bool `json:"config"`
 }
 
 // --- Users, teams and the audit log (admins only, 403 otherwise) ---

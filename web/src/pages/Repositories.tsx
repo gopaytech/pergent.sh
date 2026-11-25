@@ -288,7 +288,7 @@ function Picker() {
     const owned = r.ownerTeam !== "";
     if (owned && !mine.has(r.ownerTeam)) return <span className="meta">owned by {r.ownerTeam}</span>;
     if (r.state === "off") return button("onboard", "Onboard", true);
-    if (!owned) return button("claim", "Claim", true);
+    if (!owned) return r.config ? <span className="meta">managed by the config file</span> : button("claim", "Claim", true);
     return r.state === "paused" ? (
       button("resume", "Resume", false)
     ) : (

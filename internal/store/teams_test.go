@@ -492,6 +492,18 @@ func TestClaimOwnerRefusedRepoOwner(t *testing.T) {
 	}
 }
 
+func TestClaimOwnerRefusesEmptyProject(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "A", t0)
+	if _, err := s.ClaimOwner(ctx, "main", "", a.ID); err == nil {
+		t.Fatal("err = nil; want a refusal")
+	}
+	if got, _, _ := s.Team(ctx, a.ID); len(got.Repos) != 0 {
+		t.Errorf("repos = %+v; want none written", got.Repos)
+	}
+}
+
 func TestClaimOwnerRefusedInstanceOwner(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)

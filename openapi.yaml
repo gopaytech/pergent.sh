@@ -6467,13 +6467,16 @@ components:
     AvailableRepo:
       description: One repository the picker shows, with its state and owner.
       type: object
-      required: [instance, project, platform, state, ownerTeam]
+      required: [instance, project, platform, state, ownerTeam, config]
       properties:
         instance: {type: string}
         project: {type: string}
         platform:
           type: string
           enum: [gitlab, github]
+        config:
+          type: boolean
+          description: True when the config file sets the repository up; a maintainer cannot claim it.
         state:
           type: string
           enum: ['off', paused, 'on']

@@ -200,6 +200,9 @@ func ownSetup(e *env) ownTeams {
 
 const gadgets = "/api/admin/repositories/main/acme/gadgets"
 
+// gadgetsRepo is the remove route: DELETE lives on /api/repositories, PUT on /api/admin.
+const gadgetsRepo = "/api/repositories/main/acme/gadgets"
+
 // A maintainer of the owner team pauses and resumes with the switch on.
 func TestOwnerMaintainerPausesAndResumes(t *testing.T) {
 	t.Parallel()
@@ -229,7 +232,7 @@ func TestCoveringMaintainerCannotPause(t *testing.T) {
 	o := ownSetup(e)
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"pause":  e.send(o.ben, "PUT", gadgets, enabledBody(false)),
-		"remove": e.send(o.ben, "DELETE", gadgets, ""),
+		"remove": e.send(o.ben, "DELETE", gadgetsRepo, ""),
 	} {
 		if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgNotOwnerMaintainer {
 			t.Errorf("%s = %d %s; want 403 %q", name, rec.Code, rec.Body, msgNotOwnerMaintainer)
@@ -249,7 +252,7 @@ func TestSwitchOffLimits(t *testing.T) {
 	wantCode(t, e.send(o.ann, "PUT", gadgets, enabledBody(false)), "pause", http.StatusOK)
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"resume": e.send(o.ann, "PUT", gadgets, enabledBody(true)),
-		"remove": e.send(o.ann, "DELETE", gadgets, ""),
+		"remove": e.send(o.ann, "DELETE", gadgetsRepo, ""),
 	} {
 		if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgTeamsMayNotOnboard {
 			t.Errorf("%s = %d %s; want 403 %q", name, rec.Code, rec.Body, msgTeamsMayNotOnboard)
@@ -270,7 +273,7 @@ func TestOwnerMaintainerRemoves(t *testing.T) {
 	e := newEnv(t, teamsOnboard)
 	o := ownSetup(e)
 	e.cat["main"].set("acme/gadgets")
-	wantCode(t, e.send(o.ann, "DELETE", gadgets, ""), "remove", http.StatusOK)
+	wantCode(t, e.send(o.ann, "DELETE", gadgetsRepo, ""), "remove", http.StatusOK)
 	if _, found := e.storedRepo("main", "acme/gadgets"); found {
 		t.Error("the repository is still stored")
 	}

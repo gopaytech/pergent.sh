@@ -401,6 +401,9 @@ var errNoChange = errors.New("store: no change")
 // both before the owner is read: 2 claims of one repository run one after
 // the other, and the second one sees the first.
 func (s *Store) ClaimOwner(ctx context.Context, instance, project string, teamID int64) (OwnerChange, error) {
+	if project == "" {
+		return OwnerChange{}, errors.New("claim owner: a repository is needed")
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return OwnerChange{}, err
