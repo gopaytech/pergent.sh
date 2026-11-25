@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { RepoActionsView, RepositoryDetailView } from "../api";
 import { fakeApi } from "../test/fakeApi";
 import {
   chainRepoInherit,
@@ -1500,7 +1501,7 @@ describe("RepositoryDetail: switching on a paused repository", () => {
     const fake = fakeApi({ ...routes, "PUT /api/admin/repositories/main/acme/tools": { body: tools } });
     renderApp("/repos/main/acme/tools");
     const note = await screen.findByRole("note", { name: "Paused" });
-    await userEvent.click(within(note).getByRole("button", { name: "Switch on" }));
+    await userEvent.click(within(note).getByRole("button", { name: "Resume" }));
     expect(fake.find("PUT", "/api/admin/repositories/main/acme/tools")[0].body).toEqual({ enabled: true });
   });
 
@@ -1509,7 +1510,7 @@ describe("RepositoryDetail: switching on a paused repository", () => {
     renderApp("/repos/main/acme/tools");
     const note = await screen.findByRole("note", { name: "Paused" });
     expect(note).toHaveTextContent("An admin can switch it on again.");
-    expect(within(note).queryByRole("button", { name: "Switch on" })).not.toBeInTheDocument();
+    expect(within(note).queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
   });
 });
 
@@ -1520,5 +1521,69 @@ describe("RepositoryDetail: tabs in the address", () => {
     expect(screen.getByTestId("location")).toHaveTextContent("/repos/main/acme/payments?tab=inputs");
     await userEvent.click(screen.getByRole("tab", { name: "Setup checks (1)" }));
     expect(screen.getByTestId("location")).toHaveTextContent("?tab=setup");
+  });
+});
+
+describe("RepositoryDetail: owner-team buttons follow the actions flags", () => {
+  const flags = (a: Partial<RepoActionsView>, o: Partial<RepositoryDetailView> = {}) => ({
+    ...repoDetail(repoPayments, "maintainer"),
+    ownerTeam: { id: 2, name: "Payments", open: true },
+    ...o,
+    actions: { pause: false, resume: false, remove: false, release: false, ...a },
+  });
+  const at = (view: RepositoryDetailView) => ({ ...base, "GET /api/repositories/main/acme/payments": { body: view } });
+
+  it("shows Pause and Release ownership only for the flags that are true", async () => {
+    const first = renderAt("/repos/main/acme/payments", at(flags({ pause: true, release: true })));
+    expect(await screen.findByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Release ownership" })).toBeInTheDocument();
+    first.unmount();
+    renderAt("/repos/main/acme/payments", at(flags({})));
+    await screen.findByRole("heading", { name: "acme/payments" });
+    expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Release ownership" })).not.toBeInTheDocument();
+  });
+
+  it("Pause sends enabled false", async () => {
+    const view = flags({ pause: true });
+    const fake = fakeApi({ ...at(view), "PUT /api/admin/repositories/main/acme/payments": { body: view } });
+    renderApp("/repos/main/acme/payments");
+    await userEvent.click(await screen.findByRole("button", { name: "Pause" }));
+    expect(fake.find("PUT", "/api/admin/repositories/main/acme/payments")[0].body).toEqual({ enabled: false });
+  });
+
+  it("Release ownership asks first, then POSTs {}", async () => {
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const view = flags({ release: true });
+    const fake = fakeApi({ ...at(view), "POST /api/repositories/main/acme/payments/release": { body: { ...view, ownerTeam: null } } });
+    renderApp("/repos/main/acme/payments");
+    await userEvent.click(await screen.findByRole("button", { name: "Release ownership" }));
+    expect(confirm).toHaveBeenCalledWith(
+      "Release ownership of acme/payments? Payments keeps access, and the repository has no owner team until a team claims it.",
+    );
+    expect(fake.find("POST", "/api/repositories/main/acme/payments/release")[0].body).toEqual({});
+  });
+
+  it("sends nothing when the release confirm is cancelled", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    const fake = fakeApi(at(flags({ release: true })));
+    renderApp("/repos/main/acme/payments");
+    await userEvent.click(await screen.findByRole("button", { name: "Release ownership" }));
+    expect(fake.find("POST", "/api/repositories/main/acme/payments/release")).toHaveLength(0);
+  });
+
+  it("shows Resume on the Paused note from the resume flag, for a maintainer too", async () => {
+    const paused = { ...repoDetail(repoToolsPaused, "maintainer"), actions: { pause: false, resume: true, remove: false, release: false } };
+    const routes = { ...base, "GET /api/repositories/main/acme/tools": { body: paused } };
+    const first = renderAt("/repos/main/acme/tools", routes);
+    const note = await screen.findByRole("note", { name: "Paused" });
+    expect(within(note).getByRole("button", { name: "Resume" })).toBeInTheDocument();
+    first.unmount();
+    renderAt("/repos/main/acme/tools", {
+      ...routes,
+      "GET /api/repositories/main/acme/tools": { body: { ...paused, actions: { ...paused.actions, resume: false } } },
+    });
+    expect(within(await screen.findByRole("note", { name: "Paused" })).queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
   });
 });

@@ -547,6 +547,10 @@ type RepositoryDetailView struct {
 	OwnerTeam *OwnerTeamView `json:"ownerTeam"`
 	// Actions are the onboarding buttons the session may use now.
 	Actions RepoActionsView `json:"actions"`
+	// CoveringTeams are the names of the teams other than the owner team that
+	// list the repository themselves, which a Remove takes it from. Empty
+	// (never null) unless the session may remove it.
+	CoveringTeams []string `json:"coveringTeams"`
 }
 
 // RepoActionsView says which owner-team actions the session's buttons show:

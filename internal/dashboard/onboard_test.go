@@ -756,3 +756,40 @@ func TestRoleMatrix(t *testing.T) {
 		})
 	}
 }
+
+// coveringTeams names the teams other than the owner that list the repository
+// themselves (what a Remove takes it from), sorted and never null, and only
+// for a session that may remove.
+func TestCoveringTeams(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		cfg  func(*config.Config)
+		who  func(actionsEnv) *http.Cookie
+		want []string
+	}{
+		{"admin", teamsOnboard, func(e actionsEnv) *http.Cookie { return e.admin }, []string{"C", "D"}},
+		{"owner maintainer", teamsOnboard, func(e actionsEnv) *http.Cookie { return e.ann }, []string{"C", "D"}},
+		{"owner maintainer, switch off (no remove)", nil, func(e actionsEnv) *http.Cookie { return e.ann }, []string{}},
+		{"viewer", teamsOnboard, func(e actionsEnv) *http.Cookie { return e.viewer }, []string{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			e := newActionsEnv(t, c.cfg)
+			e.tickOn(e.a, "main", "acme/gadgets")
+			// D is made before C so the order is by name, not by ID. B covers
+			// the whole instance and so loses nothing.
+			e.team("D", nil, store.TeamRepo{Instance: "main", Project: "acme/gadgets"})
+			e.team("C", nil, store.TeamRepo{Instance: "main", Project: "Acme/Gadgets"})
+			e.dashboardRepo("main", "acme/gadgets", nil)
+			raw := getJSON[map[string]json.RawMessage](e.env, c.who(e), "/api/repositories/main/acme/gadgets")
+			got, ok := raw["coveringTeams"]
+			if !ok {
+				t.Fatalf("no coveringTeams key in %v", raw)
+			}
+			if want, _ := json.Marshal(c.want); string(got) != string(want) {
+				t.Errorf("coveringTeams = %s; want %s", got, want)
+			}
+		})
+	}
+}

@@ -469,6 +469,10 @@ export type RepositoryDetailView = {
   ownerTeam: OwnerTeamView | null;
   // actions are the owner-team buttons the session may use now.
   actions: RepoActionsView;
+  // coveringTeams are the names of the teams other than the owner team that
+  // list the repository themselves, which a Remove takes it from. [] unless
+  // the session may remove it.
+  coveringTeams: string[];
 };
 
 // RepoActionsView says which of Pause, Resume, Remove and Release ownership

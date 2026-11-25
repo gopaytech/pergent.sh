@@ -80,7 +80,8 @@ export default function RepositoryDetail() {
             </span>
           ))}
       </div>
-      {repo.paused && <Paused instance={repo.instance} project={repo.project} admin={view.role === "admin"} queryKey={queryKey} />}
+      <OwnerActions view={view} queryKey={queryKey} />
+      {repo.paused && <Paused instance={repo.instance} project={repo.project} canResume={view.actions.resume} queryKey={queryKey} />}
       {view.role === "admin" && view.quota && (
         <div className="quota" role="group" aria-label="Token usage this month">
           <QuotaLine label="This repository" ariaLabel="Repository token quota" use={view.quota.repository} />
@@ -127,9 +128,57 @@ export default function RepositoryDetail() {
   );
 }
 
-// Paused says the repository is paused; an admin switches it on from here,
-// as the switch on Repositories does.
-function Paused({ instance, project, admin, queryKey }: { instance: string; project: string; admin: boolean; queryKey: unknown[] }) {
+// OwnerActions are Pause and Release ownership, each shown when the server's
+// flag for the session is true. Release asks first.
+function OwnerActions({ view, queryKey }: { view: RepositoryDetailView; queryKey: unknown[] }) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const { repo, ownerTeam } = view;
+  const done = () => {
+    client.invalidateQueries({ queryKey });
+    client.invalidateQueries({ queryKey: ["repositories"] });
+    client.invalidateQueries({ queryKey: ["teams"] });
+    client.invalidateQueries({ queryKey: ["my-teams"] });
+  };
+  const pause = useMutation({
+    mutationFn: () => write<RepositoryDetailView>("PUT", paths.apiAdminRepo(repo.instance, repo.project), { enabled: false }),
+    onSuccess: done,
+  });
+  const release = useMutation({
+    mutationFn: () => write<RepositoryDetailView>("POST", paths.apiRepoRelease(repo.instance, repo.project), {}),
+    onSuccess: done,
+  });
+  const ask = () => {
+    const team = ownerTeam?.name ?? "The owner team";
+    if (
+      window.confirm(
+        `Release ownership of ${repo.project}? ${team} keeps access, and the repository has no owner team until a team claims it.`,
+      )
+    )
+      release.mutate();
+  };
+  if (!view.actions.pause && !view.actions.release) return null;
+  return (
+    <div className="actions-row">
+      {view.actions.pause && (
+        <button type="button" className="btn small" disabled={pause.isPending} onClick={() => pause.mutate()}>
+          Pause
+        </button>
+      )}
+      {view.actions.release && (
+        <button type="button" className="btn small" disabled={release.isPending} onClick={ask}>
+          Release ownership
+        </button>
+      )}
+      {pause.isError && <ErrorBox error={pause.error} />}
+      {release.isError && <ErrorBox error={release.error} />}
+    </div>
+  );
+}
+
+// Paused says the repository is paused; a session the server lets resume it
+// does from here, as the switch on Repositories does.
+function Paused({ instance, project, canResume, queryKey }: { instance: string; project: string; canResume: boolean; queryKey: unknown[] }) {
   const client = useQueryClient();
   const write = useWrite();
   const resume = useMutation({
@@ -143,11 +192,11 @@ function Paused({ instance, project, admin, queryKey }: { instance: string; proj
     <div className="alert" role="note" aria-label="Paused">
       <span className="prose grow">
         <strong>Paused:</strong> pergent doesn't review this repository, and its settings are kept.
-        {!admin && " An admin can switch it on again."}
+        {!canResume && " An admin can switch it on again."}
       </span>
-      {admin && (
+      {canResume && (
         <button type="button" className="btn small" disabled={resume.isPending} onClick={() => resume.mutate()}>
-          Switch on
+          Resume
         </button>
       )}
       {resume.isError && <ErrorBox error={resume.error} />}

@@ -189,7 +189,9 @@ function Picker() {
   const client = useQueryClient();
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
-  const [ownerTeam, setOwnerTeam] = useState("");
+  // ?team=<id> (from a team's + Add repository) pre-selects the owner team.
+  const [params] = useSearchParams();
+  const [ownerTeam, setOwnerTeam] = useState(params.get("team") ?? "");
   const chosen = instance !== "";
   // The owner team is optional. A list that can't be read leaves the select out.
   const teams = useQuery({ queryKey: ["teams"], queryFn: () => api.get<TeamView[]>("/api/teams"), enabled: me.admin });
@@ -243,7 +245,9 @@ function Picker() {
       ? String(maintained.find((t) => t.name === instanceOwner)?.id ?? "")
       : maintained.length === 1
         ? String(maintained[0].id)
-        : ownerTeam;
+        : maintained.some((t) => String(t.id) === ownerTeam)
+          ? ownerTeam
+          : "";
   const act = useMutation({
     mutationFn: ({ kind, project }: { kind: "onboard" | "claim" | "resume"; project: string }) => {
       if (kind === "claim") return write<RepositoryDetailView>("POST", paths.apiRepoClaim(instance, project), { team: Number(team) });
@@ -278,13 +282,18 @@ function Picker() {
     );
     if (me.admin) {
       if (r.state === "off") return button("onboard", "Switch on", false);
-      return r.state === "paused" ? button("resume", "Resume", false) : null;
+      if (r.state === "paused") return button("resume", "Resume", false);
+      return r.ownerTeam !== "" ? <span className="meta">owned by {r.ownerTeam}</span> : null;
     }
     const owned = r.ownerTeam !== "";
     if (owned && !mine.has(r.ownerTeam)) return <span className="meta">owned by {r.ownerTeam}</span>;
     if (r.state === "off") return button("onboard", "Onboard", true);
     if (!owned) return button("claim", "Claim", true);
-    return r.state === "paused" ? button("resume", "Resume", false) : <span className="meta">owned by {r.ownerTeam}</span>;
+    return r.state === "paused" ? (
+      button("resume", "Resume", false)
+    ) : (
+      <span className="meta">owned by {r.ownerTeam} (your team)</span>
+    );
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();

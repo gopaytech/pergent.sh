@@ -24,6 +24,25 @@ const routes = (me = maintainer, page: TeamPageView = teamPagePayments) => ({
 const tabNames = async () => (await screen.findAllByRole("tab")).map((t) => t.textContent);
 
 describe("Team page", () => {
+  it("links a maintainer to the picker with the team, when an instance lets teams onboard", async () => {
+    fakeApi(routes());
+    const first = renderApp("/teams/2");
+    const add = await screen.findByRole("link", { name: "+ Add repository" });
+    expect(add).toHaveAttribute("href", "/repos?add=1&team=2");
+    first.unmount();
+    fakeApi(routes({ ...maintainer, onboardInstances: [] }));
+    renderApp("/teams/2");
+    await screen.findByRole("heading", { name: "Payments" });
+    expect(screen.queryByRole("link", { name: "+ Add repository" })).not.toBeInTheDocument();
+  });
+
+  it("gives a viewer of the team no + Add repository", async () => {
+    fakeApi(routes({ ...viewer, onboardInstances: ["main"] }, asViewer));
+    renderApp("/teams/2");
+    await screen.findByRole("heading", { name: "Payments" });
+    expect(screen.queryByRole("link", { name: "+ Add repository" })).not.toBeInTheDocument();
+  });
+
   it("viewer sees Repositories, Members, Models only", async () => {
     // GET /api/teams/2/usage is not in routes: fakeApi would answer 404, and the calls list shows it.
     const fake = fakeApi(routes(viewer, asViewer));

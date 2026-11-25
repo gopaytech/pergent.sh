@@ -7665,7 +7665,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff, ownerTeam, actions]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff, ownerTeam, actions, coveringTeams]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -7715,6 +7715,10 @@ components:
             - {$ref: '#/components/schemas/OwnerTeamView'}
             - {type: 'null'}
         actions: {$ref: '#/components/schemas/RepoActionsView'}
+        coveringTeams:
+          type: array
+          items: {type: string}
+          description: The names of the teams other than the owner team that list the repository themselves (not through the whole instance), which a Remove takes it from. Sorted. Empty unless the session may remove the repository.
     RepoActionsView:
       description: |
         The owner-team buttons the session may use on a repository now. Each is

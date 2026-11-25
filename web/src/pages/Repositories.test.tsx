@@ -423,6 +423,23 @@ describe("Repositories", () => {
       expect(within(picker).queryByRole("button", { name: /payments|tools/ })).not.toBeInTheDocument();
     });
 
+    it("says owned by <team> (your team) for an on row the maintainer's own team owns", async () => {
+      fakeApi(routes([row("acme/payments", "on", "Payments")]));
+      const picker = await open();
+      expect(await within(picker).findByText("owned by Payments (your team)")).toBeInTheDocument();
+      expect(within(picker).queryByRole("button", { name: /payments/ })).not.toBeInTheDocument();
+    });
+
+    it("pre-selects the team named in ?team= for a maintainer of several teams", async () => {
+      const second = { ...myTeams[1], id: 9, name: "Core", role: "maintainer" as const };
+      fakeApi(routes([row("acme/payments", "off")], "", [myTeams[0], second, myTeams[1]]));
+      renderApp("/repos?add=1&team=9");
+      const picker = await screen.findByRole("region", { name: "Add repository" });
+      await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+      expect(await within(picker).findByLabelText("Owner team")).toHaveValue("9");
+      expect(within(picker).getByRole("button", { name: "Onboard acme/payments" })).toBeEnabled();
+    });
+
     it("asks for the team when the maintainer has more than one, with no None", async () => {
       const second = { ...myTeams[1], id: 9, name: "Core", role: "maintainer" as const };
       const fake = fakeApi(routes([row("acme/payments", "off")], "", [myTeams[0], second, myTeams[1]]));
@@ -462,6 +479,29 @@ describe("Repositories", () => {
       await userEvent.click(within(picker).getByRole("button", { name: "Resume acme/payments" }));
       expect(fake.find("PUT", "/api/admin/repositories/main/acme/payments")[0].body).toEqual({ enabled: true });
     });
+  });
+
+  it("shows an admin owned by <team> on an on row that has an owner, and pre-selects ?team=", async () => {
+    fakeApi({
+      "GET /api/me": { body: ssoAdmin },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "GET /api/teams": { body: [teamPayments, teamEmpty] },
+      "GET /api/admin/instances/main/repositories?search=": {
+        body: {
+          items: [{ instance: "main", project: "acme/tools", platform: "gitlab", state: "on", ownerTeam: "Payments" }],
+          page: 1,
+          hasMore: false,
+          truncated: false,
+          instanceOwner: "",
+        },
+      },
+    });
+    renderApp(`/repos?add=1&team=${teamEmpty.id}`);
+    const picker = await screen.findByRole("region", { name: "Add repository" });
+    await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+    expect(await within(picker).findByText("owned by Payments")).toBeInTheDocument();
+    expect(await within(picker).findByLabelText("Owner team")).toHaveValue(String(teamEmpty.id));
   });
 
   it("pauses a repository with the switch, with no confirm, and keeps it in the list", async () => {

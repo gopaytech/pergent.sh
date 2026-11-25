@@ -370,7 +370,12 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   },
   builtInRulesOff: "",
   ownerTeam: null,
-  actions: { pause: false, resume: false, remove: false, release: false },
+  // What the server's flags give an admin; anyone else gets none.
+  actions:
+    role === "admin"
+      ? { pause: !repo.paused, resume: repo.paused, remove: repo.source === "dashboard", release: false }
+      : { pause: false, resume: false, remove: false, release: false },
+  coveringTeams: [],
 });
 
 // A skill written in the dashboard, on the default list.

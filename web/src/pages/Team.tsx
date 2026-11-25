@@ -3,6 +3,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, isStatus, paths, type TeamPageView, type TeamTab } from "../api";
+import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, NotFound, Tabs } from "../ui";
 import TeamLimits from "./TeamLimits";
@@ -25,6 +26,7 @@ export default function Team() {
     enabled: id !== null,
   });
   const [search, setSearch] = useSearchParams();
+  const me = useMe();
   if (id === null || isStatus(page.error, 404)) return <NotFound />;
   if (page.isPending) return <Loading />;
   if (page.isError) return <ErrorBox error={page.error} />;
@@ -49,6 +51,14 @@ export default function Team() {
       <h1>{v.team.name}</h1>
       <div className="sub spaced">Your role: {v.role}</div>
       {v.canEdit && <AdminActions v={v} />}
+      {/* A maintainer adds repositories through the picker, for this team. */}
+      {v.role === "maintainer" && me.onboardInstances.length > 0 && (
+        <div className="actions-row">
+          <Link className="btn small primary" to={`/repos?add=1&team=${v.team.id}`}>
+            + Add repository
+          </Link>
+        </div>
+      )}
       <Tabs<TeamTab> tabs={tabs} value={tab} onChange={(t) => setSearch(t === "repositories" ? {} : { tab: t }, { replace: true })} />
       <div role="tabpanel">
         {tab === "repositories" && <TeamRepositories view={v} />}
