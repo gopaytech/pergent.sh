@@ -99,13 +99,10 @@ aside {
 }
 
 .logo {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: var(--accent);
-  display: grid;
-  place-items: center;
-  font-size: 15px;
+  display: block;
+  width: 24px;
+  height: 18px;
+  flex: none;
 }
 
 .org {
