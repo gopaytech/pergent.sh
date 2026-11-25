@@ -88,8 +88,8 @@ Repository ▲ | Owner team | Platform | Review | Reviews | Approved | Failed | 
   text. An owner through a whole-instance entry shows the same name, with the
   hover text "Owns every repository on <instance>".
 - **No owner:** for an admin, an amber "⚠ No owner" (the words go with the
-  icon) linked to the repository's Settings tab, where the Teams card sets
-  the owner. For anyone else, a grey "None": they can't set an owner, so a
+  icon) linked to the admin Teams page, where a team's Repositories tab has
+  the owner tick. For anyone else, a grey "None": they can't set an owner, so a
   warning would be noise.
 - **No-owner line** above the table, for admins only: "N repositories have
   no owner. Show them". N counts repositories being reviewed now, not paused
