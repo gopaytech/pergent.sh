@@ -372,3 +372,145 @@ func (s *Store) DeleteTeam(ctx context.Context, id int64, check func(Team) error
 	}
 	return true, nil
 }
+
+// OwnerChange is a team as it was and as it was stored by ClaimOwner or
+// ReleaseOwner.
+type OwnerChange struct{ Before, After Team }
+
+// errNoChange stops updateTeamTx when apply has nothing to write.
+var errNoChange = errors.New("store: no change")
+
+// ClaimOwner makes team teamID the owner of project on instance, in one
+// transaction. The team's own entry for the path (matched ignoring case)
+// gets the owner tick, or the team gets a new entry with it; project is
+// spelled as dashboard_repos.project stores it. Another team that owns the
+// path, at its own entry or for the whole instance, is *OwnerTakenError
+// (Project is empty for an instance owner). A team that isn't there is
+// ErrUnknownTeam. It doesn't touch dashboard_repos.enabled.
+//
+// The team row is locked first, as UpdateTeam does, then the owners lock,
+// both before the owner is read: 2 claims of one repository run one after
+// the other, and the second one sees the first.
+func (s *Store) ClaimOwner(ctx context.Context, instance, project string, teamID int64) (OwnerChange, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return OwnerChange{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	var locked int64
+	err = tx.QueryRow(ctx, `SELECT id FROM teams WHERE id = $1 FOR UPDATE`, teamID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OwnerChange{}, ErrUnknownTeam
+	}
+	if err != nil {
+		return OwnerChange{}, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, ownersLockKey); err != nil {
+		return OwnerChange{}, err
+	}
+	var ownerProject, ownerName string
+	err = tx.QueryRow(ctx, `SELECT o.project, t.name FROM team_repos o JOIN teams t ON t.id = o.team_id
+		WHERE o.owner AND o.instance = $1 AND (lower(o.project) = lower($2) OR o.project = '')
+		ORDER BY o.project = '' LIMIT 1`, instance, project).Scan(&ownerProject, &ownerName)
+	if err == nil {
+		return OwnerChange{}, &OwnerTakenError{Instance: instance, Project: ownerProject, Team: ownerName}
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return OwnerChange{}, err
+	}
+	var change OwnerChange
+	ok, err := updateTeamTx(ctx, tx, teamID, func(t *Team) error {
+		change.Before = cloneTeam(*t)
+		i := slices.IndexFunc(t.Repos, func(tr TeamRepo) bool {
+			return tr.Instance == instance && tr.Project != "" && strings.EqualFold(tr.Project, project)
+		})
+		if i >= 0 {
+			t.Repos[i].Owner = true
+		} else {
+			t.Repos = append(t.Repos, TeamRepo{Instance: instance, Project: project, Owner: true})
+		}
+		change.After = cloneTeam(*t)
+		return nil
+	})
+	if err != nil {
+		return OwnerChange{}, err
+	}
+	if !ok {
+		return OwnerChange{}, ErrUnknownTeam
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return OwnerChange{}, err
+	}
+	return change, nil
+}
+
+// ReleaseOwner clears the owner tick on the team's own entry for project on
+// instance (matched ignoring case) and keeps the entry. released is false,
+// and nothing is written, when the team has no such entry or it has no tick.
+// An instance entry is never touched. A team that isn't there is
+// ErrUnknownTeam.
+func (s *Store) ReleaseOwner(ctx context.Context, instance, project string, teamID int64) (change OwnerChange, released bool, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return OwnerChange{}, false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	ok, err := updateTeamTx(ctx, tx, teamID, func(t *Team) error {
+		i := slices.IndexFunc(t.Repos, func(tr TeamRepo) bool {
+			return tr.Instance == instance && tr.Project != "" && strings.EqualFold(tr.Project, project)
+		})
+		if i < 0 || !t.Repos[i].Owner {
+			return errNoChange
+		}
+		change.Before = cloneTeam(*t)
+		t.Repos[i].Owner = false
+		change.After = cloneTeam(*t)
+		return nil
+	})
+	if errors.Is(err, errNoChange) {
+		return OwnerChange{}, false, nil
+	}
+	if err != nil {
+		return OwnerChange{}, false, err
+	}
+	if !ok {
+		return OwnerChange{}, false, ErrUnknownTeam
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return OwnerChange{}, false, err
+	}
+	return change, true, nil
+}
+
+// cloneTeam copies the slices of t, so a later change to t leaves the copy.
+func cloneTeam(t Team) Team {
+	t.Members, t.Repos = slices.Clone(t.Members), slices.Clone(t.Repos)
+	return t
+}
+
+// InstanceOwners returns the names of the owner teams on instance: byPath is
+// keyed by lower-cased project, instanceOwner is the owner of the whole
+// instance ("" for none).
+func (s *Store) InstanceOwners(ctx context.Context, instance string) (byPath map[string]string, instanceOwner string, err error) {
+	rows, err := s.pool.Query(ctx, `SELECT r.project, t.name FROM team_repos r JOIN teams t ON t.id = r.team_id
+		WHERE r.owner AND r.instance = $1`, instance)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	byPath = map[string]string{}
+	for rows.Next() {
+		var project, name string
+		if err := rows.Scan(&project, &name); err != nil {
+			return nil, "", err
+		}
+		if project == "" {
+			instanceOwner = name
+			continue
+		}
+		byPath[strings.ToLower(project)] = name
+	}
+	return byPath, instanceOwner, rows.Err()
+}
