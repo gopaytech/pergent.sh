@@ -210,8 +210,23 @@ func TestAddRepositoryNeedsAdmin(t *testing.T) {
 			e := newEnv(t, nil)
 			e.cat["main"].set("acme/tools")
 			c := e.signInRole(role)
-			wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "GET available", http.StatusNotFound)
-			wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/tools"}`), "POST", http.StatusNotFound)
+			// A viewer maintains no team: 404. A maintainer passes that gate
+			// and meets the instance's switch, off here: 403.
+			want := http.StatusNotFound
+			if role == store.RoleMaintainer {
+				want = http.StatusForbidden
+			}
+			avail := e.get(c, "/api/repositories/available?instance=main")
+			post := e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/tools"}`)
+			wantCode(t, avail, "GET available", want)
+			wantCode(t, post, "POST", want)
+			if want == http.StatusForbidden {
+				for _, rec := range []*httptest.ResponseRecorder{avail, post} {
+					if !strings.Contains(rec.Body.String(), msgTeamsMayNotOnboard) {
+						t.Errorf("body = %s, want %q", rec.Body, msgTeamsMayNotOnboard)
+					}
+				}
+			}
 			if _, found := e.storedRepo("main", "acme/tools"); found {
 				t.Error("someone who is not an admin switched a repository on")
 			}
@@ -291,11 +306,17 @@ func TestUserCannotWriteUncoveredRepo(t *testing.T) {
 			t.Errorf("%s %s body = %s, want the unknown repository's %s", w[0], w[1], rec.Body, unknown.Body)
 		}
 	}
-	// Switching on and off is for admins, whatever the repository.
+	// Switching on and off is for admins (and, once teams may onboard, owner
+	// maintainers): with the switch off, 403.
 	for _, w := range []struct{ method, target, body string }{
 		{"DELETE", "/api/repositories/main/acme/gadgets", ""}, {"DELETE", "/api/repositories/main/acme/hidden", ""},
 	} {
-		wantCode(t, e.send(c, w.method, w.target, w.body), w.method+" "+w.target, http.StatusNotFound)
+		// alice maintains a team, and the switch is off: 403 on both.
+		rec := e.send(c, w.method, w.target, w.body)
+		wantCode(t, rec, w.method+" "+w.target, http.StatusForbidden)
+		if !strings.Contains(rec.Body.String(), msgTeamsMayNotOnboard) {
+			t.Errorf("%s %s body = %s, want %q", w.method, w.target, rec.Body, msgTeamsMayNotOnboard)
+		}
 	}
 	if r, found := e.storedRepo("main", "acme/hidden"); !found || r.Approve == nil || !*r.Approve {
 		t.Errorf("acme/hidden changed: %+v, %v", r, found)
