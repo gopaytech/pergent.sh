@@ -40,7 +40,7 @@ const settingsRoutes = (detail: RepositoryDetailView) => ({
 describe("Trusted authors: repository settings", () => {
   it("offers the instance default, on and off, and sends off", async () => {
     const fake = fakeApi(settingsRoutes(repoDetail(repoPayments)));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const select = await screen.findByLabelText("Trusted authors only");
     expect(within(select).getByRole("option", { name: "Instance default (follow visibility)" })).toBeInTheDocument();
     await userEvent.selectOptions(select, "off");
@@ -55,7 +55,7 @@ describe("Trusted authors: repository settings", () => {
       instanceTrustedAuthorsOnly: "off" as const,
     };
     const fake = fakeApi(settingsRoutes(detail));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const select = await screen.findByLabelText("Trusted authors only");
     expect(select).toHaveValue("on");
     // What following the instance would give is named.
@@ -70,7 +70,7 @@ describe("Trusted authors: repository settings", () => {
       trustedAuthors: { value: [{ id: 9, username: "bob" }, { id: 4, username: "carol" }], overridden: true },
     });
     const fake = fakeApi(settingsRoutes(detail));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const list = await screen.findByRole("group", { name: "Trusted authors" });
     expect(list).toHaveTextContent("bob");
     await userEvent.click(within(list).getByRole("button", { name: "Remove carol" }));
@@ -85,7 +85,7 @@ describe("Trusted authors: repository settings", () => {
   it("sends null when the last name goes", async () => {
     const detail = withTrust(repoDetail(repoPayments), { trustedAuthors: { value: [{ id: 9, username: "bob" }], overridden: true } });
     const fake = fakeApi(settingsRoutes(detail));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const list = await screen.findByRole("group", { name: "Trusted authors" });
     await userEvent.click(within(list).getByRole("button", { name: "Remove bob" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -101,7 +101,7 @@ describe("Trusted authors: repository settings", () => {
       "GET /api/repositories/main/acme/widgets/inputs": { body: noInputs },
       "GET /api/repositories/main/acme/widgets/teams": { body: { teams: [] } },
     });
-    renderApp("/repos/main/acme/widgets?tab=settings");
+    renderApp("/repos/main/acme/widgets?tab=settings", { unfolded: true });
     expect(await screen.findByLabelText("Trusted authors only")).toBeDisabled();
     const list = screen.getByRole("group", { name: "Trusted authors" });
     expect(list).toHaveTextContent("bob");
@@ -116,7 +116,7 @@ describe("Trusted authors: maintainers", () => {
       trustedAuthors: { value: [{ id: 9, username: "bob" }], overridden: true },
     });
     const fake = fakeApi(settingsRoutes(detail));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     expect(await screen.findByLabelText("Trusted authors only")).toBeDisabled();
     const list = screen.getByRole("group", { name: "Trusted authors" });
     expect(list).toHaveTextContent("bob");

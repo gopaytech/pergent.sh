@@ -46,7 +46,7 @@ const four = reviewersWith([[entryOpus], [entrySonnet], [entryConfig, entryOpus]
 describe("ReviewersCard", () => {
   it("shows reviewer 1 as the chain in effect, and no judge and no cost with 1 reviewer", async () => {
     fakeApi(routes());
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     const one = await group(box, "Reviewer 1");
     expect(await within(one).findByText("Inherited from the chain of its owner team, Payments.")).toBeInTheDocument();
@@ -56,7 +56,7 @@ describe("ReviewersCard", () => {
 
   it("adds reviewer 2, fills the judge with its first entry, and saves both in one PUT", async () => {
     const fake = fakeApi({ ...routes(), [`PUT ${reviewersPath}`]: { body: two } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     await userEvent.click(await within(box).findByRole("button", { name: "Add a reviewer" }));
     const r2 = await group(box, "Reviewer 2");
@@ -74,7 +74,7 @@ describe("ReviewersCard", () => {
 
   it("adds reviewer 3 and keeps the judge it has", async () => {
     const fake = fakeApi({ ...routes(two), [`PUT ${reviewersPath}`]: { body: two } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     await userEvent.click(await within(box).findByRole("button", { name: "Add a reviewer" }));
     const r3 = await group(box, "Reviewer 3");
@@ -86,7 +86,7 @@ describe("ReviewersCard", () => {
 
   it("removes reviewer 2 with a PUT of the shorter list, so the later reviewers move up", async () => {
     const fake = fakeApi({ ...routes(four), [`PUT ${reviewersPath}`]: { body: reviewersWith([[entrySonnet], [entryConfig, entryOpus]], [entryOpus]) } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     // It saves at once, so it asks first; told no, nothing is sent.
     const ask = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
@@ -105,7 +105,7 @@ describe("ReviewersCard", () => {
 
   it("removes the last extra reviewer and the judge with it", async () => {
     const fake = fakeApi({ ...routes(two), [`PUT ${reviewersPath}`]: { body: reviewersNone } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
     await userEvent.click(await within(box).findByRole("button", { name: "Remove reviewer 2" }));
@@ -119,7 +119,7 @@ describe("ReviewersCard", () => {
 
   it("edits reviewer 2 and sends the judge as it is", async () => {
     const fake = fakeApi({ ...routes(two), [`PUT ${reviewersPath}`]: { body: two } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     await userEvent.click(await within(box).findByRole("button", { name: "Edit reviewer 2" }));
     const r2 = await group(box, "Reviewer 2");
@@ -134,7 +134,7 @@ describe("ReviewersCard", () => {
 
   it("edits the judge and sends the reviewers as they are", async () => {
     const fake = fakeApi({ ...routes(two), [`PUT ${reviewersPath}`]: { body: two } });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     await userEvent.click(await within(box).findByRole("button", { name: "Edit the judge" }));
     const judge = await group(box, "Judge");
@@ -150,7 +150,7 @@ describe("ReviewersCard", () => {
       ...routes(two),
       [`PUT ${reviewersPath}`]: { status: 400, body: { error: "reviewer 3 starts with the same model as reviewer 2" } },
     });
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     await userEvent.click(await within(box).findByRole("button", { name: "Add a reviewer" }));
     const r3 = await group(box, "Reviewer 3");
@@ -190,7 +190,7 @@ describe("ReviewersCard", () => {
         warnings: ["No judge: findings are merged without checking"],
       }),
     );
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await card();
     expect(await within(box).findByText("No judge: findings are merged without checking")).toBeInTheDocument();
     expect(within(await group(box, "Judge")).getByText("No entries.")).toBeInTheDocument();
@@ -199,7 +199,7 @@ describe("ReviewersCard", () => {
   it("disables Add with the server's refusal as its title", async () => {
     // With 1 reviewer and an admin, Add is enabled unless the server refuses.
     fakeApi(routes({ ...reviewersNone, addRefusal: "no review image supports multi review yet" }));
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const add = await within(await card()).findByRole("button", { name: "Add a reviewer" });
     expect(add).toBeDisabled();
     expect(add).toHaveAttribute("title", "no review image supports multi review yet");
@@ -207,7 +207,7 @@ describe("ReviewersCard", () => {
 
   it("enables Add when the server does not refuse", async () => {
     fakeApi(routes());
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const add = await within(await card()).findByRole("button", { name: "Add a reviewer" });
     await vi.waitFor(() => expect(add).toBeEnabled());
     expect(add).not.toHaveAttribute("title");

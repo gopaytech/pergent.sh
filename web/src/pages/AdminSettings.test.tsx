@@ -1379,16 +1379,18 @@ describe("AdminSettings folding", () => {
   };
   const title = (name: RegExp) => screen.getByRole("button", { name });
 
-  it("starts with every card folded, each with a one-line summary", async () => {
+  it("starts with Repository defaults open and the other cards folded, each with a one-line summary", async () => {
     fakeApi(routes(operator));
     await render();
-    expect(title(/^Repository defaults/)).toHaveAttribute("aria-expanded", "false");
+    expect(title(/^Repository defaults/)).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Save defaults" })).toBeInTheDocument();
     expect(title(/^Repository defaults/)).toHaveTextContent("All follow the config · 1 default skill · 0 default rule sets");
+    expect(title(/^Comment footer/)).toHaveAttribute("aria-expanded", "false");
+    expect(title(/^Models/)).toHaveAttribute("aria-expanded", "false");
     expect(title(/^Comment footer/)).toHaveTextContent("The default text");
     expect(title(/^Models/)).toHaveTextContent("2 models · default Claude Sonnet");
     expect(await screen.findByRole("button", { name: /^Global chain/ })).toHaveTextContent("1 entry · first Claude Sonnet");
     // A folded card's fields are out of reach until it is opened.
-    expect(screen.queryByRole("button", { name: "Save defaults" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "Text" })).not.toBeInTheDocument();
     await userEvent.click(title(/^Comment footer/));
     expect(title(/^Comment footer/)).toHaveAttribute("aria-expanded", "true");

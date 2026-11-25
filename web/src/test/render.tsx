@@ -3,6 +3,7 @@ import { render } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter, useLocation, useNavigate } from "react-router";
 
 import App from "../App";
+import { FoldsStartOpen } from "../Fold";
 
 // Location shows the router's current path, for tests that check where a
 // page sent the user.
@@ -20,7 +21,8 @@ function Go({ into }: { into: { go: (to: string) => void } }) {
 
 // renderApp renders the whole app at path, with a fresh query cache and no
 // retries; it returns the cache's client and a go(path) that navigates, with the render result.
-export function renderApp(path: string) {
+// unfolded starts every folding card open, for a test about what is inside one.
+export function renderApp(path: string, { unfolded = false }: { unfolded?: boolean } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } },
   });
@@ -43,7 +45,9 @@ export function renderApp(path: string) {
   );
   const result = render(
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
+      <FoldsStartOpen.Provider value={unfolded}>
+        <RouterProvider router={router} />
+      </FoldsStartOpen.Provider>
     </QueryClientProvider>,
   );
   return { ...result, client, go: (to: string) => nav.go(to) };

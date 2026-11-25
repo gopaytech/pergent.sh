@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,8 +29,23 @@ func (s *Store) Audit(ctx context.Context, e AuditEntry) error {
 // AuditLog returns up to limit entries, newest first, older than the entry
 // with ID beforeID (0 starts at the newest).
 func (s *Store) AuditLog(ctx context.Context, beforeID int64, limit int) ([]AuditEntry, error) {
+	return s.SearchAudit(ctx, beforeID, "", limit)
+}
+
+// SearchAudit is AuditLog for the entries whose actor, action (with its
+// underscores read as spaces too), instance/project or detail holds text,
+// ignoring case. Empty text matches every entry; % and _ in it are plain
+// characters.
+func (s *Store) SearchAudit(ctx context.Context, beforeID int64, text string, limit int) ([]AuditEntry, error) {
+	pattern := ""
+	if text != "" {
+		pattern = "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(text) + "%"
+	}
 	rows, err := s.pool.Query(ctx, `SELECT id, at, actor_id, actor, action, instance, project, detail FROM audit_log
-		WHERE $1::bigint = 0 OR id < $1::bigint ORDER BY id DESC LIMIT $2`, beforeID, limit)
+		WHERE ($1::bigint = 0 OR id < $1::bigint)
+		AND ($3 = '' OR actor ILIKE $3 OR action ILIKE $3 OR replace(action, '_', ' ') ILIKE $3
+			OR (instance || '/' || project) ILIKE $3 OR detail ILIKE $3)
+		ORDER BY id DESC LIMIT $2`, beforeID, limit, pattern)
 	if err != nil {
 		return nil, err
 	}

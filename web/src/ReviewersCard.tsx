@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 
 import { api, paths, type ChainEntryView, type ChainRef, type ChainView, type MyTeamView, type ReviewersView } from "./api";
 import ChainEditor from "./ChainEditor";
+import { FoldCard, countText } from "./Fold";
 import { useWrite } from "./layout/write";
 import { addReviewer, costHint, draftOf, removeReviewer, setReviewer, type ReviewersDraft } from "./reviewers";
 import { ErrorBox, Loading } from "./ui";
@@ -46,7 +47,18 @@ type Open = number | "new" | "judge" | null;
 // repository sees the card; admins and maintainers of its owner team change
 // it (the server says which: readOnly). A refused save shows the server's
 // message.
-export default function ReviewersCard({ instance, project, first }: { instance: string; project: string; first: ReactNode }) {
+export default function ReviewersCard({
+  instance,
+  project,
+  first,
+  defaultOpen = true,
+}: {
+  instance: string;
+  project: string;
+  first: ReactNode;
+  // false starts the card folded, as on a repository's Settings tab.
+  defaultOpen?: boolean;
+}) {
   const client = useQueryClient();
   const write = useWrite();
   const key = ["repo-reviewers", instance, project];
@@ -88,8 +100,12 @@ export default function ReviewersCard({ instance, project, first }: { instance: 
   const judge = v?.judge ?? start;
 
   return (
-    <section className="card" aria-label="Reviewers">
-      <h2>Reviewers</h2>
+    <FoldCard
+      label="Reviewers"
+      title="Reviewers"
+      summary={reviewers === 1 ? "1 reviewer, multi review off" : `${countText(reviewers, "reviewer")} and a judge`}
+      defaultOpen={defaultOpen}
+    >
       <div className="pad meta">
         Each reviewer is a model chain: the models a review tries, in order. When the provider says an entry is out of quota or
         credit, or rejects its key, the review starts again on the next one. With 2 or more reviewers, they all review each change
@@ -194,7 +210,7 @@ export default function ReviewersCard({ instance, project, first }: { instance: 
       )}
       {save.isError && <ErrorBox error={save.error} />}
       {clear.isError && <ErrorBox error={clear.error} />}
-    </section>
+    </FoldCard>
   );
 }
 

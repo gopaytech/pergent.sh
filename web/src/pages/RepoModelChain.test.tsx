@@ -21,7 +21,7 @@ const routes = {
 describe("RepoModelChain: one Reviewers card", () => {
   it("puts the model chain in the Reviewers card as reviewer 1, with no other chain card", async () => {
     const fake = fakeApi(routes);
-    renderApp("/repos/main/acme/payments?tab=settings");
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const box = await screen.findByRole("region", { name: "Reviewers" });
     const one = await within(box).findByRole("group", { name: "Reviewer 1" });
     expect(await within(one).findByText("qwen3.5")).toBeInTheDocument();
