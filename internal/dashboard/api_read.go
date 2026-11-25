@@ -374,12 +374,15 @@ func (d *Dashboard) reviews(w http.ResponseWriter, r *http.Request) {
 		filter.Visible = v
 	}
 	if t := q.Get("team"); t != "" {
+		// owner is nil for "none": repositories with no owner team.
+		var owner *int64
 		if t != teamNone {
-			if _, err := strconv.ParseUint(t, 10, 63); err != nil {
+			n, err := strconv.ParseUint(t, 10, 63)
+			if err != nil {
 				writeError(w, http.StatusBadRequest, msgTeamFilter)
 				return
 			}
-			id, _ := strconv.ParseInt(t, 10, 64)
+			id := int64(n)
 			if _, found, err := d.Store.Team(ctx, id); err != nil {
 				d.failed(w, r, "loading a team", err)
 				return
@@ -387,8 +390,9 @@ func (d *Dashboard) reviews(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, msgNoTeam)
 				return
 			}
+			owner = &id
 		}
-		v, err := d.narrowToTeam(ctx, filter.Visible, t)
+		v, err := d.narrowToTeam(ctx, filter.Visible, owner)
 		if err != nil {
 			d.failed(w, r, "listing repository owners", err)
 			return
@@ -447,11 +451,11 @@ func (d *Dashboard) projectVisibility(ctx context.Context, se Session, instance,
 // teamNone is the team filter for repositories with no owner team.
 const teamNone = "none"
 
-// narrowToTeam is v cut to the repositories owned by team (a decimal ID), or
-// with no owner for "none". An admin's v.All is first read as every stored
+// narrowToTeam is v cut to the repositories owned by the team with ID team,
+// or with no owner when team is nil. An admin's v.All is first read as every stored
 // project, so the result is always a list of projects, and never more than v
 // let be read.
-func (d *Dashboard) narrowToTeam(ctx context.Context, v store.Visibility, team string) (store.Visibility, error) {
+func (d *Dashboard) narrowToTeam(ctx context.Context, v store.Visibility, team *int64) (store.Visibility, error) {
 	projects := v.Projects
 	if v.All {
 		stored, err := d.Store.Projects(ctx)
@@ -474,7 +478,7 @@ func (d *Dashboard) narrowToTeam(ctx context.Context, v store.Visibility, team s
 	var out []store.VisibleProject
 	for i, p := range projects {
 		owner, owned := owners[keys[i]]
-		if team == teamNone && !owned || owned && strconv.FormatInt(owner, 10) == team {
+		if team == nil && !owned || team != nil && owned && owner == *team {
 			out = append(out, p)
 		}
 	}

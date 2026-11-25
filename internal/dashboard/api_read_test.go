@@ -11,6 +11,7 @@ import (
 	"path"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -609,6 +610,7 @@ func TestReviewsTeamFilter(t *testing.T) {
 	}{
 		{"no filter", "", []string{"gh/acme/tools/3", "main/acme/payments/1", "main/acme/widgets/2"}},
 		{"devs", fmt.Sprintf("?team=%d", devs), []string{"main/acme/payments/1"}},
+		{"devs, with leading zeros", "?team=00" + strconv.FormatInt(devs, 10), []string{"main/acme/payments/1"}},
 		{"ops, through the instance", fmt.Sprintf("?team=%d", ops), []string{"main/acme/widgets/2"}},
 		{"none", "?team=none", []string{"gh/acme/tools/3"}},
 		{"devs and another project", fmt.Sprintf("?team=%d&project=acme/widgets", devs), nil},
