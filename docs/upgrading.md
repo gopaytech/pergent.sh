@@ -1,7 +1,10 @@
 # ⬆️ Upgrading
 
-## Unreleased
+## Upgrading to 0.22.0
 
+**The dashboard is easier and safer to use, and a team has its own page.** No migration and no new config key: an upgrade needs no step, and rolling back to 0.21.0 needs none either.
+
+- **Behaviour change: the Overview's Needs attention panel is gone,** and `GET /api/overview` no longer sends `attention` (`AttentionView` loses `client`). A repository's setup problems stay on its **Setup checks** tab and as the **Needs attention** health on **Repositories**. Items about a whole instance or an API client were shown only there: an approve bot token that expires within 4 days is no longer shown anywhere, an instance that is unreachable or stuck in removal is in the log, and failing API callbacks are counted by `pergent_api_callbacks_total`.
 - **Skills, instructions and rules render as markdown,** on a repository's **Skills & instructions** tab, the **Rules** page, the built-in rule picker and a skill's page with its old versions: headings, lists, code, tables and task lists. A skill's front matter shows apart, and **Show source** shows the text as written. HTML in the text is shown as text and never runs; links open in a new tab and only when they are http(s); an image shows as a link to it. Rule sets stay YAML, shown as written. The renderer (`react-markdown` with `remark-gfm`, both MIT) loads on its own, about 51 KB gzipped, only when one of these views first shows.
 - **A phone gets a top bar with a Menu button.** The menu no longer fills the first screen, tab rows scroll sideways instead of squeezing their labels, and review titles wrap to 2 lines instead of being cut off.
 - **The menu's icons are line drawings,** the same on every system, instead of emoji.
@@ -28,7 +31,7 @@
 - **A failed skill's missing findings are explained.** When a skill failed, the **Findings** tab says it failed before it could report any, with a **Show logs** button, instead of "No findings."
 - **An instance's monthly token quota** on **Integrations** has the same field as a model limit: its name above, **Save** beside it, waiting for a change, and Enter saves.
 - **The usage tables** keep each repository name on one line and give the cache and reasoning note more room.
-- No migration and no config change. The API changes are the review page above and the team routes below.
+- The other API changes are the review page above and the team routes below.
 - **New read routes `GET /api/teams/{id}`, `GET /api/teams/{id}/repository-choices` and `GET /api/teams/{id}/usage`, and counts on `GET /api/me/teams`:** the first gives a team's members, entries and the session's role to members and admins. Members' emails are for an admin only. The second is the admin search for repositories to add to a team. The third is what the repositories a team owned used, for the team's maintainers and admins (a viewer gets 403). It counts only usage recorded since v0.19.0, which first stored the owner team. `GET /api/me/teams` has the new keys `memberCount`, `repoCount`, `instanceCount` and `ownedCount`. No migration and no new config key.
 - **`POST /api/repositories` takes an optional `ownerTeam`:** a team ID. The repository is switched on and that team becomes its owner in one transaction, audited as `owner_set`, as from the team page. A team that is not there is 400. When another team owns the repository's own entry, the call is 409 and a paused repository stays paused. A repository's page (`GET /api/repositories/{instance}/{project}`) has the new key `ownerTeam`: `{id, name, open}`, or null when it has no owner team. `open` is set for an admin and for a member of that team. A call without `ownerTeam` works as before.
 - **The admin Teams page loses its editor:** a team is now changed on its own page (`/teams/<id>`). The page lists each team with its member count and counts of what it covers, and **Create team** opens the new team on its **Members** tab. The **Teams** page in the user area shows counts, not repository names. No API change.
