@@ -47,10 +47,15 @@ export default function TeamMembers({ view }: { view: TeamPageView }) {
               </select>
               <button
                 type="button"
-                className="btn small"
+                className="btn small danger"
                 aria-label={`Remove ${m.username}`}
                 disabled={save.isPending}
-                onClick={() => save.mutate({ members: live.filter((x) => x.accountId !== m.accountId) })}
+                onClick={() => {
+                  // It saves at once: ask first.
+                  if (window.confirm(`Remove ${m.username} from this team? They lose the access it gives them now.`)) {
+                    save.mutate({ members: live.filter((x) => x.accountId !== m.accountId) });
+                  }
+                }}
               >
                 Remove
               </button>

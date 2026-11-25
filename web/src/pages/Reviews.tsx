@@ -74,7 +74,11 @@ export default function Reviews() {
           ))}
         </select>
       </div>
-      <ReviewList filter={{ project: project || undefined, outcome: outcome || undefined, days }} label="Review list" />
+      <ReviewList
+        filter={{ project: project || undefined, outcome: outcome || undefined, days }}
+        label="Review list"
+        clearTo={project || outcome || days !== defaultDays ? "/reviews" : undefined}
+      />
     </>
   );
 }

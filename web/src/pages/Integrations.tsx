@@ -528,12 +528,12 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
         </div>
       )}
       {add.isError && <ErrorBox error={add.error} />}
-      <div className="actions-row">
-        <button type="submit" className="btn primary" disabled={add.isPending}>
-          {add.isPending ? "Checking…" : "Add"}
-        </button>
+      <div className="actions-row end">
         <button type="button" className="btn" onClick={onClose}>
           Cancel
+        </button>
+        <button type="submit" className="btn primary" disabled={add.isPending}>
+          {add.isPending ? "Checking…" : "Add"}
         </button>
       </div>
     </form>
@@ -839,10 +839,7 @@ function SignInEditor({ current, setSaved }: { current: SignInAdminView; setSave
       )}
       {save.isError && <ErrorBox error={save.error} />}
       <TestResult test={test} />
-      <div className="actions-row">
-        <button type="submit" className="btn primary" disabled={save.isPending}>
-          Save
-        </button>
+      <div className="actions-row end">
         {(oidc || jwt) && (
           <button
             type="button"
@@ -853,6 +850,9 @@ function SignInEditor({ current, setSaved }: { current: SignInAdminView; setSave
             Test
           </button>
         )}
+        <button type="submit" className="btn primary" disabled={save.isPending}>
+          Save
+        </button>
       </div>
       {(oidc || jwt) && (
         <div className="meta">

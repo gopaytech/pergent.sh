@@ -103,3 +103,17 @@ describe("Overview: the numbers open their reviews", () => {
     expect(screen.getByRole("link", { name: /^Reviews: / })).toHaveAttribute("href", "/reviews?days=7");
   });
 });
+
+describe("Overview: the period is in the address", () => {
+  it("reads ?days=30, and keeps a new choice in the address", async () => {
+    fakeApi({
+      "GET /api/me": { body: ssoAdmin },
+      "GET /api/overview?days=30": { body: overview },
+      "GET /api/overview?days=90": { body: overview },
+    });
+    renderApp("/?days=30");
+    expect(await screen.findByRole("combobox", { name: "Period" })).toHaveValue("30");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Period" }), "90");
+    expect(screen.getByTestId("location")).toHaveTextContent("/?days=90");
+  });
+});

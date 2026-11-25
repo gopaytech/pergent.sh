@@ -43,6 +43,7 @@ import {
   utcText,
   type Tone,
 } from "../ui";
+import { useUrlParam } from "../urlState";
 
 const triggers: Record<string, string> = {
   first: "first run",
@@ -605,7 +606,7 @@ function MemberAttempt({ runId, reviewer, n, attempt }: { runId: string; reviewe
 
 function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
   const run = useRun(id);
-  const [tab, setTab] = useState<Tab>("findings");
+  const [tab, setTab] = useUrlParam<Tab>("tab", "findings", ["findings", "checks", "files", "logs"]);
   // What the last dismiss or restore answered, kept here: the finding it
   // was for moves, and its own component goes.
   const [note, setNote] = useState("");

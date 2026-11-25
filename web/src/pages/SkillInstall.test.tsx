@@ -94,11 +94,11 @@ describe("SkillInstall", () => {
     }
   });
 
-  it("the URL help says the Job reaches only jobEgress.cidrs", async () => {
+  it("the URL help says the Job reaches only its network allow list, jobEgress.cidrs", async () => {
     fakeApi({ "GET /api/me": { body: operator } });
     renderApp("/skills/install");
     await userEvent.click(await screen.findByRole("radio", { name: "A public URL" }));
-    expect(screen.getByText(/reaches only jobEgress\.cidrs/)).toBeInTheDocument();
+    expect(screen.getByText(/reaches only the hosts on its network allow list\s+\(the Helm value jobEgress\.cidrs\)/)).toBeInTheDocument();
   });
 
   it("says installed skills are readable by every signed-in user", async () => {

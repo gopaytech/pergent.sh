@@ -97,7 +97,7 @@ export default function RepositoryDetail() {
           queryKey={queryKey}
         />
       )}
-      <Tabs<Tab> tabs={tabs} value={tab} onChange={(t) => setSearch(t === "reviews" ? {} : { tab: t }, { replace: true })} />
+      <Tabs<Tab> tabs={tabs} value={tab} onChange={(t) => setSearch(t === "reviews" ? {} : { tab: t })} />
       <div role="tabpanel">
         {tab === "reviews" && <ReviewList filter={{ project: repo.project, days: 90 }} label="Reviews of this repository" inRepo />}
         {tab === "skill-results" && <SkillResults instance={repo.instance} project={repo.project} />}

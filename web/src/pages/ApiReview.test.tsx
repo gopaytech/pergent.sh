@@ -241,7 +241,7 @@ describe("dismissing a finding", () => {
     expect(fake.find("POST", dismiss("f1"))[0].headers.get("X-CSRF-Token")).toBe(operator.csrfToken);
     expect(after).toHaveTextContent("Reason: checked <b>upstream</b>");
     expect(after.querySelector("b")).toBeNull();
-    expect(within(after).getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(within(after).getByRole("button", { name: "Restore" })).toBeInTheDocument();
     expect(within(after).queryByRole("button", { name: "Dismiss" })).toBeNull();
     // The other findings are still open to be dismissed.
     const other = await finding("Name it better");
@@ -261,7 +261,7 @@ describe("dismissing a finding", () => {
     });
     renderApp(page(done));
     const blocking = await finding("The loop never stops");
-    await userEvent.click(within(blocking).getByRole("button", { name: "Stop" }));
+    await userEvent.click(within(blocking).getByRole("button", { name: "Restore" }));
     const after = await finding("The loop never stops");
     expect(await within(after).findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
     expect(fake.find("DELETE", dismiss("f1"))).toHaveLength(1);
@@ -290,7 +290,7 @@ describe("dismissing a finding", () => {
     renderPage(queued);
     await finding("The loop never stops");
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
   });
 
   it("lists the review's history with who did it, as text", async () => {

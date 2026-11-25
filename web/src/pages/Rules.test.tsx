@@ -154,3 +154,15 @@ describe("RuleSetEditor", () => {
     expect(await screen.findByRole("heading", { name: /mine/ })).toBeInTheDocument();
   });
 });
+
+describe("Rules: the tab is in the address", () => {
+  it("opens Built-in from ?tab=built-in, and a click puts the tab in the address", async () => {
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/rule-sets": { body: ruleSets }, "GET /api/built-in-rules": { body: builtInRules } });
+    renderApp("/rules?tab=built-in");
+    expect(await screen.findByRole("tab", { name: "Built-in" })).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(screen.getByRole("tab", { name: "Rule sets" }));
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/rules$/);
+    await userEvent.click(screen.getByRole("tab", { name: "Built-in" }));
+    expect(screen.getByTestId("location")).toHaveTextContent("/rules?tab=built-in");
+  });
+});

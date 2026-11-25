@@ -41,7 +41,8 @@ describe("Reviews", () => {
     await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Repository" }), "acme/payments");
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Result" }), "blocking");
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Time" }), "7");
-    expect(await screen.findByText("No reviews match.")).toBeInTheDocument();
+    expect(await screen.findByText(/No reviews match these filters\./)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Clear the filters" })).toHaveAttribute("href", "/reviews");
     expect(fake.find("GET", "/api/reviews?project=acme%2Fpayments&outcome=blocking&days=7")).toHaveLength(1);
     expect(screen.getByTestId("location")).toHaveTextContent("/reviews?project=acme%2Fpayments&outcome=blocking&days=7");
   });

@@ -92,8 +92,8 @@ export default function SkillInstall() {
               required
             />
             <div className="meta">
-              A public https git URL, read in a Job that holds no token. The Job reaches only jobEgress.cidrs, so the host must be
-              in that list.
+              A public https git URL, read in a Job that holds no token. The Job reaches only the hosts on its network allow list
+              (the Helm value jobEgress.cidrs), so the git host must be on it.
             </div>
           </div>
         )}

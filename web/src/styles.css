@@ -1874,3 +1874,13 @@ a.stat {
 a.stat:hover {
   border-color: var(--accent);
 }
+
+.actions-row.end {
+  align-items: center;
+}
+
+/* A note at the start of a right-aligned row (Unsaved changes, a size
+   counter) sits at the left, away from the buttons. */
+.actions-row.end > :first-child:not(button) {
+  margin-right: auto;
+}

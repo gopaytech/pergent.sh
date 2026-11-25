@@ -34,7 +34,9 @@ const outcomes: Record<Outcome, [Tone, string]> = {
   blocking: ["bad", "Blocking"],
   ci_blocked: ["warn", "Blocked by CI"],
   draft: ["draft", "Draft"],
-  no_blocking: ["ok", "Not approved"],
+  // No blocking issues, but not approved (a draft, files not reviewed, a
+  // change closed first): grey, not the green of an approval.
+  no_blocking: ["grey", "Not approved"],
   failed: ["warn", "Failed"],
   superseded: ["grey", "Superseded"],
   fell_back: ["grey", "Retried on backup"],

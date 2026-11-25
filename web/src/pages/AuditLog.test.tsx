@@ -30,12 +30,12 @@ describe("AuditLog", () => {
       "GET /api/audit?before=29": { body: auditPage2 },
     });
     renderApp("/admin/audit");
-    await userEvent.click(await screen.findByRole("button", { name: "Older" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Load more" }));
     expect(await screen.findByText("old-user")).toBeInTheDocument();
     expect(fake.find("GET", "/api/audit?before=29")).toHaveLength(1);
     // Both pages are in the table, and nothing is older.
     expect(screen.getAllByRole("row")).toHaveLength(1 + 3);
-    expect(screen.queryByRole("button", { name: "Older" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 
   it("keeps the entries and the Older button when Older fails, with one error", async () => {
@@ -47,12 +47,12 @@ describe("AuditLog", () => {
         tries++ === 0 ? { status: 500, body: { error: "could not read the log" } } : { body: auditPage2 },
     });
     renderApp("/admin/audit");
-    await userEvent.click(await screen.findByRole("button", { name: "Older" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Load more" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("could not read the log");
     expect(screen.getAllByRole("alert")).toHaveLength(1);
     expect(screen.getAllByRole("row")).toHaveLength(1 + 2);
     // Retrying works.
-    await userEvent.click(screen.getByRole("button", { name: "Older" }));
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }));
     expect(await screen.findByText("old-user")).toBeInTheDocument();
     expect(fake.find("GET", "/api/audit?before=29")).toHaveLength(2);
     await vi.waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
@@ -62,7 +62,7 @@ describe("AuditLog", () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/audit": { body: auditPage2 } });
     renderApp("/admin/audit");
     await screen.findByText("old-user");
-    expect(screen.queryByRole("button", { name: "Older" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 
   it("says so when nothing is recorded", async () => {

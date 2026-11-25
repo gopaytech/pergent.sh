@@ -1,13 +1,21 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TeamPageView, UserView } from "../api";
 import { fakeApi } from "../test/fakeApi";
 import { maintainer, myTeams, ssoAdmin, teamModelsPayments, teamPagePayments, chainTeam } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
-afterEach(() => vi.unstubAllGlobals());
+// Remove saves at once, so it asks first: the tests answer yes unless one
+// says otherwise.
+beforeEach(() => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 const asAdmin: TeamPageView = { ...teamPagePayments, role: "admin", canEdit: true };
 
@@ -196,3 +204,14 @@ describe("Team Members tab", () => {
   });
 });
 
+describe("TeamMembers: Remove asks first", () => {
+  it("removes nobody when the question is answered no", async () => {
+    vi.mocked(window.confirm).mockReturnValue(false);
+    const fake = fakeApi(routes());
+    renderApp("/teams/2?tab=members");
+    const list = await screen.findByRole("region", { name: "Team members" });
+    await userEvent.click(within(list).getByRole("button", { name: "Remove ana" }));
+    expect(window.confirm).toHaveBeenCalledWith("Remove ana from this team? They lose the access it gives them now.");
+    expect(fake.find("PUT", "/api/teams/2")).toHaveLength(0);
+  });
+});

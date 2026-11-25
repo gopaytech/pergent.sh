@@ -257,12 +257,12 @@ function AddUser({ onClose }: { onClose: () => void }) {
           ))}
       </fieldset>
       {add.isError && <ErrorBox error={add.error} />}
-      <div className="actions-row">
-        <button type="submit" className="btn primary" disabled={add.isPending}>
-          Add
-        </button>
+      <div className="actions-row end">
         <button type="button" className="btn" onClick={onClose}>
           Cancel
+        </button>
+        <button type="submit" className="btn primary" disabled={add.isPending}>
+          Add
         </button>
       </div>
     </form>
@@ -334,12 +334,12 @@ function AddAdmin({ onClose }: { onClose: () => void }) {
       />
       <div className="meta">1 to 64 letters, digits, "." "_" or "-". A password is generated for it.</div>
       {create.isError && <ErrorBox error={create.error} />}
-      <div className="actions-row">
-        <button type="submit" className="btn primary" disabled={create.isPending}>
-          Create
-        </button>
+      <div className="actions-row end">
         <button type="button" className="btn" onClick={onClose}>
           Cancel
+        </button>
+        <button type="submit" className="btn primary" disabled={create.isPending}>
+          Create
         </button>
       </div>
     </form>
