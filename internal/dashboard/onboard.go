@@ -7,6 +7,13 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
+// The states of a repository in the picker.
+const (
+	stateOff    = "off"
+	statePaused = "paused"
+	stateOn     = "on"
+)
+
 const (
 	msgTeamsMayNotOnboard = "teams may not onboard repositories on this instance"
 	msgUseClaim           = "the repository is already switched on: use Claim"

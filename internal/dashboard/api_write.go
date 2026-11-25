@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
@@ -106,11 +107,11 @@ func (d *Dashboard) available(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !session(r).Admin {
+		// The picker lists every repository with its state and owner; a
+		// maintainer of any team sees it, the owner check is at onboarding.
 		if !d.maintainerGate(w, r, instance) {
 			return
 		}
-		writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
-		return
 	}
 	d.listAvailable(w, r, instance)
 }
@@ -259,18 +260,32 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msgNameInstance)
 		return
 	}
+	var ownerName string // a maintainer's chosen team
 	if !se.Admin {
 		if !d.maintainerGate(w, r, instance) {
 			return
 		}
-		writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
-		return
+		if body.OwnerTeam == nil {
+			writeError(w, http.StatusBadRequest, msgNoTeam)
+			return
+		}
+		teams, err := d.maintainedTeams(ctx, se)
+		if err != nil {
+			d.failed(w, r, "reading the teams", err)
+			return
+		}
+		i := slices.IndexFunc(teams, func(t store.Team) bool { return t.ID == *body.OwnerTeam })
+		if i < 0 {
+			writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
+			return
+		}
+		ownerName = teams[i].Name
 	}
 	if !d.knownInstance(instance) {
 		notFound(w)
 		return
 	}
-	if body.OwnerTeam != nil {
+	if body.OwnerTeam != nil && se.Admin {
 		// Before the platform is asked: a team that isn't there is the
 		// client's mistake, whatever the bot reaches.
 		_, found, err := d.Store.Team(ctx, *body.OwnerTeam)
@@ -306,7 +321,42 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	row := store.DashboardRepo{Instance: instance, Project: name, CreatedBy: se.Username}
 	var created, resumed bool
 	var owned *store.SwitchOnResult
-	if body.OwnerTeam != nil {
+	inherit := false
+	if !se.Admin {
+		// A maintainer never resumes or takes over: a row, on or paused, is
+		// for Claim. Every check comes before the write.
+		if _, found, err := d.Store.AnyDashboardRepo(ctx, instance, name); err != nil {
+			d.failed(w, r, "reading the repository", err)
+			return
+		} else if found {
+			writeError(w, http.StatusConflict, msgUseClaim)
+			return
+		}
+		_, instanceOwner, err := d.Store.InstanceOwners(ctx, instance)
+		if err != nil {
+			d.failed(w, r, "reading the owners", err)
+			return
+		}
+		if instanceOwner != "" {
+			// Team names are unique ignoring case.
+			if !strings.EqualFold(instanceOwner, ownerName) {
+				writeError(w, http.StatusForbidden, "owned by "+instanceOwner)
+				return
+			}
+			// The instance's owner is already the repository's: no tick of
+			// its own, so it inherits.
+			inherit = true
+		}
+	}
+	if inherit {
+		var err error
+		if created, err = d.Store.InsertDashboardRepo(ctx, row); err != nil {
+			d.Log.Error("dashboard: switching a repository on failed", "instance", instance, "project", name,
+				"error", err.Error())
+			writeError(w, http.StatusInternalServerError, msgWriteFailed)
+			return
+		}
+	} else if body.OwnerTeam != nil {
 		// Switched on (or resumed) and owned in one transaction: a refused
 		// owner leaves a paused repository paused.
 		res, err := d.Store.SwitchOnOwned(ctx, row, *body.OwnerTeam)
@@ -373,6 +423,23 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		d.failed(w, r, "loading a repository", err)
 		return
+	}
+	if !se.Admin {
+		// The session was read before the owner tick: the new owner's
+		// maintainer sees and runs the repository it just onboarded.
+		k := repoKey(instance, name)
+		visible, roles := maps.Clone(se.Visible), maps.Clone(se.Roles)
+		if visible == nil {
+			visible = map[RepoKey]int64{}
+		}
+		if roles == nil {
+			roles = map[RepoKey]Role{}
+		}
+		if _, ok := visible[k]; !ok {
+			visible[k] = 0
+		}
+		roles[k] = max(roles[k], RoleMaintainer)
+		se.Visible, se.Roles = visible, roles
 	}
 	view, err := d.detailView(ctx, se, repo)
 	if err != nil {

@@ -1362,9 +1362,10 @@ paths:
       tags: [Repositories]
       summary: Switch a repository on
       description: |
-        Admins, and maintainers on an instance that lets teams onboard (403
-        `only maintainers of the owner team and admins can do this` until a
-        later change opens it). The repository is checked on its own, not against the
+        Admins, and maintainers of any team on an instance that lets teams
+        onboard (403 `teams may not onboard repositories on this instance`
+        when the switch is off; 404 for someone who maintains no team). The
+        repository is checked on its own, not against the
         picker's lists: the instance's review bot (GitLab: Maintainer or
         above) or App (GitHub: installed) must reach it, else 404 whether it
         is on or not (404 also for an instance that is not there); then 409
@@ -1382,6 +1383,18 @@ paths:
         answer is 409 and nothing changes: a paused repository stays paused.
         An owner of the whole instance is not in the way. The change is
         audited as `owner_set`, as from the team page.
+
+        A maintainer has these rules instead, checked in this order, and
+        nothing is written until every one passes: `ownerTeam` is required
+        (400 `every team must be a team that exists`) and must be a team they
+        maintain (403 `only maintainers of the owner team and admins can do
+        this`); a repository set up by the config is 409; a repository that is
+        on or paused already is 409 `the repository is already switched on:
+        use Claim` (a maintainer never resumes one); when a team owns the
+        whole instance and it is not `ownerTeam`, 403 `owned by <team>`; when
+        it is, the repository is switched on with no owner tick of its own and
+        inherits the instance's. Otherwise `ownerTeam` becomes its owner as
+        for an admin.
       x-pergent-access: session
       security:
         - sessionCookie: []
@@ -1415,21 +1428,24 @@ paths:
       tags: [Repositories]
       summary: Repositories that can be switched on (the picker)
       description: |
-        Admins, and maintainers on an instance that lets teams onboard (a
-        maintainer is 403 until a later change opens it): one page of the
-        repositories of one instance that its
-        review bot or App reaches and that are not switched on (the same list
-        as `GET /api/admin/instances/{name}/repositories`). A page holds 50
-        at most. On GitLab a page is one request to GitLab in its ID order (so no
-        project falls between two pages), sorted by path within the page, and
-        a page with switched-on projects left out holds fewer than 50; on
-        GitHub, which cannot search on its side, the list is read whole,
-        sorted, cut into pages of 50, and the switched-on ones are left out of
-        each page after. `hasMore` says whether to ask for the next
-        page. `truncated` is true when the list a page is made from was too
-        long (5000) or too slow (20 s) to read whole (GitHub only). 400
-        without an `instance` or with a bad `page`, 404 for an instance that
-        is not there.
+        Admins, and maintainers of any team on an instance that lets teams
+        onboard (403 `teams may not onboard repositories on this instance`
+        when the switch is off; 404 for someone who maintains no team): one
+        page of the repositories of one instance that its review bot or App
+        reaches (the same list as
+        `GET /api/admin/instances/{name}/repositories`), every one with its
+        `state` (`off`, `paused` or `on`) and its `ownerTeam` (its own owner,
+        else the owner of the whole instance, else empty). `instanceOwner`
+        names the owner of the whole instance, empty for none. Repositories
+        the config file sets up are `on`. A page holds 50 at most. On GitLab a
+        page is one request to GitLab in its ID order (so no project falls
+        between two pages), sorted by path within the page; on GitHub, which
+        cannot search on its side, the list is read whole, sorted and cut
+        into pages of 50. `hasMore` says whether to ask for the next page.
+        `truncated` is true when the list a page is made from was too long
+        (5000) or too slow (20 s) to read whole (GitHub only). 400 without an
+        `instance` or with a bad `page`, 404 for an instance that is not
+        there.
       x-pergent-access: session
       security:
         - sessionCookie: []
@@ -3766,7 +3782,7 @@ paths:
       summary: Repositories an instance's bot or App can set up
       description: |
         Admins only: one page of the repositories the instance's review bot or
-        App can set up that are not switched on, 50 at most (see
+        App can set up, each with its state and owner team, 50 at most (see
         `GET /api/repositories/available`, the same list).
       x-pergent-access: admin
       security:
@@ -6356,19 +6372,26 @@ components:
           type: string
           description: Never holds a secret.
     AvailableRepo:
-      description: One repository that can be switched on.
+      description: One repository the picker shows, with its state and owner.
       type: object
-      required: [instance, project, platform]
+      required: [instance, project, platform, state, ownerTeam]
       properties:
         instance: {type: string}
         project: {type: string}
         platform:
           type: string
           enum: [gitlab, github]
+        state:
+          type: string
+          enum: [off, paused, 'on']
+          description: Whether the repository is switched on, paused or not set up.
+        ownerTeam:
+          type: string
+          description: The name of the owner team, its own or the instance's; empty for none.
     AvailableView:
-      description: One page of the repositories that can be switched on, 50 at most.
+      description: One page of the repositories the picker shows, 50 at most.
       type: object
-      required: [items, page, hasMore, truncated]
+      required: [items, page, hasMore, truncated, instanceOwner]
       properties:
         items:
           type: array
@@ -6384,6 +6407,9 @@ components:
         truncated:
           type: boolean
           description: True when the list the page is made from was too long or too slow to read whole (GitHub only; a GitLab page is never truncated).
+        instanceOwner:
+          type: string
+          description: The name of the team that owns the whole instance; empty for none.
     LinkView:
       description: One link of a repository to another, for the impact check.
       type: object

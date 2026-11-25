@@ -616,8 +616,9 @@ func TestAdminPicksRepositories(t *testing.T) {
 	}
 	wantCode(t, e.get(c, "/api/repositories/available?instance=nope"), "GET available for an unknown instance", http.StatusNotFound)
 	v := getJSON[AvailableView](e, c, "/api/repositories/available?instance=main")
-	if len(v.Items) != 1 || v.Items[0].Project != "acme/gadgets" || v.Items[0].Instance != "main" || v.Items[0].Platform != "gitlab" {
-		t.Errorf("available = %+v; want acme/gadgets on main (acme/widgets is on already)", v)
+	if len(v.Items) != 2 || v.Items[0].Project != "acme/gadgets" || v.Items[0].Instance != "main" || v.Items[0].Platform != "gitlab" ||
+		v.Items[0].State != stateOff || v.Items[1].Project != "acme/widgets" || v.Items[1].State != stateOn {
+		t.Errorf("available = %+v; want acme/gadgets (off) and acme/widgets (on already) on main", v)
 	}
 	if rec := e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`); rec.Code != http.StatusBadRequest ||
 		!strings.Contains(rec.Body.String(), "name the instance") {

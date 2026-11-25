@@ -750,15 +750,15 @@ func (d *Dashboard) instanceRepositories(w http.ResponseWriter, r *http.Request)
 }
 
 // listAvailable answers with one page of the repositories of the instance
-// called name that the review bot or App can set up and that aren't switched
-// on: 404 for an instance that is not there or is being removed, 400 for a
+// called name that the review bot or App can set up, each with its state
+// (off, paused or on) and owner team: 404 for an instance that is not there or is being removed, 400 for a
 // bad page. It serves the picker (GET /api/repositories/available?instance=)
 // and GET /api/admin/instances/{name}/repositories.
 //
 // A catalog that pages on the platform (PagedRepoCatalog, GitLab) is asked for
 // the one page, in the platform's order (by ID), which is sorted within the
 // page. Another is read whole, kept 5 minutes, sorted, and served 50 at a time
-// (a page is cut before the repositories switched on are dropped from it).
+// (a page is cut from the whole list).
 func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name string) {
 	if inst, ok := d.registry.Get(name); !ok || inst.Removing {
 		notFound(w)
@@ -780,23 +780,40 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 	}
 	ctx, cancel := context.WithTimeoutCause(r.Context(), d.availableBudget, errOutOfBudget)
 	defer cancel()
-	// A paused repository was added already: POST /api/repositories resumes
-	// it, so the picker leaves it out like one switched on.
 	all, err := d.Repos.ListAll(ctx)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return
 	}
-	on := map[string]bool{}
+	states := map[string]string{}
 	for _, e := range all {
 		if e.Instance == name {
-			on[lower(e.Project)] = true
+			states[lower(e.Project)] = stateOn
+			if e.Paused {
+				states[lower(e.Project)] = statePaused
+			}
+		}
+	}
+	var owners map[string]string
+	var instanceOwner string
+	if d.Store != nil {
+		if owners, instanceOwner, err = d.Store.InstanceOwners(ctx, name); err != nil {
+			d.failed(w, r, "reading the owners", err)
+			return
 		}
 	}
 	platform, _ := d.registry.Platform(name)
-	view := AvailableView{Items: []AvailableRepo{}, Page: page}
+	view := AvailableView{Items: []AvailableRepo{}, Page: page, InstanceOwner: instanceOwner}
 	add := func(p string) {
-		view.Items = append(view.Items, AvailableRepo{Instance: name, Project: p, Platform: platform})
+		state, ok := states[lower(p)]
+		if !ok {
+			state = stateOff
+		}
+		owner := owners[lower(p)]
+		if owner == "" {
+			owner = instanceOwner
+		}
+		view.Items = append(view.Items, AvailableRepo{Instance: name, Project: p, Platform: platform, State: state, OwnerTeam: owner})
 	}
 
 	if cat, ok := d.catalogs.Get(name); ok {
@@ -807,16 +824,11 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 				writeError(w, http.StatusBadGateway, msgListFailed)
 				return
 			}
-			var off []string
-			for _, p := range repos {
-				if !on[lower(p)] {
-					off = append(off, p)
-				}
-			}
 			// The platform pages by ID, so no project falls between two
 			// pages; each page is sorted by path for display.
-			sort.Strings(off)
-			for _, p := range off {
+			sorted := slices.Clone(repos)
+			sort.Strings(sorted)
+			for _, p := range sorted {
 				add(p)
 			}
 			view.HasMore = hasMore
@@ -831,18 +843,14 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 		writeError(w, http.StatusBadGateway, msgListFailed)
 		return
 	}
-	// The pages are cut from the sorted list as it is, and the switched-on
-	// repositories are dropped from each page after, as on GitLab: a
-	// repository switched on between two Load more clicks then leaves its own
-	// page and moves no later page by one, so none is skipped.
+	// The pages are cut from the sorted list as it is: a repository switched
+	// on between two Load more clicks changes its row, not the pages.
 	sorted := slices.Clone(repos)
 	sort.Strings(sorted)
 	from := min((page-1)*availablePerPage, len(sorted))
 	to := min(from+availablePerPage, len(sorted))
 	for _, p := range sorted[from:to] {
-		if !on[lower(p)] {
-			add(p)
-		}
+		add(p)
 	}
 	view.HasMore, view.Truncated = to < len(sorted), truncated
 	writeJSON(w, http.StatusOK, view)

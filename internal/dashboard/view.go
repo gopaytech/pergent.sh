@@ -1154,14 +1154,13 @@ type LLMView struct {
 
 // AvailableView is GET /api/repositories/available: one page of the
 // repositories of the instance that the review bot (GitLab: Maintainer or
-// above) or review App (GitHub: its installations) reaches and that aren't
-// switched on, by project ignoring case. Items holds 50 at most and Page is
+// above) or review App (GitHub: its installations) reaches, each with its
+// state (off, paused or on) and owner team. Items holds 50 at most and Page is
 // the page asked for (1-based). On GitLab a page is one request to the
-// platform in its order, so one with switched-on repositories left out holds
-// fewer than 50; on GitHub, which can't search on its side, the list is read
-// whole, sorted, cut into pages of 50, and the switched-on ones are left out
-// of each page after (so a page can hold fewer there too, and switching one
-// on moves no later page).
+// platform in its order; on GitHub, which can't search on its side, the list
+// is read whole, sorted and cut into pages of 50.
+// InstanceOwner is the name of the team that owns the whole instance ("" for
+// none).
 // HasMore is true when a later page may hold more. Truncated is true when
 // the list a page is made from was too long (5000) or too slow (20 s, each
 // request 10 s) to read whole; GitLab pages are never truncated. 502 when
@@ -1171,14 +1170,21 @@ type AvailableView struct {
 	Page      int             `json:"page"`
 	HasMore   bool            `json:"hasMore"`
 	Truncated bool            `json:"truncated"`
+	// InstanceOwner is the team that owns the whole instance, "" for none.
+	InstanceOwner string `json:"instanceOwner"`
 }
 
-// AvailableRepo is one repository that can be switched on.
+// AvailableRepo is one repository the picker shows.
 type AvailableRepo struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
 	// Platform is "gitlab" or "github".
 	Platform string `json:"platform"`
+	// State is "off", "paused" or "on".
+	State string `json:"state"`
+	// OwnerTeam is the name of the owner team, its own or the instance's;
+	// "" for none.
+	OwnerTeam string `json:"ownerTeam"`
 }
 
 // --- Users, teams and the audit log (admins only, 403 otherwise) ---

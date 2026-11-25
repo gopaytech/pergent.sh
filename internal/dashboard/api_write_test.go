@@ -822,7 +822,7 @@ func projectsOf(items []AvailableRepo) []string {
 }
 
 // The picker lists what the review bot or App of the instance named reaches,
-// minus what is on already, for any admin.
+// with the state of each, for any admin.
 func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 	t.Parallel()
 	t.Run("gitlab", func(t *testing.T) {
@@ -832,12 +832,16 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 		c := e.userOnMain(true)
 
 		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
-		if want := []string{"Acme/Zeta", "acme/gadgets", "acme/tools"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
-			t.Errorf("available = %v truncated %v, want %v (not what is on)", projectsOf(got.Items), got.Truncated, want)
+		if want := []string{"Acme/Zeta", "acme/dash", "acme/gadgets", "acme/tools", "acme/widgets"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
+			t.Errorf("available = %v truncated %v, want %v (what is on too)", projectsOf(got.Items), got.Truncated, want)
 		}
 		for _, it := range got.Items {
-			if it.Instance != "main" || it.Platform != "gitlab" {
-				t.Errorf("item = %+v", it)
+			state := stateOff
+			if it.Project == "acme/dash" || it.Project == "acme/widgets" {
+				state = stateOn
+			}
+			if it.Instance != "main" || it.Platform != "gitlab" || it.State != state {
+				t.Errorf("item = %+v; want state %s", it, state)
 			}
 		}
 
@@ -859,11 +863,12 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 		c := e.userOnGH(true)
 
 		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=gh")
-		if want := []string{"acme/gadgets"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
+		if want := []string{"acme/gadgets", "acme/widgets"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
 			t.Errorf("available = %v truncated %v, want %v", projectsOf(got.Items), got.Truncated, want)
 		}
-		if len(got.Items) == 1 && (got.Items[0].Instance != "gh" || got.Items[0].Platform != "github") {
-			t.Errorf("item = %+v", got.Items[0])
+		if len(got.Items) == 2 && (got.Items[0].Instance != "gh" || got.Items[0].Platform != "github" ||
+			got.Items[0].State != stateOff || got.Items[1].State != stateOn) {
+			t.Errorf("items = %+v; want gadgets off and widgets on", got.Items)
 		}
 		// The instance is the request's: main's list is not gh's.
 		if got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main"); len(got.Items) != 0 {

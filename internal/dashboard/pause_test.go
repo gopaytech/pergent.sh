@@ -79,15 +79,16 @@ func TestPausedRepoStaysVisible(t *testing.T) {
 	e.wantStatus(other, "/api/repositories/main/acme/tools", http.StatusNotFound)
 }
 
-// The picker leaves a paused repository out: it was added already.
-func TestPickerHidesPausedRepo(t *testing.T) {
+// The picker lists a paused repository with the state paused.
+func TestPickerShowsPausedRepo(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/tools", "acme/new")
 	e.pausedRepo("main", "acme/tools", nil)
 	got := getJSON[AvailableView](e, e.userOnMain(true), "/api/repositories/available?instance=main")
-	if len(got.Items) != 1 || got.Items[0].Project != "acme/new" {
-		t.Errorf("available = %+v; want acme/new alone", got.Items)
+	if len(got.Items) != 2 || got.Items[0].Project != "acme/new" || got.Items[0].State != stateOff ||
+		got.Items[1].Project != "acme/tools" || got.Items[1].State != statePaused {
+		t.Errorf("available = %+v; want acme/new (off) and acme/tools (paused)", got.Items)
 	}
 }
 
