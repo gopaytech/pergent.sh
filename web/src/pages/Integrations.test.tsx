@@ -119,6 +119,24 @@ describe("Integrations", () => {
     expect(within(hub).getByRole("button", { name: "Remove" })).toBeInTheDocument();
   });
 
+  it("switches Teams may onboard repositories with the instance's own PUT, and shows the config value read-only", async () => {
+    const fake = fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/admin/instances": { body: [{ ...instanceGitLab, teamsMayOnboard: true }, instanceGitHub] },
+      "PUT /api/admin/instances/hub/teams-onboard": { status: 204 },
+    });
+    renderApp("/admin/integrations");
+    const main = await card("GitLab · main");
+    expect(within(main).getByRole("checkbox", { name: "Teams may onboard repositories" })).toBeChecked();
+    expect(within(main).getByRole("checkbox", { name: "Teams may onboard repositories" })).toBeDisabled();
+    const hub = await card("GitHub · hub");
+    expect(hub).toHaveTextContent("Maintainers of any team can switch on repositories the review bot reaches, and become their owner.");
+    const box = within(hub).getByRole("checkbox", { name: "Teams may onboard repositories" });
+    expect(box).not.toBeChecked();
+    await userEvent.click(box);
+    expect(fake.find("PUT", "/api/admin/instances/hub/teams-onboard")[0].body).toEqual({ on: true });
+  });
+
   it("replaces a secret from an empty, write-only input", async () => {
     let listed = 0;
     const fake = fakeApi({

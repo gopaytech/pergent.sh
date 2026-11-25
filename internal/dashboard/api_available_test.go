@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
@@ -154,8 +156,8 @@ func pickNames(n int, format string) []string {
 }
 
 // On a platform that pages (GitLab) each page is one request to it, with the
-// page and the size of 50, and its order is kept. A project switched on is
-// left out of its page, which then holds fewer.
+// page and the size of 50, and its order is kept. A project switched on stays
+// in its page, with its state.
 func TestAvailablePagesOnThePlatform(t *testing.T) {
 	e := newPickerEnv(t)
 	all := pickNames(120, "acme/repo-%03d")
@@ -163,16 +165,21 @@ func TestAvailablePagesOnThePlatform(t *testing.T) {
 	e.gl.set(all...)
 
 	one := e.page(t, "gl", "")
-	if one.Page != 1 || !one.HasMore || one.Truncated || len(one.Items) != 49 {
-		t.Fatalf("page 1 = page %d, %d items, hasMore %v, truncated %v; want page 1, 49 (one is on), more",
+	if one.Page != 1 || !one.HasMore || one.Truncated || len(one.Items) != 50 {
+		t.Fatalf("page 1 = page %d, %d items, hasMore %v, truncated %v; want page 1, 50, more",
 			one.Page, len(one.Items), one.HasMore, one.Truncated)
 	}
-	if one.Items[0].Project != "acme/repo-000" || one.Items[3].Project != "acme/repo-004" {
-		t.Errorf("items = %v; want the platform's order, the one on left out", projectsOf(one.Items[:5]))
+	// The page is sorted by path, and acme/widgets sorts after the repo-NNN.
+	if one.Items[0].Project != "acme/repo-000" || one.Items[3].Project != "acme/repo-004" || one.Items[49].Project != "acme/widgets" {
+		t.Errorf("items = %v; want the platform's page sorted, the one on at its end", projectsOf(one.Items[:5]))
 	}
-	for _, it := range one.Items {
-		if it.Instance != "gl" || it.Platform != "gitlab" {
-			t.Fatalf("item = %+v", it)
+	for i, it := range one.Items {
+		want := stateOff
+		if i == 49 {
+			want = stateOn
+		}
+		if it.Instance != "gl" || it.Platform != "gitlab" || it.State != want || it.Config != (i == 49) {
+			t.Fatalf("item %d = %+v; want state %s, config only on the config repository", i, it, want)
 		}
 	}
 
@@ -231,9 +238,9 @@ func TestAvailablePageCache(t *testing.T) {
 }
 
 // A platform that can't page (GitHub) is read whole once, kept, and served 50
-// at a time from that list. The pages are cut from the sorted list first and
-// the repositories switched on are dropped from each page after, as on
-// GitLab, so switching one on between two Load more clicks moves no later page.
+// at a time from that list. The pages are cut from the sorted list, and a
+// repository switched on stays in its page with its state, so switching one on
+// between two Load more clicks moves no page.
 func TestAvailableServesAWholeListInPages(t *testing.T) {
 	e := newPickerEnv(t)
 	all := pickNames(120, "acme/repo-%03d")
@@ -241,16 +248,20 @@ func TestAvailableServesAWholeListInPages(t *testing.T) {
 	e.gh.set(append([]string{"Acme/Widgets", "Acme/Zeta"}, all...)...)
 
 	one := e.page(t, "gh", "")
-	if one.Page != 1 || len(one.Items) != 49 || !one.HasMore || one.Truncated {
-		t.Fatalf("page 1 = page %d, %d items, hasMore %v, truncated %v; want 49 (one of its 50 is on), more",
+	if one.Page != 1 || len(one.Items) != 50 || !one.HasMore || one.Truncated {
+		t.Fatalf("page 1 = page %d, %d items, hasMore %v, truncated %v; want 50, more",
 			one.Page, len(one.Items), one.HasMore, one.Truncated)
 	}
-	if one.Items[0].Project != "Acme/Zeta" || one.Items[1].Project != "acme/repo-000" || one.Items[48].Project != "acme/repo-047" {
-		t.Errorf("items %v ... %v; want the sorted list without Acme/Widgets", projectsOf(one.Items[:2]), projectsOf(one.Items[48:]))
+	if one.Items[0].Project != "Acme/Widgets" || one.Items[1].Project != "Acme/Zeta" || one.Items[49].Project != "acme/repo-047" {
+		t.Errorf("items %v ... %v; want the sorted list", projectsOf(one.Items[:2]), projectsOf(one.Items[48:]))
 	}
-	for _, it := range one.Items {
-		if it.Instance != "gh" || it.Platform != "github" {
-			t.Fatalf("item = %+v", it)
+	for i, it := range one.Items {
+		want := stateOff
+		if i == 0 {
+			want = stateOn // Acme/Widgets is in the config, matched ignoring case
+		}
+		if it.Instance != "gh" || it.Platform != "github" || it.State != want {
+			t.Fatalf("item %d = %+v; want state %s", i, it, want)
 		}
 	}
 	two := e.page(t, "gh", "page=2")
@@ -269,8 +280,8 @@ func TestAvailableServesAWholeListInPages(t *testing.T) {
 			seen[it.Project] = true
 		}
 	}
-	if len(seen) != 121 {
-		t.Errorf("the pages hold %d repositories, want 121 (122 less the one that is on)", len(seen))
+	if len(seen) != 122 {
+		t.Errorf("the pages hold %d repositories, want 122 (the one on is listed with its state)", len(seen))
 	}
 	if past := e.page(t, "gh", "page=4"); len(past.Items) != 0 || past.HasMore {
 		t.Errorf("page 4 = %+v; want none", past)
@@ -279,14 +290,17 @@ func TestAvailableServesAWholeListInPages(t *testing.T) {
 		t.Errorf("the list was read %d times for 4 pages, want 1", n)
 	}
 
-	// acme/repo-060 is switched on between two Load more clicks: its own page
-	// loses it, and the next page starts where it did.
+	// acme/repo-060 is switched on between two Load more clicks: its row
+	// changes state, and no page moves.
 	e.d.cfg.Repositories = append(e.d.cfg.Repositories, config.Repository{GitHub: "gh", Project: "acme/repo-060"})
 	two = e.page(t, "gh", "page=2")
 	three = e.page(t, "gh", "page=3")
-	if len(two.Items) != 49 || three.Items[0].Project != "acme/repo-098" || len(three.Items) != 22 {
-		t.Errorf("after switching one on, page 2 holds %d and page 3 starts at %s with %d items; want 49, repo-098, 22",
+	if len(two.Items) != 50 || three.Items[0].Project != "acme/repo-098" || len(three.Items) != 22 {
+		t.Errorf("after switching one on, page 2 holds %d and page 3 starts at %s with %d items; want 50, repo-098, 22",
 			len(two.Items), three.Items[0].Project, len(three.Items))
+	}
+	if i := slices.Index(projectsOf(two.Items), "acme/repo-060"); i < 0 || two.Items[i].State != stateOn {
+		t.Errorf("acme/repo-060 = %+v; want it on page 2, state on", two.Items)
 	}
 }
 
@@ -382,4 +396,45 @@ func TestSwitchOnUsesThePlatformsSpelling(t *testing.T) {
 	if _, ok, err := e.d.switchOnAvailable(ctx, "gl", "acme/gadgets"); err == nil || ok {
 		t.Errorf("gl while down = %v, %v; want an error", ok, err)
 	}
+}
+
+// The picker says off, paused or on for each row, and the owner team: its
+// own, else the instance's, "" for none. One env, one run of each case.
+func TestAvailableStatesAndOwners(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	e.cat["main"].set("acme/off", "acme/paused", "acme/owned", "acme/widgets")
+	e.cat["gh"].set("acme/free", "acme/own")
+	e.pausedRepo("main", "acme/paused", nil)
+	e.dashboardRepo("main", "acme/owned", nil)
+	e.team("A", nil, store.TeamRepo{Instance: "main", Project: "acme/owned", Owner: true},
+		store.TeamRepo{Instance: "gh", Project: "acme/own", Owner: true})
+	e.team("B", nil, store.TeamRepo{Instance: "gh", Owner: true})
+	e.dashboardRepo("gh", "acme/own", nil)
+	c := e.userOnMain(true)
+
+	type row struct{ state, owner string }
+	rows := func(v AvailableView) map[string]row {
+		out := map[string]row{}
+		for _, it := range v.Items {
+			out[it.Project] = row{it.State, it.OwnerTeam}
+		}
+		return out
+	}
+	t.Run("states and own owners", func(t *testing.T) {
+		v := getJSON[AvailableView](e, c, "/api/repositories/available?instance=main")
+		want := map[string]row{
+			"acme/off": {stateOff, ""}, "acme/paused": {statePaused, ""}, "acme/owned": {stateOn, "A"}, "acme/widgets": {stateOn, ""},
+		}
+		if got := rows(v); !maps.Equal(got, want) || v.InstanceOwner != "" {
+			t.Errorf("rows = %v instanceOwner %q; want %v and none", got, v.InstanceOwner, want)
+		}
+	})
+	t.Run("the instance owner", func(t *testing.T) {
+		v := getJSON[AvailableView](e, c, "/api/repositories/available?instance=gh")
+		want := map[string]row{"acme/free": {stateOff, "B"}, "acme/own": {stateOn, "A"}}
+		if got := rows(v); !maps.Equal(got, want) || v.InstanceOwner != "B" {
+			t.Errorf("rows = %v instanceOwner %q; want %v and B", got, v.InstanceOwner, want)
+		}
+	})
 }

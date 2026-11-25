@@ -692,3 +692,39 @@ describe("RepositorySettings: path rules", () => {
     expect(within(card).getByText(/Reviews get no built-in rules for now/)).toHaveClass("problem");
   });
 });
+
+describe("RepositorySettings: Remove follows the actions flag", () => {
+  const withRemove = (remove: boolean, coveringTeams: string[] = [], role: "admin" | "maintainer" = "admin") => ({
+    ...base,
+    "GET /api/repositories/main/acme/payments": {
+      body: { ...repoDetail(repoPayments, role), actions: { pause: false, resume: false, remove, release: false }, coveringTeams },
+    },
+  });
+  const card = () => screen.findByRole("region", { name: "Remove repository" });
+
+  it("shows the Remove card when actions.remove is true, also to a maintainer, and hides it when false", async () => {
+    fakeApi(withRemove(true, [], "maintainer"));
+    const second = renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
+    expect(await card()).toBeInTheDocument();
+    second.unmount();
+    fakeApi(withRemove(false));
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
+    await screen.findByRole("region", { name: "Teams" });
+    expect(screen.queryByRole("region", { name: "Remove repository" })).not.toBeInTheDocument();
+  });
+
+  it("names the teams that also lose it in the confirmation, and none when no team covers it", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    fakeApi(withRemove(true, ["Core", "Platform"]));
+    const first = renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
+    await userEvent.click(within(await card()).getByRole("button", { name: "Remove repository" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("These teams also lose it: Core, Platform."));
+    first.unmount();
+    confirm.mockClear();
+    fakeApi(withRemove(true));
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
+    await userEvent.click(within(await card()).getByRole("button", { name: "Remove repository" }));
+    expect(confirm).toHaveBeenCalledWith(expect.not.stringContaining("also lose it"));
+  });
+});

@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -431,5 +432,170 @@ func TestOwnerTakenError(t *testing.T) {
 	// Covering it without the tick is fine; so is a tick at another level.
 	if err := setOwner(t, s, b.ID, TeamRepo{Instance: "main", Project: "payments/api"}, TeamRepo{Instance: "main", Owner: true}); err != nil {
 		t.Errorf("cover without owning: %v", err)
+	}
+}
+
+func TestClaimOwnerSetsTick(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "A", t0)
+	ch, err := s.ClaimOwner(ctx, "main", "g/r", a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, ok, _ := s.OwnerTeam(ctx, "main", "g/r"); !ok || id != a.ID {
+		t.Errorf("OwnerTeam = %d, %v; want %d", id, ok, a.ID)
+	}
+	got, _, _ := s.Team(ctx, a.ID)
+	if !slices.Equal(got.Repos, []TeamRepo{{Instance: "main", Project: "g/r", Owner: true}}) {
+		t.Errorf("repos = %+v; want 1 ticked entry", got.Repos)
+	}
+	if len(ch.Before.Repos) != 0 || !slices.Equal(ch.After.Repos, got.Repos) {
+		t.Errorf("change = %+v", ch)
+	}
+	if _, err := s.ClaimOwner(ctx, "main", "g/r", a.ID+99); !errors.Is(err, ErrUnknownTeam) {
+		t.Errorf("unknown team = %v; want ErrUnknownTeam", err)
+	}
+}
+
+func TestClaimOwnerKeepsExistingEntry(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "A", t0)
+	if err := setOwner(t, s, a.ID, TeamRepo{Instance: "main", Project: "G/R"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimOwner(ctx, "main", "g/r", a.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := s.Team(ctx, a.ID)
+	if !slices.Equal(got.Repos, []TeamRepo{{Instance: "main", Project: "G/R", Owner: true}}) {
+		t.Errorf("repos = %+v; want the one entry, ticked", got.Repos)
+	}
+}
+
+func TestClaimOwnerRefusedRepoOwner(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "A", t0)
+	b, _ := s.CreateTeam(ctx, "B", t0)
+	if err := setOwner(t, s, b.ID, TeamRepo{Instance: "main", Project: "g/r", Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.ClaimOwner(ctx, "main", "G/R", a.ID)
+	var taken *OwnerTakenError
+	if !errors.As(err, &taken) || taken.Team != "B" || taken.Project != "g/r" {
+		t.Fatalf("err = %v; want *OwnerTakenError for B", err)
+	}
+	if got, _, _ := s.Team(ctx, a.ID); len(got.Repos) != 0 {
+		t.Errorf("repos = %+v; want none written", got.Repos)
+	}
+}
+
+func TestClaimOwnerRefusesEmptyProject(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "A", t0)
+	if _, err := s.ClaimOwner(ctx, "main", "", a.ID); err == nil {
+		t.Fatal("err = nil; want a refusal")
+	}
+	if got, _, _ := s.Team(ctx, a.ID); len(got.Repos) != 0 {
+		t.Errorf("repos = %+v; want none written", got.Repos)
+	}
+}
+
+func TestClaimOwnerRefusedInstanceOwner(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "A", t0)
+	b, _ := s.CreateTeam(ctx, "B", t0)
+	if err := setOwner(t, s, b.ID, TeamRepo{Instance: "main", Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.ClaimOwner(ctx, "main", "g/r", a.ID)
+	var taken *OwnerTakenError
+	if !errors.As(err, &taken) || taken.Team != "B" || taken.Project != "" {
+		t.Fatalf("err = %v; want *OwnerTakenError for B with no project", err)
+	}
+}
+
+func TestClaimOwnerRace(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "A", t0)
+	b, _ := s.CreateTeam(ctx, "B", t0)
+	errs := make([]error, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, id := range []int64{a.ID, b.ID} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = s.ClaimOwner(ctx, "main", "g/r", id)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	nils, takens := 0, 0
+	for _, err := range errs {
+		var taken *OwnerTakenError
+		switch {
+		case err == nil:
+			nils++
+		case errors.As(err, &taken):
+			takens++
+		default:
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if nils != 1 || takens != 1 {
+		t.Fatalf("errs = %v; want exactly 1 nil and 1 *OwnerTakenError", errs)
+	}
+}
+
+func TestReleaseOwner(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "A", t0)
+	if err := setOwner(t, s, a.ID, TeamRepo{Instance: "main", Project: "g/r", Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+	ch, released, err := s.ReleaseOwner(ctx, "main", "G/R", a.ID)
+	if err != nil || !released {
+		t.Fatalf("ReleaseOwner = %v, %v; want released", released, err)
+	}
+	if !ch.Before.Repos[0].Owner || ch.After.Repos[0].Owner {
+		t.Errorf("change = %+v; want the tick cleared", ch)
+	}
+	got, _, _ := s.Team(ctx, a.ID)
+	if !slices.Equal(got.Repos, []TeamRepo{{Instance: "main", Project: "g/r"}}) {
+		t.Errorf("repos = %+v; want the entry kept without a tick", got.Repos)
+	}
+	if _, ok, _ := s.OwnerTeam(ctx, "main", "g/r"); ok {
+		t.Errorf("OwnerTeam has an owner; want none")
+	}
+	if _, released, err := s.ReleaseOwner(ctx, "main", "g/r", a.ID); err != nil || released {
+		t.Errorf("second ReleaseOwner = %v, %v; want not released", released, err)
+	}
+}
+
+func TestInstanceOwners(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "A", t0)
+	b, _ := s.CreateTeam(ctx, "B", t0)
+	if err := setOwner(t, s, a.ID, TeamRepo{Instance: "main", Project: "G/R", Owner: true}, TeamRepo{Instance: "main", Project: "g/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := setOwner(t, s, b.ID, TeamRepo{Instance: "main", Owner: true}, TeamRepo{Instance: "other", Project: "o/p", Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+	byPath, inst, err := s.InstanceOwners(ctx, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byPath) != 1 || byPath["g/r"] != "A" || inst != "B" {
+		t.Errorf("owners = %v, %q; want {g/r: A}, B", byPath, inst)
 	}
 }

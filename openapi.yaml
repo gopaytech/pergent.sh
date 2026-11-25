@@ -1362,7 +1362,10 @@ paths:
       tags: [Repositories]
       summary: Switch a repository on
       description: |
-        Admins only. The repository is checked on its own, not against the
+        Admins, and maintainers of any team on an instance that lets teams
+        onboard (403 `teams may not onboard repositories on this instance`
+        when the switch is off; 404 for someone who maintains no team). The
+        repository is checked on its own, not against the
         picker's lists: the instance's review bot (GitLab: Maintainer or
         above) or App (GitHub: installed) must reach it, else 404 whether it
         is on or not (404 also for an instance that is not there); then 409
@@ -1380,7 +1383,19 @@ paths:
         answer is 409 and nothing changes: a paused repository stays paused.
         An owner of the whole instance is not in the way. The change is
         audited as `owner_set`, as from the team page.
-      x-pergent-access: admin
+
+        A maintainer has these rules instead, checked in this order, and
+        nothing is written until every one passes: `ownerTeam` is required
+        (400 `every team must be a team that exists`) and must be a team they
+        maintain (403 `only maintainers of the owner team and admins can do
+        this`); a repository set up by the config is 409; a repository that is
+        on or paused already is 409 `the repository is already switched on:
+        use Claim` (a maintainer never resumes one); when a team owns the
+        whole instance and it is not `ownerTeam`, 403 `owned by <team>`; when
+        it is, the repository is switched on with no owner tick of its own and
+        inherits the instance's. Otherwise `ownerTeam` becomes its owner as
+        for an admin.
+      x-pergent-access: session
       security:
         - sessionCookie: []
           csrfToken: []
@@ -1413,20 +1428,25 @@ paths:
       tags: [Repositories]
       summary: Repositories that can be switched on (the picker)
       description: |
-        Admins only: one page of the repositories of one instance that its
-        review bot or App reaches and that are not switched on (the same list
-        as `GET /api/admin/instances/{name}/repositories`). A page holds 50
-        at most. On GitLab a page is one request to GitLab in its ID order (so no
-        project falls between two pages), sorted by path within the page, and
-        a page with switched-on projects left out holds fewer than 50; on
-        GitHub, which cannot search on its side, the list is read whole,
-        sorted, cut into pages of 50, and the switched-on ones are left out of
-        each page after. `hasMore` says whether to ask for the next
-        page. `truncated` is true when the list a page is made from was too
-        long (5000) or too slow (20 s) to read whole (GitHub only). 400
-        without an `instance` or with a bad `page`, 404 for an instance that
-        is not there.
-      x-pergent-access: admin
+        Admins, and maintainers of any team on an instance that lets teams
+        onboard (403 `teams may not onboard repositories on this instance`
+        when the switch is off; 404 for someone who maintains no team): one
+        page of the repositories of one instance that its review bot or App
+        reaches (the same list as
+        `GET /api/admin/instances/{name}/repositories`), every one with its
+        `state` (`off`, `paused` or `on`) and its `ownerTeam` (its own owner,
+        else the owner of the whole instance, else empty). `instanceOwner`
+        names the owner of the whole instance, empty for none. Repositories
+        the config file sets up are `on`. A page holds 50 at most. On GitLab a
+        page is one request to GitLab in its ID order (so no project falls
+        between two pages), sorted by path within the page; on GitHub, which
+        cannot search on its side, the list is read whole, sorted and cut
+        into pages of 50. `hasMore` says whether to ask for the next page.
+        `truncated` is true when the list a page is made from was too long
+        (5000) or too slow (20 s) to read whole (GitHub only). 400 without an
+        `instance` or with a bad `page`, 404 for an instance that is not
+        there.
+      x-pergent-access: session
       security:
         - sessionCookie: []
       parameters:
@@ -1562,14 +1582,18 @@ paths:
       tags: [Repositories]
       summary: Remove a repository for good
       description: |
-        Admins only (404 for anyone else). Works on a repository switched on
-        or paused. Its settings and its team links are deleted; pergent.sh
+        Admins, and maintainers of the repository's owner team on an
+        instance that lets teams onboard (403 `teams may not onboard
+        repositories on this instance` with the switch off; 403 `only
+        maintainers of the owner team and admins can do this` for a team
+        that only covers it; 404 for a user who maintains no team). Works on
+        a repository switched on or paused. Its settings and its team links are deleted; pergent.sh
         removes its webhook and clone credentials, and its dismissals,
         commands, inline threads and finding fates. To stop reviews and keep
         all that, pause it instead (`PUT /api/admin/repositories/{instance}/{project}`).
         A repository set up in the config file is 409: remove it from the
         config.
-      x-pergent-access: admin
+      x-pergent-access: session
       x-pergent-pattern: DELETE /api/repositories/{instance}/{rest...}
       security:
         - sessionCookie: []
@@ -1594,7 +1618,12 @@ paths:
       tags: [Repositories]
       summary: Pause or resume a repository
       description: |
-        Admins only (404 for anyone else). `{"enabled": false}` pauses a
+        Admins, and maintainers of the repository's owner team (403 `only
+        maintainers of the owner team and admins can do this` for a team that
+        only covers it; 404 for a user who maintains no team). A pause works
+        with the switch off; a resume needs an instance that lets teams
+        onboard (403 `teams may not onboard repositories on this instance`
+        otherwise). `{"enabled": false}` pauses a
         repository of the dashboard: it stays with every setting, nothing
         reviews it, and pergent.sh takes its webhook and clone credentials off
         the platform within seconds; its dismissals and review history stay.
@@ -1602,7 +1631,7 @@ paths:
         queues a readiness scan. Asking for the state it is in changes
         nothing. 409 for a repository set up in the config file, and for a
         resume while its instance is being removed.
-      x-pergent-access: admin
+      x-pergent-access: session
       x-pergent-pattern: PUT /api/admin/repositories/{instance}/{rest...}
       security:
         - sessionCookie: []
@@ -2287,6 +2316,90 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/claim:
+    post:
+      operationId: claimRepository
+      tags: [Repositories]
+      summary: Make a team the owner of a repository that has none
+      description: |
+        For a repository switched on or paused with no owner at its own entry
+        or its instance. A maintainer names a team they maintain (403 `only
+        maintainers of the owner team and admins can do this` otherwise) on an
+        instance that lets teams onboard (403 `teams may not onboard
+        repositories on this instance` with the switch off; 404 for a user
+        who maintains no team). An admin may name any team. The team's entry
+        for the repository gets the owner tick, or is created with it. A
+        repository that is not switched on is 404. A repository of the config
+        file is 409 for a maintainer; an admin may claim it. A repository
+        that has an owner, at either level, is 409 `<repository> already has
+        owner <team>`. A paused repository stays paused. Audited as
+        `repository_claimed` (detail: the team name) and `owner_set`.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ClaimRepositoryRequest'}
+      responses:
+        '200':
+          description: The repository, with its owner team.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/release:
+    post:
+      operationId: releaseRepository
+      tags: [Repositories]
+      summary: Clear the owner tick on a team's own entry for a repository
+      description: |
+        The body is `{}`. A maintainer of the owner team releases the tick on
+        that team's own entry, with the switch on or off; the entry stays, so
+        the team still sees the repository. An owner that is the instance's is
+        403 `only maintainers of the owner team and admins can do this` for a
+        maintainer: only an admin changes that, on the team page. An admin
+        releases the tick of whichever team holds it. A repository with no
+        owner of its own is 409 `the repository has no owner of its own` for
+        an admin. A repository of the config file is 409. A user who
+        maintains no team gets 404. Audited as `repository_released` (detail:
+        the team name) and `owner_cleared`.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false}
+      responses:
+        '200':
+          description: The repository, with the owner team it has left, if any (the instance's own owner stays).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------------------------- skills
   /api/skills:
@@ -3690,6 +3803,35 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/instances/{name}/teams-onboard:
+    put:
+      operationId: setInstanceTeamsOnboard
+      tags: [Instances and settings]
+      summary: Let teams onboard repositories of an instance
+      description: |
+        Admins only. When on, the maintainers of a team may switch on
+        repositories of the instance and claim them for their team; off (the
+        default), only admins onboard. An instance of the config (set
+        `teams_may_onboard` there), or one being removed, is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstancePathName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InstanceTeamsOnboardRequest'}
+      responses:
+        '204': {description: Set.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/instances/{name}/token-quota:
     put:
       operationId: setInstanceTokenQuota
@@ -3728,7 +3870,7 @@ paths:
       summary: Repositories an instance's bot or App can set up
       description: |
         Admins only: one page of the repositories the instance's review bot or
-        App can set up that are not switched on, 50 at most (see
+        App can set up, each with its state and owner team, 50 at most (see
         `GET /api/repositories/available`, the same list).
       x-pergent-access: admin
       security:
@@ -5601,6 +5743,11 @@ components:
       required: [fingerprint]
       properties:
         fingerprint: {type: string}
+    ClaimRepositoryRequest:
+      type: object
+      required: [team]
+      properties:
+        team: {type: integer, format: int64, description: The team that becomes the owner.}
     CreateAccountRequest:
       type: object
       required: [username]
@@ -6118,6 +6265,12 @@ components:
         mode:
           type: string
           enum: [follow_visibility, 'on', 'off']
+    InstanceTeamsOnboardRequest:
+      type: object
+      required: [on]
+      additionalProperties: false
+      properties:
+        on: {type: boolean}
     TrustedAuthor:
       description: A user on a repository's allowlist, matched by ID; username is the name it had when added.
       type: object
@@ -6312,19 +6465,29 @@ components:
           type: string
           description: Never holds a secret.
     AvailableRepo:
-      description: One repository that can be switched on.
+      description: One repository the picker shows, with its state and owner.
       type: object
-      required: [instance, project, platform]
+      required: [instance, project, platform, state, ownerTeam, config]
       properties:
         instance: {type: string}
         project: {type: string}
         platform:
           type: string
           enum: [gitlab, github]
+        config:
+          type: boolean
+          description: True when the config file sets the repository up; a maintainer cannot claim it.
+        state:
+          type: string
+          enum: ['off', paused, 'on']
+          description: Whether the repository is switched on, paused or not set up.
+        ownerTeam:
+          type: string
+          description: The name of the owner team, its own or the instance's; empty for none.
     AvailableView:
-      description: One page of the repositories that can be switched on, 50 at most.
+      description: One page of the repositories the picker shows, 50 at most.
       type: object
-      required: [items, page, hasMore, truncated]
+      required: [items, page, hasMore, truncated, instanceOwner]
       properties:
         items:
           type: array
@@ -6340,6 +6503,9 @@ components:
         truncated:
           type: boolean
           description: True when the list the page is made from was too long or too slow to read whole (GitHub only; a GitLab page is never truncated).
+        instanceOwner:
+          type: string
+          description: The name of the team that owns the whole instance; empty for none.
     LinkView:
       description: One link of a repository to another, for the impact check.
       type: object
@@ -6651,13 +6817,16 @@ components:
     InstanceAdminView:
       description: One instance.
       type: object
-      required: [name, trustedAuthorsOnly, monthlyTokenQuota, tokensThisMonth, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, secrets]
+      required: [name, trustedAuthorsOnly, teamsMayOnboard, monthlyTokenQuota, tokensThisMonth, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, secrets]
       properties:
         name: {type: string}
         trustedAuthorsOnly:
           type: string
           enum: [follow_visibility, 'on', 'off']
           description: The default of the instance's repositories.
+        teamsMayOnboard:
+          type: boolean
+          description: Set when a team's maintainers may onboard repositories of the instance and claim them.
         monthlyTokenQuota:
           type: [integer, 'null']
           description: The instance's token quota per UTC month, null for none.
@@ -7499,7 +7668,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff, ownerTeam]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff, ownerTeam, actions, coveringTeams]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -7548,6 +7717,28 @@ components:
           oneOf:
             - {$ref: '#/components/schemas/OwnerTeamView'}
             - {type: 'null'}
+        actions: {$ref: '#/components/schemas/RepoActionsView'}
+        coveringTeams:
+          type: array
+          items: {type: string}
+          description: The names of the teams other than the owner team that list the repository themselves (not through the whole instance), which a Remove takes it from. Sorted. Empty unless the session may remove the repository.
+    RepoActionsView:
+      description: |
+        The owner-team buttons the session may use on a repository now. Each is
+        true exactly when the matching route would succeed: it follows the
+        repository's state (pause is for one that is on, resume for one that is
+        paused), the instance's switch (resume and remove need it on, pause and
+        release do not), and the session's role on the owner team. `release` is
+        true only when the owner team's own entry carries the owner tick (an
+        admin: whichever team holds it). A repository of the config file has
+        every flag false.
+      type: object
+      required: [pause, resume, remove, release]
+      properties:
+        pause: {type: boolean}
+        resume: {type: boolean}
+        remove: {type: boolean}
+        release: {type: boolean}
     OwnerTeamView:
       description: A repository's owner team, on its page.
       type: object
@@ -8867,7 +9058,7 @@ components:
     meView:
       description: The signed-in user. Body of GET /api/me.
       type: object
-      required: [kind, username, email, role, signIn, admin, waiting, mustChangePassword, waitingUsers, csrfToken]
+      required: [kind, username, email, role, signIn, admin, waiting, mustChangePassword, waitingUsers, csrfToken, onboardInstances]
       properties:
         kind:
           type: string
@@ -8901,6 +9092,10 @@ components:
         csrfToken:
           type: string
           description: The token writes send in X-CSRF-Token.
+        onboardInstances:
+          type: array
+          items: {type: string}
+          description: The instances the session may onboard repositories on from the picker, sorted. An admin gets every instance not being removed; a maintainer of some team gets those that let teams onboard; anyone else gets [].
     readiness.Checklist:
       description: The Readiness tab.
       type: object

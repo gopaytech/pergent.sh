@@ -59,6 +59,9 @@ export type Me = {
   mustChangePassword: boolean;
   waitingUsers: number;
   csrfToken: string;
+  // onboardInstances are the instances the session may onboard repositories
+  // on from the picker (sorted; never null).
+  onboardInstances: string[];
 };
 
 export type Role = "admin" | "maintainer" | "viewer";
@@ -464,7 +467,17 @@ export type RepositoryDetailView = {
   builtInRulesOff: string;
   // ownerTeam is the team that owns the repository; null when none.
   ownerTeam: OwnerTeamView | null;
+  // actions are the owner-team buttons the session may use now.
+  actions: RepoActionsView;
+  // coveringTeams are the names of the teams other than the owner team that
+  // list the repository themselves, which a Remove takes it from. [] unless
+  // the session may remove it.
+  coveringTeams: string[];
 };
+
+// RepoActionsView says which of Pause, Resume, Remove and Release ownership
+// the session may use on a repository now.
+export type RepoActionsView = { pause: boolean; resume: boolean; remove: boolean; release: boolean };
 
 // GraphView is a repository's Code graph: the switch, whether the install
 // keeps graphs (available), and the stored graph (commit "" is none yet), the
@@ -1291,6 +1304,9 @@ export type InstanceAdminView = {
   name: string;
   // trustedAuthorsOnly is the default of the instance's repositories.
   trustedAuthorsOnly: TrustMode;
+  // teamsMayOnboard lets maintainers of any team switch on and claim
+  // repositories of this instance.
+  teamsMayOnboard: boolean;
   // monthlyTokenQuota is the instance's tokens per UTC month, null for none;
   // tokensThisMonth is what its repositories used so far.
   monthlyTokenQuota: number | null;
@@ -1505,10 +1521,13 @@ export type AuditView = {
 // after, 0 at the end. A short page with a next is not the last.
 export type AuditPageView = { entries: AuditView[]; next: number };
 
-// AvailableView is one page (50 at most) of the repositories that can be
-// switched on; hasMore says a later page may hold more.
+// AvailableView is one page (50 at most) of the repositories the picker
+// shows; hasMore says a later page may hold more. Each item has its state and
+// its owner team's name ("" for none); instanceOwner is the team that owns
+// the whole instance ("" for none).
 export type AvailableView = {
-  items: { instance: string; project: string; platform: Platform }[];
+  items: { instance: string; project: string; platform: Platform; state: "off" | "paused" | "on"; ownerTeam: string; config: boolean }[];
+  instanceOwner: string;
   page: number;
   hasMore: boolean;
   truncated: boolean;
@@ -1668,6 +1687,10 @@ export const paths = {
   apiRepo: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}`,
   // apiAdminRepo pauses (PUT {"enabled": false}) and resumes ({"enabled": true}) a repository.
   apiAdminRepo: (instance: string, project: string) => `/api/admin/repositories/${seg(instance)}/${proj(project)}`,
+  // apiRepoClaim (POST {"team": id}) makes a team the owner of a repository
+  // that is on or paused; apiRepoRelease (POST {}) takes the ownership off.
+  apiRepoClaim: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/claim`,
+  apiRepoRelease: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/release`,
   apiRepoInputs: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/inputs`,
   apiRepoGraph: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/graph`,
   apiRepoPastDismissals: (instance: string, project: string) =>

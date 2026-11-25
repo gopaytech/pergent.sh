@@ -46,7 +46,8 @@ describe("App shell", () => {
 
   it("shows a maintainer the Settings tab of a repository, but no on/off switch", async () => {
     fakeApi({
-      "GET /api/me": { body: maintainer },
+      // No instance lets teams onboard, so a maintainer gets no + Add repository.
+      "GET /api/me": { body: { ...maintainer, onboardInstances: [] } },
       "GET /api/repositories": { body: [repoPayments] },
       "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "maintainer") },
       "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [], nextCursor: "" } },

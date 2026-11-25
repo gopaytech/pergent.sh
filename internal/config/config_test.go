@@ -1621,6 +1621,23 @@ func withTrustKeys(t *testing.T, gitlabKey, githubKey, repoKey string) (*Config,
 	return Load(writeConfig(t, body))
 }
 
+func TestTeamsMayOnboardKey(t *testing.T) {
+	cfg, err := withTrustKeys(t, "    teams_may_onboard: true\n", "    teams_may_onboard: true\n", "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.GitLab[0].TeamsMayOnboard || !cfg.GitHub[0].TeamsMayOnboard {
+		t.Errorf("teams_may_onboard: true parsed to gitlab %v, github %v", cfg.GitLab[0].TeamsMayOnboard, cfg.GitHub[0].TeamsMayOnboard)
+	}
+	cfg, err = withTrustKeys(t, "", "", "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.GitLab[0].TeamsMayOnboard || cfg.GitHub[0].TeamsMayOnboard {
+		t.Error("an absent teams_may_onboard parsed to true")
+	}
+}
+
 func TestTrustedAuthorsConfig(t *testing.T) {
 	cfg, err := withTrustKeys(t, "    trusted_authors_only: off\n", "", `    trusted_authors_only: on
     trusted_authors:

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
@@ -77,15 +78,16 @@ var (
 
 // writeRoutes adds the write API to mux: every route behind a session
 // (Auth.Require checks X-CSRF-Token); switching on, pausing, resuming and
-// removing and the picker are admin routes (adminRoute: 404 for anyone
-// else), a repository's settings are for its maintainers and admins (403
+// removing and the picker are team routes (teamRoute: admins, and the
+// maintainers of an owner team where an instance lets teams onboard; each
+// handler gates its non-admins), a repository's settings are for its maintainers and admins (403
 // otherwise).
 func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
-	d.adminRoute(mux, "GET /api/repositories/available", d.available)
+	d.teamRoute(mux, "GET /api/repositories/available", d.available)
 	d.adminRoute(mux, "GET /api/admin/linkable", d.linkable)
-	d.adminRoute(mux, "POST /api/repositories", d.switchOn)
-	d.adminRoute(mux, "PUT /api/admin/repositories/{instance}/{rest...}", d.setEnabled)
-	d.adminRoute(mux, "DELETE /api/repositories/{instance}/{rest...}", d.removeRepo)
+	d.teamRoute(mux, "POST /api/repositories", d.switchOn)
+	d.teamRoute(mux, "PUT /api/admin/repositories/{instance}/{rest...}", d.setEnabled)
+	d.teamRoute(mux, "DELETE /api/repositories/{instance}/{rest...}", d.removeRepo)
 	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPut)))
 	mux.Handle("POST /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPost)))
 	// The instance alone is 404, not a redirect to the {rest...} routes.
@@ -103,6 +105,13 @@ func (d *Dashboard) available(w http.ResponseWriter, r *http.Request) {
 	if instance == "" {
 		writeError(w, http.StatusBadRequest, msgNameInstance)
 		return
+	}
+	if !session(r).Admin {
+		// The picker lists every repository with its state and owner; a
+		// maintainer of any team sees it, the owner check is at onboarding.
+		if !d.maintainerGate(w, r, instance) {
+			return
+		}
 	}
 	d.listAvailable(w, r, instance)
 }
@@ -251,11 +260,32 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msgNameInstance)
 		return
 	}
+	var ownerName string // a maintainer's chosen team
+	if !se.Admin {
+		if !d.maintainerGate(w, r, instance) {
+			return
+		}
+		if body.OwnerTeam == nil {
+			writeError(w, http.StatusBadRequest, msgNoTeam)
+			return
+		}
+		teams, err := d.maintainedTeams(ctx, se)
+		if err != nil {
+			d.failed(w, r, "reading the teams", err)
+			return
+		}
+		i := slices.IndexFunc(teams, func(t store.Team) bool { return t.ID == *body.OwnerTeam })
+		if i < 0 {
+			writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
+			return
+		}
+		ownerName = teams[i].Name
+	}
 	if !d.knownInstance(instance) {
 		notFound(w)
 		return
 	}
-	if body.OwnerTeam != nil {
+	if body.OwnerTeam != nil && se.Admin {
 		// Before the platform is asked: a team that isn't there is the
 		// client's mistake, whatever the bot reaches.
 		_, found, err := d.Store.Team(ctx, *body.OwnerTeam)
@@ -291,7 +321,51 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	row := store.DashboardRepo{Instance: instance, Project: name, CreatedBy: se.Username}
 	var created, resumed bool
 	var owned *store.SwitchOnResult
-	if body.OwnerTeam != nil {
+	inherit := false
+	if !se.Admin {
+		// A maintainer never resumes or takes over: a row, on or paused, is
+		// for Claim. Every check comes before the write.
+		if _, found, err := d.Store.AnyDashboardRepo(ctx, instance, name); err != nil {
+			d.failed(w, r, "reading the repository", err)
+			return
+		} else if found {
+			writeError(w, http.StatusConflict, msgUseClaim)
+			return
+		}
+		byPath, instanceOwner, err := d.Store.InstanceOwners(ctx, instance)
+		if err != nil {
+			d.failed(w, r, "reading the owners", err)
+			return
+		}
+		// A stale tick of its own beats the instance's owner: another
+		// team's repository is not taken over.
+		if own := byPath[strings.ToLower(name)]; own != "" && !strings.EqualFold(own, ownerName) {
+			writeError(w, http.StatusForbidden, "owned by "+own)
+			return
+		}
+		// A tick of its own for the chosen team settles it: the instance's
+		// owner is not asked, and SwitchOnOwned keeps the tick.
+		ownTick := strings.EqualFold(byPath[strings.ToLower(name)], ownerName)
+		if instanceOwner != "" && !ownTick {
+			// Team names are unique ignoring case.
+			if !strings.EqualFold(instanceOwner, ownerName) {
+				writeError(w, http.StatusForbidden, "owned by "+instanceOwner)
+				return
+			}
+			// The instance's owner is already the repository's: no tick of
+			// its own, so it inherits.
+			inherit = true
+		}
+	}
+	if inherit {
+		var err error
+		if created, err = d.Store.InsertDashboardRepo(ctx, row); err != nil {
+			d.Log.Error("dashboard: switching a repository on failed", "instance", instance, "project", name,
+				"error", err.Error())
+			writeError(w, http.StatusInternalServerError, msgWriteFailed)
+			return
+		}
+	} else if body.OwnerTeam != nil {
 		// Switched on (or resumed) and owned in one transaction: a refused
 		// owner leaves a paused repository paused.
 		res, err := d.Store.SwitchOnOwned(ctx, row, *body.OwnerTeam)
@@ -358,6 +432,23 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		d.failed(w, r, "loading a repository", err)
 		return
+	}
+	if !se.Admin {
+		// The session was read before the owner tick: the new owner's
+		// maintainer sees and runs the repository it just onboarded.
+		k := repoKey(instance, name)
+		visible, roles := maps.Clone(se.Visible), maps.Clone(se.Roles)
+		if visible == nil {
+			visible = map[RepoKey]int64{}
+		}
+		if roles == nil {
+			roles = map[RepoKey]Role{}
+		}
+		if _, ok := visible[k]; !ok {
+			visible[k] = 0
+		}
+		roles[k] = max(roles[k], RoleMaintainer)
+		se.Visible, se.Roles = visible, roles
 	}
 	view, err := d.detailView(ctx, se, repo)
 	if err != nil {
@@ -474,8 +565,19 @@ func (d *Dashboard) targetRepo(w http.ResponseWriter, r *http.Request, suffix st
 // reconcile). A resume while its instance is being removed is 409.
 func (d *Dashboard) setEnabled(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
-	repo, ok := d.target(w, r, "", RoleAdmin)
+	need := RoleAdmin
+	if !se.Admin {
+		// Pause works with the switch off: only the gate without it.
+		if !d.maintainerGateAnySwitch(w, r, r.PathValue("instance")) {
+			return
+		}
+		need = RoleViewer
+	}
+	repo, ok := d.target(w, r, "", need)
 	if !ok {
+		return
+	}
+	if !se.Admin && !d.requireOwnerMaintainer(w, r, repo) {
 		return
 	}
 	var body struct {
@@ -483,6 +585,10 @@ func (d *Dashboard) setEnabled(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeStrict(r, &body); err != nil || body.Enabled == nil {
 		writeError(w, http.StatusBadRequest, msgBadEnabled)
+		return
+	}
+	if !se.Admin && *body.Enabled && !d.teamsMayOnboard(repo.Instance) {
+		writeError(w, http.StatusForbidden, msgTeamsMayNotOnboard)
 		return
 	}
 	enabled := *body.Enabled
@@ -544,8 +650,18 @@ func refusePaused(w http.ResponseWriter, repo settings.Effective) bool {
 // deploy token off the platform and deletes its project's record.
 func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
-	repo, ok := d.target(w, r, "", RoleAdmin)
+	need := RoleAdmin
+	if !se.Admin {
+		if !d.maintainerGate(w, r, r.PathValue("instance")) {
+			return
+		}
+		need = RoleViewer
+	}
+	repo, ok := d.target(w, r, "", need)
 	if !ok {
+		return
+	}
+	if !se.Admin && !d.requireOwnerMaintainer(w, r, repo) {
 		return
 	}
 	found, err := d.Store.RemoveDashboardRepo(ctx, repo.Instance, repo.Project)
@@ -569,6 +685,7 @@ func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view.Repo.On = false
+	view.Actions = RepoActionsView{} // gone: nothing to act on
 	def, err := d.Repos.BrowserDefaults(ctx, repo.Platform, repo.Instance)
 	if err != nil {
 		d.failed(w, r, "reading the defaults", err)
@@ -582,10 +699,18 @@ func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 
 // --- POST /api/repositories/{instance}/{project...}/... ---
 
-// repositoryPost serves the POSTs to one repository: .../readiness/scan
-// (scanNow), .../past-dismissals/stop (stopUsing) and .../settings/reset; any
+// repositoryPost serves the POSTs to one repository: .../claim (claimRepo),
+// .../release (releaseRepo), .../readiness/scan (scanNow), .../past-dismissals/stop (stopUsing) and .../settings/reset; any
 // other is 404.
 func (d *Dashboard) repositoryPost(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.PathValue("rest"), "/claim") {
+		d.claimRepo(w, r)
+		return
+	}
+	if strings.HasSuffix(r.PathValue("rest"), "/release") {
+		d.releaseRepo(w, r)
+		return
+	}
 	if strings.HasSuffix(r.PathValue("rest"), "/chain/reset") {
 		d.resetRepoChain(w, r)
 		return

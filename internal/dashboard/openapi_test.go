@@ -205,6 +205,10 @@ func gateOf(nodes ...ast.Node) string {
 // is registered with.
 const adminRouteHelper = "adminRoute"
 
+// teamRouteHelper is the Dashboard method that registers a route admins and
+// maintainers use: a session route whose handler checks who may do what.
+const teamRouteHelper = "teamRoute"
+
 type routeHelper struct {
 	lit    *ast.FuncLit
 	prefix string // "GET " for get := func(pattern ...) { mux.Handle("GET "+pattern, ...) }
@@ -300,7 +304,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 	}
 	for _, decl := range file.Decls {
 		// The one helper admin routes go through: its callers are read below.
-		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name.Name == adminRouteHelper {
+		if fd, ok := decl.(*ast.FuncDecl); ok && (fd.Name.Name == adminRouteHelper || fd.Name.Name == teamRouteHelper) {
 			continue
 		}
 		muxes := muxVars(decl)
@@ -412,17 +416,21 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 				unresolved = append(unresolved, where(call.Pos())+": a route pattern this test can't read")
 				return true
 			}
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == adminRouteHelper {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == adminRouteHelper || sel.Sel.Name == teamRouteHelper) {
+				access := "admin"
+				if sel.Sel.Name == teamRouteHelper {
+					access = "session"
+				}
 				if len(call.Args) != 3 {
-					unresolved = append(unresolved, where(call.Pos())+": "+adminRouteHelper+" is called with something other than (mux, pattern, handler)")
+					unresolved = append(unresolved, where(call.Pos())+": "+sel.Sel.Name+" is called with something other than (mux, pattern, handler)")
 					return true
 				}
 				lit, ok := stringLit(call.Args[1])
 				if !ok {
-					unresolved = append(unresolved, where(call.Pos())+": "+adminRouteHelper+" is called with a pattern that is not a string literal")
+					unresolved = append(unresolved, where(call.Pos())+": "+sel.Sel.Name+" is called with a pattern that is not a string literal")
 					return true
 				}
-				add(lit, "admin", call.Pos())
+				add(lit, access, call.Pos())
 				return true
 			}
 			if id, ok := call.Fun.(*ast.Ident); ok {
@@ -782,6 +790,15 @@ func (d *D) adminRoute(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 	if len(unresolved) != 0 || len(routes) != 2 || routes[0].Access != "admin" || routes[1].Access != "admin" {
 		t.Errorf("admin routes: %v, unresolved %v; want GET /m and GET /n, both admin", routes, unresolved)
 	}
+	// The team helper registers session routes; its own body is not read.
+	routes, unresolved = scanSource(t, `package x
+func (d *D) routes(mux *http.ServeMux) { d.teamRoute(mux, "GET /t", d.t) }
+func (d *D) teamRoute(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+	mux.Handle(pattern, d.Auth.Require(h))
+}`)
+	if len(unresolved) != 0 || len(routes) != 1 || routes[0].Pattern != "GET /t" || routes[0].Access != "session" {
+		t.Errorf("team routes: %v, unresolved %v; want GET /t as a session route", routes, unresolved)
+	}
 	_, unresolved = scanSource(t, `package x
 func f(d *D, mux *http.ServeMux, p string) { d.adminRoute(mux, p, h) }`)
 	if len(unresolved) != 1 {
@@ -861,6 +878,7 @@ var openAPISchemas = map[string]schemaType{
 	"Last7View":               outputSchema(Last7View{}),
 	"RepositoryDetailView":    outputSchema(RepositoryDetailView{}),
 	"OwnerTeamView":           outputSchema(OwnerTeamView{}),
+	"RepoActionsView":         outputSchema(RepoActionsView{}),
 	"MultiReviewView":         outputSchema(MultiReviewView{}),
 	"WaitingView":             outputSchema(WaitingView{}),
 	"QuotaView":               outputSchema(QuotaView{}),
@@ -1045,54 +1063,56 @@ var openAPISchemas = map[string]schemaType{
 // Schemas with no Go type to compare with: the error body, and the request
 // bodies the handlers decode into a struct declared inside the function.
 var openAPIUntypedSchemas = map[string]string{
-	"ErrorBody":                 "map[string]string{error, code}",
-	"ChainRequest":              "struct in decodeChain",
-	"ReviewersRequest":          "struct in decodeReviewers",
-	"StatusBody":                "map[string]string{status}",
-	"InstanceTrustRequest":      "struct in Dashboard.putInstanceTrust",
-	"InstanceTokenQuotaRequest": "struct in Dashboard.putInstanceQuota",
-	"ModelLimitRequest":         "struct in limitBody",
-	"StartRequest":              "struct in Dashboard.reviewAction",
-	"TrustedAuthorInput":        "store.TrustedAuthor with id optional, in trustedAuthorsSetting",
-	"Outcome":                   "the Outcome* constants, spelled in the enum",
-	"CSRFTokenBody":             "map[string]string{csrfToken}",
-	"PasswordSignInRequest":     "struct in Auth.passwordSignIn",
-	"PasswordChangeRequest":     "struct in Auth.changePassword",
-	"SwitchOnRequest":           "struct in Dashboard.switchOn",
-	"RepositoryEnabledRequest":  "struct in Dashboard.setEnabled",
-	"RerunRequest":              "struct in Dashboard.reviewAction",
-	"DismissRequest":            "struct in Dashboard.reviewAction",
-	"RestoreRequest":            "struct in Dashboard.reviewAction",
-	"StopUsingRequest":          "struct in Dashboard.stopUsing",
-	"ScanStartedBody":           "struct in Dashboard.scanNow",
-	"ScanBusyBody":              "struct in Dashboard.scanNow",
-	"ScanTooSoonBody":           "struct in Dashboard.scanNow",
-	"CreateAccountRequest":      "struct in Dashboard.createPasswordAccount",
-	"AddUserRequest":            "struct in Dashboard.addUser",
-	"PutRepositoryTeamsRequest": "struct in Dashboard.putRepositoryTeams",
-	"PutRepositoryGraphRequest": "struct in Dashboard.putGraph",
-	"SetAccountRoleRequest":     "struct in Dashboard.setUserRole",
-	"CreateTeamRequest":         "struct in Dashboard.createTeam",
-	"UpdateTeamRequest":         "struct in Dashboard.updateTeam",
-	"CreateInstanceRequest":     "struct in Dashboard.addInstance",
-	"UpdateInstanceRequest":     "struct in Dashboard.updateInstance",
-	"CreateModelRequest":        "struct in Dashboard.createModel",
-	"CreateTeamModelRequest":    "struct in Dashboard.createTeamModel",
-	"UpdateTeamModelRequest":    "struct in Dashboard.updateTeamModel",
-	"UpdateModelRequest":        "struct in Dashboard.updateModel",
-	"PutSignInRequest":          "putSignInBody, decoded in Dashboard.putSignIn",
-	"PutCommentFooterRequest":   "struct in Dashboard.putCommentFooter",
-	"TestSignInRequest":         "struct in Dashboard.signInTest",
-	"CreateSkillRequest":        "struct in Dashboard.createSkill",
-	"UpdateSkillRequest":        "struct in Dashboard.updateSkill",
-	"CreateRuleSetRequest":      "struct in Dashboard.createRuleSet",
-	"UpdateRuleSetRequest":      "struct in Dashboard.updateRuleSet",
-	"CopySkillRequest":          "struct in Dashboard.copySkill",
-	"StartSkillFetchRequest":    "struct in Dashboard.startSkillFetch",
-	"InstallSkillsRequest":      "struct in Dashboard.installSkills",
-	"UpdateSkillsRequest":       "struct in Dashboard.updateSkills",
-	"RepositorySettingsRequest": "settings object parsed by parseSettings (map of raw values)",
-	"DefaultsRequest":           "settings object parsed by parseDefaults (map of raw values)",
+	"ErrorBody":                   "map[string]string{error, code}",
+	"ChainRequest":                "struct in decodeChain",
+	"ReviewersRequest":            "struct in decodeReviewers",
+	"StatusBody":                  "map[string]string{status}",
+	"InstanceTrustRequest":        "struct in Dashboard.putInstanceTrust",
+	"InstanceTeamsOnboardRequest": "struct in Dashboard.putInstanceTeamsOnboard",
+	"InstanceTokenQuotaRequest":   "struct in Dashboard.putInstanceQuota",
+	"ModelLimitRequest":           "struct in limitBody",
+	"StartRequest":                "struct in Dashboard.reviewAction",
+	"TrustedAuthorInput":          "store.TrustedAuthor with id optional, in trustedAuthorsSetting",
+	"Outcome":                     "the Outcome* constants, spelled in the enum",
+	"CSRFTokenBody":               "map[string]string{csrfToken}",
+	"PasswordSignInRequest":       "struct in Auth.passwordSignIn",
+	"PasswordChangeRequest":       "struct in Auth.changePassword",
+	"SwitchOnRequest":             "struct in Dashboard.switchOn",
+	"RepositoryEnabledRequest":    "struct in Dashboard.setEnabled",
+	"RerunRequest":                "struct in Dashboard.reviewAction",
+	"DismissRequest":              "struct in Dashboard.reviewAction",
+	"RestoreRequest":              "struct in Dashboard.reviewAction",
+	"StopUsingRequest":            "struct in Dashboard.stopUsing",
+	"ClaimRepositoryRequest":      "struct in Dashboard.claimRepo",
+	"ScanStartedBody":             "struct in Dashboard.scanNow",
+	"ScanBusyBody":                "struct in Dashboard.scanNow",
+	"ScanTooSoonBody":             "struct in Dashboard.scanNow",
+	"CreateAccountRequest":        "struct in Dashboard.createPasswordAccount",
+	"AddUserRequest":              "struct in Dashboard.addUser",
+	"PutRepositoryTeamsRequest":   "struct in Dashboard.putRepositoryTeams",
+	"PutRepositoryGraphRequest":   "struct in Dashboard.putGraph",
+	"SetAccountRoleRequest":       "struct in Dashboard.setUserRole",
+	"CreateTeamRequest":           "struct in Dashboard.createTeam",
+	"UpdateTeamRequest":           "struct in Dashboard.updateTeam",
+	"CreateInstanceRequest":       "struct in Dashboard.addInstance",
+	"UpdateInstanceRequest":       "struct in Dashboard.updateInstance",
+	"CreateModelRequest":          "struct in Dashboard.createModel",
+	"CreateTeamModelRequest":      "struct in Dashboard.createTeamModel",
+	"UpdateTeamModelRequest":      "struct in Dashboard.updateTeamModel",
+	"UpdateModelRequest":          "struct in Dashboard.updateModel",
+	"PutSignInRequest":            "putSignInBody, decoded in Dashboard.putSignIn",
+	"PutCommentFooterRequest":     "struct in Dashboard.putCommentFooter",
+	"TestSignInRequest":           "struct in Dashboard.signInTest",
+	"CreateSkillRequest":          "struct in Dashboard.createSkill",
+	"UpdateSkillRequest":          "struct in Dashboard.updateSkill",
+	"CreateRuleSetRequest":        "struct in Dashboard.createRuleSet",
+	"UpdateRuleSetRequest":        "struct in Dashboard.updateRuleSet",
+	"CopySkillRequest":            "struct in Dashboard.copySkill",
+	"StartSkillFetchRequest":      "struct in Dashboard.startSkillFetch",
+	"InstallSkillsRequest":        "struct in Dashboard.installSkills",
+	"UpdateSkillsRequest":         "struct in Dashboard.updateSkills",
+	"RepositorySettingsRequest":   "settings object parsed by parseSettings (map of raw values)",
+	"DefaultsRequest":             "settings object parsed by parseDefaults (map of raw values)",
 }
 
 // goJSONField is one JSON property of a Go struct.

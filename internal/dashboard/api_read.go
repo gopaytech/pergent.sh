@@ -1249,10 +1249,44 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
+	actions, err := d.repoActions(ctx, se, repo)
+	if err != nil {
+		return RepositoryDetailView{}, err
+	}
+	covering, err := d.coveringTeams(ctx, repo, actions.Remove)
+	if err != nil {
+		return RepositoryDetailView{}, err
+	}
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
 		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model, MultiReview: multi,
 		Quota: d.quotaView(ctx, se, repo), Graph: gv, BuiltInRulesOff: builtInRulesOff(d.cfg.Jobs.Image),
-		OwnerTeam: owner}, nil
+		OwnerTeam: owner, Actions: actions, CoveringTeams: covering}, nil
+}
+
+// coveringTeams are the names of the teams other than repo's owner team that
+// list the repository themselves (their own entry, not the whole instance):
+// the teams a Remove takes it from. Only a session that may remove is told,
+// the rest get none. Sorted, never nil.
+func (d *Dashboard) coveringTeams(ctx context.Context, repo settings.Effective, mayRemove bool) ([]string, error) {
+	out := []string{}
+	if !mayRemove {
+		return out, nil
+	}
+	owner, _, err := d.Store.OwnerTeam(ctx, repo.Instance, repo.Project)
+	if err != nil {
+		return nil, err
+	}
+	teams, err := d.Store.Teams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range teams {
+		if t.ID != owner && t.OwnEntry(repo.Instance, repo.Project) >= 0 {
+			out = append(out, t.Name)
+		}
+	}
+	slices.SortFunc(out, strings.Compare)
+	return out, nil
 }
 
 // ownerTeamView is repo's owner team (Store.OwnerTeam) as its page shows

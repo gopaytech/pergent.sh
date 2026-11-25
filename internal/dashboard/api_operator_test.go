@@ -739,6 +739,11 @@ func TestOnlyAdminsTouchInstances(t *testing.T) {
 		{"PUT", "/api/admin/defaults", `{}`},
 	} {
 		for name, c := range map[string]*http.Cookie{"viewer": viewer, "waiting": waiting} {
+			if name == "waiting" && strings.HasPrefix(tc.target, "/api/repositories/") {
+				// A team route: the waiting gate answers first.
+				wantWaiting(t, e.get(c, tc.target), tc.target)
+				continue
+			}
 			var rec *httptest.ResponseRecorder
 			if tc.method == "GET" {
 				rec = e.get(c, tc.target)
@@ -1259,7 +1264,7 @@ func TestDefaults(t *testing.T) {
 }
 
 // An admin picks repositories of any instance: those the review bot or App
-// reaches that aren't on yet; switching one on needs only that, and a
+// reaches, with their state; switching one on needs only that, and a
 // repository of the config is 409.
 func TestOperatorPicksRepositories(t *testing.T) {
 	t.Parallel()
@@ -1271,8 +1276,9 @@ func TestOperatorPicksRepositories(t *testing.T) {
 	for _, it := range v.Items {
 		got = append(got, it.Instance+"/"+it.Project+"/"+it.Platform)
 	}
-	if !slices.Equal(got, []string{"main/acme/gadgets/gitlab", "main/acme/tools/gitlab"}) || v.Truncated {
-		t.Errorf("picker = %v truncated %v; want the repositories not on yet", got, v.Truncated)
+	if !slices.Equal(got, []string{"main/acme/gadgets/gitlab", "main/acme/tools/gitlab", "main/acme/widgets/gitlab"}) || v.Truncated ||
+		v.Items[0].State != stateOff || v.Items[2].State != stateOn {
+		t.Errorf("picker = %v truncated %v; want every repository, widgets on", got, v.Truncated)
 	}
 	if v := getJSON[AvailableView](e, c, "/api/admin/instances/main/repositories?search=TOOLS"); len(v.Items) != 1 || v.Items[0].Project != "acme/tools" {
 		t.Errorf("search = %+v", v)

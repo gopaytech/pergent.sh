@@ -18,9 +18,9 @@ const (
 	msgBadTeamModelEdit = `the body must be {"name": ..., "baseURL": ..., "apiKey": ...}, each optional: an entry's provider and model never change`
 )
 
-// teamRoutes adds the user area's team API to mux: session routes, each
+// teamAPIRoutes adds the user area's team API to mux: session routes, each
 // handler checking what the session may do on the team (teamFor).
-func (d *Dashboard) teamRoutes(mux *http.ServeMux) {
+func (d *Dashboard) teamAPIRoutes(mux *http.ServeMux) {
 	route := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(h)) }
 	route("GET /api/me/teams", d.myTeams)
 	route("GET /api/teams/{id}", d.teamPage)

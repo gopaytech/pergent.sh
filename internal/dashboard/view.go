@@ -545,6 +545,23 @@ type RepositoryDetailView struct {
 	// OwnerTeam is the team that owns the repository (its own entry's owner,
 	// else its instance entry's); nil when there is none.
 	OwnerTeam *OwnerTeamView `json:"ownerTeam"`
+	// Actions are the onboarding buttons the session may use now.
+	Actions RepoActionsView `json:"actions"`
+	// CoveringTeams are the names of the teams other than the owner team that
+	// list the repository themselves, which a Remove takes it from. Empty
+	// (never null) unless the session may remove it.
+	CoveringTeams []string `json:"coveringTeams"`
+}
+
+// RepoActionsView says which owner-team actions the session's buttons show:
+// each is true exactly when the matching route would succeed now (the
+// repository's state, the instance's switch, the session's role on the owner
+// team). A repository of the config file has none.
+type RepoActionsView struct {
+	Pause   bool `json:"pause"`
+	Resume  bool `json:"resume"`
+	Remove  bool `json:"remove"`
+	Release bool `json:"release"`
 }
 
 // OwnerTeamView is a repository's owner team on its page. Open is whether
@@ -1154,14 +1171,13 @@ type LLMView struct {
 
 // AvailableView is GET /api/repositories/available: one page of the
 // repositories of the instance that the review bot (GitLab: Maintainer or
-// above) or review App (GitHub: its installations) reaches and that aren't
-// switched on, by project ignoring case. Items holds 50 at most and Page is
+// above) or review App (GitHub: its installations) reaches, each with its
+// state (off, paused or on) and owner team. Items holds 50 at most and Page is
 // the page asked for (1-based). On GitLab a page is one request to the
-// platform in its order, so one with switched-on repositories left out holds
-// fewer than 50; on GitHub, which can't search on its side, the list is read
-// whole, sorted, cut into pages of 50, and the switched-on ones are left out
-// of each page after (so a page can hold fewer there too, and switching one
-// on moves no later page).
+// platform in its order; on GitHub, which can't search on its side, the list
+// is read whole, sorted and cut into pages of 50.
+// InstanceOwner is the name of the team that owns the whole instance ("" for
+// none).
 // HasMore is true when a later page may hold more. Truncated is true when
 // the list a page is made from was too long (5000) or too slow (20 s, each
 // request 10 s) to read whole; GitLab pages are never truncated. 502 when
@@ -1171,14 +1187,24 @@ type AvailableView struct {
 	Page      int             `json:"page"`
 	HasMore   bool            `json:"hasMore"`
 	Truncated bool            `json:"truncated"`
+	// InstanceOwner is the team that owns the whole instance, "" for none.
+	InstanceOwner string `json:"instanceOwner"`
 }
 
-// AvailableRepo is one repository that can be switched on.
+// AvailableRepo is one repository the picker shows.
 type AvailableRepo struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
 	// Platform is "gitlab" or "github".
 	Platform string `json:"platform"`
+	// State is "off", "paused" or "on".
+	State string `json:"state"`
+	// OwnerTeam is the name of the owner team, its own or the instance's;
+	// "" for none.
+	OwnerTeam string `json:"ownerTeam"`
+	// Config is true when the config file sets the repository up: a
+	// maintainer cannot claim it.
+	Config bool `json:"config"`
 }
 
 // --- Users, teams and the audit log (admins only, 403 otherwise) ---
@@ -1478,6 +1504,10 @@ type AuditView struct {
 //     replaces what it names, checks the whole, connects again. An address
 //     or App ID that differs is 400; an instance of the config is 409.
 //     200, InstanceAdminView.
+//   - PUT /api/admin/instances/{name}/teams-onboard {"on": bool}: lets a
+//     team's maintainers onboard repositories of the instance and claim them
+//     (or not). 204; 400 without "on"; 409 for an instance of the config
+//     (set `teams_may_onboard` there) or one being removed.
 //   - PUT /api/admin/instances/{name}/token-quota {"monthlyTokenQuota": n|null}:
 //     the instance's token quota per UTC month (a whole number from 1 to
 //     1000000000000000, or null for none; else 400). 204; 409 for an instance
@@ -1575,6 +1605,9 @@ type InstanceAdminView struct {
 	// TrustedAuthorsOnly is the default of the instance's repositories:
 	// "follow_visibility", "on" or "off".
 	TrustedAuthorsOnly string `json:"trustedAuthorsOnly"`
+	// TeamsMayOnboard is set when a team's maintainers may onboard
+	// repositories of the instance and claim them.
+	TeamsMayOnboard bool `json:"teamsMayOnboard"`
 	// MonthlyTokenQuota is the instance's token quota per UTC month; null
 	// for none. TokensThisMonth is what its reviews used this month.
 	MonthlyTokenQuota *int64 `json:"monthlyTokenQuota"`

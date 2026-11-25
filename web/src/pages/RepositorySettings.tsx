@@ -185,14 +185,14 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
       {view.role === "admin" && <RepoTeams instance={repo.instance} project={repo.project} />}
       {/* Last, so nothing else on the tab sits under it. Pausing is the
           switch on Repositories; the config removes its own repositories. */}
-      {view.role === "admin" && repo.source === "dashboard" && <RemoveRepository instance={repo.instance} project={repo.project} />}
+      {view.actions.remove && <RemoveRepository instance={repo.instance} project={repo.project} coveringTeams={view.coveringTeams} />}
     </>
   );
 }
 
 // RemoveRepository deletes a repository from pergent for good, after a
 // confirm, and goes back to the list.
-function RemoveRepository({ instance, project }: { instance: string; project: string }) {
+function RemoveRepository({ instance, project, coveringTeams }: { instance: string; project: string; coveringTeams: string[] }) {
   const client = useQueryClient();
   const write = useWrite();
   const navigate = useNavigate();
@@ -206,7 +206,7 @@ function RemoveRepository({ instance, project }: { instance: string; project: st
   const ask = () => {
     if (
       window.confirm(
-        `Remove ${project} from pergent? Its settings and team links are deleted, and its webhook and clone credentials are removed. This can't be undone.`,
+        `Remove ${project} from pergent? Its settings and team links are deleted, and its webhook and clone credentials are removed.${coveringTeams.length > 0 ? ` These teams also lose it: ${coveringTeams.join(", ")}.` : ""} This can't be undone.`,
       )
     )
       remove.mutate();

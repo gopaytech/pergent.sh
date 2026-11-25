@@ -49,6 +49,7 @@ const (
 	msgImmutable         = "an instance's address and App IDs can't change: remove it and add it again"
 	msgConfigInstance    = "this instance is managed by the config file; change it there"
 	msgInstanceRemoving  = "this instance is being removed"
+	msgBadTeamsOnboard   = `the body must be {"on": true or false}`
 	msgBadTrustMode      = `the body must be {"mode": "follow_visibility" | "on" | "off"}`
 	msgNothingToChange   = `nothing to change: give "secrets"`
 
@@ -67,6 +68,7 @@ func (d *Dashboard) operatorRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "POST /api/admin/instances", d.addInstance)
 	d.adminRoute(mux, "PUT /api/admin/instances/{name}", d.updateInstance)
 	d.adminRoute(mux, "PUT /api/admin/instances/{name}/trusted-authors", d.putInstanceTrust)
+	d.adminRoute(mux, "PUT /api/admin/instances/{name}/teams-onboard", d.putInstanceTeamsOnboard)
 	d.adminRoute(mux, "PUT /api/admin/instances/{name}/token-quota", d.putInstanceQuota)
 	d.adminRoute(mux, "DELETE /api/admin/instances/{name}", d.removeInstance)
 	d.adminRoute(mux, "GET /api/admin/instances/{name}/repositories", d.instanceRepositories)
@@ -169,7 +171,7 @@ func approverOfRow(row store.InstanceRow) string {
 // env var holds a value; a dashboard instance's when the sealed value opens.
 func (d *Dashboard) instanceView(ctx context.Context, inst instances.Instance) (InstanceAdminView, error) {
 	v := InstanceAdminView{Name: inst.Name, Platform: inst.Platform, Source: string(inst.Source), Removing: inst.Removing,
-		TrustedAuthorsOnly: inst.TrustedAuthorsOnly, MonthlyTokenQuota: inst.MonthlyTokenQuota,
+		TrustedAuthorsOnly: inst.TrustedAuthorsOnly, MonthlyTokenQuota: inst.MonthlyTokenQuota, TeamsMayOnboard: inst.TeamsMayOnboard,
 		WebhookURL: config.WebhookURL(d.cfg.PublicURL, inst.Platform, inst.Name),
 		Approver:   approverOf(inst), Secrets: map[string]SecretView{}}
 	switch {
@@ -582,6 +584,52 @@ func (d *Dashboard) putInstanceTrust(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// putInstanceTeamsOnboard turns a dashboard instance's teams-may-onboard
+// switch on or off: 204, or 409 for a config instance (its switch is in the
+// config file) or one being removed.
+func (d *Dashboard) putInstanceTeamsOnboard(w http.ResponseWriter, r *http.Request) {
+	se, name := session(r), r.PathValue("name")
+	inst, ok := d.registry.Get(name)
+	if !ok {
+		notFound(w)
+		return
+	}
+	if inst.Source == instances.SourceConfig {
+		writeError(w, http.StatusConflict, msgConfigInstance)
+		return
+	}
+	var in struct {
+		On *bool `json:"on"`
+	}
+	if err := decodeStrict(r, &in); err != nil || in.On == nil {
+		writeError(w, http.StatusBadRequest, msgBadTeamsOnboard)
+		return
+	}
+	ctx := r.Context()
+	found, err := d.Store.SetInstanceTeamsMayOnboard(ctx, name, *in.On)
+	if errors.Is(err, store.ErrRemoving) {
+		writeError(w, http.StatusConflict, msgInstanceRemoving)
+		return
+	}
+	if err != nil {
+		d.Log.Error("dashboard: setting an instance's teams-may-onboard failed", "instance", name, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	if !found {
+		notFound(w)
+		return
+	}
+	d.registry.SetTeamsMayOnboard(name, *in.On)
+	detail := "teams_may_onboard=off"
+	if *in.On {
+		detail = "teams_may_onboard=on"
+	}
+	d.Log.Info("dashboard: instance updated", "instance", name, "teams_may_onboard", *in.On, "by", se.Username)
+	d.audit(ctx, se, "instance_updated", name, "", detail)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func urlOf(inst instances.Instance) string {
 	if inst.GitLab != nil {
 		return inst.GitLab.URL
@@ -702,15 +750,15 @@ func (d *Dashboard) instanceRepositories(w http.ResponseWriter, r *http.Request)
 }
 
 // listAvailable answers with one page of the repositories of the instance
-// called name that the review bot or App can set up and that aren't switched
-// on: 404 for an instance that is not there or is being removed, 400 for a
+// called name that the review bot or App can set up, each with its state
+// (off, paused or on) and owner team: 404 for an instance that is not there or is being removed, 400 for a
 // bad page. It serves the picker (GET /api/repositories/available?instance=)
 // and GET /api/admin/instances/{name}/repositories.
 //
 // A catalog that pages on the platform (PagedRepoCatalog, GitLab) is asked for
 // the one page, in the platform's order (by ID), which is sorted within the
 // page. Another is read whole, kept 5 minutes, sorted, and served 50 at a time
-// (a page is cut before the repositories switched on are dropped from it).
+// (a page is cut from the whole list).
 func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name string) {
 	if inst, ok := d.registry.Get(name); !ok || inst.Removing {
 		notFound(w)
@@ -732,23 +780,42 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 	}
 	ctx, cancel := context.WithTimeoutCause(r.Context(), d.availableBudget, errOutOfBudget)
 	defer cancel()
-	// A paused repository was added already: POST /api/repositories resumes
-	// it, so the picker leaves it out like one switched on.
 	all, err := d.Repos.ListAll(ctx)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return
 	}
-	on := map[string]bool{}
+	states := map[string]string{}
+	configured := map[string]bool{}
 	for _, e := range all {
 		if e.Instance == name {
-			on[lower(e.Project)] = true
+			configured[lower(e.Project)] = e.Source == settings.SourceConfig
+			states[lower(e.Project)] = stateOn
+			if e.Paused {
+				states[lower(e.Project)] = statePaused
+			}
+		}
+	}
+	var owners map[string]string
+	var instanceOwner string
+	if d.Store != nil {
+		if owners, instanceOwner, err = d.Store.InstanceOwners(ctx, name); err != nil {
+			d.failed(w, r, "reading the owners", err)
+			return
 		}
 	}
 	platform, _ := d.registry.Platform(name)
-	view := AvailableView{Items: []AvailableRepo{}, Page: page}
+	view := AvailableView{Items: []AvailableRepo{}, Page: page, InstanceOwner: instanceOwner}
 	add := func(p string) {
-		view.Items = append(view.Items, AvailableRepo{Instance: name, Project: p, Platform: platform})
+		state, ok := states[lower(p)]
+		if !ok {
+			state = stateOff
+		}
+		owner := owners[lower(p)]
+		if owner == "" {
+			owner = instanceOwner
+		}
+		view.Items = append(view.Items, AvailableRepo{Instance: name, Project: p, Platform: platform, State: state, OwnerTeam: owner, Config: configured[lower(p)]})
 	}
 
 	if cat, ok := d.catalogs.Get(name); ok {
@@ -759,16 +826,11 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 				writeError(w, http.StatusBadGateway, msgListFailed)
 				return
 			}
-			var off []string
-			for _, p := range repos {
-				if !on[lower(p)] {
-					off = append(off, p)
-				}
-			}
 			// The platform pages by ID, so no project falls between two
 			// pages; each page is sorted by path for display.
-			sort.Strings(off)
-			for _, p := range off {
+			sorted := slices.Clone(repos)
+			sort.Strings(sorted)
+			for _, p := range sorted {
 				add(p)
 			}
 			view.HasMore = hasMore
@@ -783,18 +845,14 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 		writeError(w, http.StatusBadGateway, msgListFailed)
 		return
 	}
-	// The pages are cut from the sorted list as it is, and the switched-on
-	// repositories are dropped from each page after, as on GitLab: a
-	// repository switched on between two Load more clicks then leaves its own
-	// page and moves no later page by one, so none is skipped.
+	// The pages are cut from the sorted list as it is: a repository switched
+	// on between two Load more clicks changes its row, not the pages.
 	sorted := slices.Clone(repos)
 	sort.Strings(sorted)
 	from := min((page-1)*availablePerPage, len(sorted))
 	to := min(from+availablePerPage, len(sorted))
 	for _, p := range sorted[from:to] {
-		if !on[lower(p)] {
-			add(p)
-		}
+		add(p)
 	}
 	view.HasMore, view.Truncated = to < len(sorted), truncated
 	writeJSON(w, http.StatusOK, view)

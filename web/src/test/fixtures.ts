@@ -60,6 +60,7 @@ export const ssoAdmin: Me = {
   mustChangePassword: false,
   waitingUsers: 0,
   csrfToken: "csrf-123",
+  onboardInstances: [],
 };
 
 // The local admin: a password account.
@@ -74,7 +75,7 @@ export const operator: Me = {
 // A user on a team with the maintainer role, and one with the viewer role. The
 // API tells the roles apart per repository; /api/me does not.
 const userMe: Me = { ...ssoAdmin, username: "dev-user", email: "dev-user@example.com", role: "user", admin: false };
-export const maintainer: Me = { ...userMe, username: "maint-user", email: "maint-user@example.com", csrfToken: "csrf-maint" };
+export const maintainer: Me = { ...userMe, username: "maint-user", email: "maint-user@example.com", csrfToken: "csrf-maint", onboardInstances: ["main"] };
 export const viewer: Me = { ...userMe, csrfToken: "csrf-dev" };
 
 // On no team yet: sees nothing.
@@ -369,6 +370,12 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   },
   builtInRulesOff: "",
   ownerTeam: null,
+  // What the server's flags give an admin; anyone else gets none.
+  actions:
+    role === "admin"
+      ? { pause: !repo.paused, resume: repo.paused, remove: repo.source === "dashboard", release: false }
+      : { pause: false, resume: false, remove: false, release: false },
+  coveringTeams: [],
 });
 
 // A skill written in the dashboard, on the default list.
@@ -621,6 +628,7 @@ export const models: ModelsAdminView = { canSetDefault: true, followingDefault: 
 export const instanceGitLab: InstanceAdminView = {
   name: "main",
   trustedAuthorsOnly: "follow_visibility",
+  teamsMayOnboard: false,
   monthlyTokenQuota: null,
   tokensThisMonth: 0,
   platform: "gitlab",
@@ -642,6 +650,7 @@ export const instanceGitLab: InstanceAdminView = {
 export const instanceGitHub: InstanceAdminView = {
   name: "hub",
   trustedAuthorsOnly: "follow_visibility",
+  teamsMayOnboard: false,
   monthlyTokenQuota: null,
   tokensThisMonth: 0,
   platform: "github",

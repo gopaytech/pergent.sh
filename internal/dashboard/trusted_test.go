@@ -147,6 +147,41 @@ func TestInstanceTrustMode(t *testing.T) {
 	wantCode(t, e.send(e.aliceSession(), "PUT", "/api/admin/instances/lab/trusted-authors", `{"mode":"on"}`), "not an admin", http.StatusNotFound)
 }
 
+// An admin turns the teams-may-onboard switch of a dashboard instance on; a
+// config instance is read-only.
+func TestPutInstanceTeamsOnboard(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	if err := e.st.CreateInstance(ctx, store.InstanceRow{Name: "lab", Platform: "gitlab", URL: "https://lab.example.com"}, nil, e.clock.now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.reg.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	boss := e.sessionFor(e.ssoAdmin("boss@example.com"))
+	wantCode(t, e.send(boss, "PUT", "/api/admin/instances/lab/teams-onboard", `{"on":true}`), "set on", http.StatusNoContent)
+	var lab InstanceAdminView
+	for _, v := range getJSON[[]InstanceAdminView](e, boss, "/api/admin/instances") {
+		if v.Name == "lab" {
+			lab = v
+		}
+	}
+	if !lab.TeamsMayOnboard {
+		t.Errorf("lab = %+v, want teamsMayOnboard", lab)
+	}
+	if inst, _ := e.reg.Get("lab"); !inst.TeamsMayOnboard {
+		t.Error("registry switch is off")
+	}
+	a := e.auditOf("instance_updated")
+	if len(a) != 1 || a[0].Detail != "teams_may_onboard=on" {
+		t.Errorf("audit = %+v", a)
+	}
+	wantCode(t, e.send(boss, "PUT", "/api/admin/instances/lab/teams-onboard", `{}`), "no body field", http.StatusBadRequest)
+	wantCode(t, e.send(boss, "PUT", "/api/admin/instances/main/teams-onboard", `{"on":true}`), "config instance", http.StatusConflict)
+	wantCode(t, e.send(boss, "PUT", "/api/admin/instances/nope/teams-onboard", `{"on":true}`), "unknown", http.StatusNotFound)
+	wantCode(t, e.send(e.aliceSession(), "PUT", "/api/admin/instances/lab/teams-onboard", `{"on":true}`), "not an admin", http.StatusNotFound)
+}
+
 // waitingChange stores acme/widgets!7 at head as waiting, by bob.
 func (e *env) waitingChange(h, reason string) string {
 	e.t.Helper()

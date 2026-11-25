@@ -172,6 +172,9 @@ type Instance struct {
 	// TrustedAuthorsOnly is the default of the instance's repositories:
 	// TrustFollowVisibility (also when empty), TrustOn or TrustOff.
 	TrustedAuthorsOnly string `yaml:"trusted_authors_only"`
+	// TeamsMayOnboard lets a team's maintainers onboard repositories of the
+	// instance and claim them; off (the default), only admins onboard.
+	TeamsMayOnboard bool `yaml:"teams_may_onboard"`
 	// MonthlyTokenQuota is the instance's token budget per UTC calendar
 	// month, from 1 to MaxMonthlyTokenQuota (nil: none).
 	MonthlyTokenQuota *int64 `yaml:"monthly_token_quota"`
@@ -216,6 +219,8 @@ type GitHubInstance struct {
 	OAuthClientSecretEnv string `yaml:"oauth_client_secret_env"`
 	// TrustedAuthorsOnly is as for Instance.
 	TrustedAuthorsOnly string `yaml:"trusted_authors_only"`
+	// TeamsMayOnboard is as for Instance.
+	TeamsMayOnboard bool `yaml:"teams_may_onboard"`
 	// MonthlyTokenQuota is as for Instance.
 	MonthlyTokenQuota *int64 `yaml:"monthly_token_quota"`
 }

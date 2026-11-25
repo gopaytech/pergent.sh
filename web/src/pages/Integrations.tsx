@@ -171,6 +171,7 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
         <WebhookURL inst={inst} />
         <div>{approverWords(inst.approver)}</div>
         <TrustMode inst={inst} locked={locked} />
+        <TeamsOnboard inst={inst} locked={locked} />
         <TokenQuota key={String(inst.monthlyTokenQuota)} inst={inst} locked={locked} />
         {config && <div className="meta">This instance is managed by the config file; change it there.</div>}
       </div>
@@ -219,6 +220,33 @@ function TrustMode({ inst, locked }: { inst: InstanceAdminView; locked: boolean 
           <option value="off">off (trust every author)</option>
         </select>
       </label>
+      {change.isError && <ErrorBox error={change.error} />}
+    </div>
+  );
+}
+
+// TeamsOnboard is the instance's switch for teams: with it on, maintainers of
+// any team switch on repositories the review bot reaches and own them. A
+// config instance shows the config's value, read-only.
+function TeamsOnboard({ inst, locked }: { inst: InstanceAdminView; locked: boolean }) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const change = useMutation({
+    mutationFn: (on: boolean) => write<void>("PUT", `/api/admin/instances/${encodeURIComponent(inst.name)}/teams-onboard`, { on }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["admin-instances"] }),
+  });
+  return (
+    <div>
+      <label>
+        <input
+          type="checkbox"
+          checked={inst.teamsMayOnboard}
+          disabled={locked || change.isPending}
+          onChange={(e) => change.mutate(e.target.checked)}
+        />{" "}
+        Teams may onboard repositories
+      </label>
+      <div className="meta">Maintainers of any team can switch on repositories the review bot reaches, and become their owner.</div>
       {change.isError && <ErrorBox error={change.error} />}
     </div>
   );

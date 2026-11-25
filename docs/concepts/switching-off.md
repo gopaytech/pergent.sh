@@ -1,12 +1,12 @@
 # 📴 Pausing and removing a repository
 
-A repository is on when it is listed in the config or switched on in the [dashboard](dashboard.md). A dashboard repository is paused and resumed with its switch on **Repositories**, and removed for good from the Settings tab of the repository page:
+A repository is on when it is listed in the config or switched on in the [dashboard](dashboard.md). A dashboard repository is paused and resumed with its switch on **Repositories** (admins) or from the repository page (maintainers), and removed for good from the Settings tab of the repository page:
 
 | Action | Who | Where | Asks first | What happens |
 |---|---|---|---|---|
-| Pause | admin | the switch on **Repositories** | no | The repository stays in the list with every setting. On the next reconcile pergent.sh deletes its webhook and revokes its deploy token. Its readiness scans and setup problems are deleted. Its dismissals, comment commands, inline threads, finding fates, [code graph](code-graph.md) and review history stay. |
-| Resume | admin | the same switch | no | pergent.sh creates a new webhook and deploy token and queues a readiness scan. The settings, dismissals and review history are the ones from before the pause. |
-| Remove | admin | **Remove repository** on the Settings tab of the repository page | yes | The repository, its settings and its team links are deleted. Its webhook and deploy token are removed, and so are its dismissals, comment commands, inline threads, finding fates and [code graph](code-graph.md). It can be added again with **+ Add repository**, with every setting at its default. |
+| Pause | admin, maintainer of the owner team | an admin: the switch on **Repositories**. A maintainer: **Pause** on the repository page | no | The repository stays in the list with every setting. On the next reconcile pergent.sh deletes its webhook and revokes its deploy token. Its readiness scans and setup problems are deleted. Its dismissals, comment commands, inline threads, finding fates, [code graph](code-graph.md) and review history stay. |
+| Resume | admin, maintainer of the owner team | an admin: the same switch. A maintainer: **Resume** on the **Paused** banner of the repository page, or in the picker | no | pergent.sh creates a new webhook and deploy token and queues a readiness scan. The settings, dismissals and review history are the ones from before the pause. |
+| Remove | admin, maintainer of the owner team | **Remove repository** on the Settings tab of the repository page | yes | The repository, its settings and its team links are deleted. Its webhook and deploy token are removed, and so are its dismissals, comment commands, inline threads, finding fates and [code graph](code-graph.md). It can be added again with **+ Add repository**, with every setting at its default. |
 
 The reconcile of that one repository starts within seconds of the switch. The hourly reconcile also covers every repository.
 
@@ -20,7 +20,7 @@ The reconcile of that one repository starts within seconds of the switch. The ho
 - Resume is refused while its instance is being removed.
 - A library skill or a model it names can't be deleted, as for a repository that is on.
 
-The API: `PUT /api/admin/repositories/{instance}/{project}` with `{"enabled": false}` pauses and `{"enabled": true}` resumes (admins only). `DELETE /api/repositories/{instance}/{project}` removes.
+The API: `PUT /api/admin/repositories/{instance}/{project}` with `{"enabled": false}` pauses and `{"enabled": true}` resumes (admins, and maintainers of the owner team: see [Roles](roles.md)). `DELETE /api/repositories/{instance}/{project}` removes.
 
 A config repository has no switch and no **Remove repository**. To switch it off, remove it from `repositories` and redeploy: on the next reconcile (at startup and then every hour) pergent.sh deletes its webhook and revokes its deploy token, and its dismissals and the comment commands waiting for it are deleted with its record. If the config lists a repository that is paused in the dashboard, the config wins and the paused record is deleted.
 

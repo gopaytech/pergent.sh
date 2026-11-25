@@ -210,8 +210,23 @@ func TestAddRepositoryNeedsAdmin(t *testing.T) {
 			e := newEnv(t, nil)
 			e.cat["main"].set("acme/tools")
 			c := e.signInRole(role)
-			wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "GET available", http.StatusNotFound)
-			wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/tools"}`), "POST", http.StatusNotFound)
+			// A viewer maintains no team: 404. A maintainer passes that gate
+			// and meets the instance's switch, off here: 403.
+			want := http.StatusNotFound
+			if role == store.RoleMaintainer {
+				want = http.StatusForbidden
+			}
+			avail := e.get(c, "/api/repositories/available?instance=main")
+			post := e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/tools"}`)
+			wantCode(t, avail, "GET available", want)
+			wantCode(t, post, "POST", want)
+			if want == http.StatusForbidden {
+				for _, rec := range []*httptest.ResponseRecorder{avail, post} {
+					if !strings.Contains(rec.Body.String(), msgTeamsMayNotOnboard) {
+						t.Errorf("body = %s, want %q", rec.Body, msgTeamsMayNotOnboard)
+					}
+				}
+			}
 			if _, found := e.storedRepo("main", "acme/tools"); found {
 				t.Error("someone who is not an admin switched a repository on")
 			}
@@ -291,11 +306,17 @@ func TestUserCannotWriteUncoveredRepo(t *testing.T) {
 			t.Errorf("%s %s body = %s, want the unknown repository's %s", w[0], w[1], rec.Body, unknown.Body)
 		}
 	}
-	// Switching on and off is for admins, whatever the repository.
+	// Switching on and off is for admins (and, once teams may onboard, owner
+	// maintainers): with the switch off, 403.
 	for _, w := range []struct{ method, target, body string }{
 		{"DELETE", "/api/repositories/main/acme/gadgets", ""}, {"DELETE", "/api/repositories/main/acme/hidden", ""},
 	} {
-		wantCode(t, e.send(c, w.method, w.target, w.body), w.method+" "+w.target, http.StatusNotFound)
+		// alice maintains a team, and the switch is off: 403 on both.
+		rec := e.send(c, w.method, w.target, w.body)
+		wantCode(t, rec, w.method+" "+w.target, http.StatusForbidden)
+		if !strings.Contains(rec.Body.String(), msgTeamsMayNotOnboard) {
+			t.Errorf("%s %s body = %s, want %q", w.method, w.target, rec.Body, msgTeamsMayNotOnboard)
+		}
 	}
 	if r, found := e.storedRepo("main", "acme/hidden"); !found || r.Approve == nil || !*r.Approve {
 		t.Errorf("acme/hidden changed: %+v, %v", r, found)
@@ -801,7 +822,7 @@ func projectsOf(items []AvailableRepo) []string {
 }
 
 // The picker lists what the review bot or App of the instance named reaches,
-// minus what is on already, for any admin.
+// with the state of each, for any admin.
 func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 	t.Parallel()
 	t.Run("gitlab", func(t *testing.T) {
@@ -811,12 +832,16 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 		c := e.userOnMain(true)
 
 		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
-		if want := []string{"Acme/Zeta", "acme/gadgets", "acme/tools"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
-			t.Errorf("available = %v truncated %v, want %v (not what is on)", projectsOf(got.Items), got.Truncated, want)
+		if want := []string{"Acme/Zeta", "acme/dash", "acme/gadgets", "acme/tools", "acme/widgets"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
+			t.Errorf("available = %v truncated %v, want %v (what is on too)", projectsOf(got.Items), got.Truncated, want)
 		}
 		for _, it := range got.Items {
-			if it.Instance != "main" || it.Platform != "gitlab" {
-				t.Errorf("item = %+v", it)
+			state := stateOff
+			if it.Project == "acme/dash" || it.Project == "acme/widgets" {
+				state = stateOn
+			}
+			if it.Instance != "main" || it.Platform != "gitlab" || it.State != state {
+				t.Errorf("item = %+v; want state %s", it, state)
 			}
 		}
 
@@ -838,11 +863,12 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 		c := e.userOnGH(true)
 
 		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=gh")
-		if want := []string{"acme/gadgets"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
+		if want := []string{"acme/gadgets", "acme/widgets"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
 			t.Errorf("available = %v truncated %v, want %v", projectsOf(got.Items), got.Truncated, want)
 		}
-		if len(got.Items) == 1 && (got.Items[0].Instance != "gh" || got.Items[0].Platform != "github") {
-			t.Errorf("item = %+v", got.Items[0])
+		if len(got.Items) == 2 && (got.Items[0].Instance != "gh" || got.Items[0].Platform != "github" ||
+			got.Items[0].State != stateOff || got.Items[1].State != stateOn) {
+			t.Errorf("items = %+v; want gadgets off and widgets on", got.Items)
 		}
 		// The instance is the request's: main's list is not gh's.
 		if got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main"); len(got.Items) != 0 {

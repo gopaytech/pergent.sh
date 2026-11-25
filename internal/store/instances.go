@@ -32,6 +32,9 @@ type InstanceRow struct {
 	// MonthlyTokenQuota is the instance's token budget per UTC calendar
 	// month (nil: none). The database refuses a value below 1.
 	MonthlyTokenQuota *int64
+	// TeamsMayOnboard is set when a team's maintainers may onboard
+	// repositories of the instance; off, only admins do.
+	TeamsMayOnboard bool
 }
 
 // ErrRemoving is returned by UpdateInstance for an instance being removed.
@@ -43,11 +46,11 @@ type SealedSecret struct {
 	UpdatedAt time.Time
 }
 
-const instanceColumns = `name, platform, url, api_url, review_app_id, approve_app_id, approve_with_review_bot, oauth_client_id, removing, created_at, trusted_authors_only, monthly_token_quota`
+const instanceColumns = `name, platform, url, api_url, review_app_id, approve_app_id, approve_with_review_bot, oauth_client_id, removing, created_at, trusted_authors_only, monthly_token_quota, teams_may_onboard`
 
 func scanInstance(row pgx.Row) (InstanceRow, error) {
 	var r InstanceRow
-	err := row.Scan(&r.Name, &r.Platform, &r.URL, &r.APIURL, &r.ReviewAppID, &r.ApproveAppID, &r.ApproveWithReviewBot, &r.OAuthClientID, &r.Removing, &r.CreatedAt, &r.TrustedAuthorsOnly, &r.MonthlyTokenQuota)
+	err := row.Scan(&r.Name, &r.Platform, &r.URL, &r.APIURL, &r.ReviewAppID, &r.ApproveAppID, &r.ApproveWithReviewBot, &r.OAuthClientID, &r.Removing, &r.CreatedAt, &r.TrustedAuthorsOnly, &r.MonthlyTokenQuota, &r.TeamsMayOnboard)
 	return r, err
 }
 
@@ -119,6 +122,29 @@ func (s *Store) CreateInstance(ctx context.Context, row InstanceRow, secrets map
 func (s *Store) SetInstanceTrustMode(ctx context.Context, name, mode string) (found bool, err error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE instances SET trusted_authors_only = $2
 		WHERE name = $1 AND NOT removing`, name, mode)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 1 {
+		return true, nil
+	}
+	var removing bool
+	err = s.pool.QueryRow(ctx, `SELECT removing FROM instances WHERE name = $1`, name).Scan(&removing)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, ErrRemoving
+}
+
+// SetInstanceTeamsMayOnboard turns the instance's teams-may-onboard switch on
+// or off. found is false when there is no such instance; an instance being
+// removed is ErrRemoving, and nothing changes.
+func (s *Store) SetInstanceTeamsMayOnboard(ctx context.Context, name string, on bool) (found bool, err error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE instances SET teams_may_onboard = $2
+		WHERE name = $1 AND NOT removing`, name, on)
 	if err != nil {
 		return false, err
 	}
