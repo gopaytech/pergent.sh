@@ -545,6 +545,19 @@ type RepositoryDetailView struct {
 	// OwnerTeam is the team that owns the repository (its own entry's owner,
 	// else its instance entry's); nil when there is none.
 	OwnerTeam *OwnerTeamView `json:"ownerTeam"`
+	// Actions are the onboarding buttons the session may use now.
+	Actions RepoActionsView `json:"actions"`
+}
+
+// RepoActionsView says which owner-team actions the session's buttons show:
+// each is true exactly when the matching route would succeed now (the
+// repository's state, the instance's switch, the session's role on the owner
+// team). A repository of the config file has none.
+type RepoActionsView struct {
+	Pause   bool `json:"pause"`
+	Resume  bool `json:"resume"`
+	Remove  bool `json:"remove"`
+	Release bool `json:"release"`
 }
 
 // OwnerTeamView is a repository's owner team on its page. Open is whether

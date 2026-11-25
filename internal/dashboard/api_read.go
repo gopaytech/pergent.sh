@@ -1249,10 +1249,14 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
+	actions, err := d.repoActions(ctx, se, repo)
+	if err != nil {
+		return RepositoryDetailView{}, err
+	}
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
 		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model, MultiReview: multi,
 		Quota: d.quotaView(ctx, se, repo), Graph: gv, BuiltInRulesOff: builtInRulesOff(d.cfg.Jobs.Image),
-		OwnerTeam: owner}, nil
+		OwnerTeam: owner, Actions: actions}, nil
 }
 
 // ownerTeamView is repo's owner team (Store.OwnerTeam) as its page shows

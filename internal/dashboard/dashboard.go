@@ -366,6 +366,10 @@ type meView struct {
 	// (the Users list marks each of them waiting); 0 for anyone else.
 	WaitingUsers int    `json:"waitingUsers"`
 	CSRFToken    string `json:"csrfToken"`
+	// OnboardInstances are the instances the session may onboard repositories
+	// on from the picker: for an admin every one not being removed, for a
+	// maintainer of some team those that let teams onboard; [] otherwise.
+	OnboardInstances []string `json:"onboardInstances"`
 }
 
 func (d *Dashboard) me(w http.ResponseWriter, r *http.Request) {
@@ -380,10 +384,15 @@ func (d *Dashboard) me(w http.ResponseWriter, r *http.Request) {
 		}
 		waiting = n
 	}
+	onboard, err := d.onboardInstances(r.Context(), se)
+	if err != nil {
+		d.failed(w, r, "reading the teams", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, meView{
 		Kind: se.Kind, Username: se.Username, Email: se.Email, Role: role, SignIn: se.SignIn,
 		Admin: se.Admin, Waiting: se.Waiting, MustChangePassword: se.MustChangePassword,
-		WaitingUsers: waiting, CSRFToken: se.CSRFToken,
+		WaitingUsers: waiting, CSRFToken: se.CSRFToken, OnboardInstances: onboard,
 	})
 }
 

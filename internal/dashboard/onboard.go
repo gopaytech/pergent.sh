@@ -83,38 +83,117 @@ func (d *Dashboard) requireOwnerMaintainer(w http.ResponseWriter, r *http.Reques
 	return ok
 }
 
+// gateDenial is the outcome of the maintainer gate without a response: 0 to
+// go on, 404 when the instance is unknown or being removed or the session
+// maintains no team, 403 when the switch is off. anySwitch leaves the switch
+// out (a maintainer pauses and releases whatever it says). The handlers and
+// the button flags both ask it, so they cannot disagree. Callers check
+// se.Admin first.
+func (d *Dashboard) gateDenial(ctx context.Context, se Session, instance string, anySwitch bool) (int, error) {
+	if !d.knownInstance(instance) {
+		return http.StatusNotFound, nil
+	}
+	teams, err := d.maintainedTeams(ctx, se)
+	if err != nil {
+		return 0, err
+	}
+	if len(teams) == 0 {
+		return http.StatusNotFound, nil
+	}
+	if !anySwitch && !d.teamsMayOnboard(instance) {
+		return http.StatusForbidden, nil
+	}
+	return 0, nil
+}
+
 // maintainerGate lets a non-admin go on only when it maintains some team and
 // the instance lets teams onboard: 404 when it maintains none or the
 // instance is unknown, 403 when the switch is off. It answers when it
 // returns false. Callers check se.Admin first.
 func (d *Dashboard) maintainerGate(w http.ResponseWriter, r *http.Request, instance string) bool {
-	if !d.maintainerGateAnySwitch(w, r, instance) {
-		return false
-	}
-	if !d.teamsMayOnboard(instance) {
-		writeError(w, http.StatusForbidden, msgTeamsMayNotOnboard)
-		return false
-	}
-	return true
+	return d.answerGate(w, r, instance, false)
 }
 
 // maintainerGateAnySwitch is maintainerGate without the switch check: a
 // maintainer pauses and releases whatever the switch says.
 func (d *Dashboard) maintainerGateAnySwitch(w http.ResponseWriter, r *http.Request, instance string) bool {
-	if !d.knownInstance(instance) {
-		notFound(w)
-		return false
-	}
-	teams, err := d.maintainedTeams(r.Context(), session(r))
-	if err != nil {
+	return d.answerGate(w, r, instance, true)
+}
+
+func (d *Dashboard) answerGate(w http.ResponseWriter, r *http.Request, instance string, anySwitch bool) bool {
+	status, err := d.gateDenial(r.Context(), session(r), instance, anySwitch)
+	switch {
+	case err != nil:
 		d.failed(w, r, "reading the teams", err)
-		return false
-	}
-	if len(teams) == 0 {
+	case status == http.StatusNotFound:
 		notFound(w)
-		return false
+	case status == http.StatusForbidden:
+		writeError(w, http.StatusForbidden, msgTeamsMayNotOnboard)
 	}
-	return true
+	return err == nil && status == 0
+}
+
+// repoActions are the buttons repo's page shows se: each is true exactly when
+// the matching route would succeed now. They are the handlers' own checks
+// (gateDenial, ownerMaintainer, the switch and the state), so a flag and a
+// route cannot disagree. A repository of the config file has none.
+func (d *Dashboard) repoActions(ctx context.Context, se Session, repo settings.Effective) (RepoActionsView, error) {
+	var a RepoActionsView
+	if repo.Source == settings.SourceConfig {
+		return a, nil
+	}
+	if !se.Admin {
+		denied, err := d.gateDenial(ctx, se, repo.Instance, true)
+		if err != nil || denied != 0 {
+			return a, err
+		}
+	}
+	owner, ok, err := d.ownerMaintainer(ctx, se, repo.Instance, repo.Project)
+	if err != nil {
+		return a, err
+	}
+	if !se.Admin && !ok {
+		return a, nil
+	}
+	if se.Admin {
+		a.Pause = !repo.Paused
+		a.Resume = repo.Paused && d.knownInstance(repo.Instance)
+		a.Remove = true
+	} else {
+		may := d.teamsMayOnboard(repo.Instance)
+		a.Pause = !repo.Paused
+		a.Resume = repo.Paused && may
+		a.Remove = may
+	}
+	if owner != 0 {
+		t, found, err := d.Store.Team(ctx, owner)
+		if err != nil {
+			return a, err
+		}
+		i := t.OwnEntry(repo.Instance, repo.Project)
+		a.Release = found && i >= 0 && t.Repos[i].Owner
+	}
+	return a, nil
+}
+
+// onboardInstances are the instances se may onboard on from the picker: an
+// admin every one not being removed, a maintainer of some team those with the
+// switch on, nobody else any. Sorted, never nil.
+func (d *Dashboard) onboardInstances(ctx context.Context, se Session) ([]string, error) {
+	out := []string{}
+	if !se.Admin {
+		teams, err := d.maintainedTeams(ctx, se)
+		if err != nil || len(teams) == 0 {
+			return out, err
+		}
+	}
+	for _, inst := range d.registry.All() {
+		if se.Admin && !inst.Removing || !se.Admin && d.teamsMayOnboard(inst.Name) {
+			out = append(out, inst.Name)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 const (

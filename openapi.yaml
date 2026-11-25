@@ -2373,8 +2373,9 @@ paths:
         maintainer: only an admin changes that, on the team page. An admin
         releases the tick of whichever team holds it. A repository with no
         owner of its own is 409 `the repository has no owner of its own` for
-        an admin. A repository of the config file is 409. Audited as
-        `repository_released` (detail: the team name) and `owner_cleared`.
+        an admin. A repository of the config file is 409. A user who
+        maintains no team gets 404. Audited as `repository_released` (detail:
+        the team name) and `owner_cleared`.
       x-pergent-access: session
       x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
       security:
@@ -2390,7 +2391,7 @@ paths:
             schema: {type: object, additionalProperties: false}
       responses:
         '200':
-          description: The repository, with no owner team.
+          description: The repository, with the owner team it has left, if any (the instance's own owner stays).
           content:
             application/json:
               schema: {$ref: '#/components/schemas/RepositoryDetailView'}
@@ -7664,7 +7665,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff, ownerTeam]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, multiReview, quota, graph, builtInRulesOff, ownerTeam, actions]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -7713,6 +7714,24 @@ components:
           oneOf:
             - {$ref: '#/components/schemas/OwnerTeamView'}
             - {type: 'null'}
+        actions: {$ref: '#/components/schemas/RepoActionsView'}
+    RepoActionsView:
+      description: |
+        The owner-team buttons the session may use on a repository now. Each is
+        true exactly when the matching route would succeed: it follows the
+        repository's state (pause is for one that is on, resume for one that is
+        paused), the instance's switch (resume and remove need it on, pause and
+        release do not), and the session's role on the owner team. `release` is
+        true only when the owner team's own entry carries the owner tick (an
+        admin: whichever team holds it). A repository of the config file has
+        every flag false.
+      type: object
+      required: [pause, resume, remove, release]
+      properties:
+        pause: {type: boolean}
+        resume: {type: boolean}
+        remove: {type: boolean}
+        release: {type: boolean}
     OwnerTeamView:
       description: A repository's owner team, on its page.
       type: object
@@ -9032,7 +9051,7 @@ components:
     meView:
       description: The signed-in user. Body of GET /api/me.
       type: object
-      required: [kind, username, email, role, signIn, admin, waiting, mustChangePassword, waitingUsers, csrfToken]
+      required: [kind, username, email, role, signIn, admin, waiting, mustChangePassword, waitingUsers, csrfToken, onboardInstances]
       properties:
         kind:
           type: string
@@ -9066,6 +9085,10 @@ components:
         csrfToken:
           type: string
           description: The token writes send in X-CSRF-Token.
+        onboardInstances:
+          type: array
+          items: {type: string}
+          description: The instances the session may onboard repositories on from the picker, sorted. An admin gets every instance not being removed; a maintainer of some team gets those that let teams onboard; anyone else gets [].
     readiness.Checklist:
       description: The Readiness tab.
       type: object

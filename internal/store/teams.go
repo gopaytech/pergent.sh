@@ -69,6 +69,15 @@ type Team struct {
 	CreatedAt time.Time
 }
 
+// OwnEntry returns the index in t.Repos of the team's own entry for project
+// on instance (matched ignoring case; an instance entry never matches), -1
+// for none.
+func (t Team) OwnEntry(instance, project string) int {
+	return slices.IndexFunc(t.Repos, func(tr TeamRepo) bool {
+		return tr.Instance == instance && tr.Project != "" && strings.EqualFold(tr.Project, project)
+	})
+}
+
 // CreateTeam stores a team with no members and no repositories. A name
 // taken ignoring case is ErrExists. The unused teams.role column, which is
 // NOT NULL, is written "viewer".
@@ -458,9 +467,7 @@ func (s *Store) ReleaseOwner(ctx context.Context, instance, project string, team
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
 	ok, err := updateTeamTx(ctx, tx, teamID, func(t *Team) error {
-		i := slices.IndexFunc(t.Repos, func(tr TeamRepo) bool {
-			return tr.Instance == instance && tr.Project != "" && strings.EqualFold(tr.Project, project)
-		})
+		i := t.OwnEntry(instance, project)
 		if i < 0 || !t.Repos[i].Owner {
 			return errNoChange
 		}

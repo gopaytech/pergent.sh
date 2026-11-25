@@ -685,6 +685,7 @@ func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view.Repo.On = false
+	view.Actions = RepoActionsView{} // gone: nothing to act on
 	def, err := d.Repos.BrowserDefaults(ctx, repo.Platform, repo.Instance)
 	if err != nil {
 		d.failed(w, r, "reading the defaults", err)
