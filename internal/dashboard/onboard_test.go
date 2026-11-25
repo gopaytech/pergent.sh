@@ -708,7 +708,7 @@ func TestRoleMatrix(t *testing.T) {
 						keys = append(keys, k)
 					}
 					slices.Sort(keys)
-					if want := []string{"instance", "ownerTeam", "platform", "project", "state"}; !slices.Equal(keys, want) {
+					if want := []string{"config", "instance", "ownerTeam", "platform", "project", "state"}; !slices.Equal(keys, want) {
 						t.Errorf("picker item keys = %v; want %v", keys, want)
 					}
 				}
