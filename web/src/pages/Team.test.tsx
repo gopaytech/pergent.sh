@@ -123,6 +123,26 @@ describe("Team page", () => {
     });
   });
 
+  it("saving a rename reads the repository list again", async () => {
+    fakeApi({ ...routes(ssoAdmin, asAdmin), "PUT /api/teams/2": { body: {} } });
+    const { client } = renderApp("/teams/2");
+    const spy = vi.spyOn(client, "invalidateQueries");
+    await userEvent.click(await screen.findByRole("button", { name: "Rename" }));
+    const form = screen.getByRole("form", { name: "Rename the team" });
+    await userEvent.type(within(form).getByLabelText("Name"), "x");
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ["repositories"] }));
+  });
+
+  it("removing a team reads the repository list again", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    fakeApi({ ...routes(ssoAdmin, asAdmin), "DELETE /api/teams/2": { status: 204 }, "GET /api/teams": { body: [] }, "GET /api/users": { body: [] } });
+    const { client } = renderApp("/teams/2");
+    const spy = vi.spyOn(client, "invalidateQueries");
+    await userEvent.click(await screen.findByRole("button", { name: "Remove team" }));
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ["repositories"] }));
+  });
+
   it("Remove team asks, deletes, and lands on the admin Teams page", async () => {
     const confirm = vi.fn(() => true);
     vi.stubGlobal("confirm", confirm);

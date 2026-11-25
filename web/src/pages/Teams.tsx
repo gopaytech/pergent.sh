@@ -1,13 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 
 import { api, paths, type TeamView } from "../api";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading } from "../ui";
-import { membersText, teamCountsText } from "./teamText";
+import TeamsTable, { type TeamRow } from "./TeamsTable";
 
-// Teams lists the teams with counts and makes new ones. A team is changed on
+// toRow counts what a team covers from its entries. A whole instance has no
+// project.
+function toRow(t: TeamView): TeamRow {
+  return {
+    id: t.id,
+    name: t.name,
+    repoCount: t.repos.filter((r) => r.project !== "").length,
+    instanceCount: t.repos.filter((r) => r.project === "").length,
+    ownedCount: t.repos.filter((r) => r.owner).length,
+    memberCount: t.members.length,
+  };
+}
+
+// Teams lists the teams as a table and makes new ones. A team is changed on
 // its own page.
 export default function Teams() {
   const teams = useQuery({ queryKey: ["teams"], queryFn: () => api.get<TeamView[]>("/api/teams") });
@@ -26,7 +39,7 @@ export default function Teams() {
         (teams.data.length === 0 ? (
           <div className="card empty">No teams yet. Create one to give people access.</div>
         ) : (
-          teams.data.map((t) => <TeamCard key={t.id} team={t} />)
+          <TeamsTable rows={teams.data.map(toRow)} showRole={false} />
         ))}
     </div>
   );
@@ -69,45 +82,5 @@ function CreateTeam() {
       </button>
       {create.isError && <ErrorBox error={create.error} />}
     </form>
-  );
-}
-
-function TeamCard({ team }: { team: TeamView }) {
-  const client = useQueryClient();
-  const write = useWrite();
-  const remove = useMutation({
-    mutationFn: () => write<void>("DELETE", `/api/teams/${team.id}`),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["teams"] });
-      client.invalidateQueries({ queryKey: ["users"] });
-      // Members may have been waiting-free only through this team.
-      client.invalidateQueries({ queryKey: ["me"] });
-    },
-  });
-  const confirmRemove = () => {
-    if (window.confirm(`Remove the team ${team.name}? Its members stay, but lose the access it gave them.`)) remove.mutate();
-  };
-  // A whole instance has no project.
-  const counts = {
-    repoCount: team.repos.filter((r) => r.project !== "").length,
-    instanceCount: team.repos.filter((r) => r.project === "").length,
-    ownedCount: team.repos.filter((r) => r.owner).length,
-  };
-  return (
-    <section className="card" aria-label={team.name}>
-      <h2>
-        <Link to={paths.team(team.id)}>{team.name}</Link>
-        <span className="actions-row">
-          <button type="button" className="btn small danger" disabled={remove.isPending} onClick={confirmRemove}>
-            Remove
-          </button>
-        </span>
-      </h2>
-      {remove.isError && <ErrorBox error={remove.error} />}
-      <div className="facts">
-        <div>{membersText(team.members.length)}</div>
-        <div>{teamCountsText(counts)}</div>
-      </div>
-    </section>
   );
 }
