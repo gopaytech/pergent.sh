@@ -134,7 +134,7 @@ func (d *Dashboard) answerGate(w http.ResponseWriter, r *http.Request, instance 
 }
 
 // repoActions are the buttons repo's page shows se: each is true exactly when
-// the matching route would succeed now. They are the handlers' own checks
+// the matching route would succeed now and would change something. They are the handlers' own checks
 // (gateDenial, ownerMaintainer, the switch and the state), so a flag and a
 // route cannot disagree. A repository of the config file has none.
 func (d *Dashboard) repoActions(ctx context.Context, se Session, repo settings.Effective) (RepoActionsView, error) {

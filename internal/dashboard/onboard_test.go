@@ -663,7 +663,7 @@ func TestRoleMatrix(t *testing.T) {
 					return cell{"PUT", "/api/admin/repositories/main/" + ownedRepo(true), enabledBody(true)}
 				}, [5]int{200, 200, 403, 404, 403}, [5]int{200, 403, 403, 404, 403}},
 				{"remove", func(int) cell {
-					return cell{"DELETE", "/api/admin/repositories/main/" + ownedRepo(false), ""}
+					return cell{"DELETE", "/api/repositories/main/" + ownedRepo(false), ""}
 				}, [5]int{200, 200, 403, 404, 403}, [5]int{200, 403, 403, 404, 403}},
 				{"claim", func(i int) cell {
 					p := next()
@@ -691,7 +691,7 @@ func TestRoleMatrix(t *testing.T) {
 				var page struct {
 					Items []map[string]any `json:"items"`
 				}
-				rec := e.get(who[owner], "/api/repositories/available?instance=main")
+				rec := e.get(who[owner], "/api/repositories/available?instance=main&search=listed")
 				if !sw.on {
 					wantCode(t, rec, "picker", http.StatusForbidden)
 					return

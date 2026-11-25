@@ -95,8 +95,9 @@ func TestSignInOptionsInJWTMode(t *testing.T) {
 	}
 }
 
-// /api/me names the account and how it signed in, and nothing of a platform
-// account, an instance or an "operator".
+// /api/me names the account and how it signed in. It shows no platform fields
+// and no instance settings (the names of the instances the session may
+// onboard on are allowed).
 func TestMeViewHasNoPlatformFields(t *testing.T) {
 	data, err := json.Marshal(meView{})
 	if err != nil {
@@ -111,7 +112,7 @@ func TestMeViewHasNoPlatformFields(t *testing.T) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	want := []string{"admin", "csrfToken", "email", "kind", "mustChangePassword", "role", "signIn", "username", "waiting", "waitingUsers"}
+	want := []string{"admin", "csrfToken", "email", "kind", "mustChangePassword", "onboardInstances", "role", "signIn", "username", "waiting", "waitingUsers"}
 	if !slices.Equal(keys, want) {
 		t.Errorf("/api/me keys = %v, want %v", keys, want)
 	}
