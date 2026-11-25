@@ -9,6 +9,7 @@ import {
   type AvailableView,
   type InstanceAdminView,
   type LibrarySkill,
+  type MyTeamView,
   type RepositoryDetailView,
   type RepositoryView,
   type TeamView,
@@ -19,11 +20,13 @@ import { ErrorBox, Loading, Pill, Switch, platformName } from "../ui";
 
 // Repositories lists the repositories pergent reviews, or has paused, that
 // the user can see. Admins add them (the picker) and pause and resume them
-// (the switch); Remove is on a repository's page.
+// (the switch); maintainers of a team add and claim them on an instance that
+// lets teams onboard. Remove is on a repository's page.
 export default function Repositories() {
   const me = useMe();
   const [params, setParams] = useSearchParams();
-  const adding = me.admin && params.get("add") === "1";
+  const canAdd = me.admin || me.onboardInstances.length > 0;
+  const adding = canAdd && params.get("add") === "1";
   const repos = useQuery({ queryKey: ["repositories"], queryFn: () => api.get<RepositoryView[]>("/api/repositories") });
   // An instance being removed can't have a repository resumed: its switch is
   // drawn disabled. Only admins read the instances.
@@ -40,7 +43,7 @@ export default function Repositories() {
           <h1>Repositories</h1>
           <div className="sub">The repositories pergent reviews that you can see</div>
         </div>
-        {me.admin && (
+        {canAdd && (
           <button type="button" className="btn primary" onClick={() => setParams(adding ? {} : { add: "1" })}>
             + Add repository
           </button>
@@ -51,7 +54,7 @@ export default function Repositories() {
       {repos.isError && <ErrorBox error={repos.error} onRetry={() => void repos.refetch()} />}
       {repos.isSuccess &&
         (repos.data.length === 0 ? (
-          <div className="card empty">No repositories yet.{me.admin && " Use + Add repository to switch one on."}</div>
+          <div className="card empty">No repositories yet.{canAdd && " Use + Add repository to switch one on."}</div>
         ) : (
           <div className="card scroll">
             <table className="table">
@@ -139,6 +142,23 @@ function Health({ health }: { health: RepositoryView["health"] }) {
   return health === "ok" ? <Pill tone="ok">OK</Pill> : <Pill tone="warn">Needs attention</Pill>;
 }
 
+function InstanceSelect({ instance, names, onChange }: { instance: string; names: string[]; onChange: (name: string) => void }) {
+  return (
+    <div className="pad search">
+      <label htmlFor="picker-instance">Instance</label>
+      <select id="picker-instance" value={instance} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Choose an instance</option>
+        {names.map((n) => (
+          <option key={n} value={n}>
+            {n}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// InstanceChoice is the admin's: every instance not being removed.
 function InstanceChoice({ instance, onChange }: { instance: string; onChange: (name: string) => void }) {
   const instances = useQuery({
     queryKey: ["admin-instances"],
@@ -149,26 +169,21 @@ function InstanceChoice({ instance, onChange }: { instance: string; onChange: (n
   // One being removed has nothing to switch on.
   const choices = instances.data.filter((i) => !i.removing);
   if (choices.length === 0) return <div className="row empty-row">No instance yet. Add one under Integrations.</div>;
-  return (
-    <div className="pad search">
-      <label htmlFor="picker-instance">Instance</label>
-      <select id="picker-instance" value={instance} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Choose an instance</option>
-        {choices.map((i) => (
-          <option key={i.name} value={i.name}>
-            {i.name}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
+  return <InstanceSelect instance={instance} names={choices.map((i) => i.name)} onChange={onChange} />;
 }
 
 // Picker lists the repositories the review bot or App of an instance can
-// reach, to switch one on. The admin names the instance first.
+// reach, to switch one on. The person names the instance first. An admin
+// switches repositories on; a maintainer onboards, claims or resumes the ones
+// of a team they maintain (the buttons follow the row's state and owner).
 function Picker() {
+  const me = useMe();
   const [instance, setInstance] = useState("");
-  const choice = <InstanceChoice instance={instance} onChange={setInstance} />;
+  const choice = me.admin ? (
+    <InstanceChoice instance={instance} onChange={setInstance} />
+  ) : (
+    <InstanceSelect instance={instance} names={me.onboardInstances} onChange={setInstance} />
+  );
   const write = useWrite();
   const navigate = useNavigate();
   const client = useQueryClient();
@@ -177,19 +192,25 @@ function Picker() {
   const [ownerTeam, setOwnerTeam] = useState("");
   const chosen = instance !== "";
   // The owner team is optional. A list that can't be read leaves the select out.
-  const teams = useQuery({ queryKey: ["teams"], queryFn: () => api.get<TeamView[]>("/api/teams") });
+  const teams = useQuery({ queryKey: ["teams"], queryFn: () => api.get<TeamView[]>("/api/teams"), enabled: me.admin });
+  // A maintainer owns through the teams they maintain.
+  const myTeams = useQuery({ queryKey: ["my-teams"], queryFn: () => api.get<MyTeamView[]>("/api/me/teams"), enabled: !me.admin });
+  const maintained = (myTeams.data ?? []).filter((t) => t.role === "maintainer");
   const today = chosen ? teams.data?.find((t) => t.repos.some((r) => r.instance === instance && r.project === "" && r.owner)) : undefined;
   // A repository switched on here gets the default skills: with none set, it
   // has no skills and isn't reviewed. A library that can't be read says nothing.
   const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
   const noDefaults = library.isSuccess && !library.data.some((s) => s.inDefaults);
-  const base = `/api/admin/instances/${encodeURIComponent(instance)}/repositories`;
+  const base = me.admin
+    ? `/api/admin/instances/${encodeURIComponent(instance)}/repositories`
+    : `/api/repositories/available?instance=${encodeURIComponent(instance)}`;
+  const sep = me.admin ? "?" : "&";
   // The list comes 50 at a time; Load more reads the next page. Pages stay
   // while one is refetched, so a window focus doesn't read them all again.
   const available = useInfiniteQuery({
     queryKey: ["available", instance, search],
     queryFn: ({ pageParam }) =>
-      api.get<AvailableView>(`${base}?search=${encodeURIComponent(search)}${pageParam > 1 ? `&page=${pageParam}` : ""}`),
+      api.get<AvailableView>(`${base}${sep}search=${encodeURIComponent(search)}${pageParam > 1 ? `&page=${pageParam}` : ""}`),
     initialPageParam: 1,
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
     staleTime: 0,
@@ -210,25 +231,61 @@ function Picker() {
     return out;
   }, [available.data]);
   const truncated = available.data?.pages.some((p) => p.truncated) ?? false;
-  const on = useMutation({
-    mutationFn: (project: string) =>
-      write<RepositoryDetailView>("POST", "/api/repositories", {
+  // instanceOwner is the team that owns the whole instance ("" for none): a
+  // maintainer's choice of team is made for them, as the owner team.
+  const instanceOwner = me.admin ? "" : (available.data?.pages[0]?.instanceOwner ?? "");
+  const mine = new Set(maintained.map((t) => t.name));
+  // The team a maintainer acts for: the instance's owner, their only team,
+  // or the one they chose. An admin's is the select's, "" for none.
+  const team = me.admin
+    ? ownerTeam
+    : instanceOwner !== ""
+      ? String(maintained.find((t) => t.name === instanceOwner)?.id ?? "")
+      : maintained.length === 1
+        ? String(maintained[0].id)
+        : ownerTeam;
+  const act = useMutation({
+    mutationFn: ({ kind, project }: { kind: "onboard" | "claim" | "resume"; project: string }) => {
+      if (kind === "claim") return write<RepositoryDetailView>("POST", paths.apiRepoClaim(instance, project), { team: Number(team) });
+      if (kind === "resume") return write<RepositoryDetailView>("PUT", paths.apiAdminRepo(instance, project), { enabled: true });
+      return write<RepositoryDetailView>("POST", "/api/repositories", {
         project,
         instance,
-        ...(ownerTeam !== "" && { ownerTeam: Number(ownerTeam) }),
-      }),
+        ...(team !== "" && { ownerTeam: Number(team) }),
+      });
+    },
     onSuccess: (detail) => {
       client.invalidateQueries({ queryKey: ["repositories"] });
       client.invalidateQueries({ queryKey: ["available"] });
-      if (ownerTeam !== "") {
-        // The new owner changes what the team lists and covers.
-        client.invalidateQueries({ queryKey: ["teams"] });
-        client.invalidateQueries({ queryKey: ["my-teams"] });
-        client.invalidateQueries({ queryKey: ["team", Number(ownerTeam)] });
-      }
+      client.invalidateQueries({ queryKey: ["my-teams"] });
+      client.invalidateQueries({ queryKey: ["teams"] });
+      if (team !== "") client.invalidateQueries({ queryKey: ["team", Number(team)] });
       navigate(paths.repo(detail.repo.instance, detail.repo.project));
     },
   });
+  // The button of a row, or the text that says who owns it; null for none.
+  const rowAction = (r: AvailableView["items"][number]) => {
+    const button = (kind: "onboard" | "claim" | "resume", label: string, needsTeam: boolean) => (
+      <button
+        type="button"
+        className="btn small"
+        aria-label={`${label} ${r.project}`}
+        disabled={act.isPending || (needsTeam && team === "")}
+        onClick={() => act.mutate({ kind, project: r.project })}
+      >
+        {label}
+      </button>
+    );
+    if (me.admin) {
+      if (r.state === "off") return button("onboard", "Switch on", false);
+      return r.state === "paused" ? button("resume", "Resume", false) : null;
+    }
+    const owned = r.ownerTeam !== "";
+    if (owned && !mine.has(r.ownerTeam)) return <span className="meta">owned by {r.ownerTeam}</span>;
+    if (r.state === "off") return button("onboard", "Onboard", true);
+    if (!owned) return button("claim", "Claim", true);
+    return r.state === "paused" ? button("resume", "Resume", false) : <span className="meta">owned by {r.ownerTeam}</span>;
+  };
   const submit = (e: FormEvent) => {
     e.preventDefault();
     setSearch(text.trim());
@@ -246,7 +303,27 @@ function Picker() {
         </div>
       )}
       {choice}
-      {chosen && teams.isSuccess && (
+      {chosen && !me.admin && instanceOwner !== "" && (
+        <div className="pad search">
+          <div className="meta">
+            Owner: {instanceOwner} (all repositories of {instance})
+          </div>
+        </div>
+      )}
+      {chosen && !me.admin && instanceOwner === "" && myTeams.isSuccess && maintained.length > 1 && (
+        <div className="pad search">
+          <label htmlFor="picker-owner-team">Owner team</label>
+          <select id="picker-owner-team" value={ownerTeam} onChange={(e) => setOwnerTeam(e.target.value)}>
+            <option value="">Choose a team</option>
+            {maintained.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {chosen && me.admin && teams.isSuccess && (
         <div className="pad search">
           <label htmlFor="picker-owner-team">Owner team</label>
           <select id="picker-owner-team" value={ownerTeam} onChange={(e) => setOwnerTeam(e.target.value)}>
@@ -275,13 +352,13 @@ function Picker() {
           </button>
         </form>
       )}
-      {on.isError &&
-        (on.error instanceof ApiError && on.error.status === 404 ? (
+      {act.isError &&
+        (act.error instanceof ApiError && act.error.status === 404 && act.variables?.kind === "onboard" ? (
           <div className="error" role="alert">
             The review bot can't reach this repository now. It may have been renamed or moved. Reload the list.
           </div>
         ) : (
-          <ErrorBox error={on.error} />
+          <ErrorBox error={act.error} />
         ))}
       {chosen && available.isPending && <Loading />}
       {available.isError && !available.isFetchNextPageError && <ErrorBox error={available.error} />}
@@ -292,15 +369,7 @@ function Picker() {
           {items.map((r) => (
             <div className="row" key={`${r.instance}/${r.project}`}>
               <div className="grow mr">{r.project}</div>
-              <button
-                type="button"
-                className="btn small"
-                aria-label={`Switch on ${r.project}`}
-                disabled={on.isPending}
-                onClick={() => on.mutate(r.project)}
-              >
-                Switch on
-              </button>
+              {rowAction(r)}
             </div>
           ))}
           {available.hasNextPage && available.data.pages.at(-1)?.items.length === 0 && (
