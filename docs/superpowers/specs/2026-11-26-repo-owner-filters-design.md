@@ -27,6 +27,8 @@ team.
   filter here means **owner team only**.
 - Paging, search or sort on the server for the Repositories list. It loads
   whole today, and is fast.
+- A team filter on the Overview and Usage pages. It can come later, once the
+  new filters are in use.
 - Changing the Health of a repository with no owner. No owner does not stop
   reviews, so it is not a setup problem.
 
@@ -77,14 +79,21 @@ Repositories                                          [+ Add repository]
 Repository ▲ | Owner team | Platform | Review | Reviews | Approved | Failed | Health
 ```
 
-- **Owner team column**, after Repository: the team name, linked to the team
-  page when `open`; else plain text. No owner shows an amber "⚠ No owner"
-  (the words go with the icon). For an admin it links to the repository's
-  Settings tab, where the Teams card sets the owner.
-- **No-owner line** above the table: "N repositories have no owner. Show
-  them". The link sets the team filter to No owner. It is hidden when every
-  repository has an owner, and while the filter is already No owner.
-- **Search** (`?q=`): any part of the path, ignoring case, written to the
+- **Owner team column**, after Repository, shown to everyone who can open
+  the page: the team name, linked to the team page when `open`; else plain
+  text. An owner through a whole-instance entry shows the same name, with the
+  hover text "Owns every repository on <instance>".
+- **No owner:** for an admin, an amber "⚠ No owner" (the words go with the
+  icon) linked to the repository's Settings tab, where the Teams card sets
+  the owner. For anyone else, a grey "None": they can't set an owner, so a
+  warning would be noise.
+- **No-owner line** above the table, for admins only: "N repositories have
+  no owner. Show them". N counts repositories being reviewed now, not paused
+  ones. The link sets the team filter to No owner, which lists paused ones
+  too. The line is hidden when N is 0, and while the filter is already No
+  owner.
+- **Search** (`?q=`): any part of the path only (not the team name, which
+  has its own filter), ignoring case, written to the
   address a moment after typing stops. The hook moves out of `AuditLog.tsx`
   into a shared file.
 - **Team filter** (`?team=<id>` or `?team=none`): All teams, No owner, then
@@ -102,8 +111,10 @@ Repository ▲ | Owner team | Platform | Review | Reviews | Approved | Failed | 
 ### 3. Teams pages
 
 `/teams`: Team · Your role · Repositories · Owner of · Members.
-`/admin/teams`: Team · Repositories · Owner of · Members · Remove. Create a
-team stays above the table.
+`/admin/teams`: Team · Repositories · Owner of · Members. Create a team
+stays above the table. Remove leaves the table: the team's own page already
+has it, with the same confirm prompt, and a red button on every row of a
+dense table is easy to click by mistake.
 
 - Numbers come from what the API already sends; no server change.
 - A team with whole-instance entries shows "+N instance(s)" in small text
@@ -111,7 +122,6 @@ team stays above the table.
 - Search by name (`?q=`) and sort by Team, Repositories, Owner of and
   Members, with the shared search hook and one shared sort (`useTableSort`
   and a `SortHeader` component) for all 3 tables.
-- Remove keeps its confirm prompt; its error shows under the row.
 - Empty states stay as they are. A search with no match says "No team
   matches." with a Clear button.
 - `teamCountsText` and `membersText` go if nothing else uses them.
@@ -140,14 +150,15 @@ team stays above the table.
   a non-member more than before, and refuses a bad team.
 - Web: Repositories search, filter (a team, No owner), each sort and its
   reverse, the address restoring the view, the no-owner line, the empty
-  result; both Teams tables (counts, the instance note, search, sort, Remove
-  still confirms); the Reviews team dropdown and the narrowed repository
+  result, admin and non-admin views of No owner; both Teams tables (counts,
+  the instance note, search, sort, no Remove in the table); the Reviews team dropdown and the narrowed repository
   dropdown.
 - Focused test files locally; the full run on CI.
 
 ## Delivery
 
-One PR from `main`. A `## Unreleased` note in docs/upgrading.md for the new
+One PR from `main`: the shared search hook and sort serve every part, so
+2 PRs would depend on each other. A `## Unreleased` note in docs/upgrading.md for the new
 `ownerTeam` field and the `team` parameter.
 
 ## Left to the builder
