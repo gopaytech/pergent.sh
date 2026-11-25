@@ -327,7 +327,8 @@ function Picker() {
   const [search, setSearch] = useState("");
   // ?team=<id> (from a team's + Add repository) pre-selects the owner team.
   const [params] = useSearchParams();
-  const [ownerTeam, setOwnerTeam] = useState(params.get("team") ?? "");
+  const [ownerTeam, setOwnerTeam] = useState(/^\d+$/.test(params.get("team") ?? "") ? (params.get("team") ?? "") : "");
+  // Only a team id starts the owner; the list filter value "none" does not.
   const chosen = instance !== "";
   // The owner team is optional. A list that can't be read leaves the select out.
   const teams = useQuery({ queryKey: ["teams"], queryFn: () => api.get<TeamView[]>("/api/teams"), enabled: me.admin });

@@ -131,6 +131,25 @@ describe("Repositories", () => {
       expect(post.body).toEqual({ project: "acme/payments", instance: "main" });
     });
 
+    it("does not take the No owner filter as the owner team", async () => {
+      const fake = fakeApi(routes());
+      renderApp("/repos?team=none&add=1");
+      const picker = await screen.findByRole("region", { name: "Add repository" });
+      await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+      expect(await within(picker).findByLabelText("Owner team")).toHaveDisplayValue("None");
+      await userEvent.click(await within(picker).findByRole("button", { name: "Switch on acme/payments" }));
+      const [post] = fake.find("POST", "/api/repositories");
+      expect(post.body).toEqual({ project: "acme/payments", instance: "main" });
+    });
+
+    it("starts the owner team from a numeric team filter", async () => {
+      fakeApi(routes());
+      renderApp(`/repos?team=${teamPayments.id}&add=1`);
+      const picker = await screen.findByRole("region", { name: "Add repository" });
+      await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+      expect(await within(picker).findByLabelText("Owner team")).toHaveValue(String(teamPayments.id));
+    });
+
     it("says which team owns the whole instance today", async () => {
       const widgets = { ...teamEmpty, id: 4, name: "Widgets", repos: [{ instance: "main", project: "", owner: true }] };
       fakeApi(routes([teamPayments, widgets]));
