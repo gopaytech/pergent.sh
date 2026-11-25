@@ -1082,6 +1082,7 @@ var openAPIUntypedSchemas = map[string]string{
 	"DismissRequest":              "struct in Dashboard.reviewAction",
 	"RestoreRequest":              "struct in Dashboard.reviewAction",
 	"StopUsingRequest":            "struct in Dashboard.stopUsing",
+	"ClaimRepositoryRequest":      "struct in Dashboard.claimRepo",
 	"ScanStartedBody":             "struct in Dashboard.scanNow",
 	"ScanBusyBody":                "struct in Dashboard.scanNow",
 	"ScanTooSoonBody":             "struct in Dashboard.scanNow",

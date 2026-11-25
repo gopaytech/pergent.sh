@@ -343,7 +343,10 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "owned by "+own)
 			return
 		}
-		if instanceOwner != "" {
+		// A tick of its own for the chosen team settles it: the instance's
+		// owner is not asked, and SwitchOnOwned keeps the tick.
+		ownTick := strings.EqualFold(byPath[strings.ToLower(name)], ownerName)
+		if instanceOwner != "" && !ownTick {
 			// Team names are unique ignoring case.
 			if !strings.EqualFold(instanceOwner, ownerName) {
 				writeError(w, http.StatusForbidden, "owned by "+instanceOwner)
@@ -695,10 +698,18 @@ func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 
 // --- POST /api/repositories/{instance}/{project...}/... ---
 
-// repositoryPost serves the POSTs to one repository: .../readiness/scan
-// (scanNow), .../past-dismissals/stop (stopUsing) and .../settings/reset; any
+// repositoryPost serves the POSTs to one repository: .../claim (claimRepo),
+// .../release (releaseRepo), .../readiness/scan (scanNow), .../past-dismissals/stop (stopUsing) and .../settings/reset; any
 // other is 404.
 func (d *Dashboard) repositoryPost(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.PathValue("rest"), "/claim") {
+		d.claimRepo(w, r)
+		return
+	}
+	if strings.HasSuffix(r.PathValue("rest"), "/release") {
+		d.releaseRepo(w, r)
+		return
+	}
 	if strings.HasSuffix(r.PathValue("rest"), "/chain/reset") {
 		d.resetRepoChain(w, r)
 		return

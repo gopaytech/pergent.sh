@@ -2317,6 +2317,89 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/claim:
+    post:
+      operationId: claimRepository
+      tags: [Repositories]
+      summary: Make a team the owner of a repository that has none
+      description: |
+        For a repository switched on or paused with no owner at its own entry
+        or its instance. A maintainer names a team they maintain (403 `only
+        maintainers of the owner team and admins can do this` otherwise) on an
+        instance that lets teams onboard (403 `teams may not onboard
+        repositories on this instance` with the switch off; 404 for a user
+        who maintains no team). An admin may name any team. The team's entry
+        for the repository gets the owner tick, or is created with it. A
+        repository that is not switched on is 404. A repository of the config
+        file is 409 for a maintainer; an admin may claim it. A repository
+        that has an owner, at either level, is 409 `<repository> already has
+        owner <team>`. A paused repository stays paused. Audited as
+        `repository_claimed` (detail: the team name) and `owner_set`.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ClaimRepositoryRequest'}
+      responses:
+        '200':
+          description: The repository, with its owner team.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/release:
+    post:
+      operationId: releaseRepository
+      tags: [Repositories]
+      summary: Clear the owner tick on a team's own entry for a repository
+      description: |
+        The body is `{}`. A maintainer of the owner team releases the tick on
+        that team's own entry, with the switch on or off; the entry stays, so
+        the team still sees the repository. An owner that is the instance's is
+        403 `only maintainers of the owner team and admins can do this` for a
+        maintainer: only an admin changes that, on the team page. An admin
+        releases the tick of whichever team holds it. A repository with no
+        owner of its own is 409 `the repository has no owner of its own` for
+        an admin. A repository of the config file is 409. Audited as
+        `repository_released` (detail: the team name) and `owner_cleared`.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false}
+      responses:
+        '200':
+          description: The repository, with no owner team.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------------------------- skills
   /api/skills:
     get:
@@ -5659,6 +5742,11 @@ components:
       required: [fingerprint]
       properties:
         fingerprint: {type: string}
+    ClaimRepositoryRequest:
+      type: object
+      required: [team]
+      properties:
+        team: {type: integer, format: int64, description: The team that becomes the owner.}
     CreateAccountRequest:
       type: object
       required: [username]

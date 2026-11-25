@@ -2,7 +2,11 @@ package dashboard
 
 import (
 	"context"
+	"errors"
+	"maps"
 	"net/http"
+	"slices"
+	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -111,4 +115,176 @@ func (d *Dashboard) maintainerGateAnySwitch(w http.ResponseWriter, r *http.Reque
 		return false
 	}
 	return true
+}
+
+const (
+	msgBadClaimBody   = `the body must be {"team": <id>}`
+	msgBadReleaseBody = "the body must be {}"
+	msgNoOwnOwner     = "the repository has no owner of its own"
+)
+
+// claimRepo is POST .../claim {"team": id}: the named team becomes the owner
+// of a repository that is on or paused and has no owner at either level.
+// It does not use target: a maintainer may not see a repository their team
+// does not cover yet. A paused repository stays paused.
+func (d *Dashboard) claimRepo(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	instance := r.PathValue("instance")
+	if !se.Admin && !d.maintainerGate(w, r, instance) {
+		return
+	}
+	project, ok := strings.CutSuffix(r.PathValue("rest"), "/claim")
+	if !ok || project == "" {
+		notFound(w)
+		return
+	}
+	var body struct {
+		Team *int64 `json:"team"`
+	}
+	if err := decodeStrict(r, &body); err != nil || body.Team == nil {
+		writeError(w, http.StatusBadRequest, msgBadClaimBody)
+		return
+	}
+	repo, found, err := d.Repos.GetAny(ctx, instance, project)
+	if err != nil {
+		d.failed(w, r, "loading a repository", err)
+		return
+	}
+	if !found {
+		notFound(w)
+		return
+	}
+	if repo.Source == settings.SourceConfig && !se.Admin {
+		writeError(w, http.StatusConflict, msgConfigManaged)
+		return
+	}
+	if !se.Admin {
+		teams, err := d.maintainedTeams(ctx, se)
+		if err != nil {
+			d.failed(w, r, "reading the teams", err)
+			return
+		}
+		if !slices.ContainsFunc(teams, func(t store.Team) bool { return t.ID == *body.Team }) {
+			writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
+			return
+		}
+	}
+	// repo.Project is the spelling the repository is stored under.
+	change, err := d.Store.ClaimOwner(ctx, repo.Instance, repo.Project, *body.Team)
+	var taken *store.OwnerTakenError
+	switch {
+	case errors.As(err, &taken):
+		writeError(w, http.StatusConflict, taken.Error())
+		return
+	case errors.Is(err, store.ErrUnknownTeam):
+		writeError(w, http.StatusBadRequest, msgNoTeam)
+		return
+	case err != nil:
+		d.Log.Error("dashboard: claiming a repository failed", "instance", repo.Instance, "project", repo.Project,
+			"team", *body.Team, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	d.Log.Info("dashboard: repository claimed", "instance", repo.Instance, "project", repo.Project,
+		"team", change.After.Name, "by", se.Username)
+	d.audit(ctx, se, "repository_claimed", repo.Instance, repo.Project, change.After.Name)
+	d.auditOwners(ctx, se, change.Before, change.After)
+	if !se.Admin {
+		// The session was read before the owner tick: the new owner's
+		// maintainer sees and runs the repository it just claimed.
+		k := repoKey(repo.Instance, repo.Project)
+		visible, roles := maps.Clone(se.Visible), maps.Clone(se.Roles)
+		if visible == nil {
+			visible = map[RepoKey]int64{}
+		}
+		if roles == nil {
+			roles = map[RepoKey]Role{}
+		}
+		if _, ok := visible[k]; !ok {
+			visible[k] = 0
+		}
+		roles[k] = max(roles[k], RoleMaintainer)
+		se.Visible, se.Roles = visible, roles
+	}
+	d.writeDetail(w, r, se, repo.Instance, repo.Project)
+}
+
+// releaseRepo is POST .../release {}: clears the owner tick on the owner
+// team's own entry for the repository and keeps the entry. A maintainer of
+// the owner team releases whatever the switch says; an instance-level owner
+// is released by an admin only. An admin releases the tick of whichever team
+// holds it.
+func (d *Dashboard) releaseRepo(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	if !se.Admin && !d.maintainerGateAnySwitch(w, r, r.PathValue("instance")) {
+		return
+	}
+	repo, ok := d.target(w, r, "/release", RoleViewer)
+	if !ok {
+		return
+	}
+	var body struct{}
+	if err := decodeStrict(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, msgBadReleaseBody)
+		return
+	}
+	owner, ok, err := d.ownerMaintainer(ctx, se, repo.Instance, repo.Project)
+	if err != nil {
+		d.failed(w, r, "reading the owner team", err)
+		return
+	}
+	if !se.Admin && !ok {
+		writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
+		return
+	}
+	if owner == 0 {
+		// An admin, and no owner at either level.
+		writeError(w, http.StatusConflict, msgNoOwnOwner)
+		return
+	}
+	change, released, err := d.Store.ReleaseOwner(ctx, repo.Instance, repo.Project, owner)
+	switch {
+	case errors.Is(err, store.ErrUnknownTeam):
+		writeError(w, http.StatusConflict, msgNoOwnOwner)
+		return
+	case err != nil:
+		d.Log.Error("dashboard: releasing a repository failed", "instance", repo.Instance, "project", repo.Project,
+			"team", owner, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	if !released {
+		// The owner is the instance's: only an admin releases that, by the
+		// team page.
+		if !se.Admin {
+			writeError(w, http.StatusForbidden, msgNotOwnerMaintainer)
+		} else {
+			writeError(w, http.StatusConflict, msgNoOwnOwner)
+		}
+		return
+	}
+	d.Log.Info("dashboard: repository released", "instance", repo.Instance, "project", repo.Project,
+		"team", change.After.Name, "by", se.Username)
+	d.audit(ctx, se, "repository_released", repo.Instance, repo.Project, change.After.Name)
+	d.auditOwners(ctx, se, change.Before, change.After)
+	d.writeDetail(w, r, se, repo.Instance, repo.Project)
+}
+
+// writeDetail answers 200 with the stored repository's detail view.
+func (d *Dashboard) writeDetail(w http.ResponseWriter, r *http.Request, se Session, instance, project string) {
+	ctx := r.Context()
+	now, ok, err := d.Repos.GetAny(ctx, instance, project)
+	if err == nil && !ok {
+		err = errors.New("the repository isn't there any more")
+	}
+	if err != nil {
+		d.failed(w, r, "loading a repository", err)
+		return
+	}
+	view, err := d.detailView(ctx, se, now)
+	if err != nil {
+		d.failed(w, r, "loading a repository", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }

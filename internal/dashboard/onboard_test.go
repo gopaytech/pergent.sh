@@ -291,3 +291,189 @@ func TestInstanceOwnerMaintainerPauses(t *testing.T) {
 	e.dashboardRepo("gh", "acme/mine", nil)
 	wantCode(t, e.send(e.sessionFor(bob), "PUT", "/api/admin/repositories/gh/acme/mine", enabledBody(false)), "pause", http.StatusOK)
 }
+
+// A maintainer's own stale owner tick on an off repository of an instance
+// another team owns: the chosen team's tick settles it, so the onboard is
+// 201 and the tick stays (it was 403 "owned by" the instance's owner).
+func TestMaintainerOnboardOwnTickBeatsInstanceOwner(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	a := e.team("A", []store.TeamMember{{AccountID: e.alice(), Role: store.RoleMaintainer}},
+		store.TeamRepo{Instance: "gh", Project: "acme/back", Owner: true})
+	e.team("X", nil, store.TeamRepo{Instance: "gh", Owner: true})
+	e.cat["gh"].set("acme/back")
+	rec := e.send(e.aliceSession(), "POST", "/api/repositories", onboardBody("gh", "acme/back", a))
+	wantCode(t, rec, "onboard", http.StatusCreated)
+	if _, found := e.storedRepo("gh", "acme/back"); !found {
+		t.Error("acme/back was not switched on")
+	}
+	if got := e.storedTeam(a).Repos; !slices.Equal(got, []store.TeamRepo{{Instance: "gh", Project: "acme/back", Owner: true}}) {
+		t.Errorf("A's repos = %+v; want its own tick kept", got)
+	}
+}
+
+func claimBody(team int64) string { return fmt.Sprintf(`{"team":%d}`, team) }
+
+const (
+	claimPath = "/api/repositories/main/acme/gadgets/claim"
+	relPath   = "/api/repositories/main/acme/gadgets/release"
+)
+
+// claimSetup is a repository switched on with no owner and alice maintaining
+// A (not covering it yet).
+func claimSetup(e *env) (a int64) {
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	return e.team("A", []store.TeamMember{{AccountID: e.alice(), Role: store.RoleMaintainer}})
+}
+
+// Claim: the rules in their order. One env, one case per rule.
+func TestClaimUnowned(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	a := claimSetup(e)
+	rec := e.send(e.aliceSession(), "POST", claimPath, claimBody(a))
+	detail := decode[RepositoryDetailView](t, rec, "claim", http.StatusOK)
+	if detail.OwnerTeam == nil || detail.OwnerTeam.ID != a {
+		t.Errorf("OwnerTeam = %+v; want A", detail.OwnerTeam)
+	}
+	if got := e.auditActionsOf("acme/gadgets"); !slices.Equal(got, []string{"repository_claimed", "owner_set"}) {
+		t.Errorf("audit = %v; want repository_claimed then owner_set", got)
+	}
+	if owner, found, err := e.st.OwnerTeam(ctx, "main", "acme/gadgets"); err != nil || !found || owner != a {
+		t.Errorf("owner = %d, %v, %v; want A", owner, found, err)
+	}
+}
+
+func TestClaimPausedStaysPaused(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	a := e.team("A", []store.TeamMember{{AccountID: e.alice(), Role: store.RoleMaintainer}})
+	e.pausedRepo("main", "acme/gadgets", nil)
+	wantCode(t, e.send(e.aliceSession(), "POST", claimPath, claimBody(a)), "claim", http.StatusOK)
+	if r, found := e.storedRepo("main", "acme/gadgets"); !found || r.Enabled {
+		t.Errorf("the repository = %+v, %v; want it kept and paused", r, found)
+	}
+	if owner, found, _ := e.st.OwnerTeam(ctx, "main", "acme/gadgets"); !found || owner != a {
+		t.Errorf("owner = %d, %v; want A", owner, found)
+	}
+}
+
+// A taken repository is 409, at its own entry or the instance's.
+func TestClaimTaken(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	a := claimSetup(e)
+	e.team("B", nil, store.TeamRepo{Instance: "main", Project: "acme/gadgets", Owner: true})
+	rec := e.send(e.aliceSession(), "POST", claimPath, claimBody(a))
+	if want := "acme/gadgets already has owner B"; rec.Code != http.StatusConflict || errorOf(t, rec) != want {
+		t.Errorf("claim = %d %s; want 409 %q", rec.Code, rec.Body, want)
+	}
+	if got := e.storedTeam(a).Repos; len(got) != 0 {
+		t.Errorf("A's repos = %+v; want none", got)
+	}
+}
+
+func TestClaimInstanceOwned(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	a := claimSetup(e)
+	e.team("B", nil, store.TeamRepo{Instance: "main", Owner: true})
+	rec := e.send(e.aliceSession(), "POST", claimPath, claimBody(a))
+	if want := "main (whole instance) already has owner B"; rec.Code != http.StatusConflict || errorOf(t, rec) != want {
+		t.Errorf("claim = %d %s; want 409 %q", rec.Code, rec.Body, want)
+	}
+}
+
+// Not switched on (no row, not in config) is 404; a team the maintainer
+// does not maintain is 403.
+func TestClaimNotOn(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	a := e.team("A", []store.TeamMember{{AccountID: e.alice(), Role: store.RoleMaintainer}})
+	other := e.team("O", nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	wantCode(t, e.send(e.aliceSession(), "POST", "/api/repositories/main/acme/none/claim", claimBody(a)), "not on", http.StatusNotFound)
+	rec := e.send(e.aliceSession(), "POST", claimPath, claimBody(other))
+	if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgNotOwnerMaintainer {
+		t.Errorf("a team they don't maintain = %d %s; want 403 %q", rec.Code, rec.Body, msgNotOwnerMaintainer)
+	}
+}
+
+func TestClaimSwitchOff(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	a := claimSetup(e)
+	rec := e.send(e.aliceSession(), "POST", claimPath, claimBody(a))
+	if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgTeamsMayNotOnboard {
+		t.Errorf("claim = %d %s; want 403 %q", rec.Code, rec.Body, msgTeamsMayNotOnboard)
+	}
+	if owner, found, _ := e.st.OwnerTeam(ctx, "main", "acme/gadgets"); found {
+		t.Errorf("owner = %d; want none", owner)
+	}
+}
+
+// A repository of the config file: 409 for a maintainer, an admin may claim.
+func TestClaimConfigRepo(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	a := e.team("A", []store.TeamMember{{AccountID: e.alice(), Role: store.RoleMaintainer}})
+	const path = "/api/repositories/main/acme/widgets/claim"
+	rec := e.send(e.aliceSession(), "POST", path, claimBody(a))
+	if rec.Code != http.StatusConflict || errorOf(t, rec) != msgConfigManaged {
+		t.Errorf("maintainer = %d %s; want 409 %q", rec.Code, rec.Body, msgConfigManaged)
+	}
+	admin := e.sessionFor(e.ssoAdmin("root@example.com"))
+	wantCode(t, e.send(admin, "POST", path, claimBody(a)), "admin", http.StatusOK)
+	if owner, found, _ := e.st.OwnerTeam(ctx, "main", "acme/widgets"); !found || owner != a {
+		t.Errorf("owner = %d, %v; want A", owner, found)
+	}
+}
+
+// The owner's maintainer releases with the switch off: the tick goes, the
+// entry stays, the repository stays.
+func TestReleaseByOwnerMaintainer(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	o := ownSetup(e)
+	rec := e.send(o.ann, "POST", relPath, `{}`)
+	detail := decode[RepositoryDetailView](t, rec, "release", http.StatusOK)
+	if detail.OwnerTeam != nil {
+		t.Errorf("OwnerTeam = %+v; want none", detail.OwnerTeam)
+	}
+	if got := e.storedTeam(o.a).Repos; !slices.Equal(got, []store.TeamRepo{{Instance: "main", Project: "acme/gadgets"}}) {
+		t.Errorf("A's repos = %+v; want its entry without the tick", got)
+	}
+	if got := e.auditActionsOf("acme/gadgets"); !slices.Equal(got, []string{"repository_released", "owner_cleared"}) {
+		t.Errorf("audit = %v; want repository_released then owner_cleared", got)
+	}
+	if _, found := e.storedRepo("main", "acme/gadgets"); !found {
+		t.Error("the repository was removed")
+	}
+	// B only covered it: it is nobody's now, and a covering maintainer may not release.
+	if rec := e.send(o.ben, "POST", relPath, `{}`); rec.Code != http.StatusForbidden {
+		t.Errorf("B after = %d %s; want 403", rec.Code, rec.Body)
+	}
+}
+
+// An instance-level owner is not released here: its maintainer is 403, an
+// admin is 409 (no owner of its own).
+func TestReleaseInstanceOwnerRefused(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, teamsOnboard)
+	bob := e.sso("bob@example.com")
+	b := e.team("B", []store.TeamMember{{AccountID: bob, Role: store.RoleMaintainer}}, store.TeamRepo{Instance: "gh", Owner: true})
+	e.dashboardRepo("gh", "acme/mine", nil)
+	const path = "/api/repositories/gh/acme/mine/release"
+	rec := e.send(e.sessionFor(bob), "POST", path, `{}`)
+	if rec.Code != http.StatusForbidden || errorOf(t, rec) != msgNotOwnerMaintainer {
+		t.Errorf("maintainer = %d %s; want 403 %q", rec.Code, rec.Body, msgNotOwnerMaintainer)
+	}
+	admin := e.sessionFor(e.ssoAdmin("root@example.com"))
+	rec = e.send(admin, "POST", path, `{}`)
+	if rec.Code != http.StatusConflict || errorOf(t, rec) != msgNoOwnOwner {
+		t.Errorf("admin = %d %s; want 409 %q", rec.Code, rec.Body, msgNoOwnOwner)
+	}
+	if got := e.storedTeam(b).Repos; !slices.Equal(got, []store.TeamRepo{{Instance: "gh", Owner: true}}) {
+		t.Errorf("B's repos = %+v; want the instance entry kept", got)
+	}
+}
