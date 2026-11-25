@@ -1,10 +1,10 @@
 <div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-white.svg">
-    <img src="docs/assets/logo.svg" alt="pergent" width="110">
-  </picture>
-
-  <h1>pergent.sh</h1>
+  <h1>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/pergent-sh-horizontal-white.svg">
+      <img src="docs/assets/brand/pergent-sh-horizontal-black.svg" alt="pergent.sh" width="360">
+    </picture>
+  </h1>
 
   <p><strong>Run pergent code reviews on GitLab merge requests and GitHub pull requests, one Kubernetes Job per review.</strong></p>
 
