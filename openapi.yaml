@@ -982,6 +982,13 @@ paths:
         - name: instance
           in: query
           schema: {type: string}
+        - name: team
+          in: query
+          description: |
+            Keep the repositories a team owns (its id), or `none` for those
+            with no owner. It only narrows what the session can already see.
+            400 when it is neither, or the team does not exist.
+          schema: {type: string, pattern: '^([0-9]+|none)$'}
         - name: outcome
           in: query
           schema: {$ref: '#/components/schemas/Outcome'}

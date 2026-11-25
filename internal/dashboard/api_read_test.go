@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -575,6 +576,74 @@ func TestReviewsListPages(t *testing.T) {
 	for _, r := range append(first.Items, second.Items...) {
 		if r.Outcome != OutcomeBlocking {
 			t.Errorf("blocking filter returned %+v", r)
+		}
+	}
+}
+
+// GET /api/reviews?team= keeps the reviews of the repositories a team owns,
+// or with "none" those with no owner. It only narrows what the session sees.
+func TestReviewsTeamFilter(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	// devs own acme/payments by its own entry; ops own the rest of main
+	// through the instance entry; gh's acme/tools has no owner.
+	devs := e.team("devs", nil, store.TeamRepo{Instance: "main", Project: "acme/payments", Owner: true})
+	ops := e.team("ops", nil, store.TeamRepo{Instance: "main", Owner: true})
+	idle := e.team("payments", nil)
+	e.addRun(runFix{project: "acme/payments", number: 1, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true})
+	e.addRun(runFix{project: "acme/widgets", number: 2, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true})
+	e.addRun(runFix{instance: "gh", project: "acme/tools", number: 3, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true})
+
+	reviews := func(c *http.Cookie, query string) []string {
+		var got []string
+		for _, r := range getJSON[ReviewListView](e, c, "/api/reviews"+query).Items {
+			got = append(got, fmt.Sprintf("%s/%s/%d", r.Instance, r.Project, r.Number))
+		}
+		slices.Sort(got)
+		return got
+	}
+	admin := e.userOnMain(true)
+	for _, c := range []struct {
+		name, query string
+		want        []string
+	}{
+		{"no filter", "", []string{"gh/acme/tools/3", "main/acme/payments/1", "main/acme/widgets/2"}},
+		{"devs", fmt.Sprintf("?team=%d", devs), []string{"main/acme/payments/1"}},
+		{"ops, through the instance", fmt.Sprintf("?team=%d", ops), []string{"main/acme/widgets/2"}},
+		{"none", "?team=none", []string{"gh/acme/tools/3"}},
+		{"devs and another project", fmt.Sprintf("?team=%d&project=acme/widgets", devs), nil},
+		{"devs and its project", fmt.Sprintf("?team=%d&project=acme/payments", devs), []string{"main/acme/payments/1"}},
+		{"none and an owned project", "?team=none&project=acme/widgets&instance=main", nil},
+		{"a team that owns nothing", fmt.Sprintf("?team=%d", idle), nil},
+	} {
+		if got := reviews(admin, c.query); !slices.Equal(got, c.want) {
+			t.Errorf("admin %s: reviews = %v; want %v", c.name, got, c.want)
+		}
+	}
+
+	for _, q := range []string{"?team=abc", "?team=-1", "?team=%2B5", "?team=1.5", "?team=None"} {
+		if rec := e.get(admin, "/api/reviews"+q); rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgTeamFilter {
+			t.Errorf("GET %s = %d %s; want 400 %q", q, rec.Code, rec.Body, msgTeamFilter)
+		}
+	}
+	if rec := e.get(admin, "/api/reviews?team=999999"); rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgNoTeam {
+		t.Errorf("GET unknown team = %d %s; want 400 %q", rec.Code, rec.Body, msgNoTeam)
+	}
+
+	// A user who sees only acme/widgets never gets acme/payments through
+	// the team filter.
+	user := e.userOnMain(false, "acme/widgets")
+	for _, c := range []struct {
+		name, query string
+		want        []string
+	}{
+		{"user, no filter", "", []string{"main/acme/widgets/2"}},
+		{"user, devs", fmt.Sprintf("?team=%d", devs), nil},
+		{"user, ops", fmt.Sprintf("?team=%d", ops), []string{"main/acme/widgets/2"}},
+		{"user, none", "?team=none", nil},
+	} {
+		if got := reviews(user, c.query); !slices.Equal(got, c.want) {
+			t.Errorf("%s: reviews = %v; want %v", c.name, got, c.want)
 		}
 	}
 }

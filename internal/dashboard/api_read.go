@@ -373,6 +373,28 @@ func (d *Dashboard) reviews(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.Visible = v
 	}
+	if t := q.Get("team"); t != "" {
+		if t != teamNone {
+			if _, err := strconv.ParseUint(t, 10, 63); err != nil {
+				writeError(w, http.StatusBadRequest, msgTeamFilter)
+				return
+			}
+			id, _ := strconv.ParseInt(t, 10, 64)
+			if _, found, err := d.Store.Team(ctx, id); err != nil {
+				d.failed(w, r, "loading a team", err)
+				return
+			} else if !found {
+				writeError(w, http.StatusBadRequest, msgNoTeam)
+				return
+			}
+		}
+		v, err := d.narrowToTeam(ctx, filter.Visible, t)
+		if err != nil {
+			d.failed(w, r, "listing repository owners", err)
+			return
+		}
+		filter.Visible = v
+	}
 	if c := q.Get("cursor"); c != "" {
 		cur, ok := decodeCursor(c)
 		if !ok {
@@ -417,6 +439,43 @@ func (d *Dashboard) projectVisibility(ctx context.Context, se Session, instance,
 	for _, p := range stored {
 		if strings.EqualFold(p.Path, project) && (instance == "" || p.Instance == instance) {
 			out = append(out, store.VisibleProject{Instance: p.Instance, Path: p.Path, ID: p.ProjectID})
+		}
+	}
+	return store.Visibility{Projects: out}, nil
+}
+
+// teamNone is the team filter for repositories with no owner team.
+const teamNone = "none"
+
+// narrowToTeam is v cut to the repositories owned by team (a decimal ID), or
+// with no owner for "none". An admin's v.All is first read as every stored
+// project, so the result is always a list of projects, and never more than v
+// let be read.
+func (d *Dashboard) narrowToTeam(ctx context.Context, v store.Visibility, team string) (store.Visibility, error) {
+	projects := v.Projects
+	if v.All {
+		stored, err := d.Store.Projects(ctx)
+		if err != nil {
+			return store.Visibility{}, err
+		}
+		projects = make([]store.VisibleProject, len(stored))
+		for i, p := range stored {
+			projects[i] = store.VisibleProject{Instance: p.Instance, Path: p.Path, ID: p.ProjectID}
+		}
+	}
+	keys := make([]store.PathKey, len(projects))
+	for i, p := range projects {
+		keys[i] = store.PathKey{Instance: p.Instance, Path: lower(p.Path)}
+	}
+	owners, err := d.Store.OwnerTeams(ctx, keys)
+	if err != nil {
+		return store.Visibility{}, err
+	}
+	var out []store.VisibleProject
+	for i, p := range projects {
+		owner, owned := owners[keys[i]]
+		if team == teamNone && !owned || owned && strconv.FormatInt(owner, 10) == team {
+			out = append(out, p)
 		}
 	}
 	return store.Visibility{Projects: out}, nil
