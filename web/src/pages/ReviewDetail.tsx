@@ -24,25 +24,7 @@ import {
 } from "../api";
 import { useWrite } from "../layout/write";
 import RunLog from "../RunLog";
-import {
-  CopyButton,
-  ErrorBox,
-  ExternalLink,
-  Loading,
-  NotFound,
-  OutcomePill,
-  Pill,
-  Tabs,
-  ago,
-  bytesText,
-  changeRef,
-  count,
-  duration,
-  platformName,
-  skillOrigin,
-  utcText,
-  type Tone,
-} from "../ui";
+import { Ago, CopyButton, ErrorBox, ExternalLink, Loading, NotFound, OutcomePill, Pill, Tabs, ago, bytesText, changeRef, count, duration, platformName, skillOrigin, type Tone, utcText } from "../ui";
 import { useUrlParam } from "../urlState";
 
 const triggers: Record<string, string> = {
@@ -84,7 +66,7 @@ export default function ReviewDetail() {
   });
   if (change === null || isStatus(review.error, 404)) return <NotFound />;
   if (review.isPending) return <Loading />;
-  if (review.isError) return <ErrorBox error={review.error} />;
+  if (review.isError) return <ErrorBox error={review.error} onRetry={() => void review.refetch()} />;
   return <Review view={review.data} />;
 }
 
@@ -820,7 +802,7 @@ function DismissedFinding({ f, href, actions }: { f: Located; href: string | nul
       {d && (
         <div className="dismissal">
           <div className="meta">
-            Dismissed by {d.by} · {ago(d.at)}
+            Dismissed by {d.by} · <Ago t={d.at} />
           </div>
           <div className="prose">{d.reason ? `Reason: ${d.reason}` : "No reason was given."}</div>
         </div>

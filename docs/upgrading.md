@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Skills, instructions and rules render as markdown,** on a repository's **Skills & instructions** tab, the **Rules** page, the built-in rule picker and a skill's page with its old versions: headings, lists, code, tables and task lists. A skill's front matter shows apart, and **Show source** shows the text as written. HTML in the text is shown as text and never runs; links open in a new tab and only when they are http(s); an image shows as a link to it. Rule sets stay YAML, shown as written. The renderer (`react-markdown` with `remark-gfm`, both MIT) loads on its own, about 51 KB gzipped, only when one of these views first shows.
+- **A phone gets a top bar with a Menu button.** The menu no longer fills the first screen, tab rows scroll sideways instead of squeezing their labels, and review titles wrap to 2 lines instead of being cut off.
+- **The menu's icons are line drawings,** the same on every system, instead of emoji.
+- **The browser tab names the page,** such as `acme/payments · pergent.sh`.
+- **Times such as "4 days ago" show the exact UTC time on hover.**
+- **A page whose data could not be read offers Try again.**
+- **Tabs move with the arrow keys,** and Home and End; only the chosen tab is in the Tab order.
+- **Text is easier to read:** a larger page title and numbers, and secondary text at 12.5px instead of 12px.
 - **Tabs and periods are kept in the address.** A review page's tab, an API client's and an API review's tab, the **Rules** tab (`?tab=built-in`), and the period on **Overview**, **Skill results** and **Usage** survive a reload, Back and a shared link. A repository's tabs now add a history entry, so Back opens the tab before.
 - **Save is on the right, after Cancel,** in the remaining forms: sign-in, add instance, add user, a team, and the skill and rule set editors.
 - **Words:** "Not approved" is grey, not the green of an approval; an API review's **Stop** is **Restore**; the audit log's **Older** is **Load more**. Empty states say what to do: no team, no matching reviews (with **Clear the filters**), no skill results yet. Help text no longer names opencode or a bare Helm key.

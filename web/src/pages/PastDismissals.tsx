@@ -3,7 +3,7 @@ import { Link } from "react-router";
 
 import { api, paths, type PastDismissalView } from "../api";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Pill, ago, changeRef } from "../ui";
+import { Ago, ErrorBox, Loading, Pill, changeRef } from "../ui";
 
 // PastDismissals is what teaches this repository's reviews: the findings people
 // dismissed with a reason in the last 90 days, one row each. Stop using ends the
@@ -60,7 +60,7 @@ export default function PastDismissals({
               </div>
               <div className="prose">{`Reason: ${r.reason}`}</div>
               <div className="meta">
-                {r.by} · {ago(r.at)} · <Link to={paths.review(instance, project, r.number)}>{changeRef(platform, project, r.number)}</Link>
+                {r.by} · <Ago t={r.at} /> · <Link to={paths.review(instance, project, r.number)}>{changeRef(platform, project, r.number)}</Link>
               </div>
             </div>
             <button

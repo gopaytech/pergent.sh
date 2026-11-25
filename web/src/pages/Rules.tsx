@@ -6,6 +6,7 @@ import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { ErrorBox, ExternalLink, Loading, Pill, Tabs, ago } from "../ui";
 import { useUrlParam } from "../urlState";
+import Markdown from "../MarkdownLazy";
 
 // Rules lists the rule library: named rule sets of path rules, which a
 // repository chooses and orders on its Settings tab, and pergent's built-in
@@ -131,7 +132,7 @@ function BuiltInList() {
               ))}
             </span>
           </summary>
-          <pre className="doc">{r.rule}</pre>
+          <Markdown text={r.rule} />
         </details>
       ))}
     </section>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { BuiltInRule } from "./api";
+import Markdown from "./MarkdownLazy";
 
 // BuiltInRulePicker enables pergent's built-in rules for a repository. The
 // enabled rules are pinned on top, where a search never hides them; below
@@ -45,7 +46,7 @@ export default function BuiltInRulePicker({
             ))}
           </span>
         </summary>
-        <pre className="doc">{r.rule}</pre>
+        <Markdown text={r.rule} />
       </details>
     </li>
   );

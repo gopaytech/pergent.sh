@@ -28,7 +28,7 @@ export default function ReviewList({ filter, label, inRepo, clearTo }: { filter:
     getNextPageParam: (last) => last.nextCursor || undefined,
   });
   if (list.isPending) return <Loading />;
-  if (list.isError) return <ErrorBox error={list.error} />;
+  if (list.isError) return <ErrorBox error={list.error} onRetry={() => void list.refetch()} />;
   const items = list.data.pages.flatMap((p) => p.items);
   return (
     <section className="card" aria-label={label}>
