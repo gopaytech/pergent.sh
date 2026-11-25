@@ -51,10 +51,11 @@ pergent.sh follows the first 2. The review bot's access (GitLab: the bot's membe
 | Action | Admin | Maintainer | Viewer, no team |
 |---|---|---|---|
 | Turn "Teams may onboard repositories" on or off for an instance | yes | no | no |
-| Onboard (switch on a repository the bot reaches, with an owner team) | yes, any team or none | only on an instance with the switch on, owner = a team they maintain | no |
+| Onboard (switch on a repository the bot reaches, with an owner team) | yes, any team or none | only on an instance with the switch on, owner = a team they maintain. If the instance has an owner team, only its maintainers, and the repository inherits that owner | no |
 | Claim (set the owner of a switched-on repository with **no owner at either level**) | yes | switch on, a team they maintain | no |
 | Release the owner tick | yes | maintainer of the owner team, own entry only, switch on or off | no |
-| Pause, resume, remove | yes | maintainer of the owner team (either level), switch on | no |
+| Pause | yes | maintainer of the owner team (either level), switch on or off | no |
+| Resume, remove | yes | maintainer of the owner team (either level), switch on | no |
 | Move ownership between teams, untick another team's owner | yes | no | no |
 | Repository teams card, team members, team repository list | yes | no | no |
 
@@ -65,9 +66,14 @@ Notes:
 - **Remove** works as an admin's remove does today (`RemoveDashboardRepo`): it deletes the repository's row, its own chains, and every team entry for that path, the owner tick included. Instance-level entries stay. After a remove, any maintainer may onboard it again.
 - **Claim** sets the owner on a repository that is on **or paused** and has no owner. It creates the team's entry for the path when the team has none, as `SwitchOnOwned` does, and does not change paused or on. A repository that is not switched on is 404. A config-file repository is 409 for a maintainer (an admin may claim it).
 - **Onboard** by a maintainer only switches on a repository that is off. A repository that is on or paused is 409 with `use Claim`. An admin's onboard keeps today's behavior: it resumes a paused repository.
-- **Release** is allowed with the switch off: giving up ownership is always safe.
+- **Release and pause** are allowed with the switch off: both only reduce what a team holds or spends (owner's ruling, 2026-11-25).
+- **Instance owner.** On an instance with an instance-level owner team, only maintainers of that team onboard. The repository gets no owner tick of its own and inherits the instance owner. A maintainer of another team gets 403 `owned by <team>` (owner's ruling, 2026-11-25).
+- **The picker shows every repository the bot reaches** on the instance, to any maintainer, names and state only. Reviews, chains and usage stay hidden (owner's ruling, 2026-11-25).
+- **Remove confirmation** lists the other teams that cover the repository and will lose it.
+- **No limit on repository count per team.** The per-team token limit is the guard.
+- **No notice to admins.** The audit log is the record.
 - **The owner's name is shown.** The picker shows `owned by <team>` to a maintainer of any team, so they know whom to ask. This relaxes today's rule that a non-member learns nothing of a team, for the name only (owner's ruling, 2026-11-25). Members, models and usage stay hidden.
-- **Config file.** A repository in the config file can't be onboarded, paused or removed in the dashboard, as today. Claiming one stays admin-only (owner's call to review: builder default).
+- **Config file.** A repository in the config file can't be onboarded, paused or removed in the dashboard, as today. Claiming one stays admin-only (owner's ruling, 2026-11-25).
 - **A maintainer of 2 teams** picks the owner team. With one team, it is filled in.
 
 ## The switch
@@ -75,7 +81,7 @@ Notes:
 - New instance setting **"Teams may onboard repositories"**, default **off**. An upgrade changes nothing until an admin turns it on.
 - A dashboard instance: a new column on `instances`, set on the instance form (`PUT /api/admin/instances/{name}`).
 - A config-file instance: a new key `teams_may_onboard`, read-only in the dashboard like the other config instance fields.
-- Turning it off stops new onboards and claims. Repositories teams onboarded stay, with their owners. Pause, resume and remove for maintainers also stop: the admin owns the instance again.
+- Turning it off stops new onboards and claims. Repositories teams onboarded stay, with their owners. Resume and remove for maintainers also stop. Pause and release still work.
 
 ## Server
 
@@ -124,6 +130,8 @@ Every action is logged with the account, as today:
 - A claim on a repository with an instance-level owner is refused.
 - A remove by a maintainer deletes the owner tick, and another team can then onboard it.
 - A maintainer's onboard of an on or paused repository is 409; a claim of a paused one keeps it paused.
+- On an instance with an instance owner: its maintainer onboards with no own owner tick; another team's maintainer gets 403.
+- Switch off: pause and release work, resume and remove are 403.
 - UI: each picker state shows its button. A viewer sees no button.
 
 ## Left to the builder
