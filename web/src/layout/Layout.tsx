@@ -6,7 +6,7 @@ import { api, type Me } from "../api";
 import { Icon, type IconName } from "../icons";
 import ChangePassword from "../pages/ChangePassword";
 import Waiting from "../pages/Waiting";
-import { ErrorBox, Loading, NotFound } from "../ui";
+import { ErrorBox, Loading, Logo, NotFound } from "../ui";
 import { MeContext, inAdminArea, useMe } from "./me";
 import SignOut from "./SignOut";
 
@@ -150,17 +150,13 @@ export default function Layout() {
             <span>Menu</span>
           </button>
           <div className="brand">
-            <div className="logo" aria-hidden="true">
-              🦉
-            </div>
+            <Logo />
             pergent.sh
           </div>
         </header>
         <aside id="side-menu">
           <div className="brand">
-            <div className="logo" aria-hidden="true">
-              🦉
-            </div>
+            <Logo />
             pergent.sh
           </div>
           {admin && <div className="org">Admin area</div>}

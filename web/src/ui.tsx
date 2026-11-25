@@ -4,6 +4,20 @@ import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { ApiError, safeHref, type Outcome, type SecretView, type SkillSource } from "./api";
 
+// Logo is the pergent mark: two lines of code, the second one dipping at a
+// finding. It draws in the text colour, so it works on the dark sidebar and on
+// the light sign-in card. This is the small cut, with thicker lines for 24 px.
+export function Logo() {
+  return (
+    <svg className="logo" viewBox="32 48 192 144" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M48 80L160 80A16 16 0 0 0 160 48L48 48A16 16 0 0 0 48 80ZM48 144L110.76 144L133.86 184A16 16 0 0 0 161.57 184L184.66 144L208 144A16 16 0 0 0 208 112L175.43 112A16 16 0 0 0 161.57 120L147.71 144L133.86 120A16 16 0 0 0 120 112L48 112A16 16 0 0 0 48 144Z"
+      />
+    </svg>
+  );
+}
+
 // CenteredCard is the page the signed-out and gated screens (sign-in,
 // password change, waiting) show: one card on the dark background.
 export function CenteredCard({ children }: { children: ReactNode }) {
@@ -11,9 +25,7 @@ export function CenteredCard({ children }: { children: ReactNode }) {
     <div className="signin">
       <div className="card signin-card">
         <div className="brand dark">
-          <div className="logo" aria-hidden="true">
-            🦉
-          </div>
+          <Logo />
           pergent.sh
         </div>
         {children}
