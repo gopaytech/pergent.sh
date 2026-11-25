@@ -55,6 +55,10 @@ team.
   `{id, name, open}` the repository page uses. `open` is true for an admin or
   a member of the team. The repository page already shows this name to anyone
   who can read the repository, so nothing new is revealed.
+- `OwnerTeamView` also gets `viaInstance`: true when the owner comes from the
+  instance entry, for the "Owns every repository on <instance>" hover text.
+  It is worked out from the owning team's own entries, so the owner rule
+  stays in SQL.
 - New `Store.OwnerTeams(ctx, keys)` reads the owners of many repositories in
   one query, reusing `ownerTeamSQL` as it is (the repository's own owner entry
   wins, matched ignoring case, else the instance entry's owner):
