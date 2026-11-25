@@ -1316,10 +1316,6 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
-	owner, err := d.ownerTeamView(ctx, se, repo)
-	if err != nil {
-		return RepositoryDetailView{}, err
-	}
 	actions, err := d.repoActions(ctx, se, repo)
 	if err != nil {
 		return RepositoryDetailView{}, err
@@ -1331,7 +1327,7 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
 		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model, MultiReview: multi,
 		Quota: d.quotaView(ctx, se, repo), Graph: gv, BuiltInRulesOff: builtInRulesOff(d.cfg.Jobs.Image),
-		OwnerTeam: owner, Actions: actions, CoveringTeams: covering}, nil
+		OwnerTeam: views[0].OwnerTeam, Actions: actions, CoveringTeams: covering}, nil
 }
 
 // coveringTeams are the names of the teams other than repo's owner team that
@@ -1358,17 +1354,6 @@ func (d *Dashboard) coveringTeams(ctx context.Context, repo settings.Effective, 
 	}
 	slices.SortFunc(out, strings.Compare)
 	return out, nil
-}
-
-// ownerTeamView is repo's owner team (Store.OwnerTeam) as its page shows
-// it, nil for none. See ownerViews.
-func (d *Dashboard) ownerTeamView(ctx context.Context, se Session, repo settings.Effective) (*OwnerTeamView, error) {
-	k := repoKey(repo.Instance, repo.Project)
-	owners, err := d.ownerViews(ctx, se, []RepoKey{k})
-	if err != nil {
-		return nil, err
-	}
-	return owners[k], nil
 }
 
 // ownerViews is the owner team (Store.OwnerTeams) of each of keys, in one

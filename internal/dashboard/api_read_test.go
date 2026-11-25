@@ -590,7 +590,7 @@ func TestReviewsTeamFilter(t *testing.T) {
 	// through the instance entry; gh's acme/tools has no owner.
 	devs := e.team("devs", nil, store.TeamRepo{Instance: "main", Project: "acme/payments", Owner: true})
 	ops := e.team("ops", nil, store.TeamRepo{Instance: "main", Owner: true})
-	idle := e.team("payments", nil)
+	idle := e.team("idle", nil)
 	e.addRun(runFix{project: "acme/payments", number: 1, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true})
 	e.addRun(runFix{project: "acme/widgets", number: 2, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true})
 	e.addRun(runFix{instance: "gh", project: "acme/tools", number: 3, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true})
@@ -603,7 +603,7 @@ func TestReviewsTeamFilter(t *testing.T) {
 		slices.Sort(got)
 		return got
 	}
-	admin := e.userOnMain(true)
+	admin := e.sessionFor(e.ssoAdmin("boss@example.com"))
 	for _, c := range []struct {
 		name, query string
 		want        []string
@@ -633,8 +633,10 @@ func TestReviewsTeamFilter(t *testing.T) {
 	}
 
 	// A user who sees only acme/widgets never gets acme/payments through
-	// the team filter.
-	user := e.userOnMain(false, "acme/widgets")
+	// the team filter. Bob is a second account, so he is not an admin.
+	bob := e.sso("bob@example.com")
+	e.team("viewers", viewerMembers(bob), store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+	user := e.sessionFor(bob)
 	for _, c := range []struct {
 		name, query string
 		want        []string
