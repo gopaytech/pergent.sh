@@ -40,7 +40,7 @@ Rules behind the table:
 | No team | A user on no team gets the waiting 403. A viewer gets 404. |
 | Instance being removed | A maintainer gets 404. |
 | Team is not the owner | A maintainer of a team that only covers the repository gets 403 `only maintainers of the owner team and admins can do this`. |
-| Instance owner | When a team owns the whole instance, only its maintainers onboard. The repository gets no owner tick of its own and inherits the instance owner. A maintainer of another team gets 403 `owned by <team>`. Only an admin releases an instance-level owner. |
+| Instance owner | When a team owns the whole instance, only its maintainers onboard. The repository gets no owner tick of its own and inherits the instance owner. A maintainer of another team gets 403 `owned by <team>`. The release route does not clear an instance-level owner (409 for an admin, 403 for a maintainer): an admin clears it on the team page (`PUT /api/teams/{id}`). |
 | Taken repository | A claim of a repository that has an owner at either level is 409 `<repository> already has owner <team>`. This includes a claim by the team that owns it. A claim never overrides an instance owner. |
 | Config-file repository | Pause, resume and remove are 409: the config file manages it. Release is 409 too. An admin may claim it, a maintainer may not (409). |
 | Remove | Deletes the repository's row, its own chains and every team entry for its path, the owner tick included. Entries that cover the whole instance stay. After a remove, any maintainer may onboard it again. |
