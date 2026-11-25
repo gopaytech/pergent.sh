@@ -2218,3 +2218,70 @@ func TestReviewMemberLogGated(t *testing.T) {
 	e.wantStatus(admin, memberPath(run, otherMember, "log"), http.StatusNotFound)
 	e.wantStatus(admin, memberPath(otherRun, otherMember, "log"), http.StatusOK)
 }
+
+// GET /api/repositories lists each repository's owner team: its own entry's
+// owner, else its instance entry's (viaInstance). A repository with no owner
+// has null. Open is whether the session is an admin or a member of the team.
+// The repository page shows the same owner team.
+func TestRepositoriesOwnerTeam(t *testing.T) {
+	t.Parallel()
+	byProject := func(repos []RepositoryView) map[string]*OwnerTeamView {
+		out := map[string]*OwnerTeamView{}
+		for _, r := range repos {
+			out[r.Instance+"/"+r.Project] = r.OwnerTeam
+		}
+		return out
+	}
+	setup := func(e *env, members []store.TeamMember) (devs, ops int64) {
+		e.dashboardRepo("main", "acme/payments", nil)
+		e.dashboardRepo("main", "acme/widgets", nil)
+		e.dashboardRepo("gh", "acme/other", nil)
+		devs = e.team("devs", members, store.TeamRepo{Instance: "main", Project: "acme/payments", Owner: true})
+		ops = e.team("ops", nil, store.TeamRepo{Instance: "main", Project: "", Owner: true})
+		return devs, ops
+	}
+
+	t.Run("admin", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t, nil)
+		devs, ops := setup(e, nil)
+		c := e.userOnMain(true)
+		got := byProject(getJSON[[]RepositoryView](e, c, "/api/repositories"))
+		want := map[string]*OwnerTeamView{
+			"main/acme/payments": {ID: devs, Name: "devs", Open: true, ViaInstance: false},
+			"main/acme/widgets":  {ID: ops, Name: "ops", Open: true, ViaInstance: true},
+			"gh/acme/other":      nil,
+		}
+		if len(got) != len(want) {
+			t.Fatalf("listed %d repositories; want %d: %+v", len(got), len(want), got)
+		}
+		for k, w := range want {
+			g := got[k]
+			if (g == nil) != (w == nil) || (g != nil && *g != *w) {
+				t.Errorf("%s ownerTeam = %+v; want %+v", k, g, w)
+			}
+		}
+		detail := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/payments")
+		if detail.Repo.OwnerTeam == nil || detail.OwnerTeam == nil || *detail.Repo.OwnerTeam != *detail.OwnerTeam {
+			t.Errorf("detail.repo.ownerTeam = %+v; want detail.ownerTeam %+v", detail.Repo.OwnerTeam, detail.OwnerTeam)
+		}
+	})
+
+	t.Run("a member of one owner team", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t, nil)
+		devs, ops := setup(e, viewerMembers(e.alice()))
+		// devs also lists widgets (not as owner), so alice sees both.
+		e.editTeam(devs, func(tm *store.Team) {
+			tm.Repos = append(tm.Repos, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+		})
+		c := e.aliceSession()
+		got := byProject(getJSON[[]RepositoryView](e, c, "/api/repositories"))
+		if g := got["main/acme/payments"]; g == nil || g.ID != devs || !g.Open {
+			t.Errorf("payments ownerTeam = %+v; want devs, open", g)
+		}
+		if g := got["main/acme/widgets"]; g == nil || g.ID != ops || g.Open || !g.ViaInstance {
+			t.Errorf("widgets ownerTeam = %+v; want ops, not open, via instance", g)
+		}
+	})
+}
