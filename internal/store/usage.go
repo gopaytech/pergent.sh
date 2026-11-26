@@ -362,6 +362,17 @@ func (s *Store) ReviewCosts(ctx context.Context, id string) ([]ReviewCost, error
 	return out, rows.Err()
 }
 
+// allTokensSQL is every token a row used: input, cache read, cache write,
+// output and reasoning, each NULL as 0, all counted the same. Limits, quotas
+// and budgets count this.
+const allTokensSQL = "COALESCE(tokens_in, 0) + COALESCE(cache_read, 0) + COALESCE(cache_write, 0) + COALESCE(tokens_out, 0) + COALESCE(reasoning, 0)"
+
+// allTokensOf is allTokensSQL with each column of table alias (alias.tokens_in).
+func allTokensOf(alias string) string {
+	return "COALESCE(" + alias + ".tokens_in, 0) + COALESCE(" + alias + ".cache_read, 0) + COALESCE(" + alias + ".cache_write, 0) + COALESCE(" +
+		alias + ".tokens_out, 0) + COALESCE(" + alias + ".reasoning, 0)"
+}
+
 // TokenSum is input and output tokens, plus the counts reported apart and how
 // many rows didn't report them.
 type TokenSum struct {
@@ -369,6 +380,15 @@ type TokenSum struct {
 	CacheRead, CacheWrite, Reasoning int64
 	Unknown                          int64 // rows without cache and reasoning counts
 }
+
+// Prompt is the tokens sent: input, cache read and cache write.
+func (t TokenSum) Prompt() int64 { return t.In + t.CacheRead + t.CacheWrite }
+
+// Output is the tokens the model wrote: output and reasoning.
+func (t TokenSum) Output() int64 { return t.Out + t.Reasoning }
+
+// Total is all tokens: Prompt plus Output.
+func (t TokenSum) Total() int64 { return t.Prompt() + t.Output() }
 
 // Add adds b to t.
 func (t *TokenSum) Add(b TokenSum) {

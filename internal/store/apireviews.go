@@ -304,7 +304,7 @@ func (s *Store) APIClientStats(ctx context.Context, since time.Time) (map[int64]
 			SELECT ar.client_id, count(*) AS reviews, count(*) FILTER (WHERE `+apiStatusSQL["failed"]+`) AS failed,
 				COALESCE(sum(u.tokens), 0)::bigint AS tokens
 			FROM api_reviews ar JOIN runs ON runs.id = ar.run_id
-			LEFT JOIN (SELECT run_id, sum(tokens_in + tokens_out) AS tokens FROM run_usage GROUP BY run_id) u
+			LEFT JOIN (SELECT run_id, sum(`+allTokensSQL+`) AS tokens FROM run_usage GROUP BY run_id) u
 				ON u.run_id = ar.run_id
 			WHERE ar.created_at >= $1
 			GROUP BY ar.client_id) m ON m.client_id = c.id`, since)
@@ -326,12 +326,12 @@ func (s *Store) APIClientStats(ctx context.Context, since time.Time) (map[int64]
 	return out, rows.Err()
 }
 
-// APITokensSince returns the tokens (in plus out) the reviews of the client
+// APITokensSince returns all the tokens the reviews of the client
 // used, of the reviews asked for at or after since: the month the monthly
 // token budget is held to counts as APIClientStats counts it.
 func (s *Store) APITokensSince(ctx context.Context, clientID int64, since time.Time) (int64, error) {
 	var n int64
-	err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(u.tokens_in), 0)::bigint + COALESCE(sum(u.tokens_out), 0)::bigint
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(`+allTokensOf("u")+`), 0)::bigint
 		FROM run_usage u JOIN api_reviews ar ON ar.run_id = u.run_id
 		WHERE ar.client_id = $1 AND ar.created_at >= $2`, clientID, since).Scan(&n)
 	return n, err

@@ -705,3 +705,22 @@ func TestMetricsTotals(t *testing.T) {
 		t.Errorf("dismissals = %v", dismissals)
 	}
 }
+
+// Prompt is in, cache read and cache write; Output is out and reasoning; Total
+// is both: every part counts the same, with no weight.
+func TestTokenSumTotals(t *testing.T) {
+	t.Parallel()
+	sum := TokenSum{In: 42, CacheRead: 525000, CacheWrite: 75000, Out: 2500, Reasoning: 2000}
+	if got := sum.Prompt(); got != 600042 {
+		t.Errorf("Prompt = %d, want 600042", got)
+	}
+	if got := sum.Output(); got != 4500 {
+		t.Errorf("Output = %d, want 4500", got)
+	}
+	if got := sum.Total(); got != 604542 {
+		t.Errorf("Total = %d, want 604542", got)
+	}
+	if got := (TokenSum{In: 100, Out: 20}).Total(); got != 120 {
+		t.Errorf("Total of in and out alone = %d, want 120", got)
+	}
+}

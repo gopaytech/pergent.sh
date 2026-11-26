@@ -72,23 +72,23 @@ func (s *Store) ReleaseQuotaNote(ctx context.Context, mr MRKey) error {
 	return err
 }
 
-// InstanceGlobalTokensSince returns the tokens (in plus out) the reviews of
+// InstanceGlobalTokensSince returns all the tokens the reviews of
 // instance used on global keys from since on, by reported_at: the instance
 // quota counts only those. A team's key is the team's spend. A multi review
 // counts each reviewer and the judge on its own source (splitUsageSQL).
 func (s *Store) InstanceGlobalTokensSince(ctx context.Context, instance string, since time.Time) (int64, error) {
 	var n int64
-	err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(tokens_in), 0)::bigint + COALESCE(sum(tokens_out), 0)::bigint FROM `+splitUsageSQL+`
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(`+allTokensSQL+`), 0)::bigint FROM `+splitUsageSQL+`
 		WHERE instance = $1 AND source = 'global' AND reported_at >= $2`, instance, since).Scan(&n)
 	return n, err
 }
 
-// TokensSince returns the tokens (in plus out) the reviews of instance used
+// TokensSince returns all the tokens the reviews of instance used
 // from since on, by reported_at: those of project projectID, or, with 0, of
 // every project of the instance.
 func (s *Store) TokensSince(ctx context.Context, instance string, projectID int64, since time.Time) (int64, error) {
 	var n int64
-	err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(tokens_in), 0)::bigint + COALESCE(sum(tokens_out), 0)::bigint FROM run_usage
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(`+allTokensSQL+`), 0)::bigint FROM run_usage
 		WHERE instance = $1 AND ($2::bigint = 0 OR project_id = $2) AND reported_at >= $3`,
 		instance, projectID, since).Scan(&n)
 	return n, err

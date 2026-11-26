@@ -338,3 +338,40 @@ func TestHoldForLimit(t *testing.T) {
 		t.Errorf("HoldForLimit of a start = %v, %v; want left alone", ok, err)
 	}
 }
+
+// The instance and repository counts add in, cache read, cache write, out and
+// reasoning. The instance's global count leaves a team key's row out.
+func TestTokensSinceCountsAllParts(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	nov1 := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	main1 := MRKey{Instance: "main", ProjectID: 1, IID: 1}
+	seedUsage(t, s, main1, nov1, TriggerPush, false, "m", allParts("a"))
+	// A row an old pergent reported: cache and reasoning NULL.
+	seedUsage(t, s, MRKey{Instance: "main", ProjectID: 2, IID: 1}, nov1, TriggerPush, false, "m",
+		SkillUsage{Skill: "a", Verdict: "v", In: 100, Out: 20})
+
+	for _, tc := range []struct {
+		project int64
+		want    int64
+	}{{1, 604542}, {0, 604542 + 120}} {
+		if got, err := s.TokensSince(ctx, "main", tc.project, nov1); err != nil || got != tc.want {
+			t.Errorf("TokensSince(main, %d) = %d, %v; want %d", tc.project, got, err, tc.want)
+		}
+	}
+}
+
+func TestInstanceGlobalTokensSinceCountsAllParts(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	nov1 := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	seedUsage(t, s, MRKey{Instance: "main", ProjectID: 1, IID: 1}, nov1, TriggerPush, false, "m", allParts("a"))
+	teamKey := seedUsage(t, s, MRKey{Instance: "main", ProjectID: 1, IID: 2}, nov1, TriggerPush, false, "m", allParts("a"))
+	team := newTeam(t, s, "Payments")
+	if _, err := s.pool.Exec(ctx, `UPDATE run_usage SET source = 'team', team_id = $2 WHERE run_id = $1::uuid`, teamKey, team); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.InstanceGlobalTokensSince(ctx, "main", nov1); err != nil || got != 604542 {
+		t.Errorf("InstanceGlobalTokensSince = %d, %v; want 604542, a team key's row left out", got, err)
+	}
+}
