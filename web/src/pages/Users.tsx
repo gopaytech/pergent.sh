@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
+import { TriangleAlertIcon } from "lucide-react";
 import { Link } from "react-router";
+
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 import {
   api,
@@ -13,7 +22,11 @@ import {
 } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { Ago, ErrorBox, Loading, Pill } from "../ui";
+import { secretCard, secretValue } from "../OnceSecret";
+import { Ago, ErrorBox, Loading, PageHeader, Pill } from "../ui";
+
+// formCard is a card that holds a form of stacked fields.
+const formCard = "mb-4 gap-4 px-4 py-4";
 
 // waitingFirst puts the accounts on no team first, keeping the order of the
 // rest.
@@ -29,29 +42,32 @@ export default function Users() {
   const signIn = useQuery({ queryKey: ["admin-sign-in"], queryFn: () => api.get<SignInAdminView>("/api/admin/sign-in") });
   return (
     <>
-      <div className="top">
-        <div>
-          <h1>Users</h1>
-          <div className="sub">Add a person by email before they sign in, then put them on a team to give them access.</div>
-        </div>
-        {adding === null && (
-          <div className="actions-row">
-            <button type="button" className="btn primary" onClick={() => setAdding("user")}>
-              Add user
-            </button>
-            <button type="button" className="btn" onClick={() => setAdding("admin")}>
-              Add local admin
-            </button>
-          </div>
-        )}
-      </div>
+      <PageHeader
+        title="Users"
+        description="Add a person by email before they sign in, then put them on a team to give them access."
+        actions={
+          adding === null && (
+            <>
+              <Button type="button" size="sm" onClick={() => setAdding("user")}>
+                Add user
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => setAdding("admin")}>
+                Add local admin
+              </Button>
+            </>
+          )
+        }
+      />
       {signIn.isSuccess && signIn.data.mode === "" && (
-        <div className="alert" role="note">
-          <span aria-hidden="true">⚠️</span>
+        <Alert variant="warn" role="note" className="mb-4">
+          <TriangleAlertIcon aria-hidden="true" />
           <span className="prose">
-            Sign-in isn't set up, so only local admins can get in. <Link to="/admin/integrations">Set it up on Integrations</Link>
+            Sign-in isn't set up, so only local admins can get in.{" "}
+            <Link className="font-medium underline underline-offset-4" to="/admin/integrations">
+              Set it up on Integrations
+            </Link>
           </span>
-        </div>
+        </Alert>
       )}
       {adding === "user" && <AddUser onClose={() => setAdding(null)} />}
       {adding === "admin" && <AddAdmin onClose={() => setAdding(null)} />}
@@ -59,21 +75,21 @@ export default function Users() {
       {users.isError && <ErrorBox error={users.error} />}
       {users.isSuccess &&
         (users.data.length === 0 ? (
-          <div className="card empty">Nobody yet. Use Add user to give someone access.</div>
+          <Card className="text-muted-foreground px-4 py-8 text-center text-sm">Nobody yet. Use Add user to give someone access.</Card>
         ) : (
-          <div className="card scroll">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>User</th>
-                  <th>Sign-in</th>
-                  <th>Role</th>
-                  <th>Teams</th>
-                  <th>Last sign-in</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
+          <Card className="gap-0 overflow-hidden py-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>User</TableHead>
+                  <TableHead>Sign-in</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Teams</TableHead>
+                  <TableHead>Last sign-in</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {waitingFirst(users.data).map((u) => (
                   <Row
                     key={u.id}
@@ -81,9 +97,9 @@ export default function Users() {
                     lastLocalAdmin={u.kind === "password" && users.data.filter((x) => x.kind === "password" && x.role === "admin").length === 1}
                   />
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+          </Card>
         ))}
     </>
   );
@@ -126,18 +142,21 @@ function Row({ user, lastLocalAdmin }: { user: UserView; lastLocalAdmin: boolean
     if (window.confirm(`Remove ${user.username}? Their sessions end and they leave every team.`)) remove.mutate();
   };
   return (
-    <tr>
-      <td>
-        {user.username}
-        {user.waiting && <Pill tone="warn">waiting</Pill>}
-        {user.invited && <Pill tone="grey">invited</Pill>}
+    <TableRow>
+      <TableCell>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium">{user.username}</span>
+          {user.waiting && <Pill tone="warn">waiting</Pill>}
+          {user.invited && <Pill tone="grey">invited</Pill>}
+        </div>
         {remove.isError && <ErrorBox error={remove.error} />}
         {setRole.isError && <ErrorBox error={setRole.error} />}
-      </td>
-      <td>{user.kind === "password" ? "Local" : "SSO"}</td>
-      <td>
+      </TableCell>
+      <TableCell>{user.kind === "password" ? "Local" : "SSO"}</TableCell>
+      <TableCell>
         {user.kind === "sso" && !self ? (
-          <select
+          <NativeSelect
+            className="w-28"
             aria-label={`Role of ${user.username}`}
             value={user.role}
             disabled={setRole.isPending}
@@ -145,31 +164,32 @@ function Row({ user, lastLocalAdmin }: { user: UserView; lastLocalAdmin: boolean
           >
             <option value="user">user</option>
             <option value="admin">admin</option>
-          </select>
+          </NativeSelect>
         ) : (
           user.role
         )}
-      </td>
-      <td>{user.teams.length === 0 ? <span className="meta">none</span> : user.teams.map((t) => t.name).join(", ")}</td>
-      <td>{user.lastSignInAt ? <Ago t={user.lastSignInAt} /> : "never"}</td>
-      <td className="num">
+      </TableCell>
+      <TableCell>{user.teams.length === 0 ? <span className="text-muted-foreground">none</span> : user.teams.map((t) => t.name).join(", ")}</TableCell>
+      <TableCell className="text-muted-foreground">{user.lastSignInAt ? <Ago t={user.lastSignInAt} /> : "never"}</TableCell>
+      <TableCell className="text-right">
         {keep ? (
-          <span className="meta" title={keep}>
+          <span className="text-muted-foreground" title={keep}>
             {self ? "you" : "last local admin"}
           </span>
         ) : (
-          <button
+          <Button
             type="button"
-            className="btn small danger"
+            variant="destructive-outline"
+            size="sm"
             aria-label={`Remove ${user.username}`}
             disabled={remove.isPending}
             onClick={confirmRemove}
           >
             Remove
-          </button>
+          </Button>
         )}
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -206,65 +226,71 @@ function AddUser({ onClose }: { onClose: () => void }) {
     add.mutate({ email: email.trim(), ...(picked.length > 0 ? { teams: picked } : {}) });
   };
   return (
-    <form className="card pad stack" aria-label="Add user" onSubmit={submit}>
-      <label htmlFor="new-user-email">Email</label>
-      <input
-        id="new-user-email"
-        type="text"
-        inputMode="email"
-        autoComplete="off"
-        autoCapitalize="none"
-        spellCheck={false}
-        maxLength={254}
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        required
-      />
-      <div className="meta">
-        They can sign in with this email whatever the allowed domains say. They show as invited until they do. They see nothing
-        until they are on a team.
-      </div>
-      <fieldset>
-        <legend>Teams</legend>
-        {teams.isPending && <Loading />}
-        {teams.isError && <ErrorBox error={teams.error} />}
-        {teams.isSuccess && teams.data.length === 0 && <div className="meta">No team yet. Create one on Teams.</div>}
-        {teams.isSuccess &&
-          teams.data.map((t) => (
-            <div className="check" key={t.id}>
-              <label className="check plain">
-                <input
-                  type="checkbox"
-                  checked={chosen.has(t.id)}
-                  onChange={(e) => setTeam(t.id, e.target.checked ? "viewer" : null)}
-                />
-                <span>{t.name}</span>
-              </label>
-              {chosen.has(t.id) && (
-                <select
-                  aria-label={`Role on ${t.name}`}
-                  value={chosen.get(t.id)}
-                  onChange={(e) => setTeam(t.id, e.target.value as MemberRole)}
-                >
-                  {teamRoles.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          ))}
-      </fieldset>
-      {add.isError && <ErrorBox error={add.error} />}
-      <div className="actions-row end">
-        <button type="button" className="btn" onClick={onClose}>
-          Cancel
-        </button>
-        <button type="submit" className="btn primary" disabled={add.isPending}>
-          Add
-        </button>
-      </div>
+    <form aria-label="Add user" onSubmit={submit}>
+      <Card className={formCard}>
+        <div className="grid gap-2">
+          <Label htmlFor="new-user-email">Email</Label>
+          <Input
+            id="new-user-email"
+            type="text"
+            inputMode="email"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            maxLength={254}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+          <div className="text-muted-foreground text-sm">
+            They can sign in with this email whatever the allowed domains say. They show as invited until they do. They see
+            nothing until they are on a team.
+          </div>
+        </div>
+        <fieldset className="m-0 grid gap-2 rounded-md border bg-card px-3 py-2.5">
+          <legend className="px-1 text-sm font-medium">Teams</legend>
+          {teams.isPending && <Loading />}
+          {teams.isError && <ErrorBox error={teams.error} />}
+          {teams.isSuccess && teams.data.length === 0 && <div className="text-muted-foreground text-sm">No team yet. Create one on Teams.</div>}
+          {teams.isSuccess &&
+            teams.data.map((t) => (
+              <div className="flex min-h-9 items-center gap-3" key={t.id}>
+                <Label className="font-normal">
+                  <input
+                    type="checkbox"
+                    className="accent-primary size-4"
+                    checked={chosen.has(t.id)}
+                    onChange={(e) => setTeam(t.id, e.target.checked ? "viewer" : null)}
+                  />
+                  <span>{t.name}</span>
+                </Label>
+                {chosen.has(t.id) && (
+                  <NativeSelect
+                    className="w-36"
+                    aria-label={`Role on ${t.name}`}
+                    value={chosen.get(t.id)}
+                    onChange={(e) => setTeam(t.id, e.target.value as MemberRole)}
+                  >
+                    {teamRoles.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                )}
+              </div>
+            ))}
+        </fieldset>
+        {add.isError && <ErrorBox error={add.error} />}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={add.isPending}>
+            Add
+          </Button>
+        </div>
+      </Card>
     </form>
   );
 }
@@ -301,47 +327,51 @@ function AddAdmin({ onClose }: { onClose: () => void }) {
 
   if (create.isSuccess) {
     return (
-      <section className="card pad secret-box" aria-label="New local admin">
+      <Card role="region" className={secretCard} aria-label="New local admin">
         <p>Local admin {create.data.username} was created. Its password is</p>
-        <code className="secret-value">{create.data.password}</code>
+        <code className={secretValue}>{create.data.password}</code>
         <p>
           Copy it now: it won't be shown again. They must change it the first time they sign in, at /admin/sign-in.
         </p>
-        <div className="actions-row">
-          <button type="button" className="btn" onClick={copy}>
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={copy}>
             {copied ? "Copied" : "Copy"}
-          </button>
-          <button type="button" className="btn primary" onClick={done}>
+          </Button>
+          <Button type="button" size="sm" onClick={done}>
             Done
-          </button>
+          </Button>
         </div>
-      </section>
+      </Card>
     );
   }
   return (
-    <form className="card pad stack" aria-label="Add local admin" onSubmit={submit}>
-      <label htmlFor="new-admin-username">Username</label>
-      <input
-        id="new-admin-username"
-        type="text"
-        autoComplete="off"
-        autoCapitalize="none"
-        spellCheck={false}
-        maxLength={64}
-        value={username}
-        onChange={(e) => setUsername(e.target.value)}
-        required
-      />
-      <div className="meta">1 to 64 letters, digits, "." "_" or "-". A password is generated for it.</div>
-      {create.isError && <ErrorBox error={create.error} />}
-      <div className="actions-row end">
-        <button type="button" className="btn" onClick={onClose}>
-          Cancel
-        </button>
-        <button type="submit" className="btn primary" disabled={create.isPending}>
-          Create
-        </button>
-      </div>
+    <form aria-label="Add local admin" onSubmit={submit}>
+      <Card className={formCard}>
+        <div className="grid gap-2">
+          <Label htmlFor="new-admin-username">Username</Label>
+          <Input
+            id="new-admin-username"
+            type="text"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            maxLength={64}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
+          <div className="text-muted-foreground text-sm">1 to 64 letters, digits, "." "_" or "-". A password is generated for it.</div>
+        </div>
+        {create.isError && <ErrorBox error={create.error} />}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={create.isPending}>
+            Create
+          </Button>
+        </div>
+      </Card>
     </form>
   );
 }

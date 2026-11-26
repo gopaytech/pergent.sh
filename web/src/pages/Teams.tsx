@@ -1,10 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
+
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 import { api, paths, type TeamView } from "../api";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading } from "../ui";
+import { ErrorBox, Loading, PageHeader } from "../ui";
 import TeamsTable, { type TeamRow } from "./TeamsTable";
 
 // toRow counts what a team covers from its entries. A whole instance has no
@@ -25,28 +40,30 @@ function toRow(t: TeamView): TeamRow {
 export default function Teams() {
   const teams = useQuery({ queryKey: ["teams"], queryFn: () => api.get<TeamView[]>("/api/teams") });
   const [creating, setCreating] = useState(false);
-  const opener = useRef<HTMLButtonElement>(null);
-  const close = () => {
-    setCreating(false);
-    opener.current?.focus();
-  };
   return (
-    <div className="narrow">
-      <div className="top">
-        <div>
-          <h1>Teams</h1>
-          <div className="sub">A team gives each member a role on the repositories it covers. Their highest role counts.</div>
-        </div>
-        <button ref={opener} type="button" className="btn primary" onClick={() => setCreating(true)}>
-          + New team
-        </button>
-      </div>
-      {creating && <NewTeam onClose={close} />}
+    <div className="max-w-[1100px]">
+      <PageHeader
+        title="Teams"
+        description="A team gives each member a role on the repositories it covers. Their highest role counts."
+        actions={
+          // The dialog gives the focus back to its trigger when it closes. The
+          // trigger is Radix's own button: it needs a ref, which Button (a
+          // plain function component on React 18) does not pass on.
+          <Dialog open={creating} onOpenChange={setCreating}>
+            <DialogTrigger asChild>
+              <Button size="sm">+ New team</Button>
+            </DialogTrigger>
+            <DialogContent showCloseButton={false}>
+              <NewTeam />
+            </DialogContent>
+          </Dialog>
+        }
+      />
       {teams.isPending && <Loading />}
       {teams.isError && <ErrorBox error={teams.error} />}
       {teams.isSuccess &&
         (teams.data.length === 0 ? (
-          <div className="card empty">No teams yet. Use + New team to give people access.</div>
+          <Card className="text-muted-foreground px-4 py-8 text-center text-sm">No teams yet. Use + New team to give people access.</Card>
         ) : (
           <TeamsTable rows={teams.data.map(toRow)} showRole={false} />
         ))}
@@ -54,10 +71,11 @@ export default function Teams() {
   );
 }
 
-// NewTeam is the dialog that names a new team. Members are the next thing to
-// add, on the team's own page, so the dialog asks for the name alone. Escape,
-// Cancel or a click outside it closes it.
-function NewTeam({ onClose }: { onClose: () => void }) {
+// NewTeam is the form of the dialog that names a new team. Members are the
+// next thing to add, on the team's own page, so it asks for the name alone.
+// Escape, Cancel or a click outside closes the dialog, and the form goes with
+// it: the next one starts empty.
+function NewTeam() {
   const client = useQueryClient();
   const write = useWrite();
   const navigate = useNavigate();
@@ -69,46 +87,41 @@ function NewTeam({ onClose }: { onClose: () => void }) {
       navigate(paths.team(team.id, "members"));
     },
   });
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     create.mutate();
   };
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <form className="card modal" role="dialog" aria-modal="true" aria-labelledby="new-team-title" onSubmit={submit}>
-        <div className="pad">
-          <h2 id="new-team-title">New team</h2>
-          <label htmlFor="team-name">Team name</label>
-          <input
-            id="team-name"
-            type="text"
-            autoComplete="off"
-            // The dialog opens to type a name, so the field takes the focus.
-            autoFocus
-            maxLength={100}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-          <div className="meta">Next you add its members, then its repositories.</div>
-          {create.isError && <ErrorBox error={create.error} />}
-        </div>
-        <div className="modal-foot">
-          <button type="button" className="btn" onClick={onClose}>
+    <form className="grid gap-4" onSubmit={submit}>
+      <DialogHeader>
+        <DialogTitle>New team</DialogTitle>
+        <DialogDescription>Next you add its members, then its repositories.</DialogDescription>
+      </DialogHeader>
+      <div className="grid gap-2">
+        <Label htmlFor="team-name">Team name</Label>
+        <Input
+          id="team-name"
+          type="text"
+          autoComplete="off"
+          // The dialog opens to type a name, so the field takes the focus.
+          autoFocus
+          maxLength={100}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
+      </div>
+      {create.isError && <ErrorBox error={create.error} />}
+      <DialogFooter>
+        <DialogClose asChild>
+          <Button type="button" variant="outline">
             Cancel
-          </button>
-          <button type="submit" className="btn primary" disabled={create.isPending}>
-            Create team
-          </button>
-        </div>
-      </form>
-    </div>
+          </Button>
+        </DialogClose>
+        <Button type="submit" disabled={create.isPending}>
+          Create team
+        </Button>
+      </DialogFooter>
+    </form>
   );
 }

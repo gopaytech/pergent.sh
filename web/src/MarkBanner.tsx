@@ -1,3 +1,5 @@
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+
 import type { MarkView } from "./api";
 import { utcText } from "./ui";
 
@@ -22,17 +24,17 @@ export default function MarkBanner({ entries }: { entries: { name: string; mark:
   const marked = entries.filter((e) => e.mark?.live);
   if (marked.length === 0) return null;
   return (
-    <div className="alert" role="note" aria-label="Marked entries">
-      <span className="prose">
-        <strong>Reviews skip these entries until the mark ends or someone clears it.</strong>
-        <ul>
+    <Alert variant="warn" role="note" aria-label="Marked entries">
+      <AlertTitle className="line-clamp-none">Reviews skip these entries until the mark ends or someone clears it.</AlertTitle>
+      <AlertDescription>
+        <ul className="prose list-disc pl-5">
           {marked.map((e) => (
             <li key={e.name}>
               {e.name}: {markText(e.mark!)}
             </li>
           ))}
         </ul>
-      </span>
-    </div>
+      </AlertDescription>
+    </Alert>
   );
 }

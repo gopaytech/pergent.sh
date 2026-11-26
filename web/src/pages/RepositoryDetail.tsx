@@ -2,10 +2,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
+import { ChevronRight } from "lucide-react";
+
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { api, isStatus, paths, safeHref, type InputsView, type MultiReviewView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
 import { useWrite } from "../layout/write";
 import { QuotaLine } from "../quota";
-import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, platformName, skillOrigin } from "../ui";
+import { ErrorBox, ExternalLink, Loading, NotFound, PageHeader, Tabs, platformName, skillOrigin } from "../ui";
 import AttentionRows from "./Attention";
 import PastDismissals from "./PastDismissals";
 import Readiness from "./Readiness";
@@ -14,6 +21,14 @@ import ReviewList from "./ReviewList";
 import SettingsTab from "./RepositorySettings";
 import SkillResults from "./SkillResults";
 import Markdown from "../MarkdownLazy";
+
+// cardClass is a card of rows; headClass is its title bar.
+const cardClass = "mb-4 gap-0 overflow-hidden py-0";
+const headClass = "border-b py-3 [.border-b]:pb-3";
+
+// rowClass is a row of a card; muted is a line of muted text in one.
+const rowClass = "flex items-center gap-3 border-b px-4 py-3 text-sm last:border-b-0";
+const muted = "text-muted-foreground border-b px-4 py-3 text-sm last:border-b-0";
 
 type Tab = "reviews" | "skill-results" | "settings" | "past-dismissals" | "inputs" | "readiness" | "setup";
 
@@ -47,14 +62,18 @@ export default function RepositoryDetail() {
   const tab: Tab = tabs.some(([t]) => t === asked) ? (asked as Tab) : "reviews";
 
   return (
-    <div className="narrow">
-      <div className="crumbs">
-        <Link to="/repos">Repositories</Link> / {repo.project}
+    <div className="max-w-[1100px]">
+      <div className="text-muted-foreground mb-1.5 text-sm">
+        <Link className="hover:text-foreground hover:underline" to="/repos">
+          Repositories
+        </Link>{" "}
+        / {repo.project}
       </div>
-      <h1>{repo.project}</h1>
       {/* One line of facts, so the tabs start near the top. */}
-      <div className="sub spaced">
-        {(
+      <PageHeader
+        className="mb-4"
+        title={repo.project}
+        description={(
           [
             ["platform", platformName(repo.platform)],
             ["instance", repo.instance],
@@ -64,7 +83,13 @@ export default function RepositoryDetail() {
               view.ownerTeam ? (
                 <>
                   Owner team:{" "}
-                  {view.ownerTeam.open ? <Link to={paths.team(view.ownerTeam.id)}>{view.ownerTeam.name}</Link> : view.ownerTeam.name}
+                  {view.ownerTeam.open ? (
+                    <Link className="text-primary hover:underline" to={paths.team(view.ownerTeam.id)}>
+                      {view.ownerTeam.name}
+                    </Link>
+                  ) : (
+                    view.ownerTeam.name
+                  )}
                 </>
               ) : null,
             ],
@@ -79,14 +104,14 @@ export default function RepositoryDetail() {
               <span>{fact}</span>
             </span>
           ))}
-      </div>
+      />
       <OwnerActions view={view} queryKey={queryKey} />
       {repo.paused && <Paused instance={repo.instance} project={repo.project} canResume={view.actions.resume} queryKey={queryKey} />}
       {view.role === "admin" && view.quota && (
-        <div className="quota" role="group" aria-label="Token usage this month">
+        <Card className="mb-4 gap-0 px-4 py-2.5" role="group" aria-label="Token usage this month">
           <QuotaLine label="This repository" ariaLabel="Repository token quota" use={view.quota.repository} />
           <QuotaLine label="Its instance" ariaLabel="Instance token quota" use={view.quota.instance} />
-        </div>
+        </Card>
       )}
       {view.waiting.length > 0 && (
         <Waiting
@@ -118,10 +143,12 @@ export default function RepositoryDetail() {
         {tab === "inputs" && view.role === "viewer" && <RepoModelChain instance={repo.instance} project={repo.project} />}
         {tab === "readiness" && <Readiness instance={repo.instance} project={repo.project} paused={repo.paused} />}
         {tab === "setup" && (
-          <section className="card" aria-label="Setup checks">
-            <h2>Setup checks</h2>
+          <Card role="region" aria-label="Setup checks" className={cardClass}>
+            <CardHeader className={headClass}>
+              <CardTitle>Setup checks</CardTitle>
+            </CardHeader>
             <AttentionRows items={view.attention} />
-          </section>
+          </Card>
         )}
       </div>
     </div>
@@ -159,16 +186,16 @@ function OwnerActions({ view, queryKey }: { view: RepositoryDetailView; queryKey
   };
   if (!view.actions.pause && !view.actions.release) return null;
   return (
-    <div className="actions-row">
+    <div className="mb-4 flex flex-wrap items-center gap-2">
       {view.actions.pause && (
-        <button type="button" className="btn small" disabled={pause.isPending} onClick={() => pause.mutate()}>
+        <Button type="button" variant="outline" size="sm" disabled={pause.isPending} onClick={() => pause.mutate()}>
           Pause
-        </button>
+        </Button>
       )}
       {view.actions.release && (
-        <button type="button" className="btn small" disabled={release.isPending} onClick={ask}>
+        <Button type="button" variant="outline" size="sm" disabled={release.isPending} onClick={ask}>
           Release ownership
-        </button>
+        </Button>
       )}
       {pause.isError && <ErrorBox error={pause.error} />}
       {release.isError && <ErrorBox error={release.error} />}
@@ -189,18 +216,29 @@ function Paused({ instance, project, canResume, queryKey }: { instance: string; 
     },
   });
   return (
-    <div className="alert" role="note" aria-label="Paused">
-      <span className="prose grow">
+    <Alert variant="warn" className="mb-4 flex flex-wrap items-center gap-3" role="note" aria-label="Paused">
+      <span className="prose min-w-0 grow">
         <strong>Paused:</strong> pergent doesn't review this repository, and its settings are kept.
         {!canResume && " An admin can switch it on again."}
       </span>
       {canResume && (
-        <button type="button" className="btn small" disabled={resume.isPending} onClick={() => resume.mutate()}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="text-foreground"
+          disabled={resume.isPending}
+          onClick={() => resume.mutate()}
+        >
           Resume
-        </button>
+        </Button>
       )}
-      {resume.isError && <ErrorBox error={resume.error} />}
-    </div>
+      {resume.isError && (
+        <div className="basis-full">
+          <ErrorBox error={resume.error} />
+        </div>
+      )}
+    </Alert>
   );
 }
 
@@ -244,14 +282,14 @@ function Waiting({
     onSuccess: () => client.invalidateQueries({ queryKey }),
   });
   return (
-    <section className="card" aria-label="Waiting for a start">
-      <h2>Waiting for a start</h2>
-      <p className="pad meta">
-        Nobody reviews these changes until someone starts the review.
-      </p>
+    <Card role="region" aria-label="Waiting for a start" className={cardClass}>
+      <CardHeader className={headClass}>
+        <CardTitle>Waiting for a start</CardTitle>
+      </CardHeader>
+      <p className={muted}>Nobody reviews these changes until someone starts the review.</p>
       {items.map((w) => (
-        <div className="row" key={w.number}>
-          <div className="grow">
+        <div className={rowClass} key={w.number}>
+          <div className="[&_a]:text-primary min-w-0 grow [&_a]:font-medium [&_a]:hover:underline">
             {safeHref(w.webUrl) ? (
               <ExternalLink href={w.webUrl}>
                 {mark}
@@ -264,26 +302,31 @@ function Waiting({
               </span>
             )}{" "}
             by {w.author}
-            {w.title && <span className="meta"> · {w.title}</span>}
-            {w.reason === "trust_check_failed" && <div className="meta">Couldn't check the author's access.</div>}
-            {w.reason === "quota_used_up" && <div className="meta">Monthly token quota used up.</div>}
-            {w.reason === "limit_used_up" && <div className="meta">No model in the chain has room this month.</div>}
+            {w.title && <span className="text-muted-foreground"> · {w.title}</span>}
+            {w.reason === "trust_check_failed" && <div className="text-muted-foreground text-xs">Couldn't check the author's access.</div>}
+            {w.reason === "quota_used_up" && <div className="text-muted-foreground text-xs">Monthly token quota used up.</div>}
+            {w.reason === "limit_used_up" && <div className="text-muted-foreground text-xs">No model in the chain has room this month.</div>}
           </div>
           {!paused && (role === "admin" || (role === "maintainer" && !heldForTokens(w))) && (
-            <button
+            <Button
               type="button"
-              className="btn small"
+              variant="outline"
+              size="sm"
               aria-label={`Start review of ${mark}${w.number}`}
               disabled={start.isPending}
               onClick={() => start.mutate(w)}
             >
               Start review
-            </button>
+            </Button>
           )}
         </div>
       ))}
-      {start.isError && <ErrorBox error={start.error} />}
-    </section>
+      {start.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={start.error} />
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -297,38 +340,43 @@ function Inputs({ instance, project, builtInsOff }: { instance: string; project:
   const v = inputs.data;
   return (
     <>
-      <p className="sub">
-        Read from the default branch <span className="mono">{v.branch}</span>, as a review would get them. Kept for 5 minutes.
+      <p className="text-muted-foreground mb-4 text-sm">
+        Read from the default branch <span className="font-mono text-xs">{v.branch}</span>, as a review would get them. Kept for 5
+        minutes.
       </p>
-      <section className="card" aria-label="Skills">
-        <h2>Skills</h2>
-        {v.skills.length === 0 && <div className="row empty-row">No skills.</div>}
+      <Card role="region" aria-label="Skills" className={cardClass}>
+        <CardHeader className={headClass}>
+          <CardTitle>Skills</CardTitle>
+        </CardHeader>
+        {v.skills.length === 0 && <div className={muted}>No skills.</div>}
         {v.skills.map((s) => (
-          <details className="skill-doc" key={`${s.name}/${s.folder}`}>
-            <summary className="skill">
-              <b className="grow">{s.name}</b>
-              {s.problem && <span className="problem">{s.problem}</span>}
-              {s.source !== "" && <span className="src">{skillOrigin(s.source, s.version)}</span>}
-            </summary>
+          <details className={docClass} key={`${s.name}/${s.folder}`}>
+            <Summary>
+              <b className="min-w-0 grow font-semibold">{s.name}</b>
+              {s.problem && <span className="text-bad text-xs">{s.problem}</span>}
+              {s.source !== "" && <Src>{skillOrigin(s.source, s.version)}</Src>}
+            </Summary>
             {!s.problem && <Markdown text={s.content} />}
             {safeHref(s.url) && (
-              <div className="pad meta">
+              <div className="text-muted-foreground [&_a]:text-primary px-4 pb-3 text-sm [&_a]:hover:underline">
                 <ExternalLink href={s.url}>View file</ExternalLink>
               </div>
             )}
           </details>
         ))}
-      </section>
-      <section className="card" aria-label="Instructions">
-        <h2>Instructions</h2>
+      </Card>
+      <Card role="region" aria-label="Instructions" className={cardClass}>
+        <CardHeader className={headClass}>
+          <CardTitle>Instructions</CardTitle>
+        </CardHeader>
         {v.instructions ? (
-          <div className="pad-top">
+          <div className="pt-3">
             <Markdown text={v.instructions} />
           </div>
         ) : (
-          <div className="row empty-row">No instructions.</div>
+          <div className={muted}>No instructions.</div>
         )}
-      </section>
+      </Card>
       {v.rules && <RuleList rules={v.rules} builtInsOff={builtInsOff} />}
     </>
   );
@@ -344,43 +392,74 @@ function RuleList({ rules, builtInsOff }: { rules: InputsView["rules"]; builtIns
   const fromSets = rules.entries.length - fromRepo;
   const builtIns = rules.builtInEntries;
   return (
-    <section className="card" aria-label="Rules">
-      <h2>Rules</h2>
-      <div className="pad meta">
+    <Card role="region" aria-label="Rules" className={cardClass}>
+      <CardHeader className={headClass}>
+        <CardTitle>Rules</CardTitle>
+      </CardHeader>
+      <div className={muted}>
         {fromRepo} repository · {fromSets} rule {fromSets === 1 ? "set" : "sets"} · {builtIns.length} built-in. The first entry
         that matches a file gives it its rule.
       </div>
       {rules.problem && (
-        <div className="row">
-          <span className="problem">{rules.problem}</span>
+        <div className={rowClass}>
+          <span className="problem text-bad text-sm">{rules.problem}</span>
         </div>
       )}
-      {builtInsOff !== "" && builtIns.length > 0 && <div className="pad problem">{builtInsOff}</div>}
-      {!rules.problem && rules.entries.length === 0 && builtIns.length === 0 && <div className="row empty-row">No rules.</div>}
+      {builtInsOff !== "" && builtIns.length > 0 && (
+        <div className="problem text-bad border-b px-4 py-3 text-sm last:border-b-0">{builtInsOff}</div>
+      )}
+      {!rules.problem && rules.entries.length === 0 && builtIns.length === 0 && <div className={muted}>No rules.</div>}
       {rules.entries.map((e, i) => (
-        <details className="skill-doc" key={`${i}|${e.source}|${e.path}`} data-rule={`${e.source}|${e.path}`}>
-          <summary className="skill">
-            <b className="grow mono">{e.path}</b>
-            {e.off && <span className="meta">off: no rule</span>}
-            <span className="src">{e.source}</span>
-          </summary>
+        <details className={docClass} key={`${i}|${e.source}|${e.path}`} data-rule={`${e.source}|${e.path}`}>
+          <Summary>
+            <b className="min-w-0 grow font-mono text-xs font-semibold">{e.path}</b>
+            {e.off && <span className="text-muted-foreground text-xs">off: no rule</span>}
+            <Src>{e.source}</Src>
+          </Summary>
           {!e.off && <Markdown text={e.rule} />}
         </details>
       ))}
       {builtIns.map((b) => (
-        <details className="skill-doc" key={`built-in|${b.name}`} data-rule={`built-in|${b.name}`}>
-          <summary className="skill">
-            <b>{b.name}</b>
-            <span className="grow built-in-paths">
+        <details className={docClass} key={`built-in|${b.name}`} data-rule={`built-in|${b.name}`}>
+          <Summary>
+            <b className="font-semibold">{b.name}</b>
+            <span className="flex min-w-0 grow flex-wrap gap-x-2 gap-y-1">
               {b.paths.map((p) => (
-                <code key={p}>{p}</code>
+                <code key={p} className="text-muted-foreground font-mono text-xs">
+                  {p}
+                </code>
               ))}
             </span>
-            <span className="src">built-in</span>
-          </summary>
+            <Src>built-in</Src>
+          </Summary>
           <Markdown text={b.rule} />
         </details>
       ))}
-    </section>
+    </Card>
+  );
+}
+
+// docClass is a row that opens to a document: a skill's or a rule's text.
+// "skill-doc" stays as a name the tests find the rows by.
+const docClass = "skill-doc group border-b last:border-b-0";
+
+// Summary is the line of a docClass row, with an arrow that turns when it is
+// open. "skill" stays as a name the tests find the line by.
+function Summary({ children }: { children: ReactNode }) {
+  return (
+    <summary className="skill hover:bg-muted/50 flex cursor-pointer list-none items-center gap-2.5 px-4 py-2.5 text-sm before:content-none [&::-webkit-details-marker]:hidden">
+      <ChevronRight className="text-muted-foreground size-4 shrink-0 transition-transform group-open:rotate-90" aria-hidden="true" />
+      {children}
+    </summary>
+  );
+}
+
+// Src is where a skill or rule comes from, as a quiet badge. "src" stays as
+// a name the tests read.
+function Src({ children }: { children: ReactNode }) {
+  return (
+    <Badge variant="outline" className="src text-muted-foreground font-normal">
+      {children}
+    </Badge>
   );
 }

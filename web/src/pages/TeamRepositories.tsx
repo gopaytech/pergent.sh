@@ -2,12 +2,26 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
+
 import { api, paths, type RepositoryChoiceView, type RepositoryChoicesView, type TeamEntryView, type TeamPageView } from "../api";
 import { ErrorBox, Loading } from "../ui";
 import { useTeamSave } from "./teamSave";
 
 const entryLabel = (e: { instance: string; project: string }) => (e.project === "" ? `All repositories of ${e.instance}` : e.project);
 const asRead = (e: TeamEntryView) => ({ instance: e.instance, project: e.project, owner: e.owner });
+
+// row is one line of a list in a card: an entry and what can be done to it.
+const row = "flex flex-wrap items-center gap-3 border-b px-4 py-3 text-sm last:border-b-0";
+// muted is the small grey text after a name.
+const muted = "text-muted-foreground text-xs";
+// checkbox is a plain tick box: there is no shadcn one on this page.
+const checkbox = "accent-primary size-4";
 
 // TeamRepositories is the team page's Repositories tab: the team's entries,
 // and for an admin the owner tick, Remove, and a search to add a repository.
@@ -20,23 +34,30 @@ export default function TeamRepositories({ view }: { view: TeamPageView }) {
   const same = (a: { instance: string; project: string }, b: { instance: string; project: string }) =>
     a.instance === b.instance && a.project === b.project;
   return (
-    <section className="card" aria-label="Team repositories">
-      <h2>Repositories</h2>
-      {view.repos.length === 0 && <div className="pad meta">This team covers no repository yet.</div>}
+    <Card role="region" aria-label="Team repositories" className="gap-0 py-0">
+      <CardHeader className="border-b py-4">
+        <CardTitle>Repositories</CardTitle>
+      </CardHeader>
+      {view.repos.length === 0 && <div className="text-muted-foreground px-4 py-3 text-sm">This team covers no repository yet.</div>}
       {view.repos.map((r) => (
-        <div className="row" key={`${r.instance}/${r.project}`}>
-          <div className="grow">
+        <div className={row} key={`${r.instance}/${r.project}`}>
+          <div className="min-w-0 grow">
             {r.project === "" ? (
               <span>{entryLabel(r)}</span>
             ) : (
-              <Link className="mr" to={paths.repo(r.instance, r.project)}>
+              <Link className="text-foreground font-medium hover:underline" to={paths.repo(r.instance, r.project)}>
                 {r.project}
               </Link>
             )}{" "}
-            <span className="meta">{r.instance}</span>
-            {r.owner && <span className="badge"> owner</span>}
+            <span className={muted}>{r.instance}</span>
+            {r.owner && (
+              <>
+                {" "}
+                <Badge variant="secondary">owner</Badge>
+              </>
+            )}
             {r.paused && (
-              <span className="meta">
+              <span className={muted}>
                 {" "}
                 (<Link to={paths.repo(r.instance, r.project)}>paused</Link>)
               </span>
@@ -44,25 +65,27 @@ export default function TeamRepositories({ view }: { view: TeamPageView }) {
             {r.removed && (
               <>
                 {" "}
-                <span className="meta">(removed)</span> <span className="meta">The next save drops it.</span>
+                <span className={muted}>(removed)</span> <span className={muted}>The next save drops it.</span>
               </>
             )}
           </div>
           {view.canEdit && !r.removed && (
             <>
-              <label className="check">
+              <Label className="font-normal">
                 <input
                   type="checkbox"
+                  className={checkbox}
                   aria-label={`Owner of ${entryLabel(r)}`}
                   checked={r.owner}
                   disabled={save.isPending}
                   onChange={(e) => save.mutate({ repos: live.map((x) => (same(x, r) ? { ...x, owner: e.target.checked } : x)) })}
-                />{" "}
+                />
                 Owner
-              </label>
-              <button
+              </Label>
+              <Button
                 type="button"
-                className="btn small danger"
+                variant="destructive-outline"
+                size="sm"
                 aria-label={`Remove ${entryLabel(r)}`}
                 disabled={save.isPending}
                 onClick={() => {
@@ -73,21 +96,25 @@ export default function TeamRepositories({ view }: { view: TeamPageView }) {
                 }}
               >
                 Remove
-              </button>
+              </Button>
             </>
           )}
         </div>
       ))}
-      {save.isError && <ErrorBox error={save.error} />}
-      {view.canEdit && (
-        <div className="foot">
-          <button type="button" className="btn" onClick={() => setAdding(!adding)}>
-            Add repository
-          </button>
+      {save.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={save.error} />
         </div>
       )}
+      {view.canEdit && (
+        <CardFooter className="bg-muted/40 justify-end gap-2 border-t py-3">
+          <Button type="button" variant="outline" size="sm" onClick={() => setAdding(!adding)}>
+            Add repository
+          </Button>
+        </CardFooter>
+      )}
       {view.canEdit && adding && <Search view={view} onAdd={(c, owner) => save.mutate({ repos: [...live, { instance: c.instance, project: c.project, owner }] })} busy={save.isPending} />}
-    </section>
+    </Card>
   );
 }
 
@@ -121,50 +148,59 @@ function Search({ view, onAdd, busy }: { view: TeamPageView; onAdd: (c: Reposito
     setSent(text.trim());
   };
   return (
-    <section className="picker" aria-label="Add repository">
-      <form className="pad search" onSubmit={submit}>
-        <input type="search" aria-label="Search" placeholder="Search by path" maxLength={100} value={text} onChange={(e) => setText(e.target.value)} />
-        <button type="submit" className="btn">
+    <section className="border-t" aria-label="Add repository">
+      <form className="flex items-center gap-2 px-4 py-3" onSubmit={submit}>
+        <Input type="search" aria-label="Search" placeholder="Search by path" maxLength={100} value={text} onChange={(e) => setText(e.target.value)} />
+        <Button type="submit" variant="outline" size="sm">
           Search
-        </button>
+        </Button>
       </form>
       {sent !== null && results.isPending && <Loading />}
-      {results.isError && !results.isFetchNextPageError && <ErrorBox error={results.error} />}
-      {results.data && items.length === 0 && !results.hasNextPage && <div className="row empty-row">Nothing to add.</div>}
+      {results.isError && !results.isFetchNextPageError && (
+        <div className="px-4 pb-3">
+          <ErrorBox error={results.error} />
+        </div>
+      )}
+      {results.data && items.length === 0 && !results.hasNextPage && <div className={cn(row, "text-muted-foreground")}>Nothing to add.</div>}
       {items.map((c) => {
         const key = `${c.instance}/${c.project}`;
         const label = entryLabel(c);
         return (
-          <div className="row" key={key}>
-            <div className="grow">
-              <span className="mr">{label}</span> <span className="meta">{c.instance}</span>
-              {c.paused && <span className="meta"> (paused)</span>}
-              {c.ownedBy && <span className="meta"> owned by {c.ownedBy.name}</span>}
+          <div className={row} key={key}>
+            <div className="min-w-0 grow">
+              <span className="font-medium">{label}</span> <span className={muted}>{c.instance}</span>
+              {c.paused && <span className={muted}> (paused)</span>}
+              {c.ownedBy && <span className={muted}> owned by {c.ownedBy.name}</span>}
             </div>
-            <label className="check">
+            <Label className="font-normal">
               <input
                 type="checkbox"
+                className={checkbox}
                 aria-label={`Owner of ${label}`}
                 checked={owners[key] ?? false}
                 disabled={c.ownedBy !== null}
                 onChange={(e) => setOwners({ ...owners, [key]: e.target.checked })}
-              />{" "}
+              />
               Owner
-            </label>
-            <button type="button" className="btn small" aria-label={`Add ${label}`} disabled={busy} onClick={() => onAdd(c, owners[key] ?? false)}>
+            </Label>
+            <Button type="button" variant="outline" size="sm" aria-label={`Add ${label}`} disabled={busy} onClick={() => onAdd(c, owners[key] ?? false)}>
               Add
-            </button>
+            </Button>
           </div>
         );
       })}
       {results.hasNextPage && (
-        <div className="foot">
-          <button type="button" className="btn" disabled={results.isFetchingNextPage} onClick={() => results.fetchNextPage()}>
+        <div className="bg-muted/40 flex justify-end gap-2 border-t px-4 py-3">
+          <Button type="button" variant="outline" size="sm" disabled={results.isFetchingNextPage} onClick={() => results.fetchNextPage()}>
             Load more
-          </button>
+          </Button>
         </div>
       )}
-      {results.isFetchNextPageError && <ErrorBox error={results.error} />}
+      {results.isFetchNextPageError && (
+        <div className="px-4 pb-3">
+          <ErrorBox error={results.error} />
+        </div>
+      )}
     </section>
   );
 }

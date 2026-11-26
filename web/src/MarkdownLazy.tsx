@@ -9,8 +9,10 @@ export default function Markdown({ text }: { text: string }) {
   return (
     <Suspense
       fallback={
-        <div className="md-doc">
-          <pre className="doc">{text}</pre>
+        <div className="md-doc mx-4 mb-3">
+          {/* The same box as Markdown's source view. Importing its class from
+              ./Markdown would load the renderer up front. */}
+          <pre className="bg-muted/50 rounded-md border px-3 py-2.5 font-mono text-xs break-words whitespace-pre-wrap">{text}</pre>
         </div>
       }
     >

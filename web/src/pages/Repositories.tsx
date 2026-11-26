@@ -2,6 +2,17 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
+import { TriangleAlert } from "lucide-react";
+
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 import {
   ApiError,
   api,
@@ -17,7 +28,7 @@ import {
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { SortHeader, compareRows, useTableSort } from "../TableSort";
-import { ErrorBox, Loading, Pill, SearchField, Switch, platformName } from "../ui";
+import { ErrorBox, Loading, PageHeader, Pill, SearchField, Switch, platformName } from "../ui";
 import { useSearchText } from "../useSearchText";
 
 // The columns the list sorts by, and the ones that start with the biggest first.
@@ -108,21 +119,24 @@ export default function Repositories() {
   showNoOwner.set("team", "none");
   return (
     <>
-      <div className="top">
-        <div>
-          <h1>Repositories</h1>
-          <div className="sub">The repositories pergent reviews that you can see</div>
-        </div>
-        {canAdd && (
-          <button type="button" className="btn primary" onClick={toggleAdd}>
-            + Add repository
-          </button>
-        )}
-      </div>
+      <PageHeader
+        title="Repositories"
+        description="The repositories pergent reviews that you can see"
+        actions={
+          canAdd && (
+            <Button type="button" size="sm" onClick={toggleAdd}>
+              + Add repository
+            </Button>
+          )
+        }
+      />
       {me.admin && repos.isSuccess && noOwner > 0 && team !== "none" && (
-        <div className="owner-line">
-          <span className="warn-text">⚠</span> {noOwner === 1 ? "1 repository has no owner." : `${noOwner} repositories have no owner.`}{" "}
-          <Link replace to={`?${showNoOwner.toString()}`}>{noOwner === 1 ? "Show it" : "Show them"}</Link>
+        <div className="mb-3 flex flex-wrap items-center gap-1.5 text-sm">
+          <TriangleAlert className="text-warn size-4" aria-hidden="true" />{" "}
+          {noOwner === 1 ? "1 repository has no owner." : `${noOwner} repositories have no owner.`}{" "}
+          <Link className="text-primary font-medium hover:underline" replace to={`?${showNoOwner.toString()}`}>
+            {noOwner === 1 ? "Show it" : "Show them"}
+          </Link>
         </div>
       )}
       {adding && <Picker />}
@@ -130,12 +144,14 @@ export default function Repositories() {
       {repos.isError && <ErrorBox error={repos.error} onRetry={() => void repos.refetch()} />}
       {repos.isSuccess &&
         (repos.data.length === 0 ? (
-          <div className="card empty">No repositories yet.{canAdd && " Use + Add repository to switch one on."}</div>
+          <Card className="text-muted-foreground px-4 py-8 text-center text-sm">
+            No repositories yet.{canAdd && " Use + Add repository to switch one on."}
+          </Card>
         ) : (
-          <div className="card scroll">
-            <div className="pad search filters">
+          <Card className="gap-0 overflow-hidden py-0">
+            <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
               <SearchField label="Search repositories" value={typed} onChange={setTyped} />
-              <select aria-label="Team" value={team} onChange={(e) => setTeam(e.target.value)}>
+              <NativeSelect className="w-44" aria-label="Team" value={team} onChange={(e) => setTeam(e.target.value)}>
                 <option value="">All teams</option>
                 <option value="none">No owner</option>
                 {teams.map(([id, name]) => (
@@ -143,42 +159,42 @@ export default function Repositories() {
                     {name}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
               {filtering && (
-                <span className="meta count">
+                <span className="text-muted-foreground ml-auto text-sm whitespace-nowrap">
                   {shown.length} of {all.length} shown
                 </span>
               )}
             </div>
             {shown.length === 0 ? (
-              <div className="pad empty">
+              <div className="text-muted-foreground flex flex-wrap items-center justify-center gap-2 px-4 py-8 text-sm">
                 No repository matches.{" "}
-                <button type="button" className="btn" onClick={clearFilters}>
+                <Button type="button" variant="outline" size="sm" onClick={clearFilters}>
                   Clear
-                </button>
+                </Button>
               </div>
             ) : (
-              <table className="table">
-                <thead>
-                  <tr>
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
                     <SortHeader label="Repository" sortKey="name" sort={sort} onSort={onSort} />
-                    <th>Owner team</th>
-                    <th>Platform</th>
-                    {me.admin && <th>Review</th>}
+                    <TableHead>Owner team</TableHead>
+                    <TableHead>Platform</TableHead>
+                    {me.admin && <TableHead>Review</TableHead>}
                     <SortHeader label="Reviews (7 days)" sortKey="reviews" sort={sort} onSort={onSort} num />
                     <SortHeader label="Approved" sortKey="approved" sort={sort} onSort={onSort} num />
                     <SortHeader label="Failed" sortKey="failed" sort={sort} onSort={onSort} num />
-                    <th>Health</th>
-                  </tr>
-                </thead>
-                <tbody>
+                    <TableHead>Health</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {shown.map((r) => (
                     <Row key={`${r.instance}/${r.project}`} repo={r} admin={me.admin} removing={removing.has(r.instance)} />
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             )}
-          </div>
+          </Card>
         ))}
     </>
   );
@@ -194,40 +210,54 @@ function Row({ repo, admin, removing }: { repo: RepositoryView; admin: boolean; 
   });
   const config = repo.source === "config";
   return (
-    <tr>
-      <td>
-        <Link className="mr" to={paths.repo(repo.instance, repo.project)}>
+    <TableRow>
+      <TableCell>
+        <Link className="mr text-foreground font-medium hover:underline" to={paths.repo(repo.instance, repo.project)}>
           {repo.project}
         </Link>
-        {config && <span className="badge cfg">managed by config</span>}
-        {toggle.isError && <ErrorBox error={toggle.error} />}
-      </td>
+        {config && (
+          <Badge variant="grey" className="ml-2">
+            managed by config
+          </Badge>
+        )}
+        {toggle.isError && (
+          <div className="mt-2">
+            <ErrorBox error={toggle.error} />
+          </div>
+        )}
+      </TableCell>
       <OwnerCell repo={repo} admin={admin} />
-      <td>
-        <span className="plat">{platformName(repo.platform)}</span>
-      </td>
+      <TableCell>
+        <Badge variant="outline" className="text-muted-foreground font-normal">
+          {platformName(repo.platform)}
+        </Badge>
+      </TableCell>
       {admin && (
-        <td>
+        <TableCell>
           <Switch
             label={`Review ${repo.project}`}
             checked={toggle.isPending ? (toggle.variables ?? repo.on) : repo.on}
             disabled={config || toggle.isPending || removing}
             onChange={(on) => toggle.mutate(on)}
           />
-        </td>
+        </TableCell>
       )}
-      <td className="num">{repo.last7.reviews}</td>
-      <td className="num">{repo.last7.approved}</td>
-      <td className="num">
+      <TableCell className="text-right tabular-nums">{repo.last7.reviews}</TableCell>
+      <TableCell className="text-right tabular-nums">{repo.last7.approved}</TableCell>
+      <TableCell className="text-right tabular-nums">
         {repo.last7.failed > 0 ? (
-          <Link to={`/reviews?project=${encodeURIComponent(repo.project)}&outcome=failed&days=7`} aria-label={`${repo.last7.failed} failed reviews of ${repo.project}`}>
+          <Link
+            className="text-primary font-medium hover:underline"
+            to={`/reviews?project=${encodeURIComponent(repo.project)}&outcome=failed&days=7`}
+            aria-label={`${repo.last7.failed} failed reviews of ${repo.project}`}
+          >
             {repo.last7.failed}
           </Link>
         ) : (
           repo.last7.failed
         )}
-      </td>
-      <td>
+      </TableCell>
+      <TableCell>
         {repo.health === "attention" ? (
           // The problem is on the repository's Setup checks tab.
           <Link to={`${paths.repo(repo.instance, repo.project)}?tab=setup`} aria-label={`Setup checks of ${repo.project}`}>
@@ -236,10 +266,13 @@ function Row({ repo, admin, removing }: { repo: RepositoryView; admin: boolean; 
         ) : (
           <Health health={repo.health} />
         )}
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }
+
+// ownerCell lets a long team name wrap.
+const ownerCell = "max-w-[220px] [overflow-wrap:anywhere] whitespace-normal";
 
 // OwnerCell is the owner team of a repository. A closed team is plain text,
 // since its page is not open to the user. No owner is a warning for an admin,
@@ -248,21 +281,31 @@ function OwnerCell({ repo, admin }: { repo: RepositoryView; admin: boolean }) {
   const owner = repo.ownerTeam;
   if (owner === null) {
     return (
-      <td className="owner">
+      <TableCell className={ownerCell}>
         {admin ? (
-          <Link className="warn-text" to="/admin/teams" title="Set the owner with the owner tick on a team's Repositories tab">
-            <span aria-hidden="true">⚠</span> No owner
+          <Link
+            className="text-warn inline-flex items-center gap-1 font-medium hover:underline"
+            to="/admin/teams"
+            title="Set the owner with the owner tick on a team's Repositories tab"
+          >
+            <TriangleAlert className="size-3.5" aria-hidden="true" /> No owner
           </Link>
         ) : (
-          <span className="meta">None</span>
+          <span className="text-muted-foreground">None</span>
         )}
-      </td>
+      </TableCell>
     );
   }
   return (
-    <td className="owner" title={owner.viaInstance ? `Owns every repository on ${repo.instance}` : undefined}>
-      {owner.open ? <Link to={paths.team(owner.id)}>{owner.name}</Link> : owner.name}
-    </td>
+    <TableCell className={ownerCell} title={owner.viaInstance ? `Owns every repository on ${repo.instance}` : undefined}>
+      {owner.open ? (
+        <Link className="text-primary hover:underline" to={paths.team(owner.id)}>
+          {owner.name}
+        </Link>
+      ) : (
+        owner.name
+      )}
+    </TableCell>
   );
 }
 
@@ -271,18 +314,24 @@ function Health({ health }: { health: RepositoryView["health"] }) {
   return health === "ok" ? <Pill tone="ok">OK</Pill> : <Pill tone="warn">Needs attention</Pill>;
 }
 
+// pickerField is one labelled field of the picker.
+const pickerField = "grid gap-1.5 border-b px-4 py-3";
+
+// pickerRow is one repository of the picker, or a line in its place.
+const pickerRow = "flex items-center gap-3 border-b px-4 py-2.5 text-sm last:border-b-0";
+
 function InstanceSelect({ instance, names, onChange }: { instance: string; names: string[]; onChange: (name: string) => void }) {
   return (
-    <div className="pad search">
-      <label htmlFor="picker-instance">Instance</label>
-      <select id="picker-instance" value={instance} onChange={(e) => onChange(e.target.value)}>
+    <div className={pickerField}>
+      <Label htmlFor="picker-instance">Instance</Label>
+      <NativeSelect className="max-w-sm" id="picker-instance" value={instance} onChange={(e) => onChange(e.target.value)}>
         <option value="">Choose an instance</option>
         {names.map((n) => (
           <option key={n} value={n}>
             {n}
           </option>
         ))}
-      </select>
+      </NativeSelect>
     </div>
   );
 }
@@ -297,7 +346,7 @@ function InstanceChoice({ instance, onChange }: { instance: string; onChange: (n
   if (instances.isError) return <ErrorBox error={instances.error} />;
   // One being removed has nothing to switch on.
   const choices = instances.data.filter((i) => !i.removing);
-  if (choices.length === 0) return <div className="row empty-row">No instance yet. Add one under Integrations.</div>;
+  if (choices.length === 0) return <div className={`${pickerRow} text-muted-foreground`}>No instance yet. Add one under Integrations.</div>;
   return <InstanceSelect instance={instance} names={choices.map((i) => i.name)} onChange={onChange} />;
 }
 
@@ -400,29 +449,30 @@ function Picker() {
   // The button of a row, or the text that says who owns it; null for none.
   const rowAction = (r: AvailableView["items"][number]) => {
     const button = (kind: "onboard" | "claim" | "resume", label: string, needsTeam: boolean) => (
-      <button
+      <Button
         type="button"
-        className="btn small"
+        variant="outline"
+        size="sm"
         aria-label={`${label} ${r.project}`}
         disabled={act.isPending || (needsTeam && team === "")}
         onClick={() => act.mutate({ kind, project: r.project })}
       >
         {label}
-      </button>
+      </Button>
     );
     if (me.admin) {
       if (r.state === "off") return button("onboard", "Switch on", false);
       if (r.state === "paused") return button("resume", "Resume", false);
-      return r.ownerTeam !== "" ? <span className="meta">owned by {r.ownerTeam}</span> : null;
+      return r.ownerTeam !== "" ? <span className="text-muted-foreground text-xs">owned by {r.ownerTeam}</span> : null;
     }
     const owned = r.ownerTeam !== "";
-    if (owned && !mine.has(r.ownerTeam)) return <span className="meta">owned by {r.ownerTeam}</span>;
+    if (owned && !mine.has(r.ownerTeam)) return <span className="text-muted-foreground text-xs">owned by {r.ownerTeam}</span>;
     if (r.state === "off") return button("onboard", "Onboard", true);
-    if (!owned) return r.config ? <span className="meta">managed by the config file</span> : button("claim", "Claim", true);
+    if (!owned) return r.config ? <span className="text-muted-foreground text-xs">managed by the config file</span> : button("claim", "Claim", true);
     return r.state === "paused" ? (
       button("resume", "Resume", false)
     ) : (
-      <span className="meta">owned by {r.ownerTeam} (your team)</span>
+      <span className="text-muted-foreground text-xs">owned by {r.ownerTeam} (your team)</span>
     );
   };
   const submit = (e: FormEvent) => {
@@ -430,55 +480,61 @@ function Picker() {
     setSearch(text.trim());
   };
   return (
-    <section className="card picker" aria-label="Add repository">
-      <h2>Add repository</h2>
+    <Card role="region" aria-label="Add repository" className="mb-4 gap-0 overflow-hidden py-0">
+      <CardHeader className="border-b py-3 [.border-b]:pb-3">
+        <CardTitle>Add repository</CardTitle>
+      </CardHeader>
       {noDefaults && (
-        <div className="alert" role="note">
-          <span aria-hidden="true">⚠️</span>
+        <Alert variant="warn" className="flex gap-2.5 rounded-none border-x-0 border-t-0" role="note">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <span className="prose">
             No default skills are set. A repository you switch on gets no skills and is not reviewed, unless it has its own in
-            .pergent/skills. <Link to="/admin/settings">Set the default skills</Link>
+            .pergent/skills.{" "}
+            <Link className="font-medium underline" to="/admin/settings">
+              Set the default skills
+            </Link>
           </span>
-        </div>
+        </Alert>
       )}
       {choice}
       {chosen && !me.admin && instanceOwner !== "" && (
-        <div className="pad search">
-          <div className="meta">
+        <div className={pickerField}>
+          <div className="text-muted-foreground text-sm">
             Owner: {instanceOwner} (all repositories of {instance})
           </div>
         </div>
       )}
       {chosen && !me.admin && instanceOwner === "" && myTeams.isSuccess && maintained.length > 1 && (
-        <div className="pad search">
-          <label htmlFor="picker-owner-team">Owner team</label>
-          <select id="picker-owner-team" value={ownerTeam} onChange={(e) => setOwnerTeam(e.target.value)}>
+        <div className={pickerField}>
+          <Label htmlFor="picker-owner-team">Owner team</Label>
+          <NativeSelect className="max-w-sm" id="picker-owner-team" value={ownerTeam} onChange={(e) => setOwnerTeam(e.target.value)}>
             <option value="">Choose a team</option>
             {maintained.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
       )}
       {chosen && me.admin && teams.isSuccess && (
-        <div className="pad search">
-          <label htmlFor="picker-owner-team">Owner team</label>
-          <select id="picker-owner-team" value={ownerTeam} onChange={(e) => setOwnerTeam(e.target.value)}>
+        <div className={pickerField}>
+          <Label htmlFor="picker-owner-team">Owner team</Label>
+          <NativeSelect className="max-w-sm" id="picker-owner-team" value={ownerTeam} onChange={(e) => setOwnerTeam(e.target.value)}>
             <option value="">None</option>
             {teams.data.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
               </option>
             ))}
-          </select>
-          {today && <div className="meta">Owner today: {today.name} (all repositories of {instance})</div>}
+          </NativeSelect>
+          {today && <div className="text-muted-foreground text-sm">Owner today: {today.name} (all repositories of {instance})</div>}
         </div>
       )}
       {chosen && (
-        <form className="pad search" onSubmit={submit}>
-          <input
+        <form className="flex items-center gap-2 border-b px-4 py-3" onSubmit={submit}>
+          <Input
+            className="max-w-sm"
             type="search"
             aria-label="Search"
             placeholder="Search by path"
@@ -486,44 +542,65 @@ function Picker() {
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
-          <button type="submit" className="btn">
+          <Button type="submit" variant="outline" size="sm">
             Search
-          </button>
+          </Button>
         </form>
       )}
-      {act.isError &&
-        (act.error instanceof ApiError && act.error.status === 404 && act.variables?.kind === "onboard" ? (
-          <div className="error" role="alert">
-            The review bot can't reach this repository now. It may have been renamed or moved. Reload the list.
-          </div>
-        ) : (
-          <ErrorBox error={act.error} />
-        ))}
+      {act.isError && (
+        <div className="px-4 py-3">
+          {act.error instanceof ApiError && act.error.status === 404 && act.variables?.kind === "onboard" ? (
+            <Alert variant="destructive" className="block">
+              The review bot can't reach this repository now. It may have been renamed or moved. Reload the list.
+            </Alert>
+          ) : (
+            <ErrorBox error={act.error} />
+          )}
+        </div>
+      )}
       {chosen && available.isPending && <Loading />}
-      {available.isError && !available.isFetchNextPageError && <ErrorBox error={available.error} />}
+      {available.isError && !available.isFetchNextPageError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={available.error} />
+        </div>
+      )}
       {chosen && available.data && (
         <>
-          {truncated && <div className="pad meta">The list is too long to read whole. Search to find others.</div>}
-          {items.length === 0 && !available.hasNextPage && <div className="row empty-row">No repository to switch on.</div>}
+          {truncated && (
+            <div className="text-muted-foreground border-b px-4 py-2.5 text-sm">The list is too long to read whole. Search to find others.</div>
+          )}
+          {items.length === 0 && !available.hasNextPage && (
+            <div className={`${pickerRow} text-muted-foreground`}>No repository to switch on.</div>
+          )}
           {items.map((r) => (
-            <div className="row" key={`${r.instance}/${r.project}`}>
-              <div className="grow mr">{r.project}</div>
+            <div className={pickerRow} key={`${r.instance}/${r.project}`}>
+              <div className="min-w-0 grow font-medium">{r.project}</div>
               {rowAction(r)}
             </div>
           ))}
           {available.hasNextPage && available.data.pages.at(-1)?.items.length === 0 && (
-            <div className="row empty-row">Everything on this page is already switched on.</div>
+            <div className={`${pickerRow} text-muted-foreground`}>Everything on this page is already switched on.</div>
           )}
           {available.hasNextPage && (
-            <div className="foot">
-              <button type="button" className="btn" disabled={available.isFetchingNextPage} onClick={() => available.fetchNextPage()}>
+            <div className="bg-muted/40 flex justify-end border-t px-4 py-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={available.isFetchingNextPage}
+                onClick={() => available.fetchNextPage()}
+              >
                 Load more
-              </button>
+              </Button>
             </div>
           )}
-          {available.isFetchNextPageError && <ErrorBox error={available.error} />}
+          {available.isFetchNextPageError && (
+            <div className="px-4 py-3">
+              <ErrorBox error={available.error} />
+            </div>
+          )}
         </>
       )}
-    </section>
+    </Card>
   );
 }

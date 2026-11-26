@@ -1,13 +1,20 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 import { api, paths, type SkillResultView, type SkillTokensView } from "../api";
 import { useMe } from "../layout/me";
 import { ErrorBox, Loading, Pill, count } from "../ui";
 import { useUrlParam } from "../urlState";
-import { TokensTotal, output, prompt, total } from "./usageParts";
+import { TokensTotal, num, output, prompt, total, usageTable } from "./usageParts";
 
 const periods: (30 | 90)[] = [30, 90];
 const dayMs = 24 * 3600 * 1000;
+
+// empty is the line a card shows when it has no rows.
+const empty = "text-muted-foreground px-4 py-6 text-sm";
 
 // editedText says a skill changed during the window, in whole days.
 function editedText(editedAt: string, now = Date.now()): string {
@@ -36,69 +43,71 @@ export default function SkillResults({ instance, project }: { instance: string; 
   });
 
   return (
-    <>
-      <div className="top">
-        <p className="sub">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <p className="text-muted-foreground max-w-3xl text-sm">
           What became of each skill's findings when their change was merged or closed, in the last {days} days. Addressed is Fixed out of
           Raised, and shows from 10 raised. Raised, Fixed, Open and Went away count merged changes opened by people; Dismissed also counts
           closed ones.
         </p>
-        <div className="actions-row">
-          <select aria-label="Period" className="btn" value={days} onChange={(e) => setDays(Number(e.target.value) as 30 | 90)}>
-            {periods.map((d) => (
-              <option key={d} value={d}>
-                Last {d} days
-              </option>
-            ))}
-          </select>
-        </div>
+        <NativeSelect aria-label="Period" className="w-40" value={days} onChange={(e) => setDays(Number(e.target.value) as 30 | 90)}>
+          {periods.map((d) => (
+            <option key={d} value={d}>
+              Last {d} days
+            </option>
+          ))}
+        </NativeSelect>
       </div>
       {list.isPending && <Loading />}
       {list.isError && <ErrorBox error={list.error} />}
       {list.isSuccess &&
         (list.data.length === 0 ? (
-          <section className="card" aria-label="Skill results">
-            <h2>Skill results</h2>
-            <div className="row empty-row">No merged or closed changes in this period yet.</div>
-          </section>
+          <Card role="region" aria-label="Skill results" className="gap-0 py-0">
+            <CardHeader className="border-b py-3">
+              <CardTitle>Skill results</CardTitle>
+            </CardHeader>
+            <div className={empty}>No merged or closed changes in this period yet.</div>
+          </Card>
         ) : (
-          <section className="card scroll" aria-label="Skill results">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Skill</th>
-                  <th className="num">Raised</th>
-                  <th className="num">Fixed</th>
-                  <th className="num">Dismissed</th>
-                  <th className="num">Open at merge</th>
-                  <th className="num">Went away</th>
-                  <th className="num">Addressed</th>
-                </tr>
-              </thead>
-              <tbody>
+          <Card role="region" aria-label="Skill results" className="gap-0 overflow-hidden py-0">
+            <Table className={usageTable}>
+              <TableHeader className="bg-muted/40">
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Skill</TableHead>
+                  <TableHead className={num}>Raised</TableHead>
+                  <TableHead className={num}>Fixed</TableHead>
+                  <TableHead className={num}>Dismissed</TableHead>
+                  <TableHead className={num}>Open at merge</TableHead>
+                  <TableHead className={num}>Went away</TableHead>
+                  <TableHead className={num}>Addressed</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {list.data.map((r) => (
-                  <tr key={`${r.skill}/${r.severity}`}>
-                    <td>
-                      <div className="t">{r.skill}</div>
+                  <TableRow key={`${r.skill}/${r.severity}`}>
+                    <TableCell>
+                      <div className="font-medium">{r.skill}</div>
                       <div>
                         <Pill tone={r.severity === "blocking" ? "bad" : "grey"}>{r.severity}</Pill>
                       </div>
-                      {r.editedAt && <div className="meta">{editedText(r.editedAt)}</div>}
-                    </td>
-                    <td className="num">{r.raised}</td>
-                    <td className="num">{r.fixed}</td>
-                    <td className="num">{r.dismissed}</td>
-                    <td className="num">{r.open}</td>
-                    <td className="num">{r.wentAway}</td>
-                    <td className="num">{r.addressed === null ? <span className="meta">Under 10 raised</span> : <b>{`${r.addressed}%`}</b>}</td>
-                  </tr>
+                      {r.editedAt && <div className="text-muted-foreground text-xs">{editedText(r.editedAt)}</div>}
+                    </TableCell>
+                    <TableCell className={num}>{r.raised}</TableCell>
+                    <TableCell className={num}>{r.fixed}</TableCell>
+                    <TableCell className={num}>{r.dismissed}</TableCell>
+                    <TableCell className={num}>{r.open}</TableCell>
+                    <TableCell className={num}>{r.wentAway}</TableCell>
+                    <TableCell className={num}>
+                      {r.addressed === null ? <span className="text-muted-foreground text-xs">Under 10 raised</span> : <b>{`${r.addressed}%`}</b>}
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </section>
+              </TableBody>
+            </Table>
+          </Card>
         ))}
       {admin && list.isSuccess && <SkillCost tokens={tokens} results={list.data} />}
-    </>
+    </div>
   );
 }
 
@@ -110,44 +119,50 @@ function SkillCost({ tokens, results }: { tokens: UseQueryResult<SkillTokensView
   const fixed = new Map<string, number>();
   for (const r of results) fixed.set(r.skill, (fixed.get(r.skill) ?? 0) + r.fixed);
   return (
-    <section className="card scroll" aria-label="Skill cost on these changes">
-      <h2>Skill cost on these changes</h2>
+    <Card role="region" aria-label="Skill cost on these changes" className="gap-0 overflow-hidden py-0">
+      <CardHeader className="border-b py-3">
+        <CardTitle>Skill cost on these changes</CardTitle>
+      </CardHeader>
       {tokens.isPending && <Loading />}
-      {tokens.isError && <ErrorBox error={tokens.error} />}
+      {tokens.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={tokens.error} />
+        </div>
+      )}
       {tokens.isSuccess &&
         (tokens.data.length === 0 ? (
-          <div className="row empty-row">No usage recorded for these changes.</div>
+          <div className={empty}>No usage recorded for these changes.</div>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Skill</th>
-                <th className="num">Prompt</th>
-                <th className="num">Output</th>
-                <th className="num">Tokens</th>
-                <th className="num">Fixed</th>
-                <th className="num">Tokens per fixed finding</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table className={usageTable}>
+            <TableHeader className="bg-muted/40">
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Skill</TableHead>
+                <TableHead className={num}>Prompt</TableHead>
+                <TableHead className={num}>Output</TableHead>
+                <TableHead className={num}>Tokens</TableHead>
+                <TableHead className={num}>Fixed</TableHead>
+                <TableHead className={num}>Tokens per fixed finding</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {tokens.data.map((t) => {
                 const n = fixed.get(t.skill) ?? 0;
                 return (
-                  <tr key={t.skill}>
-                    <td>{t.skill}</td>
-                    <td className="num">{count(prompt(t.tokens))}</td>
-                    <td className="num">{count(output(t.tokens))}</td>
-                    <td className="num">
+                  <TableRow key={t.skill}>
+                    <TableCell>{t.skill}</TableCell>
+                    <TableCell className={num}>{count(prompt(t.tokens))}</TableCell>
+                    <TableCell className={num}>{count(output(t.tokens))}</TableCell>
+                    <TableCell className={num}>
                       <TokensTotal tokens={t.tokens} />
-                    </td>
-                    <td className="num">{n}</td>
-                    <td className="num">{n > 0 ? count(Math.round(total(t.tokens) / n)) : "—"}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell className={num}>{n}</TableCell>
+                    <TableCell className={num}>{n > 0 ? count(Math.round(total(t.tokens) / n)) : "—"}</TableCell>
+                  </TableRow>
                 );
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         ))}
-    </section>
+    </Card>
   );
 }

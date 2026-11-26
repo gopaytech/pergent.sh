@@ -1,5 +1,9 @@
 import { Link, useSearchParams } from "react-router";
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 import { paths } from "../api";
 import { SearchField } from "../ui";
 import { SortHeader, compareRows, useTableSort } from "../TableSort";
@@ -30,6 +34,14 @@ function sortValue(r: TeamRow, key: SortKey): string | number {
   return r.name;
 }
 
+// num is a number column: right-aligned, with digits of one width.
+const num = "text-right tabular-nums";
+
+// sortHeads gives the plain th cells of SortHeader the TableHead look, and
+// right-aligns the number columns (SortHeader marks them "num").
+const sortHeads =
+  "bg-muted/40 [&_th]:text-muted-foreground [&_th]:h-10 [&_th]:px-3 [&_th]:text-left [&_th]:align-middle [&_th]:font-medium [&_th]:whitespace-nowrap [&_th.num]:text-right";
+
 // TeamsTable lists teams as a table that can be searched by name and sorted.
 // Each name links to the team's page.
 export default function TeamsTable({ rows, showRole }: { rows: TeamRow[]; showRole: boolean }) {
@@ -52,55 +64,58 @@ export default function TeamsTable({ rows, showRole }: { rows: TeamRow[]; showRo
     .filter((r) => needle === "" || r.name.toLowerCase().includes(needle))
     .sort((a, b) => compareRows(a, b, (r) => sortValue(r, sort.key), sort.desc, (r) => r.name));
   return (
-    <div className="card scroll">
-      <div className="pad search filters">
+    <Card className="gap-0 overflow-hidden py-0">
+      <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
         <SearchField label="Search teams" value={typed} onChange={setTyped} />
         {needle !== "" && (
-          <span className="meta count">
+          <span className="text-muted-foreground text-xs">
             {shown.length} of {rows.length} shown
           </span>
         )}
       </div>
       {shown.length === 0 ? (
-        <div className="pad empty">
+        <div className="text-muted-foreground flex items-center gap-2 px-4 py-6 text-sm">
           No team matches.{" "}
-          <button type="button" className="btn" onClick={clear}>
+          <Button type="button" variant="outline" size="sm" onClick={clear}>
             Clear
-          </button>
+          </Button>
         </div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
+        <Table>
+          {/* SortHeader draws plain th cells: they take the TableHead look from here. */}
+          <TableHeader className={sortHeads}>
+            <TableRow className="hover:bg-transparent">
               <SortHeader label="Team" sortKey="team" sort={sort} onSort={onSort} />
-              {showRole && <th>Your role</th>}
+              {showRole && <TableHead>Your role</TableHead>}
               <SortHeader label="Repositories" sortKey="repos" sort={sort} onSort={onSort} num />
               <SortHeader label="Owner of" sortKey="owned" sort={sort} onSort={onSort} num />
               <SortHeader label="Members" sortKey="members" sort={sort} onSort={onSort} num />
-            </tr>
-          </thead>
-          <tbody>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {shown.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <Link to={paths.team(r.id)}>{r.name}</Link>
-                </td>
-                {showRole && <td>{r.role}</td>}
-                <td className="num">
+              <TableRow key={r.id}>
+                <TableCell>
+                  <Link className="text-foreground font-medium hover:underline" to={paths.team(r.id)}>
+                    {r.name}
+                  </Link>
+                </TableCell>
+                {showRole && <TableCell>{r.role}</TableCell>}
+                <TableCell className={num}>
                   {r.repoCount}
                   {r.instanceCount > 0 && (
-                    <div className="meta">
+                    <div className="text-muted-foreground text-xs">
                       +{r.instanceCount} {r.instanceCount === 1 ? "instance" : "instances"}
                     </div>
                   )}
-                </td>
-                <td className="num">{r.ownedCount}</td>
-                <td className="num">{r.memberCount}</td>
-              </tr>
+                </TableCell>
+                <TableCell className={num}>{r.ownedCount}</TableCell>
+                <TableCell className={num}>{r.memberCount}</TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
-    </div>
+    </Card>
   );
 }

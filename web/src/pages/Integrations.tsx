@@ -1,5 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
+
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
 
 import {
   api,
@@ -12,7 +21,10 @@ import {
 } from "../api";
 import { useWrite } from "../layout/write";
 import { QuotaLine, parseQuota, quotaProblem, quotaText } from "../quota";
-import { CopyButton, ErrorBox, Loading, Pill, noFill, platformName, secretFill, secretText } from "../ui";
+import { CopyButton, ErrorBox, Loading, PageHeader, Pill, noFill, platformName, secretFill, secretText } from "../ui";
+
+// hint is the look of the line of help under a field.
+const hint = "text-muted-foreground text-sm";
 
 // Integrations is, for admins, the instances pergent.sh reviews on (they add,
 // change and remove those kept in the dashboard) and how people sign in.
@@ -78,30 +90,27 @@ function Instances() {
     refetchInterval: (q) => (q.state.data?.some((i) => i.removing) ? removingPoll : false),
   });
   return (
-    <div className="narrow">
-      <div className="top">
-        <div>
-          <h1>Integrations</h1>
-          <div className="sub">
-            The GitLab and GitHub instances pergent.sh reviews on, and how people sign in. Secrets are write-only: once saved they are
-            never shown.
-          </div>
-        </div>
-        <div className="actions-row">
-          <button type="button" className="btn" onClick={() => setAdding(adding === "gitlab" ? null : "gitlab")}>
-            Add GitLab instance
-          </button>
-          <button type="button" className="btn" onClick={() => setAdding(adding === "github" ? null : "github")}>
-            Add GitHub instance
-          </button>
-        </div>
-      </div>
+    <div className="max-w-[1100px]">
+      <PageHeader
+        title="Integrations"
+        description="The GitLab and GitHub instances pergent.sh reviews on, and how people sign in. Secrets are write-only: once saved they are never shown."
+        actions={
+          <>
+            <Button type="button" variant="outline" size="sm" onClick={() => setAdding(adding === "gitlab" ? null : "gitlab")}>
+              Add GitLab instance
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => setAdding(adding === "github" ? null : "github")}>
+              Add GitHub instance
+            </Button>
+          </>
+        }
+      />
       {adding && <AddInstance key={adding} platform={adding} onClose={() => setAdding(null)} />}
       {list.isPending && <Loading />}
       {list.isError && <ErrorBox error={list.error} />}
       {list.isSuccess &&
         (list.data.length === 0 ? (
-          <div className="card empty">No instance yet. Add a GitLab or GitHub instance to start.</div>
+          <Card className="text-muted-foreground mb-4 px-4 py-8 text-center text-sm">No instance yet. Add a GitLab or GitHub instance to start.</Card>
         ) : (
           list.data.map((inst) => <InstanceCard key={inst.name} inst={inst} />)
         ))}
@@ -148,17 +157,19 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
   const platform = platformName(inst.platform);
   const fields = secretOrder.filter((f) => f in inst.secrets);
   return (
-    <section className="card" aria-label={`${platform} · ${inst.name}`}>
-      <h2>
-        <span>
+    <Card role="region" className="mb-4 gap-0 overflow-hidden py-0" aria-label={`${platform} · ${inst.name}`}>
+      <CardHeader className="border-b pt-4">
+        <CardTitle>
           {platform} · {inst.name}
-        </span>
-        <span className="actions-row">
-          {config && <span className="badge cfg">config</span>}
-          {inst.removing && <Pill tone="warn">removing</Pill>}
-        </span>
-      </h2>
-      <div className="facts">
+        </CardTitle>
+        {(config || inst.removing) && (
+          <CardAction className="flex gap-2">
+            {config && <Badge variant="grey">config</Badge>}
+            {inst.removing && <Pill tone="warn">removing</Pill>}
+          </CardAction>
+        )}
+      </CardHeader>
+      <div className="grid gap-3 px-4 py-4 text-sm">
         {inst.platform === "gitlab" ? (
           <div>Address: {inst.url}</div>
         ) : (
@@ -173,7 +184,7 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
         <TrustMode inst={inst} locked={locked} />
         <TeamsOnboard inst={inst} locked={locked} />
         <TokenQuota key={String(inst.monthlyTokenQuota)} inst={inst} locked={locked} />
-        {config && <div className="meta">This instance is managed by the config file; change it there.</div>}
+        {config && <div className={hint}>This instance is managed by the config file; change it there.</div>}
       </div>
       {fields.map((f) => (
         <SecretRow
@@ -184,15 +195,19 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
           locked={locked || (inst.platform === "gitlab" && f === "webhook_secret")}
         />
       ))}
-      {remove.isError && <ErrorBox error={remove.error} />}
-      {!locked && (
-        <div className="foot">
-          <button type="button" className="btn small danger" disabled={remove.isPending} onClick={confirmRemove}>
-            Remove
-          </button>
+      {remove.isError && (
+        <div className="px-4 pb-4">
+          <ErrorBox error={remove.error} />
         </div>
       )}
-    </section>
+      {!locked && (
+        <div className="flex justify-end border-t px-4 py-3">
+          <Button type="button" variant="destructive-outline" size="sm" disabled={remove.isPending} onClick={confirmRemove}>
+            Remove
+          </Button>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -201,15 +216,20 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
 function TrustMode({ inst, locked }: { inst: InstanceAdminView; locked: boolean }) {
   const client = useQueryClient();
   const write = useWrite();
+  const id = useId();
   const change = useMutation({
     mutationFn: (mode: string) => write<void>("PUT", `/api/admin/instances/${encodeURIComponent(inst.name)}/trusted-authors`, { mode }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["admin-instances"] }),
   });
   return (
-    <div>
-      <label>
-        Trusted authors only{" "}
-        <select
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={id} className="font-normal">
+          Trusted authors only
+        </Label>
+        <NativeSelect
+          id={id}
+          className="w-auto"
           aria-label="Trusted authors only"
           value={inst.trustedAuthorsOnly}
           disabled={locked || change.isPending}
@@ -218,8 +238,8 @@ function TrustMode({ inst, locked }: { inst: InstanceAdminView; locked: boolean 
           <option value="follow_visibility">follow visibility (on for public repositories)</option>
           <option value="on">on</option>
           <option value="off">off (trust every author)</option>
-        </select>
-      </label>
+        </NativeSelect>
+      </div>
       {change.isError && <ErrorBox error={change.error} />}
     </div>
   );
@@ -236,17 +256,18 @@ function TeamsOnboard({ inst, locked }: { inst: InstanceAdminView; locked: boole
     onSuccess: () => client.invalidateQueries({ queryKey: ["admin-instances"] }),
   });
   return (
-    <div>
-      <label>
+    <div className="grid gap-1.5">
+      <Label className="font-normal">
         <input
           type="checkbox"
+          className="accent-primary size-4"
           checked={inst.teamsMayOnboard}
           disabled={locked || change.isPending}
           onChange={(e) => change.mutate(e.target.checked)}
         />{" "}
         Teams may onboard repositories
-      </label>
-      <div className="meta">Maintainers of any team can switch on repositories the review bot reaches, and become their owner.</div>
+      </Label>
+      <div className={hint}>Maintainers of any team can switch on repositories the review bot reaches, and become their owner.</div>
       {change.isError && <ErrorBox error={change.error} />}
     </div>
   );
@@ -276,11 +297,12 @@ function TokenQuota({ inst, locked }: { inst: InstanceAdminView; locked: boolean
   // Save waits for a change; Enter in the input saves too, as for a model limit.
   const changed = text.trim() !== quotaText(inst.monthlyTokenQuota);
   return (
-    <div className="limit-field">
+    <div className="grid gap-1.5">
       <QuotaLine ariaLabel="Instance token quota" use={{ used: inst.tokensThisMonth, limit: inst.monthlyTokenQuota }} />
-      <div className="name">Monthly token quota</div>
-      <div className="inline-field">
-        <input
+      <div className="text-sm font-medium">Monthly token quota</div>
+      <div className="flex items-center gap-2">
+        <Input
+          className="max-w-48"
           type="text"
           inputMode="numeric"
           aria-label="Monthly token quota"
@@ -296,23 +318,28 @@ function TokenQuota({ inst, locked }: { inst: InstanceAdminView; locked: boolean
           }}
         />
         {!locked && (
-          <button type="button" className="btn small" disabled={change.isPending || !changed} onClick={save}>
+          <Button type="button" variant="outline" size="sm" disabled={change.isPending || !changed} onClick={save}>
             Save
-          </button>
+          </Button>
         )}
       </div>
-      <div className="meta">Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. Empty: no quota.</div>
-      {problem && <div className="meta problem">{problem}</div>}
+      <div className={hint}>Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. Empty: no quota.</div>
+      {problem && <div className="text-bad text-sm">{problem}</div>}
       {change.isError && <ErrorBox error={change.error} />}
     </div>
   );
 }
 
+// code is the look of an address to copy.
+const code = "bg-muted rounded px-1.5 py-0.5 font-mono text-xs [overflow-wrap:anywhere]";
+
 function WebhookURL({ inst }: { inst: InstanceAdminView }) {
   return (
-    <div className="webhook-url">
-      Webhook URL: <code>{inst.webhookURL}</code> <CopyButton text={inst.webhookURL} what="webhook URL" />
-      <div className="meta">
+    <div className="grid gap-1">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        Webhook URL: <code className={code}>{inst.webhookURL}</code> <CopyButton text={inst.webhookURL} what="webhook URL" />
+      </div>
+      <div className={hint}>
         {inst.platform === "gitlab" ? "pergent.sh sets this on each project." : "Set this on the review App."}
       </div>
     </div>
@@ -333,26 +360,28 @@ function SecretRow({ inst, field, locked }: { inst: InstanceAdminView; field: st
     change.mutate({ secrets: { [field]: secretValue(field, value) } });
   };
   return (
-    <div className="row wrap" role="group" aria-label={label}>
-      <div className="grow">
-        <div className="name">{label}</div>
-        <div className="meta">{secretText(inst.secrets[field])}</div>
+    <div className="flex flex-wrap items-center gap-3 border-t px-4 py-3" role="group" aria-label={label}>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium">{label}</div>
+        <div className={hint}>{secretText(inst.secrets[field])}</div>
       </div>
       {!locked && !open && (
-        <button
+        <Button
           type="button"
-          className="btn small"
+          variant="outline"
+          size="sm"
           onClick={() => {
             change.reset();
             setOpen(true);
           }}
         >
           Replace
-        </button>
+        </Button>
       )}
       {open && (
-        <form className="inline-form" onSubmit={submit}>
-          <input
+        <form className="flex flex-wrap items-center gap-2" onSubmit={submit}>
+          <Input
+            className="w-64 max-w-full"
             type="password"
             aria-label={`New ${label}`}
             {...secretFill}
@@ -361,15 +390,19 @@ function SecretRow({ inst, field, locked }: { inst: InstanceAdminView; field: st
             onChange={(e) => setValue(e.target.value)}
             required
           />
-          <button type="submit" className="btn small primary" disabled={change.isPending}>
+          <Button type="submit" size="sm" disabled={change.isPending}>
             Save
-          </button>
-          <button type="button" className="btn small" onClick={close}>
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={close}>
             Cancel
-          </button>
+          </Button>
         </form>
       )}
-      {change.isError && <ErrorBox error={change.error} />}
+      {change.isError && (
+        <div className="basis-full">
+          <ErrorBox error={change.error} />
+        </div>
+      )}
     </div>
   );
 }
@@ -397,9 +430,9 @@ function Field({
 }) {
   const id = `add-${name}`;
   return (
-    <>
-      <label htmlFor={id}>{label}</label>
-      <input
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
         id={id}
         // A secret is typed into a password input that never prefills.
         type={secret ? "password" : type}
@@ -410,8 +443,8 @@ function Field({
         onChange={(e) => set(name, e.target.value)}
         required={required}
       />
-      {help && <div className="meta">{help}</div>}
-    </>
+      {help && <div className={hint}>{help}</div>}
+    </div>
   );
 }
 
@@ -496,74 +529,76 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
 
   const title = `Add ${platformName(platform)} instance`;
   return (
-    <form className="card pad stack" aria-label={title} onSubmit={submit}>
-      <h2>{title}</h2>
-      <Field
-        d={d}
-        set={set}
-        name="name"
-        label="Name"
-        required
-        help={'1 to 63 lowercase letters, digits or "-". It can\'t change.'}
-      />
-      {github ? (
-        <>
-          <Field d={d} set={set} name="apiURL" label="API address" required help="The https address of the GitHub API." />
-          <Field d={d} set={set} name="reviewAppID" label="Review App ID" type="number" required />
-          <Field d={d} set={set} name="review_app_key" label="Review App private key" secret required />
-          <label htmlFor="add-approveWith">Approve with</label>
-          <select id="add-approveWith" value={approveWith} onChange={(e) => set("approveWith", e.target.value)}>
-            <option value="review_app">The review App (one App)</option>
-            <option value="app">A separate approve App</option>
-            <option value="token">A bot user's token</option>
-          </select>
-          <div className="meta">
-            One App is the simplest: it then needs the Pull requests: write permission. A separate App or a bot user keeps the
-            identity that writes the review from being the one that approves it.
-          </div>
-          {approveWith === "app" && (
-            <>
-              <Field d={d} set={set} name="approveAppID" label="Approve App ID" type="number" required />
-              <Field d={d} set={set} name="approve_app_key" label="Approve App private key" secret required />
-            </>
-          )}
-          {approveWith === "token" && (
-            <Field d={d} set={set} name="approve_token" label="Approve token" secret required />
-          )}
-          <Field d={d} set={set} name="webhook_secret" label="Webhook secret" secret required />
-        </>
-      ) : (
-        <>
-          <Field d={d} set={set} name="url" label="Address" required help="The https address of the GitLab server." />
-          <Field d={d} set={set} name="review_token" label="Review token" secret required />
-          <label htmlFor="add-approveWith">Approve with</label>
-          <select id="add-approveWith" value={approveWith} onChange={(e) => set("approveWith", e.target.value)}>
-            <option value="token">A separate approve bot</option>
-            <option value="review_bot">The review bot (one user)</option>
-          </select>
-          <div className="meta">
-            A separate user keeps the account that writes the review from being the one that approves it. This can't change
-            once the instance is added.
-          </div>
-          {approveWith === "token" && (
-            <Field d={d} set={set} name="approve_token" label="Approve token" secret required />
-          )}
-        </>
-      )}
-      {problem && (
-        <div className="error" role="alert">
-          {problem}
+    <form aria-label={title} onSubmit={submit}>
+      <Card className="mb-4 gap-4 px-4 py-4">
+        <CardTitle>{title}</CardTitle>
+        <Field
+          d={d}
+          set={set}
+          name="name"
+          label="Name"
+          required
+          help={'1 to 63 lowercase letters, digits or "-". It can\'t change.'}
+        />
+        {github ? (
+          <>
+            <Field d={d} set={set} name="apiURL" label="API address" required help="The https address of the GitHub API." />
+            <Field d={d} set={set} name="reviewAppID" label="Review App ID" type="number" required />
+            <Field d={d} set={set} name="review_app_key" label="Review App private key" secret required />
+            <div className="grid gap-2">
+              <Label htmlFor="add-approveWith">Approve with</Label>
+              <NativeSelect id="add-approveWith" value={approveWith} onChange={(e) => set("approveWith", e.target.value)}>
+                <option value="review_app">The review App (one App)</option>
+                <option value="app">A separate approve App</option>
+                <option value="token">A bot user's token</option>
+              </NativeSelect>
+              <div className={hint}>
+                One App is the simplest: it then needs the Pull requests: write permission. A separate App or a bot user keeps the
+                identity that writes the review from being the one that approves it.
+              </div>
+            </div>
+            {approveWith === "app" && (
+              <>
+                <Field d={d} set={set} name="approveAppID" label="Approve App ID" type="number" required />
+                <Field d={d} set={set} name="approve_app_key" label="Approve App private key" secret required />
+              </>
+            )}
+            {approveWith === "token" && (
+              <Field d={d} set={set} name="approve_token" label="Approve token" secret required />
+            )}
+            <Field d={d} set={set} name="webhook_secret" label="Webhook secret" secret required />
+          </>
+        ) : (
+          <>
+            <Field d={d} set={set} name="url" label="Address" required help="The https address of the GitLab server." />
+            <Field d={d} set={set} name="review_token" label="Review token" secret required />
+            <div className="grid gap-2">
+              <Label htmlFor="add-approveWith">Approve with</Label>
+              <NativeSelect id="add-approveWith" value={approveWith} onChange={(e) => set("approveWith", e.target.value)}>
+                <option value="token">A separate approve bot</option>
+                <option value="review_bot">The review bot (one user)</option>
+              </NativeSelect>
+              <div className={hint}>
+                A separate user keeps the account that writes the review from being the one that approves it. This can't change
+                once the instance is added.
+              </div>
+            </div>
+            {approveWith === "token" && (
+              <Field d={d} set={set} name="approve_token" label="Approve token" secret required />
+            )}
+          </>
+        )}
+        {problem && <Alert variant="destructive">{problem}</Alert>}
+        {add.isError && <ErrorBox error={add.error} />}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={add.isPending}>
+            {add.isPending ? "Checking…" : "Add"}
+          </Button>
         </div>
-      )}
-      {add.isError && <ErrorBox error={add.error} />}
-      <div className="actions-row end">
-        <button type="button" className="btn" onClick={onClose}>
-          Cancel
-        </button>
-        <button type="submit" className="btn primary" disabled={add.isPending}>
-          {add.isPending ? "Checking…" : "Add"}
-        </button>
-      </div>
+      </Card>
     </form>
   );
 }
@@ -638,13 +673,21 @@ function SignInSection() {
   const [saved, setSaved] = useState(false);
   const current = useQuery({ queryKey: ["admin-sign-in"], queryFn: () => api.get<SignInAdminView>("/api/admin/sign-in") });
   return (
-    <section className="card" aria-label="Sign-in">
-      <h2>
-        <span>Sign-in</span>
-        <span className="actions-row">{current.isSuccess && current.data.source === "config" && <span className="badge cfg">config</span>}</span>
-      </h2>
+    <Card role="region" className="mb-4 gap-0 overflow-hidden py-0" aria-label="Sign-in">
+      <CardHeader className="border-b pt-4">
+        <CardTitle>Sign-in</CardTitle>
+        {current.isSuccess && current.data.source === "config" && (
+          <CardAction>
+            <Badge variant="grey">config</Badge>
+          </CardAction>
+        )}
+      </CardHeader>
       {current.isPending && <Loading />}
-      {current.isError && <ErrorBox error={current.error} />}
+      {current.isError && (
+        <div className="p-4">
+          <ErrorBox error={current.error} />
+        </div>
+      )}
       {current.isSuccess &&
         (current.data.editable ? (
           // A new answer starts the form again from it.
@@ -653,11 +696,11 @@ function SignInSection() {
           <SignInFacts v={current.data} />
         ))}
       {saved && (
-        <div className="note" role="status">
+        <div className="text-ok px-4 pb-4 text-sm" role="status">
           Saved.
         </div>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -666,7 +709,7 @@ function SignInFacts({ v }: { v: SignInAdminView }) {
   const test = useSignInTest({});
   const list = (items: string[]) => (items.length === 0 ? "none" : items.join(", "));
   return (
-    <div className="facts">
+    <div className="grid gap-2 p-4 text-sm">
       <div>Mode: {modeNames[v.mode]}</div>
       {v.mode === "oidc" && (
         <>
@@ -690,13 +733,13 @@ function SignInFacts({ v }: { v: SignInAdminView }) {
       )}
       <div>Allowed domains: {list(v.allowedDomains)}</div>
       <div>Allowed emails: {list(v.allowedEmails)}</div>
-      <div className="meta">Sign-in is managed by the config file; change it there.</div>
+      <div className={hint}>Sign-in is managed by the config file; change it there.</div>
       {(v.mode === "oidc" || v.mode === "jwt") && (
-        <div className="actions-row">
-          <button type="button" className="btn" disabled={test.isPending} onClick={() => test.mutate()}>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" disabled={test.isPending} onClick={() => test.mutate()}>
             Test
-          </button>
-          <span className="meta">Reads {v.mode === "jwt" ? v.jwksURL : v.issuer}, the address set in the config file.</span>
+          </Button>
+          <span className={hint}>Reads {v.mode === "jwt" ? v.jwksURL : v.issuer}, the address set in the config file.</span>
         </div>
       )}
       <TestResult test={test} />
@@ -715,7 +758,11 @@ function TestResult({ test }: { test: ReturnType<typeof useSignInTest> }) {
   return (
     <>
       {test.isError && <ErrorBox error={test.error} />}
-      {test.isSuccess && <div role="status">{test.data.ok ? "It worked." : "It did not work."}</div>}
+      {test.isSuccess && (
+        <div role="status" className={test.data.ok ? "text-ok text-sm" : "text-bad text-sm"}>
+          {test.data.ok ? "It worked." : "It did not work."}
+        </div>
+      )}
     </>
   );
 }
@@ -723,7 +770,7 @@ function TestResult({ test }: { test: ReturnType<typeof useSignInTest> }) {
 function CallbackURL({ url }: { url: string }) {
   return (
     <div>
-      Redirect URI to register with the provider: <code>{url}</code>
+      Redirect URI to register with the provider: <code className={code}>{url}</code>
     </div>
   );
 }
@@ -770,9 +817,9 @@ function SignInEditor({ current, setSaved }: { current: SignInAdminView; setSave
     save.mutate(body);
   };
   const field = (k: keyof SignInForm, label: string, help?: string) => (
-    <>
-      <label htmlFor={`signin-${k}`}>{label}</label>
-      <input
+    <div className="grid gap-2">
+      <Label htmlFor={`signin-${k}`}>{label}</Label>
+      <Input
         id={`signin-${k}`}
         type="text"
         {...noFill}
@@ -781,45 +828,49 @@ function SignInEditor({ current, setSaved }: { current: SignInAdminView; setSave
         value={f[k]}
         onChange={(e) => set(k, e.target.value)}
       />
-      {help && <div className="meta">{help}</div>}
-    </>
+      {help && <div className={hint}>{help}</div>}
+    </div>
   );
   return (
-    <form className="pad stack" onSubmit={submit}>
-      <label htmlFor="signin-mode">Mode</label>
-      <select id="signin-mode" value={f.mode} onChange={(e) => set("mode", e.target.value)}>
-        {(Object.keys(modeNames) as SignInMode[]).map((m) => (
-          <option key={m} value={m}>
-            {modeNames[m]}
-          </option>
-        ))}
-      </select>
-      {f.mode === "" && (
-        <div className="meta">Only local admins can sign in. Choose OIDC, or JWT if a proxy in front of pergent.sh signs people in.</div>
-      )}
+    <form className="grid gap-4 p-4 text-sm" onSubmit={submit}>
+      <div className="grid gap-2">
+        <Label htmlFor="signin-mode">Mode</Label>
+        <NativeSelect id="signin-mode" value={f.mode} onChange={(e) => set("mode", e.target.value)}>
+          {(Object.keys(modeNames) as SignInMode[]).map((m) => (
+            <option key={m} value={m}>
+              {modeNames[m]}
+            </option>
+          ))}
+        </NativeSelect>
+        {f.mode === "" && (
+          <div className={hint}>Only local admins can sign in. Choose OIDC, or JWT if a proxy in front of pergent.sh signs people in.</div>
+        )}
+      </div>
       {oidc && (
         <>
           {field("label", "Label", "The name on the sign-in button, such as Google.")}
           {field("issuer", "Issuer", "An https address. For Google Workspace: https://accounts.google.com")}
           {field("clientID", "Client ID")}
-          <label htmlFor="signin-secret">Client secret</label>
-          <input
-            id="signin-secret"
-            type="password"
-            {...secretFill}
-            spellCheck={false}
-            value={f.clientSecret}
-            required={needsSecret}
-            onChange={(e) => set("clientSecret", e.target.value)}
-          />
-          <div className="meta">
-            <span>{secretText(current.clientSecret)}</span>. It is never shown; leave it empty to keep it.
-          </div>
-          {issuerChanged && (
-            <div className="meta" role="note">
-              You changed the issuer. Enter the client secret again: a stored secret is never sent to a new issuer.
+          <div className="grid gap-2">
+            <Label htmlFor="signin-secret">Client secret</Label>
+            <Input
+              id="signin-secret"
+              type="password"
+              {...secretFill}
+              spellCheck={false}
+              value={f.clientSecret}
+              required={needsSecret}
+              onChange={(e) => set("clientSecret", e.target.value)}
+            />
+            <div className={hint}>
+              <span>{secretText(current.clientSecret)}</span>. It is never shown; leave it empty to keep it.
             </div>
-          )}
+            {issuerChanged && (
+              <div className="text-warn text-sm" role="note">
+                You changed the issuer. Enter the client secret again: a stored secret is never sent to a new issuer.
+              </div>
+            )}
+          </div>
           <CallbackURL url={current.callbackURL} />
         </>
       )}
@@ -838,52 +889,56 @@ function SignInEditor({ current, setSaved }: { current: SignInAdminView; setSave
       )}
       {(oidc || jwt) && (
         <>
-          <label htmlFor="signin-domains">Allowed domains</label>
-          <textarea
-            id="signin-domains"
-            rows={3}
-            spellCheck={false}
-            autoCapitalize="none"
-            value={f.domains}
-            onChange={(e) => set("domains", e.target.value)}
-          />
-          <label htmlFor="signin-emails">Allowed emails</label>
-          <textarea
-            id="signin-emails"
-            rows={3}
-            spellCheck={false}
-            autoCapitalize="none"
-            value={f.emails}
-            onChange={(e) => set("emails", e.target.value)}
-          />
-          <div className="meta">
-            One per line. A person on either list can sign in. With both empty only people added under Users can. Someone on no
-            team sees nothing.
+          <div className="grid gap-2">
+            <Label htmlFor="signin-domains">Allowed domains</Label>
+            <Textarea
+              id="signin-domains"
+              rows={3}
+              spellCheck={false}
+              autoCapitalize="none"
+              value={f.domains}
+              onChange={(e) => set("domains", e.target.value)}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="signin-emails">Allowed emails</Label>
+            <Textarea
+              id="signin-emails"
+              rows={3}
+              spellCheck={false}
+              autoCapitalize="none"
+              value={f.emails}
+              onChange={(e) => set("emails", e.target.value)}
+            />
+            <div className={hint}>
+              One per line. A person on either list can sign in. With both empty only people added under Users can. Someone on no
+              team sees nothing.
+            </div>
           </div>
         </>
       )}
       {endsSessions && (
-        <div className="meta warn-text">Saving this mode or issuer ends every SSO session, yours too if you signed in that way.</div>
+        <div className="text-warn text-sm">Saving this mode or issuer ends every SSO session, yours too if you signed in that way.</div>
       )}
       {save.isError && <ErrorBox error={save.error} />}
       <TestResult test={test} />
-      <div className="actions-row end">
+      <div className="flex justify-end gap-2">
         {(oidc || jwt) && (
-          <button
+          <Button
             type="button"
-            className="btn"
+            variant="outline"
             disabled={test.isPending || (typedTarget === "" && savedTarget === "")}
             onClick={() => test.mutate()}
           >
             Test
-          </button>
+          </Button>
         )}
-        <button type="submit" className="btn primary" disabled={save.isPending}>
+        <Button type="submit" disabled={save.isPending}>
           Save
-        </button>
+        </Button>
       </div>
       {(oidc || jwt) && (
-        <div className="meta">
+        <div className={hint}>
           {typedTarget !== ""
             ? `Test reads ${typedTarget}.`
             : savedTarget !== ""

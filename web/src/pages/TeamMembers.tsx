@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { cn } from "@/lib/utils";
+
 import { api, ApiError, type AddUserBody, type MemberRole, type TeamMemberView, type TeamPageView, type UserView } from "../api";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading } from "../ui";
@@ -9,6 +17,9 @@ import { useTeamSave } from "./teamSave";
 const memberRoles: MemberRole[] = ["viewer", "maintainer"];
 const MAX_RESULTS = 10;
 const asRead = (m: TeamMemberView) => ({ accountId: m.accountId, role: m.role });
+
+// row is one line of a list in a card: a person and what can be done to them.
+const row = "flex flex-wrap items-center gap-3 border-b px-4 py-3 text-sm last:border-b-0";
 
 // TeamMembers is the team page's Members tab: each member and role, and for
 // an admin a role select, Remove, Add member (a search over the accounts that
@@ -20,18 +31,21 @@ export default function TeamMembers({ view }: { view: TeamPageView }) {
   const live = view.members.map(asRead);
   const addViewer = (accountId: number) => save.mutate({ members: [...live, { accountId, role: "viewer" }] });
   return (
-    <section className="card" aria-label="Team members">
-      <h2>Members</h2>
-      {view.members.length === 0 && <div className="pad meta">This team has no member yet.</div>}
+    <Card role="region" aria-label="Team members" className="gap-0 py-0">
+      <CardHeader className="border-b py-4">
+        <CardTitle>Members</CardTitle>
+      </CardHeader>
+      {view.members.length === 0 && <div className="text-muted-foreground px-4 py-3 text-sm">This team has no member yet.</div>}
       {view.members.map((m) => (
-        <div className="row" key={m.accountId}>
-          <div className="grow">
-            <span className="mr">{m.username}</span>
-            {view.canEdit && m.email !== "" && <span className="meta"> {m.email}</span>}
+        <div className={row} key={m.accountId}>
+          <div className="min-w-0 grow">
+            <span className="font-medium">{m.username}</span>
+            {view.canEdit && m.email !== "" && <span className="text-muted-foreground text-xs"> {m.email}</span>}
           </div>
           {view.canEdit ? (
             <>
-              <select
+              <NativeSelect
+                className="w-32"
                 aria-label={`Role of ${m.username}`}
                 value={m.role}
                 disabled={save.isPending}
@@ -44,10 +58,11 @@ export default function TeamMembers({ view }: { view: TeamPageView }) {
                     {r}
                   </option>
                 ))}
-              </select>
-              <button
+              </NativeSelect>
+              <Button
                 type="button"
-                className="btn small danger"
+                variant="destructive-outline"
+                size="sm"
                 aria-label={`Remove ${m.username}`}
                 disabled={save.isPending}
                 onClick={() => {
@@ -58,26 +73,30 @@ export default function TeamMembers({ view }: { view: TeamPageView }) {
                 }}
               >
                 Remove
-              </button>
+              </Button>
             </>
           ) : (
-            <span className="badge">{m.role}</span>
+            <Badge variant="outline">{m.role}</Badge>
           )}
         </div>
       ))}
-      {save.isError && <ErrorBox error={save.error} />}
+      {save.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={save.error} />
+        </div>
+      )}
       {view.canEdit && (
         <>
-          <div className="foot">
-            <button type="button" className="btn" onClick={() => setAdding(!adding)}>
+          <CardFooter className="bg-muted/40 justify-end gap-2 border-t py-3">
+            <Button type="button" variant="outline" size="sm" onClick={() => setAdding(!adding)}>
               Add member
-            </button>
-          </div>
+            </Button>
+          </CardFooter>
           {adding && <Search view={view} onAdd={addViewer} busy={save.isPending} />}
           <AddByEmail view={view} onKnown={addViewer} />
         </>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -96,21 +115,25 @@ function Search({ view, onAdd, busy }: { view: TeamPageView; onAdd: (accountId: 
           .filter((u) => u.kind === "sso" && !onTeam.has(u.id) && (u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)))
           .slice(0, MAX_RESULTS);
   return (
-    <section className="picker" aria-label="Add member">
-      <div className="pad search">
-        <input type="search" aria-label="Search" placeholder="Search by name or email" maxLength={100} value={text} onChange={(e) => setText(e.target.value)} />
+    <section className="border-t" aria-label="Add member">
+      <div className="px-4 py-3">
+        <Input type="search" aria-label="Search" placeholder="Search by name or email" maxLength={100} value={text} onChange={(e) => setText(e.target.value)} />
       </div>
       {users.isPending && <Loading />}
-      {users.isError && <ErrorBox error={users.error} />}
-      {users.data && q !== "" && found.length === 0 && <div className="row empty-row">Nobody to add.</div>}
+      {users.isError && (
+        <div className="px-4 pb-3">
+          <ErrorBox error={users.error} />
+        </div>
+      )}
+      {users.data && q !== "" && found.length === 0 && <div className={cn(row, "text-muted-foreground")}>Nobody to add.</div>}
       {found.map((u) => (
-        <div className="row" key={u.id}>
-          <div className="grow">
-            <span className="mr">{u.username}</span> <span className="meta">{u.email}</span>
+        <div className={row} key={u.id}>
+          <div className="min-w-0 grow">
+            <span className="font-medium">{u.username}</span> <span className="text-muted-foreground text-xs">{u.email}</span>
           </div>
-          <button type="button" className="btn small" aria-label={`Add ${u.username}`} disabled={busy} onClick={() => onAdd(u.id)}>
+          <Button type="button" variant="outline" size="sm" aria-label={`Add ${u.username}`} disabled={busy} onClick={() => onAdd(u.id)}>
             Add
-          </button>
+          </Button>
         </div>
       ))}
     </section>
@@ -166,34 +189,38 @@ function AddByEmail({ view, onKnown }: { view: TeamPageView; onKnown: (accountId
     if (typed !== "") add.mutate({ email: typed, teams: [{ teamId: view.team.id, role: "viewer" }] });
   };
   return (
-    <div className="pad add-email">
-      <label htmlFor={`team-${view.team.id}-email`}>Add by email</label>
-      <input
-        id={`team-${view.team.id}-email`}
-        type="text"
-        inputMode="email"
-        autoComplete="off"
-        autoCapitalize="none"
-        spellCheck={false}
-        maxLength={254}
-        value={email}
-        onChange={(e) => {
-          setEmail(e.target.value);
-          setNote(null);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            submit();
-          }
-        }}
-      />
-      <button type="button" className="btn small" disabled={add.isPending} onClick={submit}>
-        Add email
-      </button>
-      <div className="meta">A new email makes the account now, as invited, and puts it on this team as a viewer. It can sign in whatever the allowed domains say.</div>
+    <div className="add-email grid gap-2 border-t px-4 py-4">
+      <Label htmlFor={`team-${view.team.id}-email`}>Add by email</Label>
+      <div className="flex items-center gap-2">
+        <Input
+          id={`team-${view.team.id}-email`}
+          type="text"
+          inputMode="email"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          maxLength={254}
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            setNote(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              submit();
+            }
+          }}
+        />
+        <Button type="button" variant="outline" size="sm" disabled={add.isPending} onClick={submit}>
+          Add email
+        </Button>
+      </div>
+      <div className="text-muted-foreground text-xs">
+        A new email makes the account now, as invited, and puts it on this team as a viewer. It can sign in whatever the allowed domains say.
+      </div>
       {note !== null && (
-        <div className={note.error ? "error" : "meta"} role={note.error ? "alert" : "status"}>
+        <div className={note.error ? "text-bad text-sm" : "text-muted-foreground text-sm"} role={note.error ? "alert" : "status"}>
           {note.text}
         </div>
       )}

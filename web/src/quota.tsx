@@ -28,10 +28,12 @@ export function QuotaLine({ use, label, ariaLabel }: { use: QuotaUseView; label?
   const { used, limit } = use;
   const state = limit === null ? "" : used >= limit ? "full" : used * 5 >= limit * 4 ? "warn" : "";
   return (
-    <div className="quota-line">
-      {label && <span className="name">{label}</span>}
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1 text-sm">
+      {label && <span className="min-w-28 font-semibold">{label}</span>}
       <span>{limit === null ? `Tokens this month: ${tokens(used)}` : `Tokens this month: ${tokens(used)} of ${tokens(limit)}`}</span>
       {limit !== null && (
+        // quota-meter and its state stay as class names: the bar's colours
+        // are drawn on the meter's own parts, which have no Tailwind form.
         <meter className={`quota-meter ${state}`.trim()} aria-label={ariaLabel} min={0} max={limit} value={Math.min(used, limit)}>
           {tokens(used)} of {tokens(limit)}
         </meter>

@@ -1,9 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 import { api, paths, type UsageClientView, type UsageOverviewView } from "../api";
-import { ErrorBox, Loading, Pill, count } from "../ui";
-import { CsvLink, DailyTable, EmptyRow, PeriodSelect, periods, UsageCells, UsageHead, UsageNotes, UsageStats } from "./usageParts";
+import { ErrorBox, Loading, PageHeader, Pill, count } from "../ui";
+import {
+  CsvLink,
+  DailyTable,
+  EmptyRow,
+  PeriodSelect,
+  periods,
+  num,
+  UsageCard,
+  UsageCells,
+  UsageHead,
+  UsageNotes,
+  UsageStats,
+  usageTable,
+} from "./usageParts";
 import { useUrlParam } from "../urlState";
 
 // Usage is where the model tokens went across every repository and API client,
@@ -17,16 +32,16 @@ export default function Usage() {
   });
   return (
     <>
-      <div className="top">
-        <div>
-          <h1>Usage</h1>
-          <div className="sub">Where model tokens went in the last {days} days, across every repository and API client</div>
-        </div>
-        <div className="actions-row">
-          <PeriodSelect days={days} onChange={setDays} />
-          <CsvLink days={days} />
-        </div>
-      </div>
+      <PageHeader
+        title="Usage"
+        description={`Where model tokens went in the last ${days} days, across every repository and API client`}
+        actions={
+          <>
+            <PeriodSelect days={days} onChange={setDays} />
+            <CsvLink days={days} />
+          </>
+        }
+      />
       <UsageNotes />
       {data.isPending && <Loading />}
       {data.isError && <ErrorBox error={data.error} />}
@@ -38,80 +53,80 @@ export default function Usage() {
 function Body({ view, days }: { view: UsageOverviewView; days: number }) {
   const { tokens } = view;
   return (
-    <>
+    <div className="flex flex-col gap-6">
       <UsageStats tokens={tokens} reviews={view.reviews} />
-      <section className="card scroll" aria-label="Repositories">
-        <h2>Repositories</h2>
+      <UsageCard label="Repositories">
         {view.repositories.length === 0 ? (
           <EmptyRow>No usage in this period.</EmptyRow>
         ) : (
-          <table className="table">
-            <thead>
+          <Table className={usageTable}>
+            <TableHeader className="bg-muted/40">
               <UsageHead
                 first="Repository"
                 after={
                   <>
-                    <th className="num">On global keys</th>
-                    <th className="num">On team keys</th>
+                    <TableHead className={num}>On global keys</TableHead>
+                    <TableHead className={num}>On team keys</TableHead>
                   </>
                 }
               >
-                <th className="num">Reviews</th>
+                <TableHead className={num}>Reviews</TableHead>
               </UsageHead>
-            </thead>
-            <tbody>
+            </TableHeader>
+            <TableBody>
               {view.repositories.map((r) => (
-                <tr key={`${r.instance}/${r.project}`}>
-                  <td>
+                <TableRow key={`${r.instance}/${r.project}`}>
+                  <TableCell>
                     {r.switchedOn || r.paused ? (
-                      <>
-                        <Link to={paths.usageRepo(r.instance, r.project)}>{`${r.instance}/${r.project}`}</Link>
+                      <span className="inline-flex items-center gap-2">
+                        <Link className="text-primary hover:underline" to={paths.usageRepo(r.instance, r.project)}>{`${r.instance}/${r.project}`}</Link>
                         {r.paused && <Pill tone="grey">paused</Pill>}
-                      </>
+                      </span>
                     ) : (
                       // A repository removed has no page: the API answers 404.
                       <>
-                        {`${r.instance}/${r.project}`}
-                        <Pill tone="grey">removed</Pill>
+                        <span className="inline-flex items-center gap-2">
+                          {`${r.instance}/${r.project}`}
+                          <Pill tone="grey">removed</Pill>
+                        </span>
                         <div>
-                          <a href={paths.apiUsageCSV(days, r.instance, r.project)} download>
+                          <a className="text-primary text-xs hover:underline" href={paths.apiUsageCSV(days, r.instance, r.project)} download>
                             CSV
                           </a>
                         </div>
                       </>
                     )}
-                  </td>
-                  <td className="num">{r.reviews}</td>
+                  </TableCell>
+                  <TableCell className={num}>{r.reviews}</TableCell>
                   <UsageCells tokens={r.tokens} />
-                  <td className="num">{count(r.globalTokens)}</td>
-                  <td className="num">{count(r.teamTokens)}</td>
-                </tr>
+                  <TableCell className={num}>{count(r.globalTokens)}</TableCell>
+                  <TableCell className={num}>{count(r.teamTokens)}</TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
-      </section>
-      <section className="card scroll" aria-label="API clients">
-        <h2>API clients</h2>
+      </UsageCard>
+      <UsageCard label="API clients">
         {view.clients.length === 0 ? (
           <EmptyRow>No usage in this period.</EmptyRow>
         ) : (
-          <table className="table">
-            <thead>
+          <Table className={usageTable}>
+            <TableHeader className="bg-muted/40">
               <UsageHead first="Client and tenants">
-                <th className="num">Reviews</th>
+                <TableHead className={num}>Reviews</TableHead>
               </UsageHead>
-            </thead>
-            <tbody>
+            </TableHeader>
+            <TableBody>
               {view.clients.map((c) => (
                 <ClientRows key={c.name} client={c} />
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </UsageCard>
       <DailyTable daily={view.daily} />
-    </>
+    </div>
   );
 }
 
@@ -120,24 +135,31 @@ function Body({ view, days }: { view: UsageOverviewView; days: number }) {
 function ClientRows({ client }: { client: UsageClientView }) {
   return (
     <>
-      <tr>
-        <td>
-          <Link to={paths.clientPage(client.name)}>{client.name}</Link>
-        </td>
-        <td className="num">{client.reviews}</td>
+      <TableRow>
+        <TableCell>
+          <Link className="text-primary hover:underline" to={paths.clientPage(client.name)}>
+            {client.name}
+          </Link>
+        </TableCell>
+        <TableCell className={num}>{client.reviews}</TableCell>
         <UsageCells tokens={client.tokens} />
-      </tr>
+      </TableRow>
+      {/* A tenant is muted and set in under its client. */}
       {client.tenants.map((t) => (
-        <tr key={t.tenant} className="tenant-row">
-          <td>{t.tenant === "" ? "(no tenant)" : t.tenant}</td>
-          <td className="num">{t.reviews}</td>
+        <TableRow key={t.tenant} className="text-muted-foreground">
+          <TableCell>
+            <span className="pl-4">{t.tenant === "" ? "(no tenant)" : t.tenant}</span>
+          </TableCell>
+          <TableCell className={num}>{t.reviews}</TableCell>
           <UsageCells tokens={t.tokens} />
-        </tr>
+        </TableRow>
       ))}
       {client.moreTenants > 0 && (
-        <tr className="tenant-row">
-          <td colSpan={6}>{`and ${client.moreTenants} more ${client.moreTenants === 1 ? "tenant" : "tenants"}`}</td>
-        </tr>
+        <TableRow className="text-muted-foreground">
+          <TableCell colSpan={6}>
+            <span className="pl-4">{`and ${client.moreTenants} more ${client.moreTenants === 1 ? "tenant" : "tenants"}`}</span>
+          </TableCell>
+        </TableRow>
       )}
     </>
   );

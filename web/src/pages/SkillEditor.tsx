@@ -2,10 +2,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+
 import { api, isStatus, paths, type SkillDetail, type SkillVersion, type SkillVersionDetail } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { Ago, ErrorBox, Loading, NotFound, Pill, SkillSourceText, bytesText } from "../ui";
+import { Ago, ErrorBox, Loading, NotFound, PageHeader, Pill, SkillSourceText, bytesText } from "../ui";
 import { useUnsavedGuard } from "../unsaved";
 import Markdown from "../MarkdownLazy";
 
@@ -15,10 +22,27 @@ const maxSkillBytes = 128 * 1024;
 
 const sizeOf = (text: string) => new TextEncoder().encode(text).length;
 
+// skillText is the skill text box: monospace, tall enough to read a skill.
+const skillText = "min-h-[360px] font-mono text-xs";
+// hint is the small grey line under a field.
+const hint = "text-muted-foreground text-xs";
+
+// Crumbs is the way back to the skill list, over the page's title.
+function Crumbs({ here }: { here: string }) {
+  return (
+    <div className="text-muted-foreground mb-1.5 text-xs">
+      <Link className="text-muted-foreground hover:underline" to="/skills">
+        Skills
+      </Link>{" "}
+      / {here}
+    </div>
+  );
+}
+
 function SizeCounter({ text }: { text: string }) {
   const n = sizeOf(text);
   return (
-    <span className={n > maxSkillBytes ? "problem" : "meta"}>
+    <span className={cn("text-xs", n > maxSkillBytes ? "problem text-bad" : "text-muted-foreground")}>
       {bytesText(n)} of {bytesText(maxSkillBytes)}
     </span>
   );
@@ -50,56 +74,56 @@ export function NewSkill() {
     create.mutate();
   };
   return (
-    <div className="narrow">
-      <div className="crumbs">
-        <Link to="/skills">Skills</Link> / New skill
-      </div>
-      <div className="top">
-        <h1>New skill</h1>
-      </div>
-      <form className="card pad stack" aria-label="New skill" onSubmit={submit}>
-        <div>
-          <label htmlFor="skill-name">Name</label>
-          <input
-            id="skill-name"
-            type="text"
-            autoComplete="off"
-            maxLength={100}
-            pattern="[A-Za-z0-9][A-Za-z0-9._\-]*"
-            title="Letters, digits, dots, dashes and underscores, starting with a letter or digit"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-          <div className="meta">The name can't change later.</div>
-        </div>
-        <div>
-          <label htmlFor="skill-text">Skill text</label>
-          <textarea
-            id="skill-text"
-            className="skill-text"
-            spellCheck={false}
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            required
-          />
-          <div className="meta">
-            A markdown file. An optional frontmatter may set paths, exclude and cross_batch; its name must match the name above.
+    <div className="max-w-[1100px]">
+      <Crumbs here="New skill" />
+      <PageHeader title="New skill" />
+      <Card>
+        <form className="flex flex-col gap-4 px-4" aria-label="New skill" onSubmit={submit}>
+          <div className="grid gap-2">
+            <Label htmlFor="skill-name">Name</Label>
+            <Input
+              id="skill-name"
+              type="text"
+              autoComplete="off"
+              maxLength={100}
+              pattern="[A-Za-z0-9][A-Za-z0-9._\-]*"
+              title="Letters, digits, dots, dashes and underscores, starting with a letter or digit"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+            <div className={hint}>The name can't change later.</div>
           </div>
-        </div>
-        <label className="check">
-          <input type="checkbox" checked={addToDefaults} onChange={(e) => setAddToDefaults(e.target.checked)} />
-          Add to default skills
-        </label>
-        <div className="meta">A repository that sets no skills of its own uses the default skills.</div>
-        <div className="actions-row end">
-          <SizeCounter text={content} />
-          <button type="submit" className="btn primary" disabled={create.isPending || sizeOf(content) > maxSkillBytes}>
-            Create skill
-          </button>
-        </div>
-        {create.isError && <ErrorBox error={create.error} />}
-      </form>
+          <div className="grid gap-2">
+            <Label htmlFor="skill-text">Skill text</Label>
+            <Textarea
+              id="skill-text"
+              className={skillText}
+              spellCheck={false}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              required
+            />
+            <div className={hint}>
+              A markdown file. An optional frontmatter may set paths, exclude and cross_batch; its name must match the name above.
+            </div>
+          </div>
+          <div className="grid gap-2">
+            <Label className="font-normal">
+              <input type="checkbox" className="accent-primary size-4" checked={addToDefaults} onChange={(e) => setAddToDefaults(e.target.checked)} />
+              Add to default skills
+            </Label>
+            <div className={hint}>A repository that sets no skills of its own uses the default skills.</div>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <SizeCounter text={content} />
+            <Button type="submit" disabled={create.isPending || sizeOf(content) > maxSkillBytes}>
+              Create skill
+            </Button>
+          </div>
+          {create.isError && <ErrorBox error={create.error} />}
+        </form>
+      </Card>
     </div>
   );
 }
@@ -159,62 +183,58 @@ function SkillPage({ skill, reload }: { skill: SkillDetail; reload: () => Promis
   };
   const stale = save.isError && isStatus(save.error, 409);
   return (
-    <div className="narrow">
-      <div className="crumbs">
-        <Link to="/skills">Skills</Link> / {skill.name}
-      </div>
-      <div className="top">
-        <div>
-          <h1>
-            {skill.name} {skill.inDefaults && <Pill tone="run">default</Pill>}
-          </h1>
-          <div className="sub">
-            v{skill.version} · <SkillSourceText source={skill.source} />
-            {skill.source?.commit ? ` · commit ${skill.source.commit.slice(0, 7)}` : ""} · {bytesText(skill.size)}
-          </div>
-        </div>
+    <div className="flex max-w-[1100px] flex-col gap-4">
+      <div>
+        <Crumbs here={skill.name} />
+        <PageHeader
+          className="mb-2"
+          title={
+            <>
+              {skill.name} {skill.inDefaults && <Pill tone="run">default</Pill>}
+            </>
+          }
+          description={
+            <>
+              v{skill.version} · <SkillSourceText source={skill.source} />
+              {skill.source?.commit ? ` · commit ${skill.source.commit.slice(0, 7)}` : ""} · {bytesText(skill.size)}
+            </>
+          }
+        />
       </div>
       {editable ? (
-        <form className="card pad stack" aria-label="Edit skill" onSubmit={submit}>
-          <label htmlFor="skill-text">Skill text</label>
-          <textarea
-            id="skill-text"
-            className="skill-text"
-            spellCheck={false}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-          <div className="actions-row end">
-            <SizeCounter text={draft} />
-            {dirty && <span className="meta">Unsaved changes</span>}
-            <button
-              type="submit"
-              className="btn primary"
-              disabled={save.isPending || draft === base.content || draft.trim() === "" || sizeOf(draft) > maxSkillBytes}
-            >
-              Save
-            </button>
-          </div>
-          {note && (
-            <div className="note" role="status">
-              {note}
+        <Card>
+          <form className="flex flex-col gap-3 px-4" aria-label="Edit skill" onSubmit={submit}>
+            <Label htmlFor="skill-text">Skill text</Label>
+            <Textarea id="skill-text" className={skillText} spellCheck={false} value={draft} onChange={(e) => setDraft(e.target.value)} />
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <SizeCounter text={draft} />
+              {dirty && <span className={hint}>Unsaved changes</span>}
+              <Button type="submit" disabled={save.isPending || draft === base.content || draft.trim() === "" || sizeOf(draft) > maxSkillBytes}>
+                Save
+              </Button>
             </div>
-          )}
-          {save.isError && <ErrorBox error={save.error} />}
-          {stale && (
-            <div className="actions-row">
-              <button type="button" className="btn small" onClick={() => void reloadText()}>
-                Reload
-              </button>
-              <span className="meta">Reload shows the saved text and drops your changes.</span>
-            </div>
-          )}
-        </form>
+            {note && (
+              <div className="text-ok text-sm" role="status">
+                {note}
+              </div>
+            )}
+            {save.isError && <ErrorBox error={save.error} />}
+            {stale && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => void reloadText()}>
+                  Reload
+                </Button>
+                <span className={hint}>Reload shows the saved text and drops your changes.</span>
+              </div>
+            )}
+          </form>
+        </Card>
       ) : (
-        <section className="card" aria-label="Skill text">
-          {me.admin && <div className="pad meta">An installed skill can't be edited. Copy it from the list to change it.</div>}
+        // The markdown view brings its own room at the sides.
+        <Card role="region" aria-label="Skill text">
+          {me.admin && <div className="text-muted-foreground px-4 text-sm">An installed skill can't be edited. Copy it from the list to change it.</div>}
           <Markdown text={skill.content} />
-        </section>
+        </Card>
       )}
       <Versions name={skill.name} versions={skill.versions} />
     </div>
@@ -229,29 +249,40 @@ function Versions({ name, versions }: { name: string; versions: SkillVersion[] }
     enabled: shown !== null,
   });
   return (
-    <section className="card" aria-label="Versions">
-      <h2>Versions</h2>
+    <Card role="region" aria-label="Versions" className="gap-0 py-0">
+      <CardHeader className="border-b py-4">
+        <CardTitle>Versions</CardTitle>
+      </CardHeader>
       {versions.map((v) => (
-        <div className="row" key={v.version}>
-          <b>v{v.version}</b>
-          <span className="grow meta">
+        <div className="flex items-center gap-3 border-b px-4 py-3 text-sm last:border-b-0" key={v.version}>
+          <b className="font-semibold">v{v.version}</b>
+          <span className="text-muted-foreground min-w-0 grow text-xs">
             <Ago t={v.at} />
             {v.actor ? ` · ${v.actor}` : ""}
             {v.commit ? ` · commit ${v.commit.slice(0, 7)}` : ""}
           </span>
-          <button
+          <Button
             type="button"
-            className="btn small"
+            variant="outline"
+            size="sm"
             aria-label={`View v${v.version}`}
             onClick={() => setShown(shown === v.version ? null : v.version)}
           >
             {shown === v.version ? "Hide" : "View"}
-          </button>
+          </Button>
         </div>
       ))}
       {shown !== null && one.isPending && <Loading />}
-      {shown !== null && one.isError && <ErrorBox error={one.error} />}
-      {shown !== null && one.isSuccess && <Markdown text={one.data.content} />}
-    </section>
+      {shown !== null && one.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={one.error} />
+        </div>
+      )}
+      {shown !== null && one.isSuccess && (
+        <div className="border-t pt-3">
+          <Markdown text={one.data.content} />
+        </div>
+      )}
+    </Card>
   );
 }

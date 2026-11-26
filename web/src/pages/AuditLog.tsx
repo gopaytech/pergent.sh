@@ -2,8 +2,12 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { Fragment, type ReactNode } from "react";
 import { Link } from "react-router";
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 import { api, paths, query, type AuditPageView, type AuditView } from "../api";
-import { ErrorBox, Loading, Pill, SearchField, type Tone } from "../ui";
+import { ErrorBox, Loading, PageHeader, Pill, SearchField, type Tone } from "../ui";
 import { useSearchText } from "../useSearchText";
 
 // day is an RFC 3339 time's UTC day, as "Wed 25 Nov 2026" (the API sends
@@ -41,7 +45,7 @@ function Who({ actor }: { actor: string }) {
   return (
     <>
       {m[1]}
-      <div className="meta">{m[2]}</div>
+      <div className="meta text-muted-foreground text-xs">{m[2]}</div>
     </>
   );
 }
@@ -51,9 +55,9 @@ function Who({ actor }: { actor: string }) {
 function Where({ e }: { e: AuditView }) {
   if (e.project === "") return <>{e.instance}</>;
   return (
-    <Link to={paths.repo(e.instance, e.project)} title={`${e.instance}/${e.project}`}>
+    <Link className="text-foreground no-underline hover:underline" to={paths.repo(e.instance, e.project)} title={`${e.instance}/${e.project}`}>
       {e.project}
-      <div className="meta">{e.instance}</div>
+      <div className="meta text-muted-foreground text-xs">{e.instance}</div>
     </Link>
   );
 }
@@ -63,22 +67,26 @@ function Where({ e }: { e: AuditView }) {
 // linked to the review page. Any other detail is text, wrapped.
 const pairs = /^\S+=\S*( \S+=\S*)*$/;
 function Detail({ e }: { e: AuditView }) {
-  if (!pairs.test(e.detail)) return <span className="audit-text">{e.detail}</span>;
+  if (!pairs.test(e.detail)) return <span>{e.detail}</span>;
   return (
-    <span className="audit-kvs">
+    <span className="flex flex-wrap gap-x-3 gap-y-1">
       {e.detail.split(" ").map((pair, i) => {
         const at = pair.indexOf("=");
         const key = pair.slice(0, at);
         const value = pair.slice(at + 1);
         let shown: ReactNode = value;
         if (/^[0-9a-f]{12,}$/i.test(value)) {
-          shown = <abbr title={value}>{value.slice(0, 8)}</abbr>;
+          shown = (
+            <abbr className="font-mono text-xs no-underline" title={value}>
+              {value.slice(0, 8)}
+            </abbr>
+          );
         } else if ((key === "mr" || key === "pr") && /^\d+$/.test(value) && e.project !== "") {
           shown = <Link to={paths.review(e.instance, e.project, Number(value))}>{value}</Link>;
         }
         return (
-          <span className="audit-kv" key={i}>
-            <span className="k">{key}</span> {shown}
+          <span key={i}>
+            <span className="text-muted-foreground">{key}</span> {shown}
           </span>
         );
       })}
@@ -103,15 +111,10 @@ export default function AuditLog() {
   // they stay, and so does the button to try again.
   const entries = log.data?.pages.flatMap((p) => p.entries) ?? [];
   return (
-    <div className="narrow">
-      <div className="top">
-        <div>
-          <h1>Audit log</h1>
-          <div className="sub">Every change made in the dashboard, kept for 90 days. Never a secret. Times are UTC.</div>
-        </div>
-      </div>
-      <div className="card">
-        <div className="pad search filters">
+    <div className="max-w-[1100px]">
+      <PageHeader title="Audit log" description="Every change made in the dashboard, kept for 90 days. Never a secret. Times are UTC." />
+      <Card className="mb-4 gap-0 overflow-hidden py-0">
+        <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
           <SearchField
             label="Search the audit log"
             placeholder="Search by who, what, repository or detail"
@@ -123,68 +126,66 @@ export default function AuditLog() {
         {log.isError && !log.isFetchNextPageError && <ErrorBox error={log.error} onRetry={() => log.refetch()} />}
         {log.data &&
           (entries.length === 0 && !log.hasNextPage ? (
-            <div className="pad empty">
+            <div className="text-muted-foreground px-4 py-8 text-center text-sm">
               {q === "" ? "Nothing is recorded yet." : `No entry holds "${q}". Try a shorter search, or clear it.`}
             </div>
           ) : (
-            <div className="table-scroll">
-              <table className="table audit">
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Who</th>
-                    <th>What</th>
-                    <th>Where</th>
-                    <th>Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {entries.map((e, i) => {
-                    const d = day(e.at);
-                    const first = i === 0 || day(entries[i - 1].at) !== d;
-                    return (
-                      <Fragment key={e.id}>
-                        {first && (
-                          <tr className="day-row">
-                            <th colSpan={5} scope="colgroup">
-                              {d}
-                            </th>
-                          </tr>
-                        )}
-                        <tr>
-                          <td className="nowrap">
-                            <time dateTime={e.at} title={`${e.at.slice(0, 10)} ${clock(e.at)} UTC`}>
-                              {clock(e.at)}
-                            </time>
-                          </td>
-                          <td>
-                            <Who actor={e.actor} />
-                          </td>
-                          <td className="nowrap">
-                            <Pill tone={toneOf(e.action)}>{what(e.action)}</Pill>
-                          </td>
-                          <td className="mr">
-                            <Where e={e} />
-                          </td>
-                          <td className="detail">
-                            <Detail e={e} />
-                          </td>
-                        </tr>
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Who</TableHead>
+                  <TableHead>What</TableHead>
+                  <TableHead>Where</TableHead>
+                  <TableHead>Detail</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {entries.map((e, i) => {
+                  const d = day(e.at);
+                  const first = i === 0 || day(entries[i - 1].at) !== d;
+                  return (
+                    <Fragment key={e.id}>
+                      {first && (
+                        <TableRow className="day-row bg-muted/50 hover:bg-muted/50">
+                          <TableHead colSpan={5} scope="colgroup" className="text-foreground h-8 px-4 text-xs font-semibold">
+                            {d}
+                          </TableHead>
+                        </TableRow>
+                      )}
+                      <TableRow className="[&>td]:align-top">
+                        <TableCell className="whitespace-nowrap">
+                          <time dateTime={e.at} title={`${e.at.slice(0, 10)} ${clock(e.at)} UTC`}>
+                            {clock(e.at)}
+                          </time>
+                        </TableCell>
+                        <TableCell>
+                          <Who actor={e.actor} />
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          <Pill tone={toneOf(e.action)}>{what(e.action)}</Pill>
+                        </TableCell>
+                        <TableCell>
+                          <Where e={e} />
+                        </TableCell>
+                        <TableCell className="max-w-[420px] min-w-[220px] [overflow-wrap:anywhere]">
+                          <Detail e={e} />
+                        </TableCell>
+                      </TableRow>
+                    </Fragment>
+                  );
+                })}
+              </TableBody>
+            </Table>
           ))}
         {log.hasNextPage && (
-          <div className="foot">
-            <button type="button" className="btn" disabled={log.isFetchingNextPage} onClick={() => log.fetchNextPage()}>
+          <div className="flex justify-end border-t px-4 py-3">
+            <Button type="button" variant="outline" size="sm" disabled={log.isFetchingNextPage} onClick={() => log.fetchNextPage()}>
               Load more
-            </button>
+            </Button>
           </div>
         )}
-      </div>
+      </Card>
       {log.isFetchNextPageError && <ErrorBox error={log.error} />}
     </div>
   );

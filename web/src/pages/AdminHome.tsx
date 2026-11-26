@@ -1,6 +1,11 @@
+import { TriangleAlertIcon } from "lucide-react";
 import { Link } from "react-router";
 
+import { Alert } from "@/components/ui/alert";
+import { Card } from "@/components/ui/card";
+
 import { useMe } from "../layout/me";
+import { PageHeader } from "../ui";
 
 const areas: [string, string, string][] = [
   ["/admin/users", "Users", "Who has signed in, who is an admin, and who waits for a team."],
@@ -16,30 +21,28 @@ export default function AdminHome() {
   const me = useMe();
   return (
     <>
-      <div className="top">
-        <div>
-          <h1>Admin</h1>
-          <div className="sub">Manage who can sign in, what pergent.sh is connected to, and how it behaves.</div>
-        </div>
-      </div>
+      <PageHeader title="Admin" description="Manage who can sign in, what pergent.sh is connected to, and how it behaves." />
       {me.waitingUsers > 0 && (
-        <div className="alert" role="note">
-          <span aria-hidden="true">⚠️</span>
+        <Alert variant="warn" role="note" className="mb-4">
+          <TriangleAlertIcon aria-hidden="true" />
           <span className="prose">
-            {me.waitingUsers} {me.waitingUsers === 1 ? "user is" : "users are"} waiting for a team. <Link to="/admin/users">Open Users</Link>
+            {me.waitingUsers} {me.waitingUsers === 1 ? "user is" : "users are"} waiting for a team.{" "}
+            <Link className="font-medium underline underline-offset-4" to="/admin/users">
+              Open Users
+            </Link>
           </span>
-        </div>
+        </Alert>
       )}
-      <section className="card" aria-label="Admin pages">
+      <Card role="region" aria-label="Admin pages" className="gap-0 py-0">
         {areas.map(([to, label, text]) => (
-          <div className="row" key={to}>
-            <div className="grow">
-              <Link to={to}>{label}</Link>
-              <div className="meta">{text}</div>
-            </div>
+          <div className="border-b px-4 py-3 last:border-b-0" key={to}>
+            <Link className="text-primary text-sm font-medium underline-offset-4 hover:underline" to={to}>
+              {label}
+            </Link>
+            <div className="text-muted-foreground text-sm">{text}</div>
           </div>
         ))}
-      </section>
+      </Card>
     </>
   );
 }

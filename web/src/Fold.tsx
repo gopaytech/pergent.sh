@@ -1,5 +1,9 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 
+import { ChevronRight } from "lucide-react";
+
+import { cn } from "@/lib/utils";
+
 // FoldHead is a card's title as a button that folds and unfolds the card's
 // body, with a one-line summary of what is inside, so a long page reads at
 // a glance while every card is folded. children are buttons that sit on
@@ -18,10 +22,22 @@ export function FoldHead({
   children?: ReactNode;
 }) {
   return (
-    <h2 className="fold-head">
-      <button type="button" className="fold" aria-expanded={open} data-fold="" onClick={onToggle}>
-        <span className="fold-title">{title}</span>
-        {summary !== undefined && summary !== "" && <span className="fold-sum">{summary}</span>}
+    <h2 className="flex items-center gap-2 pr-4 text-[15px] leading-tight font-semibold">
+      <button
+        type="button"
+        className="focus-visible:ring-ring/50 flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-xl px-4 py-3 text-left outline-none focus-visible:ring-[3px]"
+        aria-expanded={open}
+        data-fold=""
+        onClick={onToggle}
+      >
+        <ChevronRight
+          className={cn("text-muted-foreground size-4 shrink-0 transition-transform", open && "rotate-90")}
+          aria-hidden="true"
+        />
+        <span className="flex shrink-0 items-center gap-1.5">{title}</span>
+        {summary !== undefined && summary !== "" && (
+          <span className="text-muted-foreground min-w-0 truncate text-sm font-normal">{summary}</span>
+        )}
       </button>
       {children}
     </h2>
@@ -58,11 +74,23 @@ export function FoldCard({
   const startOpen = useContext(FoldsStartOpen);
   const [open, setOpen] = useState(defaultOpen || startOpen);
   return (
-    <section className={open ? "card" : "card folded"} aria-label={label} data-fold-card="">
+    // data-slot="card" marks it as a card, as the Card component does;
+    // "folded" is what openFoldOf looks for.
+    <section
+      className={cn(
+        "bg-card text-card-foreground mb-4 overflow-hidden rounded-xl border shadow-xs",
+        !open && "folded",
+      )}
+      aria-label={label}
+      data-fold-card=""
+      data-slot="card"
+    >
       <FoldHead title={title} summary={summary} open={open} onToggle={() => setOpen(!open)}>
         {actions}
       </FoldHead>
-      <div hidden={!open}>{children}</div>
+      <div className="border-t" hidden={!open}>
+        {children}
+      </div>
     </section>
   );
 }

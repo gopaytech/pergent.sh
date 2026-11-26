@@ -22,11 +22,48 @@ import {
   type RunSummary,
   type SkillView,
 } from "../api";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+
 import { useWrite } from "../layout/write";
 import RunLog from "../RunLog";
-import { Ago, CopyButton, ErrorBox, ExternalLink, Loading, NotFound, OutcomePill, Pill, Tabs, ago, bytesText, changeRef, duration, platformName, skillOrigin, type Tone, utcText } from "../ui";
+import {
+  Ago,
+  CopyButton,
+  ErrorBox,
+  ExternalLink,
+  Loading,
+  NotFound,
+  OutcomePill,
+  PageHeader,
+  Pill,
+  Tabs,
+  ago,
+  bytesText,
+  changeRef,
+  duration,
+  platformName,
+  skillOrigin,
+  type Tone,
+  utcText,
+} from "../ui";
 import { useUrlParam } from "../urlState";
 import { TokenTable, TokensTotal } from "./usageParts";
+
+// The class names the page's cards share.
+// listCard is a card of rows under a title; each row draws its own top line.
+const listCard = "gap-0 overflow-hidden py-0";
+// line is one row or block of a card, under a line.
+const line = "border-t px-4 py-3 text-sm";
+// muted is a note in the card's smaller, lighter text.
+const muted = "text-muted-foreground text-xs";
+// groupHead is the small heading over a group of rows in a card.
+const groupHead = "text-muted-foreground text-[13px] font-semibold";
+// codeBox is model or Job text shown as written, in a box of its own.
+const codeBox = "bg-muted/50 rounded-md border px-3 py-2.5 font-mono text-xs break-words whitespace-pre-wrap";
 
 const triggers: Record<string, string> = {
   first: "first run",
@@ -91,47 +128,66 @@ function Review({ view }: { view: ReviewDetailView }) {
     .join(" · ");
   return (
     <>
-      <div className="crumbs">
-        <Link to="/reviews">Reviews</Link> / <Link to={paths.repo(header.instance, header.project)}>{header.project}</Link> /{" "}
-        {header.platform === "github" ? "#" : "!"}
+      <div className="text-muted-foreground mb-2 text-sm">
+        <Link className={crumb} to="/reviews">
+          Reviews
+        </Link>{" "}
+        /{" "}
+        <Link className={crumb} to={paths.repo(header.instance, header.project)}>
+          {header.project}
+        </Link>{" "}
+        / {header.platform === "github" ? "#" : "!"}
         {header.number}
       </div>
-      <div className="head">
-        <div>
-          <h1>
-            {header.title || changeRef(header.platform, header.project, header.number)} {runs[0] && <OutcomePill outcome={runs[0].outcome} />}
-          </h1>
-          <div className="sub">
+      <PageHeader
+        title={
+          <>
+            {header.title || changeRef(header.platform, header.project, header.number)}{" "}
+            {runs[0] && (
+              <span className="inline-flex align-middle">
+                <OutcomePill outcome={runs[0].outcome} />
+              </span>
+            )}
+          </>
+        }
+        description={
+          <>
             {sub}
             {header.webURL && " · "}
             <ExternalLink href={header.webURL}>open in {platform} ↗</ExternalLink>
-          </div>
-        </div>
-        {can.rerun && <RerunButtons header={header} newest={runs[0]?.id} />}
-      </div>
-      <div className="layout">
-        <div>
-          <section className="card" aria-label="Review history">
-            <h2>
-              Review history <span className="meta">{runs.length === 1 ? "1 run" : `${runs.length} runs`}</span>
-            </h2>
+          </>
+        }
+        actions={can.rerun && <RerunButtons header={header} newest={runs[0]?.id} />}
+      />
+      {/* Two columns on a wide screen: the history and the run's facts, then
+          the findings. On a phone the findings come first. */}
+      <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <Card role="region" aria-label="Review history" className={listCard}>
+            <CardHeader className="py-3">
+              <CardTitle>Review history</CardTitle>
+              <CardAction className="text-muted-foreground text-sm">{runs.length === 1 ? "1 run" : `${runs.length} runs`}</CardAction>
+            </CardHeader>
             {runs.map((r) => (
               <RunItem key={r.id} run={r} selected={r.id === selected?.id} />
             ))}
-          </section>
+          </Card>
           {selected && <ThisRun id={selected.id} platform={platform} />}
         </div>
-        <div>
+        <div className="flex min-w-0 flex-col gap-4 max-lg:order-first">
           {selected ? (
             <RunBody key={selected.id} id={selected.id} actions={{ header, can }} />
           ) : (
-            <div className="card empty">No runs yet.</div>
+            <Card className="text-muted-foreground px-4 py-6 text-sm">No runs yet.</Card>
           )}
         </div>
       </div>
     </>
   );
 }
+
+// crumb is a link of the path above the title.
+const crumb = "text-muted-foreground hover:text-foreground hover:underline";
 
 // useReviewAction posts to one of the review's action routes; once it is
 // answered, the review, its runs and the lists are read again.
@@ -171,19 +227,19 @@ function RerunButtons({ header, newest }: { header: ReviewHeader; newest: string
   const someFailed = latest.data?.skills.some((s) => s.verdict === "failed") ?? false;
   const note = rerun.isSuccess ? (rerunNote[rerun.data.status as RerunStatus] ?? "") : "";
   return (
-    <div className="review-actions">
-      <div className="actions-row">
-        <button type="button" className="btn primary" disabled={rerun.isPending} onClick={() => rerun.mutate({ failed: false })}>
+    <div className="flex flex-col items-end gap-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" disabled={rerun.isPending} onClick={() => rerun.mutate({ failed: false })}>
           Re-run review
-        </button>
+        </Button>
         {someFailed && (
-          <button type="button" className="btn" disabled={rerun.isPending} onClick={() => rerun.mutate({ failed: true })}>
+          <Button type="button" variant="outline" disabled={rerun.isPending} onClick={() => rerun.mutate({ failed: true })}>
             Re-run failed only
-          </button>
+          </Button>
         )}
       </div>
       {note && (
-        <div className="meta" role="status">
+        <div className="text-muted-foreground text-sm" role="status">
           {note}
         </div>
       )}
@@ -202,13 +258,17 @@ function RunItem({ run, selected }: { run: RunSummary; selected: boolean }) {
     .filter(Boolean)
     .join(" · ");
   return (
+    // The selected run is marked by a bar on its left.
     <Link
       to={`?run=${encodeURIComponent(run.id)}`}
-      className={selected ? "run-item sel" : "run-item"}
+      className={cn(
+        "text-foreground block border-t border-l-[3px] px-3.5 py-2.5 text-sm",
+        selected ? "bg-accent border-l-primary" : "hover:bg-muted/50 border-l-transparent",
+      )}
       aria-current={selected ? "true" : undefined}
     >
-      <OutcomePill outcome={run.outcome} /> <span className="mono">{run.head.slice(0, 7)}</span>
-      <div className="meta">{meta}</div>
+      <OutcomePill outcome={run.outcome} /> <span className="font-mono text-xs">{run.head.slice(0, 7)}</span>
+      <div className={cn(muted, "mt-1")}>{meta}</div>
     </Link>
   );
 }
@@ -229,33 +289,45 @@ function ThisRun({ id, platform }: { id: string; platform: string }) {
   const run = useRun(id);
   const status = run.data?.status;
   return (
-    <section className="card" aria-label="This run">
-      <h2>
-        This run{" "}
-        {status && (
-          <span title={`Status on ${platform}`}>
-            <span className="sr-only">Status on {platform}: </span>
-            <Pill tone={statusTone[status] ?? "grey"}>{status}</Pill>
-          </span>
+    <Card role="region" aria-label="This run" className={listCard}>
+      <CardHeader className="py-3">
+        <CardTitle className="flex items-center gap-2">
+          This run{" "}
+          {status && (
+            <span className="inline-flex" title={`Status on ${platform}`}>
+              <span className="sr-only">Status on {platform}: </span>
+              <Pill tone={statusTone[status] ?? "grey"}>{status}</Pill>
+            </span>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <div className="border-t pb-1">
+        {run.isPending && <Loading />}
+        {run.isError && (
+          <div className="p-4">
+            <ErrorBox error={run.error} />
+          </div>
         )}
-      </h2>
-      {run.isPending && <Loading />}
-      {run.isError && <ErrorBox error={run.error} />}
-      {run.isSuccess && <Facts run={run.data} />}
-      {run.isSuccess && run.data.kubernetes && <Kubernetes k={run.data.kubernetes} />}
-    </section>
+        {run.isSuccess && <Facts run={run.data} />}
+        {run.isSuccess && run.data.kubernetes && <Kubernetes k={run.data.kubernetes} />}
+      </div>
+    </Card>
   );
 }
 
 // Fact is one row of a card's facts: a name and its value.
 function Fact({ k, children }: { k: string; children: ReactNode }) {
   return (
-    <div>
-      <dt>{k}</dt>
-      <dd>{children}</dd>
+    <div className="contents">
+      <dt className="text-muted-foreground">{k}</dt>
+      <dd className="min-w-0">{children}</dd>
     </div>
   );
 }
+
+// factList is a card's facts: a short name on the left, its value on the
+// right.
+const factList = "grid grid-cols-[80px_minmax(0,1fr)] gap-x-2.5 gap-y-1.5 px-4 py-3 text-sm";
 
 // modelText is the model a run used as "provider / model"; the model alone
 // when no provider was recorded (a run from before the list of models), and a
@@ -282,7 +354,7 @@ const entryText = (e: NonNullable<RunDetailView["entry"]>) =>
 // each but the run shown, with why an earlier one was dropped.
 function Attempts({ run }: { run: RunDetailView }) {
   return (
-    <ol className="attempts" aria-label="Attempts">
+    <ol className="list-decimal space-y-0.5 pl-4" aria-label="Attempts">
       {run.attempts.map((a, i) => {
         const label = `Attempt ${i + 1}: ${a.name} (entry ${a.position})`;
         const why =
@@ -318,7 +390,7 @@ function Facts({ run }: { run: RunDetailView }) {
   return (
     <>
       {notes && (
-        <div className="run-notes">
+        <div className="flex flex-col gap-1.5 px-4 pt-3 text-sm">
           {run.run.outcome === "fell_back" && (
             <div>
               <OutcomePill outcome="fell_back" /> The provider refused this model ({reasonText(run.run.outcome, run.run.reason)}),
@@ -333,10 +405,10 @@ function Facts({ run }: { run: RunDetailView }) {
           )}
         </div>
       )}
-      <dl className="run-facts">
+      <dl className={factList}>
         <Fact k="Approved">{run.approved ? "Yes" : `No — ${reasonText(run.run.outcome, run.approvalReason) || "not approved"}`}</Fact>
         <Fact k="Model">
-          <span className="mono">{modelText(run.provider, run.model)}</span>
+          <span className="font-mono text-xs">{modelText(run.provider, run.model)}</span>
         </Fact>
         {run.entry && <Fact k="Chain">{entryText(run.entry)}</Fact>}
         {run.attempts.length > 0 && (
@@ -345,13 +417,13 @@ function Facts({ run }: { run: RunDetailView }) {
           </Fact>
         )}
         <Fact k="pergent">
-          <span className="mono">{run.pergentVersion || "not recorded"}</span>
+          <span className="font-mono text-xs">{run.pergentVersion || "not recorded"}</span>
         </Fact>
         <Fact k="Max steps">{run.maxTurns ?? "not recorded"}</Fact>
         <Fact k="Files">{files.join(", ")}</Fact>
       </dl>
-      <h3 className="group">Tokens</h3>
-      <div className="run-tokens">
+      <h3 className={cn(groupHead, "mx-4 mt-1 mb-1.5")}>Tokens</h3>
+      <div className="px-4 pb-3">
         <TokenTable tokens={run.tokens} />
       </div>
     </>
@@ -372,33 +444,36 @@ function Kubernetes({ k }: { k: NonNullable<RunDetailView["kubernetes"]> }) {
     );
   }
   return (
-    <div role="group" aria-label="Kubernetes">
-      <h3 className="group">Kubernetes</h3>
-      <dl className="run-facts">
+    <div role="group" aria-label="Kubernetes" className="border-t pt-3">
+      <h3 className={cn(groupHead, "mx-4")}>Kubernetes</h3>
+      {/* A long Job or pod name wraps in its own column, whole, never cut. */}
+      <dl className={factList}>
         <Fact k="Namespace">
-          <span className="mono">{k.namespace}</span>
+          <span className="font-mono text-xs">{k.namespace}</span>
         </Fact>
         <Fact k="Job">
-          <span className="mono id">{k.job}</span>
+          <span className="font-mono text-xs wrap-anywhere">{k.job}</span>
         </Fact>
         <Fact k="Pod">
           {k.pod === "" ? (
             "none yet"
           ) : (
-            <span className="mono id">{k.pod}</span>
+            <span className="font-mono text-xs wrap-anywhere">{k.pod}</span>
           )}
         </Fact>
       </dl>
-      {k.detail && <pre className="log kube-detail">{k.detail}</pre>}
+      {k.detail && <pre className={cn(codeBox, "mx-4 mb-2 max-h-80 overflow-auto")}>{k.detail}</pre>}
+      {/* Each command: its name and Copy on top, the command on one line
+          below, scrolling in its box when it is longer than the card. */}
       {commands.map(([name, command]) => (
-        <div key={name} className="kube-command">
-          <div className="head">
+        <div key={name} className="mx-4 mb-2 overflow-hidden rounded-md border">
+          <div className="bg-muted/50 flex items-center justify-between gap-2 border-b py-1 pr-1 pl-2.5 text-xs font-semibold">
             {name} <CopyButton text={command} what={`the ${name.toLowerCase()} command`} />
           </div>
-          <code>{command}</code>
+          <code className="block overflow-x-auto px-2.5 py-2 font-mono text-xs whitespace-nowrap">{command}</code>
         </div>
       ))}
-      <div className="meta kube-note">The Job is deleted an hour after it finishes. After that, only what is shown here is left.</div>
+      <div className={cn(muted, "px-4 pt-1 pb-3")}>The Job is deleted an hour after it finishes. After that, only what is shown here is left.</div>
     </div>
   );
 }
@@ -449,19 +524,21 @@ function ciRead(j: CIJobResult) {
 // them, and while the run waits for CI, until when. It shows no CI text.
 function CIJobs({ jobs, deadline }: { jobs: CIJobResult[]; deadline: string | null }) {
   return (
-    <section className="card" aria-label="CI jobs">
-      <h2>CI jobs</h2>
-      {deadline !== null && <div className="pad">Waiting for CI until {utcText(deadline)}.</div>}
+    <Card role="region" aria-label="CI jobs" className={listCard}>
+      <CardHeader className="py-3">
+        <CardTitle>CI jobs</CardTitle>
+      </CardHeader>
+      {deadline !== null && <div className={line}>Waiting for CI until {utcText(deadline)}.</div>}
       <div role="list" aria-label="CI job results">
         {jobs.map((j) => (
-          <div className="verdict" role="listitem" key={j.name}>
+          <div className={cn(line, "flex items-center gap-2.5")} role="listitem" key={j.name}>
             <Pill tone={ciTone[j.result] ?? "grey"}>
               {j.result}
               {j.reason ? ` (${j.reason})` : ""}
             </Pill>
-            <div className="grow">
-              <b>{j.name}</b>
-              <div className="meta">
+            <div className="min-w-0 grow">
+              <b className="font-semibold">{j.name}</b>
+              <div className={muted}>
                 {ciRead(j)}
                 {j.blocks && " · blocks approval"}
               </div>
@@ -469,7 +546,7 @@ function CIJobs({ jobs, deadline }: { jobs: CIJobResult[]; deadline: string | nu
           </div>
         ))}
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -520,73 +597,77 @@ function judgeState(j: JudgeView) {
 function MultiReview({ runId, review }: { runId: string; review: RunMultiReviewView }) {
   if (review.off !== undefined) {
     return (
-      <section className="card" aria-label="Multi review">
-        <h2>Multi review</h2>
-        <div className="pad">Multi review off: {review.off}. The review ran with reviewer 1 alone.</div>
-      </section>
+      <Card role="region" aria-label="Multi review" className={listCard}>
+        <CardHeader className="py-3">
+          <CardTitle>Multi review</CardTitle>
+        </CardHeader>
+        <div className={line}>Multi review off: {review.off}. The review ran with reviewer 1 alone.</div>
+      </Card>
     );
   }
   const judge = review.judge;
   return (
-    // scroll: 7 columns don't fit a phone; they scroll instead of being cut.
-    <section className="card scroll" aria-label="Multi review">
-      <h2>Multi review</h2>
-      <table className="table" aria-label="Reviewers">
-        <thead>
-          <tr>
-            <th>Reviewer</th>
-            <th>Entry</th>
-            <th>Model</th>
-            <th>State</th>
-            <th>Findings</th>
-            <th>Tokens</th>
-          </tr>
-        </thead>
-        <tbody>
-          {review.reviewers.map((r) => (
-            <tr key={r.number}>
-              <td>Reviewer {r.number}</td>
-              <td>{r.entry}</td>
-              <td className="mono">{optionalModel(r.provider, r.model)}</td>
-              <td>{reviewerState(r)}</td>
-              <td>{r.skipped === "" && !liveStates.includes(r.state) ? r.findings : ""}</td>
-              <td>
-                <TokensTotal tokens={r} />
-              </td>
-            </tr>
-          ))}
-          {judge && (
-            <tr>
-              <td>Judge</td>
-              <td>{judge.entry}</td>
-              <td className="mono">{optionalModel(judge.provider, judge.model)}</td>
-              <td>{judgeState(judge)}</td>
-              <td></td>
-              <td>
-                <TokensTotal tokens={judge} />
-              </td>
-            </tr>
-          )}
-          <tr>
-            <td>
-              <b>Total</b>
-            </td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td>
-              <TokensTotal tokens={review.total} />
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div className="facts">
-        {!judge && <div className="meta">No judge ran on this run.</div>}
+    // The table scrolls sideways on a phone instead of being cut.
+    <Card role="region" aria-label="Multi review" className={listCard}>
+      <CardHeader className="py-3">
+        <CardTitle>Multi review</CardTitle>
+      </CardHeader>
+      <div className="border-t">
+        <Table aria-label="Reviewers" className="[&_tr>*:first-child]:pl-4 [&_tr>*:last-child]:pr-4">
+          <TableHeader className="bg-muted/40">
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Reviewer</TableHead>
+              <TableHead>Entry</TableHead>
+              <TableHead>Model</TableHead>
+              <TableHead>State</TableHead>
+              <TableHead>Findings</TableHead>
+              <TableHead>Tokens</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {review.reviewers.map((r) => (
+              <TableRow key={r.number}>
+                <TableCell className="whitespace-nowrap">Reviewer {r.number}</TableCell>
+                <TableCell>{r.entry}</TableCell>
+                <TableCell className="font-mono text-xs">{optionalModel(r.provider, r.model)}</TableCell>
+                <TableCell>{reviewerState(r)}</TableCell>
+                <TableCell>{r.skipped === "" && !liveStates.includes(r.state) ? r.findings : ""}</TableCell>
+                <TableCell>
+                  <TokensTotal tokens={r} />
+                </TableCell>
+              </TableRow>
+            ))}
+            {judge && (
+              <TableRow>
+                <TableCell>Judge</TableCell>
+                <TableCell>{judge.entry}</TableCell>
+                <TableCell className="font-mono text-xs">{optionalModel(judge.provider, judge.model)}</TableCell>
+                <TableCell>{judgeState(judge)}</TableCell>
+                <TableCell></TableCell>
+                <TableCell>
+                  <TokensTotal tokens={judge} />
+                </TableCell>
+              </TableRow>
+            )}
+            <TableRow>
+              <TableCell className="font-semibold">Total</TableCell>
+              <TableCell></TableCell>
+              <TableCell></TableCell>
+              <TableCell></TableCell>
+              <TableCell></TableCell>
+              <TableCell>
+                <TokensTotal tokens={review.total} />
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
+      <div className="flex flex-col gap-3 border-t px-4 py-3 text-sm">
+        {!judge && <div className={muted}>No judge ran on this run.</div>}
         {review.reviewers.map((r) => (
           <div key={r.number}>
-            <h3 className="group">Reviewer {r.number}</h3>
-            <ol className="attempts" aria-label={`Reviewer ${r.number} attempts`}>
+            <h3 className={cn(groupHead, "mb-1.5")}>Reviewer {r.number}</h3>
+            <ol className="list-decimal space-y-1.5 pl-4" aria-label={`Reviewer ${r.number} attempts`}>
               {r.attempts.map((a, i) => (
                 <MemberAttempt key={a.id} runId={runId} reviewer={r.number} n={i + 1} attempt={a} />
               ))}
@@ -594,7 +675,7 @@ function MultiReview({ runId, review }: { runId: string; review: RunMultiReviewV
           </div>
         ))}
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -608,15 +689,17 @@ function MemberAttempt({ runId, reviewer, n, attempt }: { runId: string; reviewe
       Attempt {n}: {attempt.entry || "not started"}
       {attempt.position > 0 && ` (entry ${attempt.position})`}
       {model && ` · ${model}`} · {attemptState(attempt)}{" "}
-      <button
+      <Button
         type="button"
-        className="btn small"
+        variant="outline"
+        size="sm"
+        className="ml-1 h-7 px-2 text-xs"
         aria-expanded={open}
         aria-label={`Log of reviewer ${reviewer}, attempt ${n}`}
         onClick={() => setOpen(!open)}
       >
         {open ? "Hide log" : "Log"}
-      </button>
+      </Button>
       {open && (
         <RunLog
           logPath={paths.apiRunMemberLog(runId, attempt.id)}
@@ -654,25 +737,29 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
   // review's reviewers come after them.
   return (
     <>
-      <section className="card" aria-label="Skills">
-        <h2>Skills</h2>
+      <Card role="region" aria-label="Skills" className={listCard}>
+        <CardHeader className="py-3">
+          <CardTitle>Skills</CardTitle>
+        </CardHeader>
         {view.skills.length === 0 && (
-          <div className="verdict prose">This run has no skill results: {reasonText(view.run.outcome, view.approvalReason || view.run.reason) || "no usable review."}</div>
+          <div className={cn(line, "prose")}>This run has no skill results: {reasonText(view.run.outcome, view.approvalReason || view.run.reason) || "no usable review."}</div>
         )}
         {view.skills.map((s) => (
-          <div className="verdict" key={s.name}>
+          // "verdict" stays as a name the tests find a skill's row by;
+          // border-b-0 drops the old rule's bottom line.
+          <div className={cn("verdict flex items-center gap-2.5 border-b-0", line)} key={s.name}>
             <VerdictPill skill={s} />
-            <div className="grow">
-              <b>{s.name}</b>
-              <div className="meta">
+            <div className="min-w-0 grow">
+              <b className="font-semibold">{s.name}</b>
+              <div className={muted}>
                 {plural(s.findings.filter((x) => x.severity === "suggestion").length, "suggestion")}
                 {s.dismissed.length > 0 && ` · ${s.dismissed.length} dismissed`} · {skillOrigin(s.source, s.version)}
               </div>
             </div>
           </div>
         ))}
-      </section>
-      <div className="card">
+      </Card>
+      <Card className={listCard}>
         <Tabs<Tab>
           inCard
           value={tab}
@@ -684,28 +771,31 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
             ["logs", "Logs"],
           ]}
         />
-        <div role="tabpanel">
+        {/* Every block of the panel draws its own top line but the first:
+            the panel's line under the tabs is that one. */}
+        <div role="tabpanel" className="mt-3 border-t [&>:first-child]:border-t-0">
           {tab === "findings" && (
             <>
               {note && (
-                <div className="note pad" role="status">
+                <div className={cn(line, "text-ok")} role="status">
                   {note}
                 </div>
               )}
-              {findings.length === 0 && failed.length === 0 && <div className="pad meta">No findings.</div>}
+              {findings.length === 0 && failed.length === 0 && <div className={cn(line, "text-muted-foreground")}>No findings.</div>}
               {findings.length === 0 && failed.length > 0 && (
-                <div className="pad row-note">
-                  <span className="meta grow">
+                // "row-note" stays as a name the tests find this line by.
+                <div className={cn(line, "row-note flex items-center gap-3")}>
+                  <span className="text-muted-foreground grow">
                     No findings, because {failed.join(", ")} failed before {failed.length === 1 ? "it" : "they"} could report any. The logs
                     show why.
                   </span>
-                  <button type="button" className="btn small" onClick={() => setTab("logs")}>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setTab("logs")}>
                     Show logs
-                  </button>
+                  </Button>
                 </div>
               )}
               {actions === null && (allowed.can.dismissBlocking || allowed.can.dismissSuggestion) && findings.length > 0 && (
-                <div className="pad meta">Findings are dismissed on the newest finished run. Open it in the history to dismiss one.</div>
+                <div className={cn(line, "text-muted-foreground")}>Findings are dismissed on the newest finished run. Open it in the history to dismiss one.</div>
               )}
               {findings.map((f, i) => (
                 <Finding
@@ -719,8 +809,8 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
               {view.skills
                 .filter((s) => s.dismissed.length > 0)
                 .map((s) => (
-                  <div role="group" aria-label={`Dismissed in ${s.name}`} key={s.name}>
-                    <h3 className="group">
+                  <div role="group" aria-label={`Dismissed in ${s.name}`} key={s.name} className="border-t">
+                    <h3 className={cn(groupHead, "mx-4 mt-3 mb-1")}>
                       Dismissed in {s.name} ({s.dismissed.length})
                     </h3>
                     {s.dismissed.map((f, i) => (
@@ -734,7 +824,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
           {tab === "files" && <Files files={view.files} rulesUsed={view.rulesUsed} builtInNote={view.builtInRulesNote} />}
           {tab === "logs" && <RunLog logPath={paths.apiRunLog(id)} diagnosticsPath={paths.apiRunDiagnostics(id)} />}
         </div>
-      </div>
+      </Card>
       {(view.ciJobs !== null || view.ciDeadline !== null) && <CIJobs jobs={view.ciJobs ?? []} deadline={view.ciDeadline} />}
       {view.multiReview && <MultiReview runId={id} review={view.multiReview} />}
     </>
@@ -747,16 +837,16 @@ function FindingBody({ f, href }: { f: Located; href: string | null }) {
   const where = `${f.file}${f.line ? `:${f.line}` : ""}`;
   return (
     <>
-      <Pill tone={f.severity === "blocking" ? "bad" : "grey"}>{f.severity}</Pill> <span className="t">{f.title}</span>{" "}
-      <span className="mono meta">{f.id}</span>
-      <div className="loc">
+      <Pill tone={f.severity === "blocking" ? "bad" : "grey"}>{f.severity}</Pill> <span className="font-semibold">{f.title}</span>{" "}
+      <span className="text-muted-foreground font-mono text-xs">{f.id}</span>
+      <div className="text-muted-foreground mt-0.5 font-mono text-xs wrap-anywhere">
         {href ? <ExternalLink href={href}>{where}</ExternalLink> : where} · {f.skill}
       </div>
-      {f.explanation && <p className="prose">{f.explanation}</p>}
+      {f.explanation && <p className="prose mt-1.5">{f.explanation}</p>}
       {f.suggestedFix && (
         <>
-          <div className="fix-label">Suggested fix</div>
-          <pre className="fix">{f.suggestedFix}</pre>
+          <div className={cn(muted, "mt-2 mb-1")}>Suggested fix</div>
+          <pre className={codeBox}>{f.suggestedFix}</pre>
         </>
       )}
     </>
@@ -771,7 +861,8 @@ function Finding({ f, href, blocking, actions }: { f: Located; href: string | nu
   const may =
     actions !== null && f.fingerprint !== "" && (blocking ? actions.can.dismissBlocking : actions.can.dismissSuggestion);
   return (
-    <div className="finding">
+    // "finding" stays as a name the tests find a finding by.
+    <div className={cn("finding", line)}>
       <FindingBody f={f} href={href} />
       {may && <DismissControl f={f} blocking={blocking} actions={actions} />}
     </div>
@@ -802,16 +893,16 @@ function DismissControl({ f, blocking, actions }: { f: Located; blocking: boolea
   };
   if (!open) {
     return (
-      <div className="finding-actions">
-        <button type="button" className="btn small" onClick={() => setOpen(true)}>
+      <div className="mt-2">
+        <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
           Dismiss
-        </button>
+        </Button>
       </div>
     );
   }
   return (
-    <form className="dismiss-form" onSubmit={submit}>
-      <textarea
+    <form className="mt-2 flex flex-col gap-2" onSubmit={submit}>
+      <Textarea
         aria-label="Reason"
         placeholder={blocking ? "Why is this not a problem? (required)" : "Why? (optional)"}
         rows={2}
@@ -820,14 +911,14 @@ function DismissControl({ f, blocking, actions }: { f: Located; blocking: boolea
         disabled={dismiss.isPending}
         onChange={(e) => setReason(e.target.value)}
       />
-      <div className="actions-row">
-        <button type="submit" className="btn small primary" disabled={dismiss.isPending}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="submit" size="sm" disabled={dismiss.isPending}>
           Dismiss finding
-        </button>
-        <button type="button" className="btn small" disabled={dismiss.isPending} onClick={() => setOpen(false)}>
+        </Button>
+        <Button type="button" variant="outline" size="sm" disabled={dismiss.isPending} onClick={() => setOpen(false)}>
           Cancel
-        </button>
-        {problem && <span className="meta problem">{problem}</span>}
+        </Button>
+        {problem && <span className="text-bad text-xs">{problem}</span>}
       </div>
       {dismiss.isError && <ErrorBox error={dismiss.error} />}
     </form>
@@ -839,11 +930,11 @@ function DismissControl({ f, blocking, actions }: { f: Located; blocking: boolea
 function DismissedFinding({ f, href, actions }: { f: Located; href: string | null; actions: RunActions | null }) {
   const d = f.dismissed;
   return (
-    <div className="finding">
+    <div className={cn("finding", line)}>
       <FindingBody f={f} href={href} />
       {d && (
-        <div className="dismissal">
-          <div className="meta">
+        <div className="mt-1.5 border-l-[3px] pl-2.5">
+          <div className={muted}>
             Dismissed by {d.by} · <Ago t={d.at} />
           </div>
           <div className="prose">{d.reason ? `Reason: ${d.reason}` : "No reason was given."}</div>
@@ -860,10 +951,10 @@ function RestoreButton({ fingerprint, actions }: { fingerprint: string; actions:
   );
   return (
     <>
-      <div className="finding-actions">
-        <button type="button" className="btn small" disabled={restore.isPending} onClick={() => restore.mutate({ fingerprint })}>
+      <div className="mt-2">
+        <Button type="button" variant="outline" size="sm" disabled={restore.isPending} onClick={() => restore.mutate({ fingerprint })}>
           Restore
-        </button>
+        </Button>
       </div>
       {restore.isError && <ErrorBox error={restore.error} />}
     </>
@@ -874,18 +965,18 @@ const checkTone: Record<string, Tone> = { pass: "ok", fail: "bad" };
 
 function Checks({ skills }: { skills: SkillView[] }) {
   const withChecks = skills.filter((s) => s.checks.length > 0);
-  if (withChecks.length === 0) return <div className="pad meta">No checklist was recorded for this run.</div>;
+  if (withChecks.length === 0) return <div className={cn(line, "text-muted-foreground")}>No checklist was recorded for this run.</div>;
   return (
     <>
       {withChecks.map((s) => (
-        <div key={s.name}>
-          <h3 className="group">{s.name}</h3>
+        <div key={s.name} className="border-t">
+          <h3 className={cn(groupHead, "mx-4 mt-3 mb-1")}>{s.name}</h3>
           {s.checks.map((c: CheckView, i) => (
-            <div className="check" key={i}>
+            <div className={cn(line, "flex items-start gap-2.5")} key={i}>
               <Pill tone={checkTone[c.status] ?? "grey"}>{c.status}</Pill>
-              <div className="grow">
-                <div className="t">{c.name}</div>
-                <div className="meta">
+              <div className="min-w-0 grow">
+                <div className="font-semibold">{c.name}</div>
+                <div className={muted}>
                   {c.section} · batch {c.batch}
                 </div>
                 {c.detail && <div className="prose">{c.detail}</div>}
@@ -898,38 +989,43 @@ function Checks({ skills }: { skills: SkillView[] }) {
   );
 }
 
+// fileList is a list of file paths, in two columns on a wide screen; a long
+// path wraps in its column, never cut.
+const fileList = "mt-1 mb-1 text-sm sm:columns-2";
+const fileItem = "break-inside-avoid py-0.5 wrap-anywhere";
+
 // builtInNote is why the built-in rules the repository chose were left out.
 function Files({ files, rulesUsed, builtInNote }: { files: RunDetailView["files"]; rulesUsed: boolean; builtInNote: string }) {
   // A file's path rule is the same in every skill that had rules on.
   const ruleOf = new Map((files.rules ?? []).map((r) => [r.path, r.rule]));
   return (
-    <div className="pad">
-      <h3 className="group">Reviewed ({files.reviewed.length})</h3>
-      {!rulesUsed && <div className="meta">This image does not use rules.</div>}
-      {builtInNote !== "" && <div className="meta">{builtInNote}</div>}
-      <ul className="files">
+    <div className={line}>
+      <h3 className={cn(groupHead, "mb-1.5")}>Reviewed ({files.reviewed.length})</h3>
+      {!rulesUsed && <div className={muted}>This image does not use rules.</div>}
+      {builtInNote !== "" && <div className={muted}>{builtInNote}</div>}
+      <ul className={fileList}>
         {files.reviewed.map((p) => (
-          <li key={p}>
-            <span className="mono">{p}</span>
-            {ruleOf.has(p) && <span className="meta"> rule: {ruleOf.get(p)}</span>}
+          <li key={p} className={fileItem}>
+            <span className="font-mono text-xs">{p}</span>
+            {ruleOf.has(p) && <span className={muted}> rule: {ruleOf.get(p)}</span>}
           </li>
         ))}
       </ul>
-      <h3 className="group">Skipped ({files.skipped.length})</h3>
-      <ul className="files">
+      <h3 className={cn(groupHead, "mt-3 mb-1.5")}>Skipped ({files.skipped.length})</h3>
+      <ul className={fileList}>
         {files.skipped.map((s) => (
-          <li key={s.path}>
-            <span className="mono">{s.path}</span> <span className="meta">{s.rule}</span>
+          <li key={s.path} className={fileItem}>
+            <span className="font-mono text-xs">{s.path}</span> <span className={muted}>{s.rule}</span>
           </li>
         ))}
       </ul>
       {files.notReviewed.length > 0 && (
         <>
-          <h3 className="group">Not reviewed ({files.notReviewed.length})</h3>
-          <ul className="files">
+          <h3 className={cn(groupHead, "mt-3 mb-1.5")}>Not reviewed ({files.notReviewed.length})</h3>
+          <ul className={fileList}>
             {files.notReviewed.map((s) => (
-              <li key={s.path}>
-                <span className="mono">{s.path}</span> <span className="meta">{s.cause}</span>
+              <li key={s.path} className={fileItem}>
+                <span className="font-mono text-xs">{s.path}</span> <span className={muted}>{s.cause}</span>
               </li>
             ))}
           </ul>

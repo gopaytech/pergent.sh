@@ -2,10 +2,22 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
 import { paths, type FetchedSkill, type SkillFetchResult } from "../api";
 import { useWrite } from "../layout/write";
 import { FetchStatus, useSkillFetch, useStartFetch } from "../skillFetch";
-import { ErrorBox, Loading, Pill, bytesText } from "../ui";
+import { ErrorBox, Loading, PageHeader, Pill, bytesText } from "../ui";
+
+// hint is the small grey line under a field.
+const hint = "text-muted-foreground text-xs";
+// tick is a plain tick box or radio: there is no shadcn one on this page.
+const tick = "accent-primary size-4";
+// field is a label, its box and its hint.
+const field = "grid gap-2";
 
 // SkillInstall installs skills into the library from a git source (admins):
 // a repository of a connected instance, or a public URL. It reads the source
@@ -32,108 +44,113 @@ export default function SkillInstall() {
     });
   };
   return (
-    <div className="narrow">
-      <div className="crumbs">
-        <Link to="/skills">Skills</Link> / Install from git
+    <div className="flex max-w-[1100px] flex-col gap-4">
+      <div>
+        <div className="text-muted-foreground mb-1.5 text-xs">
+          <Link className="text-muted-foreground hover:underline" to="/skills">
+            Skills
+          </Link>{" "}
+          / Install from git
+        </div>
+        <PageHeader title="Install from git" className="mb-2" />
       </div>
-      <div className="top">
-        <h1>Install from git</h1>
-      </div>
-      <p className="meta">
+      <p className="text-muted-foreground text-sm">
         Installed skills are readable by every signed-in user, including skills from a private repository. Install only what
         everyone may read.
       </p>
-      <form className="card pad stack" aria-label="Read a source" onSubmit={submit}>
-        <div className="actions-row">
-          <label className="check plain">
-            <input type="radio" name="source" checked={kind === "instance"} onChange={() => setKind("instance")} />A repository on
-            an instance
-          </label>
-          <label className="check plain">
-            <input type="radio" name="source" checked={kind === "url"} onChange={() => setKind("url")} />A public URL
-          </label>
-        </div>
-        {kind === "instance" ? (
-          <>
-            <div>
-              <label htmlFor="fetch-instance">Instance</label>
-              <input
-                id="fetch-instance"
+      <Card>
+        <form className="flex flex-col gap-4 px-4" aria-label="Read a source" onSubmit={submit}>
+          <div className="flex flex-wrap items-center gap-4">
+            <Label className="font-normal">
+              <input type="radio" className={tick} name="source" checked={kind === "instance"} onChange={() => setKind("instance")} />A
+              repository on an instance
+            </Label>
+            <Label className="font-normal">
+              <input type="radio" className={tick} name="source" checked={kind === "url"} onChange={() => setKind("url")} />A public URL
+            </Label>
+          </div>
+          {kind === "instance" ? (
+            <>
+              <div className={field}>
+                <Label htmlFor="fetch-instance">Instance</Label>
+                <Input
+                  id="fetch-instance"
+                  type="text"
+                  autoComplete="off"
+                  value={instance}
+                  onChange={(e) => setInstance(e.target.value)}
+                  required
+                />
+              </div>
+              <div className={field}>
+                <Label htmlFor="fetch-repo">Repository</Label>
+                <Input
+                  id="fetch-repo"
+                  type="text"
+                  autoComplete="off"
+                  placeholder="group/project"
+                  value={repo}
+                  onChange={(e) => setRepo(e.target.value)}
+                  required
+                />
+              </div>
+            </>
+          ) : (
+            <div className={field}>
+              <Label htmlFor="fetch-url">URL</Label>
+              <Input
+                id="fetch-url"
                 type="text"
                 autoComplete="off"
-                value={instance}
-                onChange={(e) => setInstance(e.target.value)}
+                placeholder="https://example.com/skills.git"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
                 required
               />
+              <div className={hint}>
+                A public https git URL, read in a Job that holds no token. The Job reaches only the hosts on its network allow list
+                (the Helm value jobEgress.cidrs), so the git host must be on it.
+              </div>
             </div>
-            <div>
-              <label htmlFor="fetch-repo">Repository</label>
-              <input
-                id="fetch-repo"
-                type="text"
-                autoComplete="off"
-                placeholder="group/project"
-                value={repo}
-                onChange={(e) => setRepo(e.target.value)}
-                required
-              />
-            </div>
-          </>
-        ) : (
-          <div>
-            <label htmlFor="fetch-url">URL</label>
-            <input
-              id="fetch-url"
+          )}
+          <div className={field}>
+            <Label htmlFor="fetch-ref">Branch or tag</Label>
+            <Input
+              id="fetch-ref"
               type="text"
               autoComplete="off"
-              placeholder="https://example.com/skills.git"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              placeholder="main or v1.0"
+              value={ref}
+              onChange={(e) => setRef(e.target.value)}
               required
             />
-            <div className="meta">
-              A public https git URL, read in a Job that holds no token. The Job reaches only the hosts on its network allow list
-              (the Helm value jobEgress.cidrs), so the git host must be on it.
-            </div>
           </div>
-        )}
-        <div>
-          <label htmlFor="fetch-ref">Branch or tag</label>
-          <input
-            id="fetch-ref"
-            type="text"
-            autoComplete="off"
-            placeholder="main or v1.0"
-            value={ref}
-            onChange={(e) => setRef(e.target.value)}
-            required
-          />
-        </div>
-        <div>
-          <label htmlFor="fetch-folder">Folder</label>
-          <input
-            id="fetch-folder"
-            type="text"
-            autoComplete="off"
-            placeholder="skills"
-            value={folder}
-            onChange={(e) => setFolder(e.target.value)}
-          />
-          <div className="meta">Leave it empty to read the top of the repository. Each skill is name.md or name/SKILL.md.</div>
-        </div>
-        <div className="actions-row">
-          <button type="submit" className="btn primary" disabled={running}>
-            Read skills
-          </button>
-        </div>
-        {start.isError && <ErrorBox error={start.error} />}
-      </form>
+          <div className={field}>
+            <Label htmlFor="fetch-folder">Folder</Label>
+            <Input
+              id="fetch-folder"
+              type="text"
+              autoComplete="off"
+              placeholder="skills"
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
+            />
+            <div className={hint}>Leave it empty to read the top of the repository. Each skill is name.md or name/SKILL.md.</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="submit" disabled={running}>
+              Read skills
+            </Button>
+          </div>
+          {start.isError && <ErrorBox error={start.error} />}
+        </form>
+      </Card>
       {read.isPending && id !== undefined && <Loading />}
       {read.isError && <ErrorBox error={read.error} />}
       {read.isSuccess && read.data.status !== "done" && (
-        <section className="card" aria-label="Reading">
+        <Card role="region" aria-label="Reading" className="px-4">
           <FetchStatus read={read.data} />
-        </section>
+        </Card>
       )}
       {read.isSuccess && read.data.status === "done" && (
         <Found key={read.data.id} id={read.data.id} commit={read.data.commit} skills={read.data.skills} />
@@ -171,48 +188,51 @@ function Found({ id, commit, skills }: { id: string; commit: string; skills: Fet
     install.mutate(ticked);
   };
   return (
-    <section className="card" aria-label="Skills found">
+    <Card role="region" aria-label="Skills found" className="gap-0 py-0">
       <form onSubmit={submit}>
-        <div className="pad meta">{commit ? `Read commit ${commit.slice(0, 7)}.` : "Read."}</div>
-        {skills.length === 0 && <div className="row empty-row">No skills found in this folder.</div>}
+        <div className="text-muted-foreground border-b px-4 py-3 text-xs">{commit ? `Read commit ${commit.slice(0, 7)}.` : "Read."}</div>
+        {skills.length === 0 && <div className="text-muted-foreground border-b px-4 py-3 text-sm">No skills found in this folder.</div>}
         {skills.map((s) => {
           const result = results[s.name];
           const installed = result?.ok === true;
           const blocked = s.taken || !!s.problem || installed;
           return (
-            <div className="check" key={s.path}>
+            <div className="flex items-start gap-2.5 border-b px-4 py-3 text-sm" key={s.path}>
               <input
                 type="checkbox"
+                className={`${tick} mt-0.5`}
                 aria-label={s.name}
                 disabled={blocked}
                 checked={ticked.includes(s.name)}
                 onChange={(e) => toggle(s.name, e.target.checked)}
               />
-              <div className="grow">
-                <b>{s.name}</b> <span className="meta">{s.path}</span>
-                {s.size > 0 && <span className="meta"> · {bytesText(s.size)}</span>}
-                {s.problem && <div className="problem">{s.problem}</div>}
-                {s.taken && !installed && <div className="meta">name already in the library</div>}
+              <div className="min-w-0 grow">
+                <b className="font-semibold">{s.name}</b> <span className={hint}>{s.path}</span>
+                {s.size > 0 && <span className={hint}> · {bytesText(s.size)}</span>}
+                {s.problem && <div className="problem text-bad text-xs">{s.problem}</div>}
+                {s.taken && !installed && <div className={hint}>name already in the library</div>}
                 {installed && <Pill tone="ok">Installed</Pill>}
-                {result && !result.ok && <div className="problem">{result.error}</div>}
+                {result && !result.ok && <div className="problem text-bad text-xs">{result.error}</div>}
               </div>
             </div>
           );
         })}
-        <div className="pad stack">
-          <label className="check plain">
-            <input type="checkbox" checked={addToDefaults} onChange={(e) => setAddToDefaults(e.target.checked)} />
-            Add to default skills
-          </label>
-          <div className="meta">A repository that sets no skills of its own uses the default skills.</div>
-          <div className="actions-row">
-            <button type="submit" className="btn primary" disabled={install.isPending || ticked.length === 0}>
+        <div className="flex flex-col gap-3 px-4 py-4">
+          <div className="grid gap-2">
+            <Label className="font-normal">
+              <input type="checkbox" className={tick} checked={addToDefaults} onChange={(e) => setAddToDefaults(e.target.checked)} />
+              Add to default skills
+            </Label>
+            <div className={hint}>A repository that sets no skills of its own uses the default skills.</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="submit" disabled={install.isPending || ticked.length === 0}>
               Install
-            </button>
+            </Button>
           </div>
           {install.isError && <ErrorBox error={install.error} />}
         </div>
       </form>
-    </section>
+    </Card>
   );
 }

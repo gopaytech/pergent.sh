@@ -4,6 +4,12 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+
 import type { SecretView } from "./api";
 import { useWrite } from "./layout/write";
 import { ErrorBox, Switch, noFill, secretFill, secretText } from "./ui";
@@ -23,6 +29,9 @@ const providers: [string, string][] = [
 
 const nameHelp = "Up to 64 letters, digits, spaces and . _ : / + -. After a backup model reviews a change, the comment names it.";
 const baseURLHelp = "Empty uses the provider's own API. Set it for a proxy or an OpenAI-compatible server.";
+
+// hint is the look of the line of help under a field.
+const hint = "text-muted-foreground text-sm";
 
 // AddModelForm adds an entry with a POST to path: its name, provider, model,
 // base URL and key, and with teamsMayUse, the admins' switch that lets team
@@ -78,12 +87,11 @@ export function AddModelForm<T extends { name: string }>({
       ...(teamsMayUse ? { teamsMayUse: forTeams } : {}),
     });
   };
-  return (
-    <form className={inCard ? "add-model" : "card"} aria-label="Add a model" onSubmit={submit}>
-      {inCard ? <h3>Add a model</h3> : <h2>Add a model</h2>}
-      <div className="pad stack">
-        <label htmlFor="llm-name">Name</label>
-        <input
+  const body = (
+    <div className="grid gap-4 p-4">
+      <div className="grid gap-2">
+        <Label htmlFor="llm-name">Name</Label>
+        <Input
           id="llm-name"
           type="text"
           {...noFill}
@@ -93,9 +101,11 @@ export function AddModelForm<T extends { name: string }>({
           onChange={(e) => setName(e.target.value)}
           required
         />
-        <div className="meta">{nameHelp}</div>
-        <label htmlFor="llm-provider">Provider</label>
-        <select id="llm-provider" value={choice} onChange={(e) => setChoice(e.target.value)} required>
+        <div className={hint}>{nameHelp}</div>
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="llm-provider">Provider</Label>
+        <NativeSelect id="llm-provider" value={choice} onChange={(e) => setChoice(e.target.value)} required>
           <option value="" disabled>
             Choose a provider
           </option>
@@ -105,24 +115,26 @@ export function AddModelForm<T extends { name: string }>({
             </option>
           ))}
           <option value="other">Other (type its ID)</option>
-        </select>
-        {choice === "other" && (
-          <>
-            <label htmlFor="llm-provider-id">Provider ID</label>
-            <input
-              id="llm-provider-id"
-              type="text"
-              {...noFill}
-              spellCheck={false}
-              value={otherID}
-              onChange={(e) => setOtherID(e.target.value)}
-              required
-            />
-            <div className="meta">The provider's ID in opencode. With a Base URL, it is any OpenAI-compatible server.</div>
-          </>
-        )}
-        <label htmlFor="llm-model">Model</label>
-        <input
+        </NativeSelect>
+      </div>
+      {choice === "other" && (
+        <div className="grid gap-2">
+          <Label htmlFor="llm-provider-id">Provider ID</Label>
+          <Input
+            id="llm-provider-id"
+            type="text"
+            {...noFill}
+            spellCheck={false}
+            value={otherID}
+            onChange={(e) => setOtherID(e.target.value)}
+            required
+          />
+          <div className={hint}>The provider's ID in opencode. With a Base URL, it is any OpenAI-compatible server.</div>
+        </div>
+      )}
+      <div className="grid gap-2">
+        <Label htmlFor="llm-model">Model</Label>
+        <Input
           id="llm-model"
           type="text"
           {...noFill}
@@ -131,9 +143,11 @@ export function AddModelForm<T extends { name: string }>({
           onChange={(e) => setModel(e.target.value)}
           required
         />
-        <div className="meta">The model's ID as the provider names it.</div>
-        <label htmlFor="llm-base-url">Base URL</label>
-        <input
+        <div className={hint}>The model's ID as the provider names it.</div>
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="llm-base-url">Base URL</Label>
+        <Input
           id="llm-base-url"
           type="text"
           {...noFill}
@@ -142,9 +156,11 @@ export function AddModelForm<T extends { name: string }>({
           value={baseURL}
           onChange={(e) => setBaseURL(e.target.value)}
         />
-        <div className="meta">{baseURLHelp}</div>
-        <label htmlFor="llm-api-key">API key</label>
-        <input
+        <div className={hint}>{baseURLHelp}</div>
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="llm-api-key">API key</Label>
+        <Input
           id="llm-api-key"
           type="password"
           {...secretFill}
@@ -153,29 +169,52 @@ export function AddModelForm<T extends { name: string }>({
           onChange={(e) => setKey(e.target.value)}
           required
         />
-        {teamsMayUse && (
-          <label className="link-block">
-            <Switch label="Teams may use it" checked={forTeams} onChange={setForTeams} />
-            <span>Teams may use it in their chains. Its key then pays for their reviews.</span>
-          </label>
-        )}
-        {add.isError && <ErrorBox error={add.error} />}
       </div>
-      <div className="foot">
-        {note && (
-          <span className="meta grow" role="status">
-            {note}
-          </span>
-        )}
-        {inCard && (
-          <button type="button" className="btn" disabled={add.isPending} onClick={onCancel}>
-            Cancel
-          </button>
-        )}
-        <button type="submit" className="btn primary" disabled={add.isPending}>
-          Add model
-        </button>
-      </div>
+      {teamsMayUse && (
+        <Label className="font-normal">
+          <Switch label="Teams may use it" checked={forTeams} onChange={setForTeams} />
+          <span>Teams may use it in their chains. Its key then pays for their reviews.</span>
+        </Label>
+      )}
+      {add.isError && <ErrorBox error={add.error} />}
+    </div>
+  );
+  // The save bar at the foot of the form.
+  const foot = (
+    <div className="bg-muted/40 flex items-center justify-end gap-2 border-t px-4 py-3">
+      {note && (
+        <span className="text-muted-foreground min-w-0 flex-1 text-sm" role="status">
+          {note}
+        </span>
+      )}
+      {inCard && (
+        <Button type="button" variant="outline" size="sm" disabled={add.isPending} onClick={onCancel}>
+          Cancel
+        </Button>
+      )}
+      <Button type="submit" size="sm" disabled={add.isPending}>
+        Add model
+      </Button>
+    </div>
+  );
+  if (inCard) {
+    return (
+      <form className="border-t" aria-label="Add a model" onSubmit={submit}>
+        <h3 className="m-0 px-4 pt-4 text-sm font-semibold">Add a model</h3>
+        {body}
+        {foot}
+      </form>
+    );
+  }
+  return (
+    <form aria-label="Add a model" onSubmit={submit}>
+      <Card className="mb-4 gap-0 overflow-hidden py-0">
+        <CardHeader className="border-b pt-4">
+          <CardTitle>Add a model</CardTitle>
+        </CardHeader>
+        {body}
+        {foot}
+      </Card>
     </form>
   );
 }
@@ -221,55 +260,59 @@ export function EditModelForm({
   };
   const id = `model-${m.id}`;
   return (
-    <form className="stack" aria-label={`Edit ${m.name}`} onSubmit={submit}>
-      <label htmlFor={`${id}-name`}>Name</label>
-      <input
-        id={`${id}-name`}
-        type="text"
-        {...noFill}
-        spellCheck={false}
-        maxLength={64}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        required
-      />
-      <label htmlFor={`${id}-base-url`}>Base URL</label>
-      <input
-        id={`${id}-base-url`}
-        type="text"
-        {...noFill}
-        spellCheck={false}
-        placeholder="the provider's own"
-        value={baseURL}
-        onChange={(e) => setBaseURL(e.target.value)}
-      />
-      <div className="meta">{baseURLHelp}</div>
-      <div className="name">API key</div>
-      <div className="meta">{secretText(m.key)}</div>
-      {askKey ? (
-        <input
-          type="password"
-          aria-label="New API key"
-          {...secretFill}
+    <form className="grid gap-3" aria-label={`Edit ${m.name}`} onSubmit={submit}>
+      <div className="grid gap-2">
+        <Label htmlFor={`${id}-name`}>Name</Label>
+        <Input
+          id={`${id}-name`}
+          type="text"
+          {...noFill}
           spellCheck={false}
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
+          maxLength={64}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
         />
-      ) : (
-        <div>
-          <button type="button" className="btn small" onClick={() => setReplacing(true)}>
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor={`${id}-base-url`}>Base URL</Label>
+        <Input
+          id={`${id}-base-url`}
+          type="text"
+          {...noFill}
+          spellCheck={false}
+          placeholder="the provider's own"
+          value={baseURL}
+          onChange={(e) => setBaseURL(e.target.value)}
+        />
+        <div className={hint}>{baseURLHelp}</div>
+      </div>
+      <div className="grid justify-items-start gap-2">
+        <div className="text-sm font-medium">API key</div>
+        <div className={hint}>{secretText(m.key)}</div>
+        {askKey ? (
+          <Input
+            type="password"
+            aria-label="New API key"
+            {...secretFill}
+            spellCheck={false}
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+          />
+        ) : (
+          <Button type="button" variant="outline" size="sm" onClick={() => setReplacing(true)}>
             Replace
-          </button>
-        </div>
-      )}
+          </Button>
+        )}
+      </div>
       {save.isError && <ErrorBox error={save.error} />}
-      <div className="actions-row end">
-        <button type="button" className="btn small" disabled={save.isPending} onClick={onDone}>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" size="sm" disabled={save.isPending} onClick={onDone}>
           Cancel
-        </button>
-        <button type="submit" className="btn primary small" disabled={save.isPending}>
+        </Button>
+        <Button type="submit" size="sm" disabled={save.isPending}>
           Save
-        </button>
+        </Button>
       </div>
     </form>
   );

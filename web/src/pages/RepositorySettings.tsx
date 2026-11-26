@@ -2,6 +2,16 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 
+import { TriangleAlert } from "lucide-react";
+
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { cn } from "@/lib/utils";
+
 import {
   api,
   paths,
@@ -171,12 +181,20 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         }}
       />
       {note && (
-        <div className="note" role="status">
+        <div className="text-ok mb-4 text-sm" role="status">
           {note}
         </div>
       )}
-      {save.isError && <ErrorBox error={save.error} />}
-      {reset.isError && <ErrorBox error={reset.error} />}
+      {save.isError && (
+        <div className="mb-4">
+          <ErrorBox error={save.error} />
+        </div>
+      )}
+      {reset.isError && (
+        <div className="mb-4">
+          <ErrorBox error={reset.error} />
+        </div>
+      )}
       {/* The model chain is not a setting: it has its own routes, and the
           config does not set it, so it is there for every repository. */}
       <RepoModelChain instance={repo.instance} project={repo.project} defaultOpen={false} />
@@ -213,16 +231,14 @@ function RemoveRepository({ instance, project, coveringTeams }: { instance: stri
   };
   return (
     <FoldCard label="Remove repository" title="Remove repository" summary="delete it from pergent for good">
-      <div className="pad stack">
-        <div className="meta">
+      <div className="grid justify-items-start gap-3 px-4 py-3">
+        <div className="text-muted-foreground text-sm">
           Its settings and team links are deleted, and its webhook and clone credentials are removed. This cannot be undone.
         </div>
         {remove.isError && <ErrorBox error={remove.error} />}
-        <div className="actions-row">
-          <button type="button" className="btn danger" disabled={remove.isPending} onClick={ask}>
-            Remove repository
-          </button>
-        </div>
+        <Button type="button" variant="destructive" size="sm" disabled={remove.isPending} onClick={ask}>
+          Remove repository
+        </Button>
       </div>
     </FoldCard>
   );
@@ -243,11 +259,19 @@ function RepoTeams({ instance, project }: { instance: string; project: string })
       summary={teams.isSuccess ? teamsSummary(teams.data) : undefined}
     >
       {teams.isPending && <Loading />}
-      {teams.isError && <ErrorBox error={teams.error} />}
+      {teams.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={teams.error} />
+        </div>
+      )}
       {teams.isSuccess &&
         (teams.data.teams.length === 0 ? (
-          <div className="pad meta">
-            No team yet. Create one on <Link to="/admin/teams">Teams</Link>.
+          <div className={muted}>
+            No team yet. Create one on{" "}
+            <Link className="text-primary hover:underline" to="/admin/teams">
+              Teams
+            </Link>
+            .
           </div>
         ) : (
           // A new answer from the server starts the list again from it.
@@ -308,32 +332,39 @@ function RepoTeamsForm({
   };
   return (
     <form
-      className="pad stack"
+      className="grid gap-3 px-4 py-3"
       onSubmit={(e) => {
         e.preventDefault();
         save.mutate([...ticked].sort((a, b) => a - b));
       }}
     >
       {data.teams.map((t) => (
-        <label className="check" key={t.id}>
-          <input type="checkbox" checked={ticked.has(t.id)} onChange={(e) => toggle(t.id, e.target.checked)} />
+        <Label className="leading-snug font-normal" key={t.id}>
+          <input
+            type="checkbox"
+            className="accent-primary size-4 shrink-0"
+            checked={ticked.has(t.id)}
+            onChange={(e) => toggle(t.id, e.target.checked)}
+          />
           <span>
-            {t.name} <span className="meta">{t.members === 1 ? "1 member" : `${t.members} members`}</span>
-            {t.wholeInstance && <span className="meta"> · covers every repository of {instance}</span>}
+            {t.name} <span className="text-muted-foreground text-xs">{t.members === 1 ? "1 member" : `${t.members} members`}</span>
+            {t.wholeInstance && <span className="text-muted-foreground text-xs"> · covers every repository of {instance}</span>}
           </span>
-        </label>
+        </Label>
       ))}
-      <div className="meta">A team covers the repositories it lists, or all of an instance. Edit a team's members on Teams.</div>
+      <div className="text-muted-foreground text-sm">
+        A team covers the repositories it lists, or all of an instance. Edit a team's members on Teams.
+      </div>
       {save.isError && <ErrorBox error={save.error} />}
       {saved && (
-        <div className="note" role="status">
+        <div className="text-ok text-sm" role="status">
           Saved.
         </div>
       )}
-      <div className="actions-row">
-        <button type="submit" className="btn primary" disabled={save.isPending}>
+      <div>
+        <Button type="submit" size="sm" disabled={save.isPending}>
           Save teams
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -695,7 +726,11 @@ function Form({
     onSave(body);
   };
 
-  const managed = locked && <span className="badge cfg">managed by config</span>;
+  const managed = locked && (
+    <Badge variant="grey" className="badge cfg ml-0">
+      managed by config
+    </Badge>
+  );
   return (
     <>
       <FoldCard
@@ -705,12 +740,12 @@ function Form({
         defaultOpen
       >
         {attention.map((m) => (
-          <div className="alert" key={m}>
-            <span aria-hidden="true">⚠️</span>
+          // No role: a setup check is not news, as an error is.
+          <Alert variant="warn" role={undefined} className="flex gap-2.5 rounded-none border-x-0 border-t-0" key={m}>
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span className="prose">{m}</span>
-          </div>
+          </Alert>
         ))}
-        
         <Setting
           name="Approve clean reviews"
           overridden={settings.approve.overridden}
@@ -723,7 +758,7 @@ function Form({
           overridden={settings.blockingStatus.overridden}
           help={blockingHelp}
         >
-          <select
+          <NativeSelect
             aria-label={blockingLabel}
             value={d.blockingStatus}
             disabled={disabled || !canSetStatus}
@@ -731,11 +766,11 @@ function Form({
           >
             <option value="failed">failed (blocks merge)</option>
             <option value="neutral">neutral</option>
-          </select>
-          {!locked && !canSetStatus && <div className="meta">Only an admin changes this.</div>}
+          </NativeSelect>
+          {!locked && !canSetStatus && <div className="text-muted-foreground text-xs">Only an admin changes this.</div>}
         </Setting>
         <Setting name={failureLabel} overridden={settings.failureStatus.overridden} help={failureHelp}>
-          <select
+          <NativeSelect
             aria-label={failureLabel}
             value={d.failureStatus}
             disabled={disabled || !canSetStatus}
@@ -743,9 +778,9 @@ function Form({
           >
             <option value="failed">failed (blocks merge)</option>
             <option value="neutral">neutral</option>
-          </select>
-          {d.blockingStatus === "neutral" && <div className="meta">{notUsedNote}</div>}
-          {!locked && !canSetStatus && <div className="meta">Only an admin changes this.</div>}
+          </NativeSelect>
+          {d.blockingStatus === "neutral" && <div className="text-muted-foreground text-xs">{notUsedNote}</div>}
+          {!locked && !canSetStatus && <div className="text-muted-foreground text-xs">Only an admin changes this.</div>}
         </Setting>
         <Setting
           name="Review drafts"
@@ -783,7 +818,7 @@ function Form({
           overridden={settings.trustedAuthorsOnly.overridden}
           help="When on, a change from an author without write access and not on the list below isn't reviewed until someone with write access starts it. The instance's default follows the repository's visibility: on for a public repository."
         >
-          <select
+          <NativeSelect
             aria-label="Trusted authors only"
             value={d.trustedAuthorsOnly}
             disabled={disabled || !canSetTrust}
@@ -794,7 +829,7 @@ function Form({
             </option>
             <option value="on">on</option>
             <option value="off">off</option>
-          </select>
+          </NativeSelect>
         </Setting>
         {canSetQuota && settings.monthlyTokenQuota && (
           <Setting
@@ -802,7 +837,7 @@ function Form({
             overridden={settings.monthlyTokenQuota.overridden}
             help="Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. Empty: limited only by the instance's quota."
           >
-            <input
+            <Input
               type="text"
               inputMode="numeric"
               aria-label="Monthly token quota"
@@ -813,23 +848,24 @@ function Form({
             />
           </Setting>
         )}
-        <div className="set" role="group" aria-label="Trusted authors">
+        <div className={setRow} role="group" aria-label="Trusted authors">
           <div>
-            <div className="name">
-              Trusted authors <Badge overridden={settings.trustedAuthors.overridden} />
+            <div className={setName}>
+              Trusted authors <SetBadge overridden={settings.trustedAuthors.overridden} />
             </div>
-            <div className="help">
+            <div className={setHelp}>
               People without write access whose changes are reviewed without anyone starting them, such as a regular outside
               contributor or a bot. A username is looked up when you save, and kept by the platform's user ID.
             </div>
-            {d.trustedAuthors.length === 0 && <div className="meta">Nobody.</div>}
+            {d.trustedAuthors.length === 0 && <div className="text-muted-foreground mt-2 text-sm">Nobody.</div>}
             {d.trustedAuthors.map((a) => (
-              <div className="row" key={`${a.id ?? "new"}/${a.username}`}>
-                <span className="grow mono">{a.username}</span>
+              <div className="flex items-center gap-3 border-b py-2 text-sm last:border-b-0" key={`${a.id ?? "new"}/${a.username}`}>
+                <span className="min-w-0 grow font-mono text-xs">{a.username}</span>
                 {!disabled && canSetTrust && (
-                  <button
+                  <Button
                     type="button"
-                    className="btn small"
+                    variant="outline"
+                    size="sm"
                     aria-label={`Remove ${a.username}`}
                     onClick={() =>
                       set(
@@ -839,24 +875,27 @@ function Form({
                     }
                   >
                     Remove
-                  </button>
+                  </Button>
                 )}
               </div>
             ))}
-            {!locked && !canSetTrust && <div className="meta">Only admins of this repository change who is trusted.</div>}
+            {!locked && !canSetTrust && (
+              <div className="text-muted-foreground mt-2 text-xs">Only admins of this repository change who is trusted.</div>
+            )}
           </div>
           {!disabled && canSetTrust && (
-            <div className="search">
-              <input
+            <div className="flex items-center gap-2">
+              <Input
                 aria-label="Add a username"
                 placeholder="username"
                 maxLength={255}
                 value={newAuthor}
                 onChange={(e) => setNewAuthor(e.target.value)}
               />
-              <button
+              <Button
                 type="button"
-                className="btn small"
+                variant="outline"
+                size="sm"
                 onClick={() => {
                   const name = newAuthor.trim();
                   if (name !== "" && !d.trustedAuthors.some((a) => a.username.toLowerCase() === name.toLowerCase())) {
@@ -866,7 +905,7 @@ function Form({
                 }}
               >
                 Add
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -922,11 +961,10 @@ function Form({
 
       <FoldCard
         label="CI jobs"
-        title={<>CI jobs <Badge overridden={settings.ciJobs.overridden} /> {managed}</>}
+        title={<>CI jobs <SetBadge overridden={settings.ciJobs.overridden} /> {managed}</>}
         summary={ciSummary(d.ciJobs)}
       >
-        
-        <div className="pad meta">
+                <div className={muted}>
           Choose the CI jobs a review waits for. A blocking job that has not passed holds approval back. A job read as log or report
           also gives the review its output.
         </div>
@@ -936,11 +974,10 @@ function Form({
       {canSetLinks && (
         <FoldCard
         label="Linked repositories"
-        title={<>Linked repositories <Badge overridden={settings.linkedReposEnabled.overridden || settings.linkedRepos.overridden} /> {managed}</>}
+        title={<>Linked repositories <SetBadge overridden={settings.linkedReposEnabled.overridden || settings.linkedRepos.overridden} /> {managed}</>}
         summary={platform === "github" ? linksSummary(d) : "GitHub only"}
       >
-          
-          {platform === "github" ? (
+                    {platform === "github" ? (
             <LinkedReposEditor
               enabled={d.linkedReposEnabled}
               onEnabled={(v) => set("linkedReposEnabled", v)}
@@ -952,18 +989,17 @@ function Form({
               disabled={disabled}
             />
           ) : (
-            <div className="pad meta">Linked repositories work on GitHub repositories only, for now.</div>
+            <div className={muted}>Linked repositories work on GitHub repositories only, for now.</div>
           )}
         </FoldCard>
       )}
 
       <FoldCard
         label="Comment layout"
-        title={<>Comment layout <Badge overridden={settings.commentLayout.overridden} /> {managed}</>}
+        title={<>Comment layout <SetBadge overridden={settings.commentLayout.overridden} /> {managed}</>}
         summary={d.commentLayout === null ? "the default blocks" : countText(d.commentLayout.length, "block") + " shown"}
       >
-        
-        <div className="pad meta">
+                <div className={muted}>
           The blocks of the review comment, in order. A block that is not shown is left out. Quiet reviews and the size limit
           can still cut what a block shows.
         </div>
@@ -978,59 +1014,60 @@ function Form({
 
       <FoldCard
         label="Skills used for this repository"
-        title={<>Skills used for this repository <Badge overridden={settings.skills.overridden} /> {managed}</>}
+        title={<>Skills used for this repository <SetBadge overridden={settings.skills.overridden} /> {managed}</>}
         summary={d.skillsMode === "default" ? `the default skills (${defaultSkills.length})` : countText(d.skills.length, "skill") + " chosen"}
       >
-        
-        <div className="skill">
-          <label className="grow">
+        <div className={skillRow}>
+          <Label className="grow font-normal">
             <input
               type="radio"
+              className={radio}
               name="skills-mode"
               checked={d.skillsMode === "default"}
               disabled={disabled}
               onChange={() => set("skillsMode", "default")}
             />{" "}
             Use the default skills ({defaultSkills.length > 0 ? defaultSkills.join(", ") : "none"})
-          </label>
+          </Label>
         </div>
-        <div className="skill">
-          <label className="grow">
+        <div className={skillRow}>
+          <Label className="grow font-normal">
             <input
               type="radio"
+              className={radio}
               name="skills-mode"
               checked={d.skillsMode === "choose"}
               disabled={disabled}
               onChange={() => set("skillsMode", "choose")}
             />{" "}
             Choose skills
-          </label>
+          </Label>
         </div>
         {d.skillsMode === "default" && defaultSkills.length === 0 && (
-          <div className="pad meta">
+          <div className={muted}>
             There are no default skills, so this repository gets no skills from the library. Without skills of its own it is
             not reviewed.
           </div>
         )}
         {(d.skillsMode === "choose" || locked) &&
           skillNames.map((s) => (
-            <div className="skill" key={s}>
+            <div className={skillRow} key={s}>
               <Switch
                 label={`Skill ${s}`}
                 checked={used.includes(s)}
                 disabled={disabled || d.skillsMode === "default"}
                 onChange={(on) => set("skills", on ? [...d.skills, s] : d.skills.filter((x) => x !== s))}
               />
-              <b className="grow">{s}</b>
-              <span className="src">{library.includes(s) ? "library" : "not in the library"}</span>
+              <b className="min-w-0 grow font-semibold">{s}</b>
+              <Src>{library.includes(s) ? "library" : "not in the library"}</Src>
             </div>
           ))}
-        <div className={total > skillBudget ? "pad problem" : "pad meta"}>
+        <div className={cn(muted, total > skillBudget && "text-bad")}>
           Total {bytesText(total)} of {bytesText(skillBudget)}
           {total > skillBudget && ": a review takes at most that much library skill text."}
         </div>
         {gone.length > 0 && (
-          <div className="pad meta">
+          <div className={muted}>
             {gone.join(", ")} {gone.length === 1 ? "is" : "are"} no longer in the library. Saving a change to the skills
             removes {gone.length === 1 ? "it" : "them"} from this repository.
           </div>
@@ -1039,33 +1076,34 @@ function Form({
 
       <FoldCard
         label="Rule sets used for this repository"
-        title={<>Rule sets used for this repository <Badge overridden={settings.ruleSets?.overridden ?? false} /> {managed}</>}
+        title={<>Rule sets used for this repository <SetBadge overridden={settings.ruleSets?.overridden ?? false} /> {managed}</>}
         summary={d.ruleSetsMode === "default" ? `the default rule sets (${defaultRuleSets.length})` : countText(d.ruleSets.length, "rule set") + " chosen"}
       >
-        
-        <div className="skill">
-          <label className="grow">
+        <div className={skillRow}>
+          <Label className="grow font-normal">
             <input
               type="radio"
+              className={radio}
               name="rule-sets-mode"
               checked={d.ruleSetsMode === "default"}
               disabled={disabled}
               onChange={() => set("ruleSetsMode", "default")}
             />{" "}
             Use the default rule sets ({defaultRuleSets.length > 0 ? defaultRuleSets.join(", ") : "none"})
-          </label>
+          </Label>
         </div>
-        <div className="skill">
-          <label className="grow">
+        <div className={skillRow}>
+          <Label className="grow font-normal">
             <input
               type="radio"
+              className={radio}
               name="rule-sets-mode"
               checked={d.ruleSetsMode === "choose"}
               disabled={disabled}
               onChange={() => set("ruleSetsMode", "choose")}
             />{" "}
             Choose rule sets
-          </label>
+          </Label>
         </div>
         {d.ruleSetsMode === "choose" &&
           (ruleLibrary === null ? (
@@ -1079,7 +1117,7 @@ function Form({
               onChange={(v) => set("ruleSets", v)}
             />
           ))}
-        <div className="pad meta">
+        <div className={muted}>
           After the repository's own .pergent/rules.yaml, in this order. The first entry that matches a file gives it its rule;
           a rule never says what is blocking.
         </div>
@@ -1087,18 +1125,19 @@ function Form({
 
       <FoldCard
         label="Built-in rules"
-        title={<>Built-in rules <Badge overridden={settings.builtInRules?.overridden ?? false} /> {managed}</>}
+        title={<>Built-in rules <SetBadge overridden={settings.builtInRules?.overridden ?? false} /> {managed}</>}
         summary={d.builtInRules.length === 0 ? "none enabled" : `${d.builtInRules.length} enabled: ${d.builtInRules.join(", ")}`}
       >
-        
-        <div className="pad meta">
+                <div className={muted}>
           pergent's own path rules, after the repository's and the rule sets'. Each one adds its text to the runs on its files, so
           enable only the ones you need. None is enabled by default.
         </div>
-        {builtInsOff !== "" && <div className={d.builtInRules.length > 0 ? "pad problem" : "pad meta"}>{builtInsOff}</div>}
+        {builtInsOff !== "" && (
+          <div className={cn(muted, d.builtInRules.length > 0 && "problem text-bad")}>{builtInsOff}</div>
+        )}
         {builtIns === "loading" && <Loading />}
         {builtIns === "error" && (
-          <div className="pad meta">
+          <div className={muted}>
             The built-in rules can't be read now{d.builtInRules.length > 0 && `. Enabled: ${d.builtInRules.join(", ")}`}.
           </div>
         )}
@@ -1112,46 +1151,49 @@ function Form({
         title={<>Skills in the repository {managed}</>}
         summary={d.repoSkills.length === 0 ? ".pergent/skills only" : `.pergent/skills and ${countText(d.repoSkills.length, "skill")} turned on`}
       >
-        
-        <div className="skill">
+        <div className={skillRow}>
           <span className="grow">
-            <b>.pergent/skills</b>
+            <b className="font-semibold">.pergent/skills</b>
           </span>
-          <span className="src">always on</span>
+          <Src>always on</Src>
         </div>
         {detected.status === "loading" && <Loading />}
-        {detected.status === "error" && <ErrorBox error={detected.error} />}
+        {detected.status === "error" && (
+          <div className="px-4 py-3">
+            <ErrorBox error={detected.error} />
+          </div>
+        )}
         {detected.status === "ok" &&
           found.map((x) => (
-            <div className="skill" key={`${x.folder}/${x.name}`}>
+            <div className={skillRow} key={`${x.folder}/${x.name}`}>
               <Switch
                 label={`Repository skill ${x.name}`}
                 checked={d.repoSkills.includes(x.name)}
                 disabled={disabled || (x.problem !== undefined && x.problem !== "" && !d.repoSkills.includes(x.name))}
                 onChange={(on) => set("repoSkills", on ? [...d.repoSkills, x.name] : d.repoSkills.filter((n) => n !== x.name))}
               />
-              <b className="grow">{x.name}</b>
-              {x.problem && <span className="problem">{x.problem}</span>}
-              <span className="src">{x.folder}</span>
+              <b className="min-w-0 grow font-semibold">{x.name}</b>
+              {x.problem && <span className="text-bad text-xs">{x.problem}</span>}
+              <Src>{x.folder}</Src>
             </div>
           ))}
         {detected.status === "ok" &&
           missing.map((n) => (
-            <div className="skill" key={`missing/${n}`}>
+            <div className={skillRow} key={`missing/${n}`}>
               <Switch
                 label={`Repository skill ${n}`}
                 checked={d.repoSkills.includes(n)}
                 disabled={disabled}
                 onChange={(on) => set("repoSkills", on ? [...d.repoSkills, n] : d.repoSkills.filter((x) => x !== n))}
               />
-              <b className="grow">{n}</b>
-              <span className="problem">not found in the repository</span>
+              <b className="min-w-0 grow font-semibold">{n}</b>
+              <span className="text-bad text-xs">not found in the repository</span>
             </div>
           ))}
         {detected.status === "ok" && found.length === 0 && missing.length === 0 && (
-          <div className="pad meta">No skills in .agents/skills, .claude/skills or .github/skills.</div>
+          <div className={muted}>No skills in .agents/skills, .claude/skills or .github/skills.</div>
         )}
-        <div className="pad meta">
+        <div className={muted}>
           Skills in .agents/skills, .claude/skills and .github/skills run only when turned on here; .pergent/skills always runs.
           A skill in a repository folder replaces a library skill of the same name. Only the SKILL.md text of a skill is used:
           its other files are ignored.
@@ -1163,13 +1205,12 @@ function Form({
         title={<>Review Job {managed}</>}
         summary={jobSummary(d)}
       >
-        
-        <Setting
+                <Setting
           name="Timeout"
           overridden={settings.jobTimeoutSeconds.overridden}
           help="How long one review may run, in seconds (60 to 7200)."
         >
-          <input
+          <Input
             type="text"
             inputMode="numeric"
             aria-label="Timeout (seconds)"
@@ -1183,7 +1224,7 @@ function Form({
           overridden={settings.maxTurns.overridden}
           help="Steps each review run may take before pergent stops it; each step can call several tools."
         >
-          <input
+          <Input
             type="text"
             inputMode="numeric"
             aria-label="Max steps"
@@ -1197,7 +1238,7 @@ function Form({
           overridden={settings.jobMemory.overridden}
           help="Raise it if reviews run out of memory, for example 6Gi. Empty means the default."
         >
-          <input
+          <Input
             type="text"
             aria-label="Memory limit"
             placeholder="none"
@@ -1211,7 +1252,7 @@ function Form({
           overridden={settings.rerunLimitPerMR.overridden}
           help="The most re-runs (buttons and comments) of one merge request or pull request in a UTC day, 1 to 1000. Pushes always run."
         >
-          <input
+          <Input
             type="number"
             aria-label="Re-run cap per MR/PR (per day)"
             min={1}
@@ -1228,7 +1269,7 @@ function Form({
           overridden={settings.rerunLimitPerRepo.overridden}
           help="The most re-runs across the whole repository in a UTC day, 1 to 1000."
         >
-          <input
+          <Input
             type="number"
             aria-label="Re-run cap per repository (per day)"
             min={1}
@@ -1241,34 +1282,43 @@ function Form({
           />
         </Setting>
         {!locked && !canSetCaps && (
-          <div className="pad meta">Only admins of this repository change its re-run caps.</div>
+          <div className={muted}>Only admins of this repository change its re-run caps.</div>
         )}
         {!locked && (
-          <div className="foot start">
-            <button type="button" className="btn danger" disabled={busy} onClick={onReset}>
+          <div className={footClass}>
+            <Button type="button" variant="destructive-outline" size="sm" disabled={busy} onClick={onReset}>
               Reset to defaults
-            </button>
-            {!dirty && !problem && <span className="meta">All changes are saved.</span>}
+            </Button>
+            {!dirty && !problem && <span className="text-muted-foreground text-sm">All changes are saved.</span>}
           </div>
         )}
-        {locked && <div className="foot meta">This repository is listed in pergent.sh's config; change it there.</div>}
+        {locked && (
+          <div className={cn(footClass, "text-muted-foreground text-sm")}>
+            This repository is listed in pergent.sh's config; change it there.
+          </div>
+        )}
       </FoldCard>
       {/* Save sits in a bar that stays at the bottom of the window while the
           draft differs from what is saved, so it is never 4000px away. It
           covers the cards above; the model chain, Reviewers and Teams below
           save on their own. */}
       {!locked && (dirty || problem !== "") && (
-        <div className="save-bar" role="region" aria-label="Unsaved changes">
+        <div
+          className="border-primary bg-card sticky bottom-4 z-5 my-4 flex items-center gap-2 rounded-xl border py-2.5 pr-3 pl-4 text-sm shadow-lg"
+          role="region"
+          aria-label="Unsaved changes"
+        >
           {problem ? (
-            <span className="problem grow" role="alert">
+            <span className="text-bad min-w-0 grow" role="alert">
               {problem}
             </span>
           ) : (
-            <span className="grow">You have unsaved changes to the settings above.</span>
+            <span className="min-w-0 grow">You have unsaved changes to the settings above.</span>
           )}
-          <button
+          <Button
             type="button"
-            className="btn"
+            variant="outline"
+            size="sm"
             disabled={busy}
             onClick={() => {
               setD(initial);
@@ -1276,30 +1326,58 @@ function Form({
             }}
           >
             Discard
-          </button>
-          <button type="button" className="btn primary" disabled={busy} onClick={submit}>
+          </Button>
+          <Button type="button" size="sm" disabled={busy} onClick={submit}>
             Save
-          </button>
+          </Button>
         </div>
       )}
     </>
   );
 }
 
-function Badge({ overridden }: { overridden: boolean }) {
-  return overridden ? <span className="badge">overridden here</span> : <span className="badge cfg">default</span>;
+// The classes of the tab's rows. "set", "name" and "skill" stay as names
+// the tests find the rows by.
+const setRow = "set grid grid-cols-1 items-center gap-4 border-b px-4 py-3.5 last:border-b-0 sm:grid-cols-[1fr_280px]";
+const setName = "name flex flex-wrap items-center gap-1.5 text-sm font-semibold";
+const setHelp = "text-muted-foreground mt-0.5 text-sm";
+const skillRow = "skill flex items-center gap-2.5 border-b px-4 py-2.5 text-sm last:border-b-0";
+const muted = "text-muted-foreground border-b px-4 py-3 text-sm last:border-b-0";
+const footClass = "bg-muted/40 flex items-center gap-3 border-t px-4 py-3";
+const radio = "accent-primary size-4";
+
+// SetBadge says whether a setting is the repository's own or the default.
+// "badge" and "cfg" stay as names the tests read.
+function SetBadge({ overridden }: { overridden: boolean }) {
+  return overridden ? (
+    <Badge className="badge bg-primary/10 text-primary ml-0">overridden here</Badge>
+  ) : (
+    <Badge variant="grey" className="badge cfg ml-0">
+      default
+    </Badge>
+  );
+}
+
+// Src is where a skill comes from, as a quiet badge. "src" stays as a name
+// the tests read.
+function Src({ children }: { children: ReactNode }) {
+  return (
+    <Badge variant="outline" className="src text-muted-foreground font-normal">
+      {children}
+    </Badge>
+  );
 }
 
 function Setting({ name, overridden, help, children }: { name: string; overridden: boolean; help: string; children: ReactNode }) {
   return (
-    <div className="set">
+    <div className={setRow}>
       <div>
-        <div className="name">
-          {name} <Badge overridden={overridden} />
+        <div className={setName}>
+          {name} <SetBadge overridden={overridden} />
         </div>
-        <div className="help">{help}</div>
+        <div className={setHelp}>{help}</div>
       </div>
-      <div>{children}</div>
+      <div className="grid gap-1.5">{children}</div>
     </div>
   );
 }

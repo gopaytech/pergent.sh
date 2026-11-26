@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+
 import {
   ApiError,
   api,
@@ -22,6 +27,19 @@ export const pollMs = 5_000;
 
 // The noise list shows this many paths; the API already stops there.
 const noiseShown = 50;
+
+// cardClass is a card of rows; headClass is its title bar.
+const cardClass = "mb-4 gap-0 overflow-hidden py-0";
+const headClass = "border-b py-3 [.border-b]:pb-3";
+
+// whyClass is the muted text under a check's title; fixClass is the text to
+// paste or run.
+const whyClass = "prose text-muted-foreground text-sm";
+const fixClass = "bg-muted/50 mt-1.5 rounded-md border px-3 py-2 font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]";
+
+// checkClass is a tick box with its label; boxClass is the box.
+const checkClass = "leading-snug font-normal";
+const boxClass = "accent-primary size-4 shrink-0";
 
 const stateLabel: Record<ChecklistState, [Tone, string]> = {
   passed: ["ok", "Passed"],
@@ -119,24 +137,28 @@ export default function Readiness({ instance, project, paused = false }: { insta
 
   return (
     <>
-      <section className="card pad stack" aria-label="Scan">
-        <div className="row wrap">
-          <div className="grow">
+      <Card role="region" aria-label="Scan" className="mb-4 gap-3 px-4 py-4">
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <div className="min-w-0 grow">
             {scanning && <div role="status">Scanning…</div>}
             {v.latest ? <TopLine scan={v.latest} /> : !scanning && <div>Not scanned yet</div>}
           </div>
           {v.canScan && (
-            <button type="button" className="btn small" disabled={scanning || scanNow.isPending} onClick={() => scanNow.mutate()}>
+            <Button type="button" variant="outline" size="sm" disabled={scanning || scanNow.isPending} onClick={() => scanNow.mutate()}>
               Scan now
-            </button>
+            </Button>
           )}
         </div>
         <ScanError error={scanNow.isError ? scanNow.error : null} />
-        {note && <div className="note">{note}</div>}
-      </section>
-      {apply.isError && <ErrorBox error={apply.error} />}
+        {note && <div className="text-ok text-sm">{note}</div>}
+      </Card>
+      {apply.isError && (
+        <div className="mb-4">
+          <ErrorBox error={apply.error} />
+        </div>
+      )}
       {v.checklist === null ? (
-        <div className="card empty">
+        <Card className="text-muted-foreground px-4 py-8 text-center text-sm">
           {scanning
             ? "The first scan is running."
             : v.canScan
@@ -144,7 +166,7 @@ export default function Readiness({ instance, project, paused = false }: { insta
               : paused
                 ? "This repository is paused, so it is not scanned. Switch it on to scan it."
                 : "Not scanned yet. A maintainer or an admin of this repository can scan it."}
-        </div>
+        </Card>
       ) : (
         <>
           <Checklist
@@ -186,7 +208,7 @@ function Checklist({
           {s.key === "skills" && suggestions}
         </Section>
       ))}
-      {!hasSkills && checklist.suggested.length > 0 && <section className="card">{suggestions}</section>}
+      {!hasSkills && checklist.suggested.length > 0 && <Card className={cardClass}>{suggestions}</Card>}
     </>
   );
 }
@@ -208,7 +230,11 @@ function TopLine({ scan }: { scan: ScanView }) {
   if (scan.state === "failed") {
     // The error is the Job's text: shown as text.
     const age = scannedAgo(scan.finishedAt ?? scan.queuedAt);
-    return <div className="sub prose">{scan.error ? `Last scan failed ${age} ago: ${scan.error}` : `Last scan failed ${age} ago.`}</div>;
+    return (
+      <div className="prose text-muted-foreground">
+        {scan.error ? `Last scan failed ${age} ago: ${scan.error}` : `Last scan failed ${age} ago.`}
+      </div>
+    );
   }
   const who =
     scan.startedBy === "switch-on"
@@ -217,22 +243,27 @@ function TopLine({ scan }: { scan: ScanView }) {
         ? "after the upgrade"
         : `by ${scan.startedBy}`;
   const at = scan.commit ? `, at commit ${scan.commit.slice(0, 7)}` : "";
-  return <div className="sub">{`Scanned ${scannedAgo(scan.finishedAt ?? scan.queuedAt)} ago, ${who}${at}`}</div>;
+  return <div className="text-muted-foreground">{`Scanned ${scannedAgo(scan.finishedAt ?? scan.queuedAt)} ago, ${who}${at}`}</div>;
 }
 
 // ScanError says why Scan now didn't queue a scan. The wait comes from
 // waitSeconds, rounded up to whole minutes.
 function ScanError({ error }: { error: unknown }) {
   if (error === null) return null;
-  if (isStatus(error, 409)) return <div role="alert" className="error">A scan is already running.</div>;
+  if (isStatus(error, 409))
+    return (
+      <Alert variant="destructive" className="block">
+        A scan is already running.
+      </Alert>
+    );
   if (isStatus(error, 429)) {
     const wait = (error as ApiError).body as { waitSeconds?: unknown } | undefined;
     if (typeof wait?.waitSeconds === "number" && wait.waitSeconds > 0) {
       const minutes = Math.ceil(wait.waitSeconds / 60);
       return (
-        <div role="alert" className="error">
+        <Alert variant="destructive" className="block">
           Try again in {minutes} {minutes === 1 ? "minute" : "minutes"}.
-        </div>
+        </Alert>
       );
     }
   }
@@ -242,13 +273,15 @@ function ScanError({ error }: { error: unknown }) {
 function Section({ section, children }: { section: ChecklistSection; children?: ReactNode }) {
   const title = sectionTitle[section.key] ?? section.key;
   return (
-    <section className="card" aria-label={title}>
-      <h2>{title}</h2>
+    <Card role="region" aria-label={title} className={cardClass}>
+      <CardHeader className={headClass}>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
       {section.items.map((it) => (
         <Item key={it.key} item={it} />
       ))}
       {children}
-    </section>
+    </Card>
   );
 }
 
@@ -256,14 +289,14 @@ function Item({ item }: { item: ChecklistItem }) {
   const [tone, label] = stateLabel[item.state] ?? ["grey", "Couldn't check"];
   const noise = item.noise ?? [];
   return (
-    <div className="row">
+    <div className="flex items-start gap-3 border-b px-4 py-3 text-sm last:border-b-0">
       <Pill tone={tone}>{label}</Pill>
-      <div className="grow">
-        <div className="title">{itemTitle[item.key] ?? item.key}</div>
-        {item.reason && <div className="why prose">{item.reason}</div>}
-        {item.why && <div className="why prose">{item.why}</div>}
+      <div className="grid min-w-0 grow gap-0.5">
+        <div className="font-medium">{itemTitle[item.key] ?? item.key}</div>
+        {item.reason && <div className={whyClass}>{item.reason}</div>}
+        {item.why && <div className={whyClass}>{item.why}</div>}
         {item.list && item.list.length > 0 && (
-          <ul className="why">
+          <ul className="text-muted-foreground list-disc pl-5 text-sm">
             {item.list.map((l, i) => (
               <li key={i} className="prose">
                 {l}
@@ -272,7 +305,7 @@ function Item({ item }: { item: ChecklistItem }) {
           </ul>
         )}
         {noise.length > 0 && <NoiseList noise={noise} more={item.more ?? 0} />}
-        {item.fix && <pre className="fix">{item.fix}</pre>}
+        {item.fix && <pre className={fixClass}>{item.fix}</pre>}
       </div>
     </div>
   );
@@ -284,10 +317,10 @@ function NoiseList({ noise, more }: { noise: NoiseFile[]; more: number }) {
   const shown = noise.slice(0, noiseShown);
   const rest = more + (noise.length - shown.length);
   return (
-    <ul className="why">
+    <ul className="text-muted-foreground list-disc pl-5 text-sm">
       {shown.map((n, i) => (
         <li key={i} className="prose">
-          <span className="mono">{n.path}</span> · {n.why} · {bytesText(n.size)}
+          <span className="font-mono text-xs">{n.path}</span> · {n.why} · {bytesText(n.size)}
           {n.skills && n.skills.length > 0 && <> · skills: {n.skills.join(", ")}</>}
         </li>
       ))}
@@ -325,33 +358,34 @@ function Suggestions({
     onApply(list, () => setTicked([]));
   };
   return (
-    <div className="pad stack" aria-label="Suggested skills">
-      <h3 className="group">Suggested skills</h3>
+    <div className="grid gap-2 border-t px-4 py-3 text-sm" aria-label="Suggested skills">
+      <h3 className="text-muted-foreground text-[13px] font-semibold">Suggested skills</h3>
       {suggested.map((s) =>
         choose ? (
-          <label className="check" key={s}>
+          <Label className={checkClass} key={s}>
             <input
               type="checkbox"
+              className={boxClass}
               checked={ticked.includes(s)}
               onChange={(e) => setTicked(e.target.checked ? [...ticked, s] : ticked.filter((t) => t !== s))}
             />
             {s}
-          </label>
+          </Label>
         ) : (
           <div key={s}>{s}</div>
         ),
       )}
       {view.configRepo ? (
         <>
-          <div className="meta">This repository is set up in the config file. Paste this line there:</div>
-          <pre className="fix">{skillsLine(list)}</pre>
+          <div className="text-muted-foreground">This repository is set up in the config file. Paste this line there:</div>
+          <pre className={fixClass}>{skillsLine(list)}</pre>
         </>
       ) : (
         view.canScan && (
           <div>
-            <button type="button" className="btn primary small" disabled={picked.length === 0 || saving} onClick={save}>
+            <Button type="button" size="sm" disabled={picked.length === 0 || saving} onClick={save}>
               Use these skills
-            </button>
+            </Button>
           </div>
         )
       )}
@@ -386,52 +420,48 @@ function BuiltInSuggestions({
   const picked = suggested.map((f) => f.name).filter((n) => ticked.includes(n) && !view.applyBuiltInBase.includes(n));
   const list = [...view.applyBuiltInBase, ...picked];
   return (
-    <section className="card" aria-label="Suggested built-in rules">
-      <h2>Suggested built-in rules</h2>
-      <div className="pad stack">
-        <div className="meta">
+    <Card role="region" aria-label="Suggested built-in rules" className={cardClass}>
+      <CardHeader className={headClass}>
+        <CardTitle>Suggested built-in rules</CardTitle>
+      </CardHeader>
+      <div className="grid gap-2 px-4 py-3 text-sm">
+        <div className="text-muted-foreground">
           Built-in rules whose globs match files in this repository and that are not enabled. Each one adds its text to the runs on
           its files, so enable only the ones you need.
         </div>
         {suggested.map((f) =>
           choose ? (
-            <label className="check" key={f.name}>
+            <Label className={checkClass} key={f.name}>
               <input
                 type="checkbox"
+                className={boxClass}
                 aria-label={f.name}
                 checked={ticked.includes(f.name)}
                 onChange={(e) => setTicked(e.target.checked ? [...ticked, f.name] : ticked.filter((t) => t !== f.name))}
               />
-              {f.name}{" "}
-              <span className="meta">{filesText(f.files)}</span>
-            </label>
+              {f.name} <span className="text-muted-foreground text-xs">{filesText(f.files)}</span>
+            </Label>
           ) : (
             <div key={f.name}>
-              {f.name}{" "}
-              <span className="meta">{filesText(f.files)}</span>
+              {f.name} <span className="text-muted-foreground text-xs">{filesText(f.files)}</span>
             </div>
           ),
         )}
         {view.configRepo ? (
           <>
-            <div className="meta">This repository is set up in the config file. Paste this line there:</div>
-            <pre className="fix">{builtInRulesLine(list)}</pre>
+            <div className="text-muted-foreground">This repository is set up in the config file. Paste this line there:</div>
+            <pre className={fixClass}>{builtInRulesLine(list)}</pre>
           </>
         ) : (
           view.canScan && (
             <div>
-              <button
-                type="button"
-                className="btn primary small"
-                disabled={picked.length === 0 || saving}
-                onClick={() => onApply(list, () => setTicked([]))}
-              >
+              <Button type="button" size="sm" disabled={picked.length === 0 || saving} onClick={() => onApply(list, () => setTicked([]))}>
                 Enable {picked.length} {picked.length === 1 ? "rule" : "rules"}
-              </button>
+              </Button>
             </div>
           )
         )}
       </div>
-    </section>
+    </Card>
   );
 }

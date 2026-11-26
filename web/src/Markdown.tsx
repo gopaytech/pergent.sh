@@ -2,7 +2,13 @@ import { useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { Button } from "@/components/ui/button";
+
 import { safeHref } from "./api";
+
+// sourceBox is the box the text as written is shown in. MarkdownLazy draws
+// the same box while the renderer loads.
+const sourceBox = "bg-muted/50 rounded-md border px-3 py-2.5 font-mono text-xs break-words whitespace-pre-wrap";
 
 // splitFrontmatter takes a leading "---" block (a skill's name and
 // description) off the text: rendered, it would read as a rule and a run of
@@ -56,23 +62,24 @@ const components: Components = {
 
 // Markdown shows a skill, an instructions file or a rule as rendered
 // markdown (with GitHub's tables, task lists and strikethrough), with a
-// button to show the text as it is written.
+// button to show the text as it is written. md-doc and md stay as class
+// names: the rendered markdown's own styles hang on them.
 export default function Markdown({ text }: { text: string }) {
   const [source, setSource] = useState(false);
   const { front, body } = splitFrontmatter(text);
   return (
-    <div className="md-doc">
-      <div className="md-bar">
-        <button type="button" className="btn small" aria-pressed={source} onClick={() => setSource(!source)}>
+    <div className="md-doc mx-4 mb-3">
+      <div className="mb-1.5 flex justify-end">
+        <Button type="button" variant="outline" size="sm" aria-pressed={source} onClick={() => setSource(!source)}>
           {source ? "Show rendered" : "Show source"}
-        </button>
+        </Button>
       </div>
       {source ? (
-        <pre className="doc">{text}</pre>
+        <pre className={sourceBox}>{text}</pre>
       ) : (
         <>
           {front && (
-            <pre className="md-front" aria-label="Front matter">
+            <pre className="bg-muted/50 text-muted-foreground mb-2.5 rounded-md border px-3 py-2 font-mono text-xs whitespace-pre-wrap" aria-label="Front matter">
               {front}
             </pre>
           )}

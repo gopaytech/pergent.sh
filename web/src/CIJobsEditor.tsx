@@ -1,5 +1,10 @@
 import { useId } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+
 import type { CIJob, CIJobRead, CIJobs } from "./api";
 import { Switch } from "./ui";
 
@@ -62,16 +67,16 @@ export default function CIJobsEditor({
 
   return (
     <div>
-      <div className="set">
+      <div className="grid items-center gap-4 border-b px-4 py-3.5 sm:grid-cols-[1fr_280px]">
         <div>
-          <div className="name">Wait for CI</div>
-          <div className="help">
+          <div className="text-sm font-semibold">Wait for CI</div>
+          <div className="text-muted-foreground mt-0.5 text-sm">
             A review waits this long for the jobs below to end, from 5m to 2h, for example 30m. A blocking job that has not passed
             holds approval back.
           </div>
         </div>
         <div>
-          <input
+          <Input
             type="text"
             aria-label="How long to wait for CI"
             spellCheck={false}
@@ -91,12 +96,12 @@ export default function CIJobsEditor({
         {value.jobs.map((j, i) => {
           const unknown = names !== null && j.name.trim() !== "" && !names.includes(j.name.trim());
           return (
-            <div className="link-row ci-job" role="listitem" key={i}>
-              <div className="link-head">
-                <input
+            <div className="grid gap-2 border-b px-4 py-3" role="listitem" key={i}>
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <Input
                   type="text"
                   role="combobox"
-                  className="grow"
+                  className="min-w-40 flex-1"
                   aria-label="Job name"
                   placeholder="Job name"
                   list={listId}
@@ -105,31 +110,38 @@ export default function CIJobsEditor({
                   disabled={disabled}
                   onChange={(e) => change(i, { name: e.target.value })}
                 />
-                <select aria-label="Read" value={j.read} disabled={disabled} onChange={(e) => setRead(i, e.target.value as CIJobRead)}>
+                <NativeSelect
+                  className="w-48"
+                  aria-label="Read"
+                  value={j.read}
+                  disabled={disabled}
+                  onChange={(e) => setRead(i, e.target.value as CIJobRead)}
+                >
                   <option value="status">status only</option>
                   <option value="log">status and log</option>
                   <option value="report">status and report</option>
-                </select>
-                <label className="link-block">
+                </NativeSelect>
+                <Label className="shrink-0 font-normal">
                   <Switch label="Blocks approval" checked={j.blocksApproval} disabled={disabled} onChange={(on) => change(i, { blocksApproval: on })} />
                   <span>Blocks approval</span>
-                </label>
-                <button
+                </Label>
+                <Button
                   type="button"
-                  className="btn small"
+                  variant="outline"
+                  size="sm"
                   aria-label={`Remove ${j.name.trim() || "job"}`}
                   disabled={disabled}
                   onClick={() => onChange({ ...value, jobs: value.jobs.filter((_, k) => k !== i) })}
                 >
                   Remove
-                </button>
+                </Button>
               </div>
               {j.read === "report" && (
-                <div className="link-head">
+                <div className="flex flex-wrap items-center gap-3">
                   {github && (
-                    <input
+                    <Input
                       type="text"
-                      className="grow"
+                      className="min-w-40 flex-1"
                       aria-label="Report artifact"
                       placeholder="Workflow artifact name"
                       spellCheck={false}
@@ -138,9 +150,9 @@ export default function CIJobsEditor({
                       onChange={(e) => setReport(i, { artifact: e.target.value })}
                     />
                   )}
-                  <input
+                  <Input
                     type="text"
-                    className="grow"
+                    className="min-w-40 flex-1"
                     aria-label="Report path"
                     placeholder="Path of the report in the job's artifacts"
                     spellCheck={false}
@@ -150,25 +162,26 @@ export default function CIJobsEditor({
                   />
                 </div>
               )}
-              {unknown && <div className="meta warn-text">{unknownNameWarning}</div>}
-              {j.read !== "status" && <div className="meta warn-text">{providerWarning}</div>}
+              {unknown && <div className="text-warn text-sm">{unknownNameWarning}</div>}
+              {j.read !== "status" && <div className="text-warn text-sm">{providerWarning}</div>}
             </div>
           );
         })}
       </div>
-      {value.jobs.length === 0 && <div className="pad meta">No CI job yet.</div>}
-      <div className="pad">
+      {value.jobs.length === 0 && <div className="text-muted-foreground border-b px-4 py-2.5 text-sm">No CI job yet.</div>}
+      <div className="grid justify-items-start gap-2 px-4 py-3">
         {full ? (
-          <div className="meta">A repository has at most {maxCIJobs} jobs. Remove one to add another.</div>
+          <div className="text-muted-foreground text-sm">A repository has at most {maxCIJobs} jobs. Remove one to add another.</div>
         ) : null}
-        <button
+        <Button
           type="button"
-          className="btn small"
+          variant="outline"
+          size="sm"
           disabled={disabled || full}
           onClick={() => onChange({ ...value, jobs: [...value.jobs, { name: "", read: "status", blocksApproval: false }] })}
         >
           Add a job
-        </button>
+        </Button>
       </div>
     </div>
   );

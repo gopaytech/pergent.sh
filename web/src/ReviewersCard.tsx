@@ -1,12 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+
 import { api, paths, type ChainEntryView, type ChainRef, type ChainView, type MyTeamView, type ReviewersView } from "./api";
 import ChainEditor from "./ChainEditor";
 import { FoldCard, countText } from "./Fold";
 import { useWrite } from "./layout/write";
 import { addReviewer, costHint, draftOf, removeReviewer, setReviewer, type ReviewersDraft } from "./reviewers";
 import { ErrorBox, Loading } from "./ui";
+
+// noteRow is a line of muted text in the card.
+const noteRow = "text-muted-foreground border-b px-4 py-3 text-sm";
 
 // repoChainQuery reads reviewer 1, the repository's model chain in effect.
 export const repoChainQuery = (instance: string, project: string) => ({
@@ -106,19 +112,23 @@ export default function ReviewersCard({
       summary={reviewers === 1 ? "1 reviewer, multi review off" : `${countText(reviewers, "reviewer")} and a judge`}
       defaultOpen={defaultOpen}
     >
-      <div className="pad meta">
+      <div className="text-muted-foreground border-b px-4 py-3 text-sm">
         Each reviewer is a model chain: the models a review tries, in order. When the provider says an entry is out of quota or
         credit, or rejects its key, the review starts again on the next one. With 2 or more reviewers, they all review each change
         at the same time, and a judge checks their findings and writes one result. Multi review is experimental.
       </div>
       {v?.warnings.map((w) => (
-        <div className="alert" role="note" key={w}>
+        <Alert variant="warn" className="block rounded-none border-x-0 border-t-0" role="note" key={w}>
           {w}
-        </div>
+        </Alert>
       ))}
       {first}
       {view.isPending && <Loading />}
-      {view.isError && <ErrorBox error={view.error} />}
+      {view.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={view.error} />
+        </div>
+      )}
       {v && draft && (
         <>
           {v.reviewers.map((r) => (
@@ -127,7 +137,8 @@ export default function ReviewersCard({
               name={`Reviewer ${r.number}`}
               title={
                 <>
-                  <b>Reviewer {r.number}</b> <span className="meta">(multi review, experimental)</span>
+                  <b className="font-semibold">Reviewer {r.number}</b>{" "}
+                  <span className="text-muted-foreground text-sm">(multi review, experimental)</span>
                 </>
               }
               chain={r.chain}
@@ -155,7 +166,8 @@ export default function ReviewersCard({
               name={`Reviewer ${added}`}
               title={
                 <>
-                  <b>Reviewer {added}</b> <span className="meta">(multi review, experimental)</span>
+                  <b className="font-semibold">Reviewer {added}</b>{" "}
+                  <span className="text-muted-foreground text-sm">(multi review, experimental)</span>
                 </>
               }
               chain={start}
@@ -170,23 +182,24 @@ export default function ReviewersCard({
             />
           )}
           {!v.readOnly && open !== "new" && (
-            <div className="pad">
-              <button
+            <div className="border-b px-4 py-3">
+              <Button
                 type="button"
-                className="btn small"
+                variant="outline"
+                size="sm"
                 disabled={busy || v.addRefusal !== "" || !start}
                 title={v.addRefusal || undefined}
                 onClick={() => edit("new")}
               >
                 Add a reviewer
-              </button>
+              </Button>
             </div>
           )}
           {v.reviewers.length > 0 && judge && (
             <ChainGroup
               key={`judge:${JSON.stringify(v.judge)}`}
               name="Judge"
-              title={<b>Judge</b>}
+              title={<b className="font-semibold">Judge</b>}
               intro="The judge checks the findings of every reviewer against the code, and writes one result."
               chain={judge}
               readOnly={v.readOnly}
@@ -199,17 +212,25 @@ export default function ReviewersCard({
               onClear={(e) => clear.mutate(e)}
             />
           )}
-          {v.readOnly && <div className="pad meta">Only admins and maintainers of the repository's owner team change its reviewers.</div>}
-          {costHint(reviewers) && <div className="pad meta">{costHint(reviewers)}</div>}
+          {v.readOnly && <div className={noteRow}>Only admins and maintainers of the repository's owner team change its reviewers.</div>}
+          {costHint(reviewers) && <div className={noteRow}>{costHint(reviewers)}</div>}
         </>
       )}
       {note && (
-        <div className="pad note" role="status">
+        <div className="text-ok px-4 py-3 text-sm" role="status">
           {note}
         </div>
       )}
-      {save.isError && <ErrorBox error={save.error} />}
-      {clear.isError && <ErrorBox error={clear.error} />}
+      {save.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={save.error} />
+        </div>
+      )}
+      {clear.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={clear.error} />
+        </div>
+      )}
     </FoldCard>
   );
 }
@@ -248,22 +269,29 @@ function ChainGroup({
 }) {
   const canEdit = !readOnly && editing;
   return (
-    <div role="group" aria-label={name}>
-      <div className="pad actions-row">
-        <span className="grow">{title}</span>
+    <div role="group" aria-label={name} className="border-b">
+      <div className="flex items-center gap-2 px-4 py-3 text-sm">
+        <span className="min-w-0 grow">{title}</span>
         {!readOnly && !editing && (
-          <button type="button" className="btn small" aria-label={editLabel} disabled={busy} onClick={onEdit}>
+          <Button type="button" variant="outline" size="sm" aria-label={editLabel} disabled={busy} onClick={onEdit}>
             Edit
-          </button>
+          </Button>
         )}
         {!readOnly && onRemove && (
-          <button type="button" className="btn small danger" aria-label={`Remove ${name.toLowerCase()}`} disabled={busy} onClick={onRemove}>
+          <Button
+            type="button"
+            variant="destructive-outline"
+            size="sm"
+            aria-label={`Remove ${name.toLowerCase()}`}
+            disabled={busy}
+            onClick={onRemove}
+          >
             Remove
-          </button>
+          </Button>
         )}
       </div>
-      {intro && <div className="pad meta">{intro}</div>}
-      {chain.savedByAdmin && <div className="pad meta">An admin saved this chain.</div>}
+      {intro && <div className="text-muted-foreground px-4 pb-3 text-sm">{intro}</div>}
+      {chain.savedByAdmin && <div className="text-muted-foreground px-4 pb-3 text-sm">An admin saved this chain.</div>}
       <ChainEditor
         // The start of an edit starts the editor again from the chain.
         key={String(canEdit)}
@@ -276,10 +304,10 @@ function ChainGroup({
         onClear={onClear}
       />
       {canEdit && (
-        <div className="pad">
-          <button type="button" className="btn small" disabled={busy} onClick={onCancel}>
+        <div className="border-t px-4 py-3">
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
         </div>
       )}
     </div>

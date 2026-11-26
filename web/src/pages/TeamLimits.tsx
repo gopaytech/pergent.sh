@@ -1,5 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { Badge } from "@/components/ui/badge";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+
 import { api, isStatus, paths, type Role, type TeamGlobalLimitView, type TeamLimitsView } from "../api";
 import LimitField from "../LimitField";
 import { QuotaLine } from "../quota";
@@ -12,6 +16,9 @@ const modelLimitText: Record<TeamGlobalLimitView["modelLimit"], string> = {
   room_left: "Model limit for all teams: room left",
   used_up: "Model limit for all teams: used up",
 };
+
+// entry is one model's block in the card.
+const entry = "flex flex-col gap-2 border-b px-4 py-3 text-sm last:border-b-0";
 
 // TeamLimits is the Model limits card of a team's page, for the team's
 // maintainers and admins (canEdit); a viewer sees nothing and asks nothing.
@@ -33,21 +40,27 @@ export default function TeamLimits({ team, role, canEdit }: { team: number; role
     client.invalidateQueries({ queryKey: ["admin-models"] });
   };
   return (
-    <section className="card" aria-label="Model limits">
-      <h2>Model limits</h2>
-      <div className="pad meta">
-        Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. The repositories this team owns may use this many on a model. Reviews skip
-        a model at its limit. Empty: no limit.
-      </div>
+    <Card role="region" aria-label="Model limits" className="gap-0 py-0">
+      <CardHeader className="border-b py-4">
+        <CardTitle>Model limits</CardTitle>
+        <CardDescription>
+          Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. The repositories this team owns may use this many on a model. Reviews
+          skip a model at its limit. Empty: no limit.
+        </CardDescription>
+      </CardHeader>
       {limits.isPending && <Loading />}
-      {limits.isError && <ErrorBox error={limits.error} />}
+      {limits.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={limits.error} />
+        </div>
+      )}
       {limits.isSuccess && limits.data.models.length === 0 && limits.data.global.length === 0 && (
-        <div className="pad meta">No model of the team's own, and no admin limit for the team.</div>
+        <div className="text-muted-foreground px-4 py-3 text-sm">No model of the team's own, and no admin limit for the team.</div>
       )}
       {limits.isSuccess &&
         limits.data.models.map((m) => (
-          <div className="pad stack" role="group" aria-label={`${m.name} limit`} key={m.id}>
-            <b>{m.name}</b>
+          <div className={entry} role="group" aria-label={`${m.name} limit`} key={m.id}>
+            <b className="font-semibold">{m.name}</b>
             <QuotaLine ariaLabel={`Tokens of ${m.name} this month`} use={{ used: m.used, limit: m.limit }} />
             <LimitField
               key={String(m.limit)}
@@ -61,10 +74,10 @@ export default function TeamLimits({ team, role, canEdit }: { team: number; role
         ))}
       {limits.isSuccess &&
         limits.data.global.map((g) => (
-          <div className="pad stack" role="group" aria-label={`${g.name} limit`} key={g.id}>
-            <div className="row">
-              <b className="grow">{g.name}</b>
-              <span className="badge">global</span>
+          <div className={entry} role="group" aria-label={`${g.name} limit`} key={g.id}>
+            <div className="flex items-center gap-3">
+              <b className="min-w-0 grow font-semibold">{g.name}</b>
+              <Badge variant="outline">global</Badge>
             </div>
             <QuotaLine ariaLabel={`Tokens of ${g.name} this month`} use={{ used: g.used, limit: g.limit }} />
             {role === "admin" ? (
@@ -77,13 +90,13 @@ export default function TeamLimits({ team, role, canEdit }: { team: number; role
                 onSaved={changed}
               />
             ) : (
-              <div className="meta">Set by an admin.</div>
+              <div className="text-muted-foreground text-xs">Set by an admin.</div>
             )}
             {g.modelLimit !== "none" && (
-              <div className={g.modelLimit === "used_up" ? "meta warn-text" : "meta"}>{modelLimitText[g.modelLimit]}</div>
+              <div className={cn("text-xs", g.modelLimit === "used_up" ? "text-warn" : "text-muted-foreground")}>{modelLimitText[g.modelLimit]}</div>
             )}
           </div>
         ))}
-    </section>
+    </Card>
   );
 }

@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { Card } from "@/components/ui/card";
+
 import { api, type MyTeamView } from "../api";
-import { ErrorBox, Loading } from "../ui";
+import { ErrorBox, Loading, PageHeader } from "../ui";
 import TeamsTable from "./TeamsTable";
 
 const myTeamsKey = ["my-teams"];
@@ -11,20 +13,18 @@ const myTeamsKey = ["my-teams"];
 export default function MyTeams() {
   const teams = useQuery({ queryKey: myTeamsKey, queryFn: () => api.get<MyTeamView[]>("/api/me/teams") });
   return (
-    <div className="narrow">
-      <div className="top">
-        <div>
-          <h1>Teams</h1>
-          <div className="sub">
-            The teams you are on. A team that owns a repository can give its reviews its own models and keys.
-          </div>
-        </div>
-      </div>
+    <div className="max-w-[1100px]">
+      <PageHeader
+        title="Teams"
+        description="The teams you are on. A team that owns a repository can give its reviews its own models and keys."
+      />
       {teams.isPending && <Loading />}
       {teams.isError && <ErrorBox error={teams.error} />}
       {teams.isSuccess &&
         (teams.data.length === 0 ? (
-          <div className="card empty">You are on no team yet, so you see no repositories. Ask an admin to add you to one.</div>
+          <Card className="text-muted-foreground px-4 py-8 text-center text-sm">
+            You are on no team yet, so you see no repositories. Ask an admin to add you to one.
+          </Card>
         ) : (
           <TeamsTable rows={teams.data} showRole />
         ))}

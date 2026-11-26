@@ -1400,7 +1400,7 @@ describe("RepositoryDetail while paused, and Remove", () => {
   // it is the tab's last card.
   const removeCard = async () => {
     const card = await screen.findByRole("region", { name: "Remove repository" });
-    const cards = screen.getByRole("tabpanel").querySelectorAll("section.card");
+    const cards = screen.getByRole("tabpanel").querySelectorAll('[data-slot="card"]');
     expect(cards[cards.length - 1]).toBe(card);
     return card;
   };

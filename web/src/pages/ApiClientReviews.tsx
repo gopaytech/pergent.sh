@@ -2,6 +2,12 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 import { api, paths, query, type APIReviewList } from "../api";
 import { ErrorBox, Loading, utcText } from "../ui";
 import { StatusPill, VerdictPill } from "./ApiReview";
@@ -48,8 +54,9 @@ export default function ClientReviews({ client }: { client: string }) {
   const items = list.data?.pages.flatMap((p) => p.items) ?? [];
   return (
     <>
-      <form className="filters" aria-label="Filter reviews" onSubmit={submit}>
-        <input
+      <form className="mb-4 flex flex-wrap items-center gap-2" aria-label="Filter reviews" onSubmit={submit}>
+        <Input
+          className="w-auto min-w-40"
           type="text"
           aria-label="Tenant"
           placeholder="Tenant"
@@ -58,7 +65,8 @@ export default function ClientReviews({ client }: { client: string }) {
           value={draft.tenant}
           onChange={(e) => setDraft({ ...draft, tenant: e.target.value })}
         />
-        <input
+        <Input
+          className="w-auto min-w-40"
           type="text"
           aria-label="Subject"
           placeholder="Subject"
@@ -67,63 +75,65 @@ export default function ClientReviews({ client }: { client: string }) {
           value={draft.subject}
           onChange={(e) => setDraft({ ...draft, subject: e.target.value })}
         />
-        <select aria-label="Status" value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
+        <NativeSelect className="w-auto min-w-40" aria-label="Status" value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
           <option value="">Any status</option>
           {statuses.map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </select>
-        <button type="submit" className="btn">
+        </NativeSelect>
+        <Button type="submit" variant="outline">
           Filter
-        </button>
+        </Button>
       </form>
       {list.isPending && <Loading />}
       {list.isError && <ErrorBox error={list.error} />}
       {list.isSuccess &&
         (items.length === 0 ? (
-          <div className="card empty">{filtered ? "No reviews match." : "No reviews yet."}</div>
+          <Card className="text-muted-foreground px-4 py-8 text-center text-sm">{filtered ? "No reviews match." : "No reviews yet."}</Card>
         ) : (
-          <div className="card scroll">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Subject</th>
-                  <th>Tenant</th>
-                  <th>Title</th>
-                  <th>Status</th>
-                  <th>Verdict</th>
-                  <th>Created</th>
-                  <th>Finished</th>
-                </tr>
-              </thead>
-              <tbody>
+          <Card className="gap-0 overflow-hidden py-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Subject</TableHead>
+                  <TableHead>Tenant</TableHead>
+                  <TableHead>Title</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Verdict</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>Finished</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {items.map((r) => (
-                  <tr key={r.id}>
-                    <td>
-                      <Link to={paths.clientReviewPage(client, r.id)}>{r.subject}</Link>
-                    </td>
-                    <td>{r.tenant}</td>
-                    <td>{r.title}</td>
-                    <td>
+                  <TableRow key={r.id}>
+                    <TableCell>
+                      <Link className="text-foreground font-medium no-underline hover:underline" to={paths.clientReviewPage(client, r.id)}>
+                        {r.subject}
+                      </Link>
+                    </TableCell>
+                    <TableCell>{r.tenant}</TableCell>
+                    <TableCell>{r.title}</TableCell>
+                    <TableCell>
                       <StatusPill status={r.status} />
-                    </td>
-                    <td>{r.verdict && <VerdictPill verdict={r.verdict} />}</td>
-                    <td className="nowrap">{utcText(r.createdAt)}</td>
-                    <td className="nowrap">{r.finishedAt ? utcText(r.finishedAt) : ""}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell>{r.verdict && <VerdictPill verdict={r.verdict} />}</TableCell>
+                    <TableCell className="text-muted-foreground whitespace-nowrap">{utcText(r.createdAt)}</TableCell>
+                    <TableCell className="text-muted-foreground whitespace-nowrap">{r.finishedAt ? utcText(r.finishedAt) : ""}</TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
             {list.hasNextPage && (
-              <div className="foot">
-                <button type="button" className="btn" onClick={() => list.fetchNextPage()} disabled={list.isFetchingNextPage}>
+              <div className="flex justify-end border-t px-4 py-3">
+                <Button type="button" variant="outline" size="sm" onClick={() => list.fetchNextPage()} disabled={list.isFetchingNextPage}>
                   Load more
-                </button>
+                </Button>
               </div>
             )}
-          </div>
+          </Card>
         ))}
     </>
   );

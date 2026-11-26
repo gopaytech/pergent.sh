@@ -2,9 +2,23 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router";
 
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 import { api, paths, type TeamUsageView, type UsageNamedView } from "../api";
 import { ErrorBox, Loading } from "../ui";
-import { DailyTable, dash, EmptyRow, PeriodSelect, UsageCells, UsageHead, UsageStats, usageIntro } from "./usageParts";
+import {
+  DailyTable,
+  dash,
+  EmptyRow,
+  num,
+  PeriodSelect,
+  UsageCard,
+  UsageCells,
+  UsageHead,
+  UsageStats,
+  usageIntro,
+  usageTable,
+} from "./usageParts";
 
 // TeamUsage is the Usage tab of a team's page, for its maintainers and
 // admins: the tokens of the reviews the team owns, each day, each repository
@@ -17,13 +31,13 @@ export default function TeamUsage({ team }: { team: number }) {
   });
   return (
     <>
-      <div className="top">
-        <div className="sub">Tokens of the reviews in the repositories this team owns, in the last {days} days</div>
-        <div className="actions-row">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="text-muted-foreground text-sm">Tokens of the reviews in the repositories this team owns, in the last {days} days</div>
+        <div className="flex items-center gap-2">
           <PeriodSelect days={days} onChange={setDays} />
         </div>
       </div>
-      <p className="sub">
+      <p className="text-muted-foreground text-sm">
         Days are cut at midnight UTC. {usageIntro} A review counts on the team that owned the repository when it ran.
       </p>
       {data.isPending && <Loading />}
@@ -37,33 +51,34 @@ function Body({ view }: { view: TeamUsageView }) {
   const { tokens } = view;
   return (
     <>
-      {view.partialRange && <p className="sub">Counts reviews since v0.19.0</p>}
+      {view.partialRange && <p className="text-muted-foreground text-sm">Counts reviews since v0.19.0</p>}
       <UsageStats tokens={tokens} reviews={view.reviews} />
-      <section className="card scroll" aria-label="Repositories">
-        <h2>Repositories</h2>
+      <UsageCard label="Repositories">
         {view.repositories.length === 0 ? (
           <EmptyRow>No usage in this period.</EmptyRow>
         ) : (
-          <table className="table">
-            <thead>
+          <Table className={usageTable}>
+            <TableHeader className="bg-muted/40">
               <UsageHead first="Repository">
-                <th className="num">Reviews</th>
+                <TableHead className={num}>Reviews</TableHead>
               </UsageHead>
-            </thead>
-            <tbody>
+            </TableHeader>
+            <TableBody>
               {view.repositories.map((r) => (
-                <tr key={`${r.instance}/${r.project}`}>
-                  <td>
-                    <Link to={paths.repo(r.instance, r.project)}>{`${r.instance}/${r.project}`}</Link>
-                  </td>
-                  <td className="num">{r.reviews}</td>
+                <TableRow key={`${r.instance}/${r.project}`}>
+                  <TableCell>
+                    <Link className="text-foreground font-medium hover:underline" to={paths.repo(r.instance, r.project)}>
+                      {`${r.instance}/${r.project}`}
+                    </Link>
+                  </TableCell>
+                  <TableCell className={num}>{r.reviews}</TableCell>
                   <UsageCells tokens={r.tokens} />
-                </tr>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </UsageCard>
       <Models rows={view.models} />
       <DailyTable daily={view.daily} />
     </>
@@ -74,30 +89,29 @@ function Body({ view }: { view: TeamUsageView }) {
 // providers.
 function Models({ rows }: { rows: UsageNamedView[] }) {
   return (
-    <section className="card scroll" aria-label="Models">
-      <h2>Models</h2>
+    <UsageCard label="Models">
       {rows.length === 0 ? (
         <EmptyRow>No usage in this period.</EmptyRow>
       ) : (
-        <table className="table">
-          <thead>
+        <Table className={usageTable}>
+          <TableHeader className="bg-muted/40">
             <UsageHead first="Model">
-              <th>Provider</th>
-              <th className="num">Runs</th>
+              <TableHead>Provider</TableHead>
+              <TableHead className={num}>Runs</TableHead>
             </UsageHead>
-          </thead>
-          <tbody>
+          </TableHeader>
+          <TableBody>
             {rows.map((r) => (
-              <tr key={`${r.provider}\0${r.name}`}>
-                <td>{r.name}</td>
-                <td>{r.provider === "" ? dash : r.provider}</td>
-                <td className="num">{r.runs}</td>
+              <TableRow key={`${r.provider}\0${r.name}`}>
+                <TableCell>{r.name}</TableCell>
+                <TableCell>{r.provider === "" ? dash : r.provider}</TableCell>
+                <TableCell className={num}>{r.runs}</TableCell>
                 <UsageCells tokens={r.tokens} />
-              </tr>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
-    </section>
+    </UsageCard>
   );
 }

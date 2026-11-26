@@ -1,5 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 
+import { Alert } from "@/components/ui/alert";
+
 import { api, paths, type SkillFetch } from "./api";
 import { useWrite } from "./layout/write";
 
@@ -45,12 +47,13 @@ export function useSkillFetch(id: string | undefined) {
 // FetchStatus says a read is running, or why it failed; it is nothing once
 // the read is done.
 export function FetchStatus({ read }: { read: SkillFetch }) {
-  if (read.status === "running") return <div className="meta pad">Reading the source…</div>;
+  if (read.status === "running") return <div className="text-muted-foreground text-sm">Reading the source…</div>;
   if (read.status === "failed") {
+    // Alert is a grid with an icon column: block puts the text in the box.
     return (
-      <div className="error" role="alert">
+      <Alert variant="destructive" className="block">
         {read.error || "Reading the source failed."}
-      </div>
+      </Alert>
     );
   }
   return null;

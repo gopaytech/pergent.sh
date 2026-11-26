@@ -1,3 +1,8 @@
+import { ArrowDown, ArrowUp } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
+
 import type { RuleSet } from "./api";
 
 // RuleSetPicker chooses and orders rule sets of the library: the first entry
@@ -27,32 +32,41 @@ export default function RuleSetPicker({
   };
   return (
     <div role="group" aria-label={label}>
-      <ol className="files" aria-label="Rule sets in match order">
+      <ol aria-label="Rule sets in match order">
         {selected.map((n, i) => (
-          <li key={n} data-rule-set={n} className="skill">
-            <b className="grow">{n}</b>
-            {!known.has(n) && <span className="problem">not in the library</span>}
-            <button type="button" className="btn small" aria-label={`Move ${n} up`} disabled={disabled || i === 0} onClick={() => move(i, -1)}>
-              ↑
-            </button>
-            <button
+          <li key={n} data-rule-set={n} className="flex items-center gap-2 border-b px-4 py-2.5 text-sm">
+            <b className="min-w-0 grow font-semibold">{n}</b>
+            {!known.has(n) && <span className="text-bad text-sm">not in the library</span>}
+            <Button type="button" variant="outline" size="icon-sm" aria-label={`Move ${n} up`} disabled={disabled || i === 0} onClick={() => move(i, -1)}>
+              <ArrowUp aria-hidden="true" />
+            </Button>
+            <Button
               type="button"
-              className="btn small"
+              variant="outline"
+              size="icon-sm"
               aria-label={`Move ${n} down`}
               disabled={disabled || i === selected.length - 1}
               onClick={() => move(i, 1)}
             >
-              ↓
-            </button>
-            <button type="button" className="btn small" aria-label={`Remove ${n}`} disabled={disabled} onClick={() => onChange(selected.filter((x) => x !== n))}>
+              <ArrowDown aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label={`Remove ${n}`}
+              disabled={disabled}
+              onClick={() => onChange(selected.filter((x) => x !== n))}
+            >
               Remove
-            </button>
+            </Button>
           </li>
         ))}
       </ol>
-      {selected.length === 0 && <div className="pad meta">No rule sets.</div>}
-      <div className="pad">
-        <select
+      {selected.length === 0 && <div className="text-muted-foreground border-b px-4 py-2.5 text-sm">No rule sets.</div>}
+      <div className="border-b px-4 py-2.5">
+        <NativeSelect
+          className="max-w-xs"
           aria-label="Add a rule set"
           value=""
           disabled={disabled || offered.length === 0}
@@ -64,7 +78,7 @@ export default function RuleSetPicker({
               {s.name}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       </div>
     </div>
   );
