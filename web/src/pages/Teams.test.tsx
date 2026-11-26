@@ -44,7 +44,9 @@ describe("Teams", () => {
     expect(screen.getByRole("table")).toHaveTextContent("Platform");
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
-    expect(screen.getByRole("form", { name: "Create a team" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "+ New team" })).toBeInTheDocument();
+    // The name is asked in a dialog, not a form that is always open.
+    expect(screen.queryByLabelText("Team name")).not.toBeInTheDocument();
   });
 
   it("counts a whole instance on its own, from the entries", async () => {
@@ -84,7 +86,10 @@ describe("Teams", () => {
       ...base,
     });
     renderApp("/admin/teams");
-    await userEvent.type(await screen.findByLabelText("Team name"), "Payments");
+    await userEvent.click(await screen.findByRole("button", { name: "+ New team" }));
+    const dialog = screen.getByRole("dialog", { name: "New team" });
+    expect(within(dialog).getByLabelText("Team name")).toHaveFocus();
+    await userEvent.type(within(dialog).getByLabelText("Team name"), "Payments");
     expect(screen.queryByLabelText("Role")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Create team" }));
     const [post] = fake.find("POST", "/api/teams");
@@ -100,8 +105,27 @@ describe("Teams", () => {
       ...base,
     });
     renderApp("/admin/teams");
-    await userEvent.type(await screen.findByLabelText("Team name"), "Payments");
+    await userEvent.click(await screen.findByRole("button", { name: "+ New team" }));
+    await userEvent.type(screen.getByLabelText("Team name"), "Payments");
     await userEvent.click(screen.getByRole("button", { name: "Create team" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("a team with this name exists already");
+    // The dialog stays open, with the name, to fix it.
+    expect(screen.getByLabelText("Team name")).toHaveValue("Payments");
+  });
+
+  it("closes the New team dialog with Cancel or Escape, and gives the focus back to the button", async () => {
+    const fake = fakeApi({ "GET /api/teams": { body: [teamPayments] }, ...base });
+    renderApp("/admin/teams");
+    const open = await screen.findByRole("button", { name: "+ New team" });
+    await userEvent.click(open);
+    await userEvent.click(within(screen.getByRole("dialog", { name: "New team" })).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(open).toHaveFocus();
+    await userEvent.click(open);
+    await userEvent.type(screen.getByLabelText("Team name"), "Gone");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(open).toHaveFocus();
+    expect(fake.find("POST", "/api/teams")).toHaveLength(0);
   });
 });

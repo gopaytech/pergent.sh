@@ -4,7 +4,7 @@ Each review runs as a Kubernetes Job. When one fails, the failure line says whic
 
 ## Find the Job and pod
 
-**From the review page.** Admins see a Kubernetes group on the review, while it runs and after: the namespace, the Job, the newest pod, and four commands to copy:
+**From the review page.** Admins see a Kubernetes group on the review, while it runs and after: the namespace, the Job, the newest pod, and four named commands, each with **Copy**: **Pod status**, **Checkout log**, **Review log** and **Describe pod**:
 
 ```
 kubectl -n <namespace> get pods -l job-name=<job>
