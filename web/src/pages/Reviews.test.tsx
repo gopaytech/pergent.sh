@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -105,5 +105,59 @@ describe("Reviews", () => {
       "href",
       "/reviews/gh/acme/widgets/128",
     );
+  });
+
+  it("filters by owner team and narrows the Repository select", async () => {
+    const fake = fakeApi({
+      ...base,
+      "GET /api/reviews?days=90": { body: { items: [reviewApproved, reviewBlocking], nextCursor: "" } },
+      "GET /api/reviews?days=90&team=1": { body: { items: [reviewBlocking], nextCursor: "" } },
+    });
+    renderApp("/reviews");
+    await screen.findByRole("link", { name: /acme\/widgets !128/ });
+    const team = await screen.findByRole("combobox", { name: "Team" });
+    expect(within(team).getAllByRole("option").map((o) => o.textContent)).toEqual(["All teams", "No owner", "payments"]);
+    await userEvent.selectOptions(team, "payments");
+    await waitFor(() => expect(fake.find("GET", "/api/reviews?days=90&team=1")).toHaveLength(1));
+    const repo = screen.getByRole("combobox", { name: "Repository" });
+    expect(within(repo).getAllByRole("option").map((o) => o.textContent)).toEqual(["All repositories", "acme/payments"]);
+    expect(screen.getByTestId("location")).toHaveTextContent("/reviews?team=1");
+  });
+
+  it("clears a repository the picked team does not own", async () => {
+    const fake = fakeApi({
+      ...base,
+      "GET /api/reviews?project=acme%2Fwidgets&days=90": { body: { items: [reviewApproved], nextCursor: "" } },
+      "GET /api/reviews?days=90&team=1": { body: { items: [reviewBlocking], nextCursor: "" } },
+    });
+    renderApp("/reviews?project=acme%2Fwidgets");
+    await screen.findByRole("link", { name: /acme\/widgets !128/ });
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Team" }), "payments");
+    await waitFor(() => expect(fake.find("GET", "/api/reviews?days=90&team=1")).toHaveLength(1));
+    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveValue("");
+    expect(screen.getByTestId("location")).toHaveTextContent("/reviews?team=1");
+  });
+
+  it("sends no team for a team that owns nothing in the list", async () => {
+    const fake = fakeApi({
+      ...base,
+      "GET /api/reviews?days=90": { body: { items: [reviewApproved], nextCursor: "" } },
+    });
+    renderApp("/reviews?team=99");
+    await screen.findByRole("link", { name: /acme\/widgets !128/ });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("");
+    expect(fake.find("GET", "/api/reviews?days=90")).toHaveLength(1);
+  });
+
+  it("sends team=none and lists only repositories with no owner", async () => {
+    fakeApi({
+      ...base,
+      "GET /api/reviews?days=90&team=none": { body: { items: [], nextCursor: "" } },
+    });
+    renderApp("/reviews?team=none");
+    expect(await screen.findByText(/No reviews match these filters\./)).toBeInTheDocument();
+    const repo = screen.getByRole("combobox", { name: "Repository" });
+    expect(within(repo).getAllByRole("option").map((o) => o.textContent)).toEqual(["All repositories", "acme/widgets"]);
+    expect(screen.getByRole("link", { name: "Clear the filters" })).toHaveAttribute("href", "/reviews");
   });
 });

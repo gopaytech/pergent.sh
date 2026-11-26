@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"path"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -575,6 +577,77 @@ func TestReviewsListPages(t *testing.T) {
 	for _, r := range append(first.Items, second.Items...) {
 		if r.Outcome != OutcomeBlocking {
 			t.Errorf("blocking filter returned %+v", r)
+		}
+	}
+}
+
+// GET /api/reviews?team= keeps the reviews of the repositories a team owns,
+// or with "none" those with no owner. It only narrows what the session sees.
+func TestReviewsTeamFilter(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	// devs own acme/payments by its own entry; ops own the rest of main
+	// through the instance entry; gh's acme/tools has no owner.
+	devs := e.team("devs", nil, store.TeamRepo{Instance: "main", Project: "acme/payments", Owner: true})
+	ops := e.team("ops", nil, store.TeamRepo{Instance: "main", Owner: true})
+	idle := e.team("idle", nil)
+	e.addRun(runFix{project: "acme/payments", number: 1, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true})
+	e.addRun(runFix{project: "acme/widgets", number: 2, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true})
+	e.addRun(runFix{instance: "gh", project: "acme/tools", number: 3, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true})
+
+	reviews := func(c *http.Cookie, query string) []string {
+		var got []string
+		for _, r := range getJSON[ReviewListView](e, c, "/api/reviews"+query).Items {
+			got = append(got, fmt.Sprintf("%s/%s/%d", r.Instance, r.Project, r.Number))
+		}
+		slices.Sort(got)
+		return got
+	}
+	admin := e.sessionFor(e.ssoAdmin("boss@example.com"))
+	for _, c := range []struct {
+		name, query string
+		want        []string
+	}{
+		{"no filter", "", []string{"gh/acme/tools/3", "main/acme/payments/1", "main/acme/widgets/2"}},
+		{"devs", fmt.Sprintf("?team=%d", devs), []string{"main/acme/payments/1"}},
+		{"devs, with leading zeros", "?team=00" + strconv.FormatInt(devs, 10), []string{"main/acme/payments/1"}},
+		{"ops, through the instance", fmt.Sprintf("?team=%d", ops), []string{"main/acme/widgets/2"}},
+		{"none", "?team=none", []string{"gh/acme/tools/3"}},
+		{"devs and another project", fmt.Sprintf("?team=%d&project=acme/widgets", devs), nil},
+		{"devs and its project", fmt.Sprintf("?team=%d&project=acme/payments", devs), []string{"main/acme/payments/1"}},
+		{"none and an owned project", "?team=none&project=acme/widgets&instance=main", nil},
+		{"a team that owns nothing", fmt.Sprintf("?team=%d", idle), nil},
+	} {
+		if got := reviews(admin, c.query); !slices.Equal(got, c.want) {
+			t.Errorf("admin %s: reviews = %v; want %v", c.name, got, c.want)
+		}
+	}
+
+	for _, q := range []string{"?team=abc", "?team=-1", "?team=%2B5", "?team=1.5", "?team=None"} {
+		if rec := e.get(admin, "/api/reviews"+q); rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgTeamFilter {
+			t.Errorf("GET %s = %d %s; want 400 %q", q, rec.Code, rec.Body, msgTeamFilter)
+		}
+	}
+	if rec := e.get(admin, "/api/reviews?team=999999"); rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgNoTeam {
+		t.Errorf("GET unknown team = %d %s; want 400 %q", rec.Code, rec.Body, msgNoTeam)
+	}
+
+	// A user who sees only acme/widgets never gets acme/payments through
+	// the team filter. Bob is a second account, so he is not an admin.
+	bob := e.sso("bob@example.com")
+	e.team("viewers", viewerMembers(bob), store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+	user := e.sessionFor(bob)
+	for _, c := range []struct {
+		name, query string
+		want        []string
+	}{
+		{"user, no filter", "", []string{"main/acme/widgets/2"}},
+		{"user, devs", fmt.Sprintf("?team=%d", devs), nil},
+		{"user, ops", fmt.Sprintf("?team=%d", ops), []string{"main/acme/widgets/2"}},
+		{"user, none", "?team=none", nil},
+	} {
+		if got := reviews(user, c.query); !slices.Equal(got, c.want) {
+			t.Errorf("%s: reviews = %v; want %v", c.name, got, c.want)
 		}
 	}
 }
@@ -2279,4 +2352,83 @@ func TestReviewMemberLogGated(t *testing.T) {
 	// The admin sees the other run's member under its own run only.
 	e.wantStatus(admin, memberPath(run, otherMember, "log"), http.StatusNotFound)
 	e.wantStatus(admin, memberPath(otherRun, otherMember, "log"), http.StatusOK)
+}
+
+// GET /api/repositories lists each repository's owner team: its own entry's
+// owner, else its instance entry's (viaInstance). A repository with no owner
+// has null. Open is whether the session is an admin or a member of the team.
+// The repository page shows the same owner team.
+func TestRepositoriesOwnerTeam(t *testing.T) {
+	t.Parallel()
+	byProject := func(repos []RepositoryView) map[string]*OwnerTeamView {
+		out := map[string]*OwnerTeamView{}
+		for _, r := range repos {
+			out[r.Instance+"/"+r.Project] = r.OwnerTeam
+		}
+		return out
+	}
+	setup := func(e *env, members []store.TeamMember, ownerPath string) (devs, ops int64) {
+		// newEnv already lists acme/payments and acme/widgets on main.
+		e.dashboardRepo("gh", "acme/other", nil)
+		devs = e.team("devs", members, store.TeamRepo{Instance: "main", Project: ownerPath, Owner: true})
+		ops = e.team("ops", nil, store.TeamRepo{Instance: "main", Project: "", Owner: true})
+		return devs, ops
+	}
+
+	t.Run("admin", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t, nil)
+		devs, ops := setup(e, nil, "acme/payments")
+		c := e.userOnMain(true)
+		got := byProject(getJSON[[]RepositoryView](e, c, "/api/repositories"))
+		want := map[string]*OwnerTeamView{
+			"main/acme/payments": {ID: devs, Name: "devs", Open: true, ViaInstance: false},
+			"main/acme/widgets":  {ID: ops, Name: "ops", Open: true, ViaInstance: true},
+			"gh/acme/other":      nil,
+		}
+		for k, w := range want {
+			g, listed := got[k]
+			if !listed {
+				t.Errorf("%s is not listed", k)
+				continue
+			}
+			if (g == nil) != (w == nil) || (g != nil && *g != *w) {
+				t.Errorf("%s ownerTeam = %+v; want %+v", k, g, w)
+			}
+		}
+		detail := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/payments")
+		if detail.Repo.OwnerTeam == nil || detail.OwnerTeam == nil || *detail.Repo.OwnerTeam != *detail.OwnerTeam {
+			t.Errorf("detail.repo.ownerTeam = %+v; want detail.ownerTeam %+v", detail.Repo.OwnerTeam, detail.OwnerTeam)
+		}
+	})
+
+	t.Run("a member of one owner team", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t, nil)
+		devs, ops := setup(e, viewerMembers(e.alice()), "acme/payments")
+		// devs also lists widgets (not as owner), so alice sees both.
+		e.editTeam(devs, func(tm *store.Team) {
+			tm.Repos = append(tm.Repos, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+		})
+		c := e.aliceSession()
+		got := byProject(getJSON[[]RepositoryView](e, c, "/api/repositories"))
+		if g := got["main/acme/payments"]; g == nil || g.ID != devs || !g.Open || g.ViaInstance {
+			t.Errorf("payments ownerTeam = %+v; want devs, open, not via instance", g)
+		}
+		if g := got["main/acme/widgets"]; g == nil || g.ID != ops || g.Open || !g.ViaInstance {
+			t.Errorf("widgets ownerTeam = %+v; want ops, not open, via instance", g)
+		}
+	})
+
+	// The owner entry matches the repository ignoring case.
+	t.Run("an owner entry in another case", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t, nil)
+		devs, _ := setup(e, nil, "ACME/Payments")
+		c := e.userOnMain(true)
+		got := byProject(getJSON[[]RepositoryView](e, c, "/api/repositories"))
+		if g := got["main/acme/payments"]; g == nil || g.ID != devs || g.ViaInstance {
+			t.Errorf("payments ownerTeam = %+v; want devs, not via instance", g)
+		}
+	})
 }

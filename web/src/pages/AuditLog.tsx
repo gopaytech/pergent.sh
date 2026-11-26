@@ -1,9 +1,10 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { Fragment, useEffect, useState, type ReactNode } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Fragment, type ReactNode } from "react";
+import { Link } from "react-router";
 
 import { api, paths, query, type AuditPageView, type AuditView } from "../api";
 import { ErrorBox, Loading, Pill, type Tone } from "../ui";
+import { useSearchText } from "../useSearchText";
 
 // day is an RFC 3339 time's UTC day, as "Wed 25 Nov 2026" (the API sends
 // UTC), spelled out here so every browser shows the same.
@@ -83,34 +84,6 @@ function Detail({ e }: { e: AuditView }) {
       })}
     </span>
   );
-}
-
-// useSearchText is the search as typed, and the search to send: the text in
-// the address (?q=), set a moment after typing stops, so a reload or a shared
-// link opens the same search and each key press is not a request.
-function useSearchText(): [string, (v: string) => void, string] {
-  const [params, setParams] = useSearchParams();
-  const sent = params.get("q") ?? "";
-  const [typed, setTyped] = useState(sent);
-  useEffect(() => {
-    const t = typed.trim();
-    if (t === sent) return;
-    const timer = setTimeout(
-      () =>
-        setParams(
-          (old) => {
-            const next = new URLSearchParams(old);
-            if (t === "") next.delete("q");
-            else next.set("q", t);
-            return next;
-          },
-          { replace: true },
-        ),
-      300,
-    );
-    return () => clearTimeout(timer);
-  }, [typed, sent, setParams]);
-  return [typed, setTyped, sent];
 }
 
 // AuditLog is the record of who changed what, newest first, a day at a

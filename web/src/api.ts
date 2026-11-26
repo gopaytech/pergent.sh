@@ -349,6 +349,8 @@ export type RepositoryView = {
   last7: { reviews: number; approved: number; failed: number };
   // health is "paused" while it is paused, whatever setup problems are left.
   health: "ok" | "attention" | "paused";
+  // ownerTeam is the team that owns the repository; null when none.
+  ownerTeam: OwnerTeamView | null;
 };
 
 export type SettingView<T> = { value: T; overridden: boolean };
@@ -1442,9 +1444,10 @@ export type TeamUsageView = {
   partialRange: boolean;
 };
 
-// OwnerTeamView is a repository's owner team on its page. open: the session
-// may open the team's page.
-export type OwnerTeamView = { id: number; name: string; open: boolean };
+// OwnerTeamView is a repository's owner team. open: the session may open the
+// team's page. viaInstance: the team owns it through its entry for the whole
+// instance.
+export type OwnerTeamView = { id: number; name: string; open: boolean; viaInstance: boolean };
 
 // TeamModelView is one of a team's own entries. baseURL is "" for a viewer;
 // the key is only whether one is set. usedIn and mark are ModelAdminView's.

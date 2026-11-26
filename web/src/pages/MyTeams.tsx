@@ -1,9 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router";
 
-import { api, paths, type MyTeamView } from "../api";
+import { api, type MyTeamView } from "../api";
 import { ErrorBox, Loading } from "../ui";
-import { membersText, teamCountsText } from "./teamText";
+import TeamsTable from "./TeamsTable";
 
 const myTeamsKey = ["my-teams"];
 
@@ -27,18 +26,7 @@ export default function MyTeams() {
         (teams.data.length === 0 ? (
           <div className="card empty">You are on no team yet, so you see no repositories. Ask an admin to add you to one.</div>
         ) : (
-          teams.data.map((t) => (
-            <section className="card" aria-label={t.name} key={t.id}>
-              <h2>
-                <Link to={paths.team(t.id)}>{t.name}</Link>
-              </h2>
-              <div className="facts">
-                <div>Your role: {t.role}</div>
-                <div>{teamCountsText(t)}</div>
-                <div>{membersText(t.memberCount)}</div>
-              </div>
-            </section>
-          ))
+          <TeamsTable rows={teams.data} showRole />
         ))}
     </div>
   );

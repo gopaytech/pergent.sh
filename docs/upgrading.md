@@ -1,6 +1,6 @@
 # ⬆️ Upgrading
 
-## Upgrading to the next release
+## Unreleased
 
 > **Tokens now count all tokens: input, cache read, cache write, output and reasoning.** Before, they counted input and output only. With pergent v0.11.0 and later, most prompt tokens are reported as cache read and cache write, so usage looked about 100 times lower than it was, and token limits did almost nothing. **This counts against every quota and limit.** Before you upgrade, on the old release, add the Input + Output of the last 30 days to the cache read, cache write and reasoning numbers that Usage shows apart, and raise each limit to cover it.
 
@@ -18,6 +18,8 @@ Worked example: a team used 285.4k tokens in 30 days under the old count, and ab
 - **No migration and no new config key.** Rolling back needs no step, but the old release counts input and output only.
 - **New fields.** The Review API's `usage` has `cache_read`, `cache_write`, `reasoning` and `tokens`, and `tokens_in` and `tokens_out` stay. The Usage CSV has a `tokens` column at the end. Older columns keep their places.
 - **If you forget.** The limit bars turn red and a review that a limit holds waits. It is never passed by mistake. An admin can start a held review from the dashboard.
+- `GET /api/repositories` gives each repository its `ownerTeam` (null when none). `OwnerTeamView` gets `viaInstance`.
+- `GET /api/reviews` takes `team`: a team's id, or `none` for repositories with no owner. It only narrows what you can already see.
 
 ## Upgrading to 0.23.0
 

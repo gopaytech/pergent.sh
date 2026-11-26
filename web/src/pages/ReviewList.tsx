@@ -5,7 +5,7 @@ import { api, query, type ReviewListView } from "../api";
 import { ErrorBox, Loading } from "../ui";
 import ReviewRows from "./ReviewRows";
 
-export type ReviewFilter = { project?: string; outcome?: string; days: number };
+export type ReviewFilter = { project?: string; outcome?: string; days: number; team?: string };
 
 // ReviewList is a page of reviews matching filter, with "Load more" while
 // the API has a next page.
@@ -13,7 +13,7 @@ export type ReviewFilter = { project?: string; outcome?: string; days: number };
 // is filtered, is where "Clear the filters" goes when nothing matches.
 export default function ReviewList({ filter, label, inRepo, clearTo }: { filter: ReviewFilter; label: string; inRepo?: boolean; clearTo?: string }) {
   const list = useInfiniteQuery({
-    queryKey: ["reviews", filter.project ?? "", filter.outcome ?? "", filter.days],
+    queryKey: ["reviews", filter.project ?? "", filter.outcome ?? "", filter.days, filter.team ?? ""],
     initialPageParam: "",
     queryFn: ({ pageParam }) =>
       api.get<ReviewListView>(
@@ -22,6 +22,7 @@ export default function ReviewList({ filter, label, inRepo, clearTo }: { filter:
             ["project", filter.project],
             ["outcome", filter.outcome],
             ["days", filter.days],
+            ["team", filter.team],
             ["cursor", pageParam],
           ]),
       ),

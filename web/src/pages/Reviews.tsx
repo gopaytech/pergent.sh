@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { useSearchParams } from "react-router";
 
 import { api, query, type RepositoryView } from "../api";
@@ -23,20 +24,35 @@ export default function Reviews() {
   const days = times.some(([d]) => d === daysParam) ? daysParam : defaultDays;
   const repos = useQuery({ queryKey: ["repositories"], queryFn: () => api.get<RepositoryView[]>("/api/repositories") });
 
-  const set = (next: { project?: string; outcome?: string; days?: number }) => {
-    const v = { project, outcome, days, ...next };
+  const all = useMemo(() => repos.data ?? [], [repos.data]);
+  // The teams that own something in the list, by name. A ?team= that is not
+  // one of them, and not "none", counts as All teams.
+  const teams = useMemo(() => {
+    const byId = new Map<number, string>();
+    for (const r of all) if (r.ownerTeam) byId.set(r.ownerTeam.id, r.ownerTeam.name);
+    return [...byId].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [all]);
+  const teamParam = params.get("team") ?? "";
+  const team = teamParam === "none" || teams.some(([id]) => String(id) === teamParam) ? teamParam : "";
+  const inTeam = (r: RepositoryView, t: string) => t === "" || (t === "none" ? r.ownerTeam === null : String(r.ownerTeam?.id) === t);
+
+  const set = (next: { project?: string; outcome?: string; days?: number; team?: string }) => {
+    const v = { project, outcome, days, team, ...next };
+    // A repository the picked team does not own is dropped with the team change.
+    if (next.team !== undefined && !all.some((r) => r.project === v.project && inTeam(r, v.team))) v.project = "";
     setParams(
       new URLSearchParams(
         query([
           ["project", v.project],
           ["outcome", v.outcome],
           ["days", v.days === defaultDays ? undefined : v.days],
+          ["team", v.team],
         ]).slice(1),
       ),
     );
   };
 
-  const projects = (repos.data ?? []).map((r) => r.project);
+  const projects = all.filter((r) => inTeam(r, team)).map((r) => r.project);
   if (project && !projects.includes(project)) projects.push(project);
 
   return (
@@ -48,6 +64,17 @@ export default function Reviews() {
         </div>
       </div>
       <div className="filters">
+        {!repos.isPending && (
+          <select aria-label="Team" value={team} onChange={(e) => set({ team: e.target.value })}>
+            <option value="">All teams</option>
+            <option value="none">No owner</option>
+            {teams.map(([id, name]) => (
+              <option key={id} value={String(id)}>
+                {name}
+              </option>
+            ))}
+          </select>
+        )}
         {!repos.isPending && (
           <select aria-label="Repository" value={project} onChange={(e) => set({ project: e.target.value })}>
             <option value="">All repositories</option>
@@ -74,11 +101,14 @@ export default function Reviews() {
           ))}
         </select>
       </div>
-      <ReviewList
-        filter={{ project: project || undefined, outcome: outcome || undefined, days }}
-        label="Review list"
-        clearTo={project || outcome || days !== defaultDays ? "/reviews" : undefined}
-      />
+      {/* A ?team= is checked against the list, so wait for it. */}
+      {!(repos.isPending && teamParam) && (
+        <ReviewList
+          filter={{ project: project || undefined, outcome: outcome || undefined, days, team: team || undefined }}
+          label="Review list"
+          clearTo={project || outcome || team || days !== defaultDays ? "/reviews" : undefined}
+        />
+      )}
     </>
   );
 }

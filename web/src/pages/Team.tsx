@@ -84,6 +84,8 @@ function AdminActions({ v }: { v: TeamPageView }) {
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["teams"] });
       client.invalidateQueries({ queryKey: ["my-teams"] });
+      // The repository list shows owner team names.
+      client.invalidateQueries({ queryKey: ["repositories"] });
       client.invalidateQueries({ queryKey: ["users"] });
       // Members may have been waiting-free only through this team.
       client.invalidateQueries({ queryKey: ["me"] });

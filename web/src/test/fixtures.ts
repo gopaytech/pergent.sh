@@ -267,6 +267,7 @@ export const repoPayments: RepositoryView = {
   paused: false,
   last7: { reviews: 40, approved: 31, failed: 2 },
   health: "attention",
+  ownerTeam: { id: 1, name: "payments", open: true, viaInstance: false },
 };
 
 export const repoWidgets: RepositoryView = {
@@ -278,6 +279,7 @@ export const repoWidgets: RepositoryView = {
   paused: false,
   last7: { reviews: 12, approved: 10, failed: 0 },
   health: "ok",
+  ownerTeam: null,
 };
 
 // A dashboard repository that is paused.
@@ -290,6 +292,7 @@ export const repoToolsPaused: RepositoryView = {
   paused: true,
   last7: { reviews: 0, approved: 0, failed: 0 },
   health: "paused",
+  ownerTeam: null,
 };
 
 // A GitHub repository switched on in the dashboard: the one that links.
@@ -302,6 +305,7 @@ export const repoGadgets: RepositoryView = {
   paused: false,
   last7: { reviews: 5, approved: 4, failed: 0 },
   health: "ok",
+  ownerTeam: null,
 };
 
 // What GET /api/admin/linkable says for acme/gadgets: one that is linkable,

@@ -470,6 +470,8 @@ type RepositoryView struct {
 	// Health is "paused" while it is paused, else "attention" when it has
 	// setup problems, else "ok".
 	Health string `json:"health"`
+	// OwnerTeam is the team that owns the repository; nil when there is none.
+	OwnerTeam *OwnerTeamView `json:"ownerTeam"`
 }
 
 // Last7View counts the repository's runs of the last 7 days, as StatsView.
@@ -558,10 +560,13 @@ type RepoActionsView struct {
 
 // OwnerTeamView is a repository's owner team on its page. Open is whether
 // the session may open the team's page: an admin, or a member of the team.
+// ViaInstance is true when the team owns the repository through its entry
+// for the whole instance, not through an entry of its own for the repository.
 type OwnerTeamView struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-	Open bool   `json:"open"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Open        bool   `json:"open"`
+	ViaInstance bool   `json:"viaInstance"`
 }
 
 // MultiReviewView is a repository's multi review on its page. On is

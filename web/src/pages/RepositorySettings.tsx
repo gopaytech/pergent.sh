@@ -291,6 +291,11 @@ function RepoTeamsForm({
       // The Teams page and the Users page's team column read the same rows.
       client.invalidateQueries({ queryKey: ["teams"] });
       client.invalidateQueries({ queryKey: ["users"] });
+      // Dropping the owning team changes the owner the list, the repository
+      // page and the Reviews team filter show.
+      client.invalidateQueries({ queryKey: ["repositories"] });
+      client.invalidateQueries({ queryKey: ["repo", instance, project] });
+      client.invalidateQueries({ queryKey: ["my-teams"] });
       setSaved(true);
     },
   });

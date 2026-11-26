@@ -41,6 +41,7 @@ const (
 	msgBadEmail       = "that is not an email address"
 	msgBadAddUser     = `the body must be {"email": ..., "teams": [{"teamId": ..., "role": "viewer" or "maintainer"}]}`
 	msgNoTeam         = "every team must be a team that exists"
+	msgTeamFilter     = "team must be a team's id or none"
 	msgUserAdded      = "this email is added already"
 	msgBadRepoTeams   = `the body must be {"teams": [<team id>, ...]}`
 )
