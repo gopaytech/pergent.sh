@@ -72,20 +72,20 @@ describe("RepositoryDetail: the multi review line", () => {
 });
 
 describe("RepositoryDetail: the owner team line", () => {
-  const withOwner = (ownerTeam: { id: number; name: string; open: boolean } | null) => ({
+  const withOwner = (ownerTeam: { id: number; name: string; open: boolean; viaInstance: boolean } | null) => ({
     ...base,
     "GET /api/repositories/main/acme/payments": { body: { ...payments, ownerTeam } },
   });
 
   it("links the owner team to its page when the session may open it", async () => {
-    renderAt("/repos/main/acme/payments", withOwner({ id: 2, name: "Payments", open: true }));
+    renderAt("/repos/main/acme/payments", withOwner({ id: 2, name: "Payments", open: true, viaInstance: false }));
     const link = await screen.findByRole("link", { name: "Payments" });
     expect(link).toHaveAttribute("href", "/teams/2");
     expect(link.closest(".sub")).toHaveTextContent("Owner team: Payments");
   });
 
   it("shows the owner team as plain text when the session may not open it", async () => {
-    renderAt("/repos/main/acme/payments", withOwner({ id: 2, name: "Payments", open: false }));
+    renderAt("/repos/main/acme/payments", withOwner({ id: 2, name: "Payments", open: false, viaInstance: false }));
     expect(await screen.findByText("Owner team: Payments")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Payments" })).not.toBeInTheDocument();
   });
@@ -1527,7 +1527,7 @@ describe("RepositoryDetail: tabs in the address", () => {
 describe("RepositoryDetail: owner-team buttons follow the actions flags", () => {
   const flags = (a: Partial<RepoActionsView>, o: Partial<RepositoryDetailView> = {}) => ({
     ...repoDetail(repoPayments, "maintainer"),
-    ownerTeam: { id: 2, name: "Payments", open: true },
+    ownerTeam: { id: 2, name: "Payments", open: true, viaInstance: false },
     ...o,
     actions: { pause: false, resume: false, remove: false, release: false, ...a },
   });

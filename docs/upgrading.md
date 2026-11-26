@@ -1,5 +1,10 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+- `GET /api/repositories` gives each repository its `ownerTeam` (null when none). `OwnerTeamView` gets `viaInstance`.
+- `GET /api/reviews` takes `team`: a team's id, or `none` for repositories with no owner. It only narrows what you can already see.
+
 ## Upgrading to 0.23.0
 
 **Teams can onboard and claim their own repositories, and the audit log has a search:** [Roles](concepts/roles.md). The switch for teams is off on every instance after the upgrade.

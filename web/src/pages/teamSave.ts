@@ -35,6 +35,8 @@ export function useTeamSave(v: TeamPageView) {
       client.invalidateQueries({ queryKey: ["team", v.team.id] });
       client.invalidateQueries({ queryKey: ["my-teams"] });
       client.invalidateQueries({ queryKey: ["teams"] });
+      // The repository list shows owner team names.
+      client.invalidateQueries({ queryKey: ["repositories"] });
       client.invalidateQueries({ queryKey: ["users"] });
       client.invalidateQueries({ queryKey: ["me"] });
       // The owner ticks and the repositories move which models and chains a

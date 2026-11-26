@@ -373,6 +373,32 @@ func (d *Dashboard) reviews(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.Visible = v
 	}
+	if t := q.Get("team"); t != "" {
+		// owner is nil for "none": repositories with no owner team.
+		var owner *int64
+		if t != teamNone {
+			n, err := strconv.ParseUint(t, 10, 63)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, msgTeamFilter)
+				return
+			}
+			id := int64(n)
+			if _, found, err := d.Store.Team(ctx, id); err != nil {
+				d.failed(w, r, "loading a team", err)
+				return
+			} else if !found {
+				writeError(w, http.StatusBadRequest, msgNoTeam)
+				return
+			}
+			owner = &id
+		}
+		v, err := d.narrowToTeam(ctx, filter.Visible, owner)
+		if err != nil {
+			d.failed(w, r, "listing repository owners", err)
+			return
+		}
+		filter.Visible = v
+	}
 	if c := q.Get("cursor"); c != "" {
 		cur, ok := decodeCursor(c)
 		if !ok {
@@ -417,6 +443,43 @@ func (d *Dashboard) projectVisibility(ctx context.Context, se Session, instance,
 	for _, p := range stored {
 		if strings.EqualFold(p.Path, project) && (instance == "" || p.Instance == instance) {
 			out = append(out, store.VisibleProject{Instance: p.Instance, Path: p.Path, ID: p.ProjectID})
+		}
+	}
+	return store.Visibility{Projects: out}, nil
+}
+
+// teamNone is the team filter for repositories with no owner team.
+const teamNone = "none"
+
+// narrowToTeam is v cut to the repositories owned by the team with ID team,
+// or with no owner when team is nil. An admin's v.All is first read as every stored
+// project, so the result is always a list of projects, and never more than v
+// let be read.
+func (d *Dashboard) narrowToTeam(ctx context.Context, v store.Visibility, team *int64) (store.Visibility, error) {
+	projects := v.Projects
+	if v.All {
+		stored, err := d.Store.Projects(ctx)
+		if err != nil {
+			return store.Visibility{}, err
+		}
+		projects = make([]store.VisibleProject, len(stored))
+		for i, p := range stored {
+			projects[i] = store.VisibleProject{Instance: p.Instance, Path: p.Path, ID: p.ProjectID}
+		}
+	}
+	keys := make([]store.PathKey, len(projects))
+	for i, p := range projects {
+		keys[i] = store.PathKey{Instance: p.Instance, Path: lower(p.Path)}
+	}
+	owners, err := d.Store.OwnerTeams(ctx, keys)
+	if err != nil {
+		return store.Visibility{}, err
+	}
+	var out []store.VisibleProject
+	for i, p := range projects {
+		owner, owned := owners[keys[i]]
+		if team == nil && !owned || team != nil && owned && owner == *team {
+			out = append(out, p)
 		}
 	}
 	return store.Visibility{Projects: out}, nil
@@ -1081,6 +1144,14 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 	for _, a := range items {
 		troubled[repoKey(a.Instance, a.Project)] = true
 	}
+	keys := make([]RepoKey, len(repos))
+	for i, e := range repos {
+		keys[i] = repoKey(e.Instance, e.Project)
+	}
+	owners, err := d.ownerViews(ctx, se, keys)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]RepositoryView, 0, len(repos))
 	for _, e := range repos {
 		k := repoKey(e.Instance, e.Project)
@@ -1094,7 +1165,7 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 		}
 		out = append(out, RepositoryView{Instance: e.Instance, Project: e.Project, Platform: e.Platform,
 			Source: string(e.Source), On: !e.Paused, Paused: e.Paused, Health: health,
-			Last7: Last7View{Reviews: c.Reviews, Approved: c.Approved, Failed: c.Failed}})
+			Last7: Last7View{Reviews: c.Reviews, Approved: c.Approved, Failed: c.Failed}, OwnerTeam: owners[k]})
 	}
 	return out, nil
 }
@@ -1245,10 +1316,6 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
-	owner, err := d.ownerTeamView(ctx, se, repo)
-	if err != nil {
-		return RepositoryDetailView{}, err
-	}
 	actions, err := d.repoActions(ctx, se, repo)
 	if err != nil {
 		return RepositoryDetailView{}, err
@@ -1260,7 +1327,7 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
 		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly, Model: model, MultiReview: multi,
 		Quota: d.quotaView(ctx, se, repo), Graph: gv, BuiltInRulesOff: builtInRulesOff(d.cfg.Jobs.Image),
-		OwnerTeam: owner, Actions: actions, CoveringTeams: covering}, nil
+		OwnerTeam: views[0].OwnerTeam, Actions: actions, CoveringTeams: covering}, nil
 }
 
 // coveringTeams are the names of the teams other than repo's owner team that
@@ -1289,19 +1356,43 @@ func (d *Dashboard) coveringTeams(ctx context.Context, repo settings.Effective, 
 	return out, nil
 }
 
-// ownerTeamView is repo's owner team (Store.OwnerTeam) as its page shows
-// it, nil for none. Open: the session is an admin or a member of the team.
-func (d *Dashboard) ownerTeamView(ctx context.Context, se Session, repo settings.Effective) (*OwnerTeamView, error) {
-	id, ok, err := d.Store.OwnerTeam(ctx, repo.Instance, repo.Project)
-	if err != nil || !ok {
+// ownerViews is the owner team (Store.OwnerTeams) of each of keys, in one
+// query for the owners and one for the teams. A repository with no owner is
+// not in the result. Open: the session is an admin or a member of the team.
+// ViaInstance: the team has no owner entry of its own for the repository.
+func (d *Dashboard) ownerViews(ctx context.Context, se Session, keys []RepoKey) (map[RepoKey]*OwnerTeamView, error) {
+	out := map[RepoKey]*OwnerTeamView{}
+	if len(keys) == 0 {
+		return out, nil
+	}
+	pks := make([]store.PathKey, len(keys))
+	for i, k := range keys {
+		pks[i] = store.PathKey(k)
+	}
+	ids, err := d.Store.OwnerTeams(ctx, pks)
+	if err != nil || len(ids) == 0 {
+		return out, err
+	}
+	teams, err := d.Store.Teams(ctx)
+	if err != nil {
 		return nil, err
 	}
-	t, found, err := d.Store.Team(ctx, id)
-	if err != nil || !found {
-		return nil, err // removed meanwhile: no owner team
+	byID := make(map[int64]store.Team, len(teams))
+	for _, t := range teams {
+		byID[t.ID] = t
 	}
-	member := slices.ContainsFunc(t.Members, func(m store.TeamMember) bool { return m.AccountID == se.AccountID })
-	return &OwnerTeamView{ID: t.ID, Name: t.Name, Open: se.Admin || member}, nil
+	for _, k := range keys {
+		id, ok := ids[store.PathKey(k)]
+		t, found := byID[id]
+		if !ok || !found {
+			continue // no owner, or the team was removed meanwhile
+		}
+		member := slices.ContainsFunc(t.Members, func(m store.TeamMember) bool { return m.AccountID == se.AccountID })
+		own := t.OwnEntry(k.Instance, k.Path)
+		out[k] = &OwnerTeamView{ID: t.ID, Name: t.Name, Open: se.Admin || member,
+			ViaInstance: own < 0 || !t.Repos[own].Owner}
+	}
+	return out, nil
 }
 
 // builtInRulesOff is why a review with jobs.image image leaves chosen

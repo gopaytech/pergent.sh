@@ -325,6 +325,38 @@ func (s *Store) OwnerTeam(ctx context.Context, instance, project string) (teamID
 	return *id, true, nil
 }
 
+// OwnerTeams returns the owner team of each of keys (ownerTeamSQL), in one
+// query. The keys of the result are lower-cased paths. A repository with no
+// owner is not in the result.
+func (s *Store) OwnerTeams(ctx context.Context, keys []PathKey) (map[PathKey]int64, error) {
+	out := make(map[PathKey]int64, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	instances := make([]string, len(keys))
+	projects := make([]string, len(keys))
+	for i, k := range keys {
+		instances[i], projects[i] = k.Instance, k.Path
+	}
+	rows, err := s.pool.Query(ctx, `SELECT r.instance, lower(r.project), `+ownerTeamSQL("r.instance", "r.project")+`
+		FROM unnest($1::text[], $2::text[]) AS r(instance, project)`, instances, projects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var instance, project string
+		var id *int64
+		if err := rows.Scan(&instance, &project, &id); err != nil {
+			return nil, err
+		}
+		if id != nil {
+			out[PathKey{instance, project}] = *id
+		}
+	}
+	return out, rows.Err()
+}
+
 // DeleteTeam removes a team with its members, repositories, entries, chain
 // and the marks of its entries (not the accounts), and takes its entries out
 // of the repository chains (chain A and the reviewer chains) that name them; ok is false when there is no such team. When check is not nil

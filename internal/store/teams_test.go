@@ -2,7 +2,9 @@ package store
 
 import (
 	"errors"
+	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -405,6 +407,44 @@ func TestOwnerMostSpecific(t *testing.T) {
 	}
 	if id, _, _ := s.OwnerTeam(ctx, "main", "acme/api"); id != b.ID {
 		t.Errorf("owner after a rename = %d; want %d", id, b.ID)
+	}
+}
+
+// OwnerTeams reads the owners of many repositories in one query, and agrees
+// with OwnerTeam for each of them.
+func TestOwnerTeams(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a, _ := s.CreateTeam(ctx, "Platform", t0)
+	b, _ := s.CreateTeam(ctx, "Payments", t0)
+	if err := setOwner(t, s, a.ID, TeamRepo{Instance: "main", Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := setOwner(t, s, b.ID, TeamRepo{Instance: "main", Project: "acme/api", Owner: true}, TeamRepo{Instance: "main", Project: "acme/web"}); err != nil {
+		t.Fatal(err)
+	}
+	keys := []PathKey{{"main", "ACME/api"}, {"main", "acme/web"}, {"main", "acme/other"}, {"other", "acme/api"}}
+	got, err := s.OwnerTeams(ctx, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[PathKey]int64{{"main", "acme/api"}: b.ID, {"main", "acme/web"}: a.ID, {"main", "acme/other"}: a.ID}
+	if !maps.Equal(got, want) {
+		t.Errorf("OwnerTeams = %v; want %v", got, want)
+	}
+	for _, k := range keys {
+		id, ok, err := s.OwnerTeam(ctx, k.Instance, k.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gid, gok := got[PathKey{k.Instance, strings.ToLower(k.Path)}]
+		if gid != id || gok != ok {
+			t.Errorf("OwnerTeams(%s, %s) = %d, %v; OwnerTeam says %d, %v", k.Instance, k.Path, gid, gok, id, ok)
+		}
+	}
+	none, err := s.OwnerTeams(ctx, nil)
+	if err != nil || len(none) != 0 {
+		t.Errorf("OwnerTeams(nil) = %v, %v; want an empty map", none, err)
 	}
 }
 

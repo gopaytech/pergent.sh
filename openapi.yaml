@@ -982,6 +982,13 @@ paths:
         - name: instance
           in: query
           schema: {type: string}
+        - name: team
+          in: query
+          description: |
+            Keep the repositories a team owns (its id), or `none` for those
+            with no owner. It only narrows what the session can already see.
+            400 when it is neither, or the team does not exist.
+          schema: {type: string, pattern: '^([0-9]+|none)$'}
         - name: outcome
           in: query
           schema: {$ref: '#/components/schemas/Outcome'}
@@ -7740,15 +7747,18 @@ components:
         remove: {type: boolean}
         release: {type: boolean}
     OwnerTeamView:
-      description: A repository's owner team, on its page.
+      description: A repository's owner team, on its page and in the list.
       type: object
-      required: [id, name, open]
+      required: [id, name, open, viaInstance]
       properties:
         id: {type: integer}
         name: {type: string}
         open:
           type: boolean
           description: Whether the session may open the team's page (an admin, or a member of the team).
+        viaInstance:
+          type: boolean
+          description: True when the team owns the repository through its entry for the whole instance, not through an owner entry of its own for the repository.
     MultiReviewView:
       description: A repository's multi review, on its page. Never a model, a base URL or a key.
       type: object
@@ -7823,7 +7833,7 @@ components:
     RepositoryView:
       description: One repository switched on or paused.
       type: object
-      required: [instance, project, platform, source, 'on', paused, last7, health]
+      required: [instance, project, platform, source, 'on', paused, last7, health, ownerTeam]
       properties:
         instance: {type: string}
         project: {type: string}
@@ -7845,6 +7855,11 @@ components:
           type: string
           enum: [ok, attention, paused]
           description: '"paused" while it is paused, else "attention" when it has setup problems, else "ok".'
+        ownerTeam:
+          description: The team that owns the repository (its own entry's owner, else its instance entry's). Null when there is none.
+          oneOf:
+            - {$ref: '#/components/schemas/OwnerTeamView'}
+            - {type: 'null'}
     ReviewDetailView:
       description: The change and every run of it, newest first.
       type: object
