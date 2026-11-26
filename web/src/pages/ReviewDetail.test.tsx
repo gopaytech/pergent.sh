@@ -20,6 +20,15 @@ function routes(run: RunDetailView = runDetail) {
   };
 }
 
+// fact is the value a card's facts give for one name.
+const fact = (scope: HTMLElement, name: string) => within(scope).getByText(name, { selector: "dt" }).nextElementSibling as HTMLElement;
+
+// tokenRows is the token table as text, row by row.
+const tokenRows = (scope: HTMLElement) =>
+  within(within(scope).getByRole("table", { name: "Tokens" }))
+    .getAllByRole("row")
+    .map((r) => Array.from(r.children, (c) => c.textContent).join(" "));
+
 describe("ReviewDetail", () => {
   it("writes where each skill came from: library with its version, or the repository folder", async () => {
     const run = structuredClone(runDetail);
@@ -72,17 +81,26 @@ describe("ReviewDetail", () => {
     expect(full).not.toHaveTextContent("carried over");
   });
 
-  it("shows the run's tokens on 3 lines: the total, the prompt and the output", async () => {
+  it("shows the run's tokens as a table: the total, then the prompt and the output with their parts", async () => {
     const { unmount } = renderAndWait({ ...runDetail, tokens: fiveParts });
     const run = await screen.findByRole("region", { name: "This run" });
-    expect(await within(run).findByText("Tokens: 604.5k")).toBeInTheDocument();
-    expect(within(run).getByText("Prompt 600k · input 42 · cache read 525k · cache write 75k")).toBeInTheDocument();
-    expect(within(run).getByText("Output 4.5k · output 2.5k · reasoning 2k")).toBeInTheDocument();
+    expect(await within(run).findByText("604.5k")).toBeInTheDocument();
+    expect(tokenRows(run)).toEqual([
+      "Prompt 600k",
+      "cache read 525k",
+      "cache write 75k",
+      "input 42",
+      "Output 4.5k",
+      "output 2.5k",
+      "reasoning 2k",
+    ]);
     unmount();
 
     renderAndWait({ ...runDetail, tokens: tok(1000, 200, { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 1 }) });
     const unknown = await screen.findByRole("region", { name: "This run" });
-    expect(await within(unknown).findByText("Prompt 1k · input 1k · cache read 0 · cache write 0 · unknown for 1 skill run")).toBeInTheDocument();
+    await within(unknown).findByRole("table", { name: "Tokens" });
+    expect(tokenRows(unknown)).toContain("unknown for 1 skill run");
+    expect(tokenRows(unknown).indexOf("unknown for 1 skill run")).toBe(tokenRows(unknown).indexOf("input 1k") + 1);
   });
 
   it("labels a quiet run quiet, and says nothing for a run that was not", async () => {
@@ -90,7 +108,7 @@ describe("ReviewDetail", () => {
     const quiet = await screen.findByRole("region", { name: "This run" });
     expect(await within(quiet).findByText("quiet")).toBeInTheDocument();
     // The page still shows the checks and files a quiet comment leaves out.
-    expect(quiet).toHaveTextContent("Files:");
+    expect(fact(quiet, "Files")).toHaveTextContent("2 reviewed, 1 skipped, 1 not reviewed");
     unmount();
 
     renderAndWait();
@@ -116,11 +134,12 @@ describe("ReviewDetail", () => {
 
     const run = await screen.findByRole("region", { name: "This run" });
     expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
-    expect(run).toHaveTextContent("Status on GitLab: failed");
-    expect(run).toHaveTextContent("Approved: no — Blocking issues were found.");
-    expect(run).toHaveTextContent("model anthropic / claude-sonnet · max steps 40");
-    expect(run).toHaveTextContent("Tokens: 54.3k");
-    expect(run).toHaveTextContent("Files: 2 reviewed · 1 skipped · 1 not reviewed");
+    expect(within(run).getByRole("heading", { name: "This run Status on GitLab: failed" })).toBeInTheDocument();
+    expect(fact(run, "Approved")).toHaveTextContent("No — Blocking issues were found.");
+    expect(fact(run, "Model")).toHaveTextContent("anthropic / claude-sonnet");
+    expect(fact(run, "Max steps")).toHaveTextContent("40");
+    expect(within(run).getByText("54.3k")).toBeInTheDocument();
+    expect(fact(run, "Files")).toHaveTextContent("2 reviewed, 1 skipped, 1 not reviewed");
 
     const skills = screen.getByRole("region", { name: "Skills" });
     expect(within(skills).getByText("security-review").closest(".verdict")).toHaveTextContent("1 blocking");
@@ -133,22 +152,21 @@ describe("ReviewDetail", () => {
     renderAndWait({ ...runDetail, maxTurns: null });
     const run = await screen.findByRole("region", { name: "This run" });
     expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
-    expect(run).toHaveTextContent("model anthropic / claude-sonnet · max steps not recorded");
+    expect(fact(run, "Max steps")).toHaveTextContent("not recorded");
   });
 
   it("shows the model alone for a run that recorded no provider", async () => {
     renderAndWait({ ...runDetail, provider: null });
     const run = await screen.findByRole("region", { name: "This run" });
     expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
-    expect(run).toHaveTextContent("model claude-sonnet · max steps 40");
-    expect(run).not.toHaveTextContent("/ claude-sonnet");
+    expect(fact(run, "Model")).toHaveTextContent(/^claude-sonnet$/);
   });
 
   it("says the model was not recorded when neither was", async () => {
     renderAndWait({ ...runDetail, provider: null, model: null });
     const run = await screen.findByRole("region", { name: "This run" });
     expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
-    expect(run).toHaveTextContent("model not recorded · max steps 40");
+    expect(fact(run, "Model")).toHaveTextContent(/^not recorded$/);
   });
 
   it("lists the findings with their fix", async () => {
@@ -229,7 +247,8 @@ describe("ReviewDetail", () => {
     ];
     for (const c of commands) expect(within(block).getByText(c).tagName).toBe("CODE");
     expect(within(block).getAllByRole("button", { name: /^Copy / })).toHaveLength(4);
-    await user.click(within(block).getByRole("button", { name: "Copy kubectl logs -c checkout" }));
+    for (const name of ["Pod status", "Checkout log", "Review log", "Describe pod"]) expect(within(block).getByText(name)).toBeInTheDocument();
+    await user.click(within(block).getByRole("button", { name: "Copy the checkout log command" }));
     expect(await navigator.clipboard.readText()).toBe(commands[1]);
     expect(within(block).getByRole("button", { name: "Copied" })).toBeInTheDocument();
     // The detail is text, never HTML.
@@ -237,7 +256,7 @@ describe("ReviewDetail", () => {
     expect(detail.tagName).toBe("PRE");
     expect(detail).toHaveTextContent("<b>x</b>");
     expect(detail.querySelector("b")).toBeNull();
-    expect(block).toHaveTextContent("The Job is deleted an hour after it finishes; after that only what was kept here is left.");
+    expect(block).toHaveTextContent("The Job is deleted an hour after it finishes. After that, only what is shown here is left.");
   });
 
   it("leaves out the commands that need a pod while there is no pod", async () => {
@@ -247,6 +266,7 @@ describe("ReviewDetail", () => {
     expect(within(block).getAllByRole("button", { name: /^Copy / })).toHaveLength(1);
     expect(block).not.toHaveTextContent("logs");
     expect(block).not.toHaveTextContent("describe");
+    expect(fact(block, "Pod")).toHaveTextContent("none yet");
     expect(block.querySelector("pre")).toBeNull();
   });
 
@@ -329,14 +349,14 @@ describe("ReviewDetail", () => {
     renderAndWait({ ...runDetail, entry: { name: "qwen3.5", position: 2, length: 3, source: "team", team: "Payments" } });
     const run = await screen.findByRole("region", { name: "This run" });
     expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
-    expect(run).toHaveTextContent("Model chain: qwen3.5 · entry 2 of 3 · team Payments");
+    expect(fact(run, "Chain")).toHaveTextContent("qwen3.5 · entry 2 of 3 · team Payments");
   });
 
   it("says nothing of a chain or attempts for a run that recorded no entry", async () => {
     renderAndWait();
     const run = await screen.findByRole("region", { name: "This run" });
     expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
-    expect(run).not.toHaveTextContent("Model chain:");
+    expect(within(run).queryByText("Chain", { selector: "dt" })).not.toBeInTheDocument();
     expect(within(run).queryByRole("list", { name: "Attempts" })).not.toBeInTheDocument();
   });
 
@@ -358,7 +378,7 @@ describe("ReviewDetail", () => {
     expect(within(items[0]).getByRole("link", { name: /Attempt 1/ })).toHaveAttribute("href", `/reviews/main/acme/payments/77?run=${dropped}`);
     expect(items[1]).toHaveTextContent("Attempt 2: qwen3.5 (entry 2) · this run");
     expect(within(items[1]).queryByRole("link")).not.toBeInTheDocument();
-    expect(run).toHaveTextContent("Model chain: qwen3.5 · entry 2 of 2 · global");
+    expect(fact(run, "Chain")).toHaveTextContent("qwen3.5 · entry 2 of 2 · global");
   });
 
   it("opens a dropped attempt, which the history leaves out", async () => {
@@ -379,11 +399,11 @@ describe("ReviewDetail", () => {
     });
     renderApp(`/reviews/main/acme/payments/77?run=${dropped}`);
     const run = await screen.findByRole("region", { name: "This run" });
-    expect(await within(run).findByText("Model chain: Claude Sonnet · entry 1 of 2 · global", { exact: false })).toBeInTheDocument();
+    expect(await within(run).findByText("Claude Sonnet · entry 1 of 2 · global")).toBeInTheDocument();
     expect(fake.find("GET", `/api/runs/${dropped}`)).toHaveLength(1);
     expect(screen.getByText("Retried on backup")).toBeInTheDocument();
     // The reason is the class the store keeps (quota), said in words.
-    expect(run).toHaveTextContent("Approved: no — out of quota");
+    expect(fact(run, "Approved")).toHaveTextContent("No — out of quota");
     expect(screen.getByRole("region", { name: "Skills" })).toHaveTextContent("This run has no skill results: out of quota");
     expect(run).not.toHaveTextContent("— quota");
     // No run of the history is the one shown.
@@ -401,7 +421,7 @@ describe("ReviewDetail", () => {
     renderAppAt();
     const history = await screen.findByRole("region", { name: "Review history" });
     await userEvent.click(within(history).getByText("5c4b3a2"));
-    expect(await screen.findByText(/Approved: no — The review failed\./)).toBeInTheDocument();
+    expect(await screen.findByText("No — The review failed.")).toBeInTheDocument();
     expect(fake.find("GET", `/api/runs/${older}`)).toHaveLength(1);
     expect(screen.getByTestId("location")).toHaveTextContent(`?run=${older}`);
     expect(screen.getByText(/This run has no skill results/)).toBeInTheDocument();

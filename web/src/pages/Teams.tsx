@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 
 import { api, paths, type TeamView } from "../api";
@@ -20,10 +20,16 @@ function toRow(t: TeamView): TeamRow {
   };
 }
 
-// Teams lists the teams as a table and makes new ones. A team is changed on
-// its own page.
+// Teams lists the teams as a table. + New team opens a dialog that names a
+// new one. A team is changed on its own page.
 export default function Teams() {
   const teams = useQuery({ queryKey: ["teams"], queryFn: () => api.get<TeamView[]>("/api/teams") });
+  const [creating, setCreating] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+  const close = () => {
+    setCreating(false);
+    opener.current?.focus();
+  };
   return (
     <div className="narrow">
       <div className="top">
@@ -31,13 +37,16 @@ export default function Teams() {
           <h1>Teams</h1>
           <div className="sub">A team gives each member a role on the repositories it covers. Their highest role counts.</div>
         </div>
+        <button ref={opener} type="button" className="btn primary" onClick={() => setCreating(true)}>
+          + New team
+        </button>
       </div>
-      <CreateTeam />
+      {creating && <NewTeam onClose={close} />}
       {teams.isPending && <Loading />}
       {teams.isError && <ErrorBox error={teams.error} />}
       {teams.isSuccess &&
         (teams.data.length === 0 ? (
-          <div className="card empty">No teams yet. Create one to give people access.</div>
+          <div className="card empty">No teams yet. Use + New team to give people access.</div>
         ) : (
           <TeamsTable rows={teams.data.map(toRow)} showRole={false} />
         ))}
@@ -45,7 +54,10 @@ export default function Teams() {
   );
 }
 
-function CreateTeam() {
+// NewTeam is the dialog that names a new team. Members are the next thing to
+// add, on the team's own page, so the dialog asks for the name alone. Escape,
+// Cancel or a click outside it closes it.
+function NewTeam({ onClose }: { onClose: () => void }) {
   const client = useQueryClient();
   const write = useWrite();
   const navigate = useNavigate();
@@ -53,34 +65,50 @@ function CreateTeam() {
   const create = useMutation({
     mutationFn: () => write<TeamView>("POST", "/api/teams", { name: name.trim() }),
     onSuccess: (team) => {
-      setName("");
       client.invalidateQueries({ queryKey: ["teams"] });
-      // Members are the first thing to add to a new team.
       navigate(paths.team(team.id, "members"));
     },
   });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     create.mutate();
   };
   return (
-    <form className="card pad inline-form" aria-label="Create a team" onSubmit={submit}>
-      <div className="grow">
-        <label htmlFor="team-name">Team name</label>
-        <input
-          id="team-name"
-          type="text"
-          autoComplete="off"
-          maxLength={100}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          required
-        />
-      </div>
-      <button type="submit" className="btn primary" disabled={create.isPending}>
-        Create team
-      </button>
-      {create.isError && <ErrorBox error={create.error} />}
-    </form>
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <form className="card modal" role="dialog" aria-modal="true" aria-labelledby="new-team-title" onSubmit={submit}>
+        <div className="pad">
+          <h2 id="new-team-title">New team</h2>
+          <label htmlFor="team-name">Team name</label>
+          <input
+            id="team-name"
+            type="text"
+            autoComplete="off"
+            // The dialog opens to type a name, so the field takes the focus.
+            autoFocus
+            maxLength={100}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+          />
+          <div className="meta">Next you add its members, then its repositories.</div>
+          {create.isError && <ErrorBox error={create.error} />}
+        </div>
+        <div className="modal-foot">
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="btn primary" disabled={create.isPending}>
+            Create team
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
