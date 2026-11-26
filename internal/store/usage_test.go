@@ -115,14 +115,14 @@ func TestRunUsage(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	id := reported(t, s, mr1, "head1", `{"schema_version":1,"status":"completed","skills":[]}`)
-	if in, out, found, err := s.RunUsage(ctx, id); err != nil || found || in != 0 || out != 0 {
-		t.Errorf("before = %d, %d, %v, %v; want 0, 0, false", in, out, found, err)
+	if tk, found, err := s.RunUsage(ctx, id); err != nil || found || tk != (TokenSum{}) {
+		t.Errorf("before = %+v, %v, %v; want 0, 0, false", tk, found, err)
 	}
 	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "a", In: 10, Out: 2}, {Skill: "b", In: 5, Out: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	if in, out, found, err := s.RunUsage(ctx, id); err != nil || !found || in != 15 || out != 3 {
-		t.Errorf("after = %d, %d, %v, %v; want 15, 3, true", in, out, found, err)
+	if tk, found, err := s.RunUsage(ctx, id); err != nil || !found || tk.In != 15 || tk.Out != 3 {
+		t.Errorf("after = %+v, %v, %v; want 15, 3, true", tk, found, err)
 	}
 }
 
@@ -722,5 +722,170 @@ func TestTokenSumTotals(t *testing.T) {
 	}
 	if got := (TokenSum{In: 100, Out: 20}).Total(); got != 120 {
 		t.Errorf("Total of in and out alone = %d, want 120", got)
+	}
+}
+
+// partsRow is a skill row with all 5 token parts set.
+func partsRow(skill string, in, cacheRead, cacheWrite, out, reasoning int64) SkillUsage {
+	return SkillUsage{Skill: skill, Verdict: "no_blocking_issues", In: in, Out: out,
+		CacheRead: ptrTo(cacheRead), CacheWrite: ptrTo(cacheWrite), Reasoning: ptrTo(reasoning)}
+}
+
+// Every ranking sorts by all tokens. A has 2000 in plus out; B has 50110,
+// most of it cache read, so B is first. Under in plus out, A (2000) would beat B (110).
+func TestUsageRankingCountsAllTokens(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a := func() SkillUsage { return skillRow("sk-a", "no_blocking_issues", 1000, 1000) }
+	b := func() SkillUsage { return partsRow("sk-b", 10, 50000, 0, 100, 0) }
+
+	// One repository holds both merge requests, skills and models.
+	seedUsage(t, s, usageMR(30, 1), usageAt(5, 10, 0), TriggerPush, false, "m-a", a())
+	seedUsage(t, s, usageMR(30, 2), usageAt(5, 11, 0), TriggerPush, false, "m-b", b())
+	// Two repositories, one each, and two teams' views of them.
+	seedUsage(t, s, usageMR(40, 1), usageAt(5, 12, 0), TriggerPush, false, "m-a", a())
+	seedUsage(t, s, usageMR(41, 1), usageAt(5, 13, 0), TriggerPush, false, "m-b", b())
+	team := newTeam(t, s, "Ranking")
+	if err := setOwner(t, s, team, TeamRepo{Instance: mr1.Instance, Project: "acme/p40", Owner: true},
+		TeamRepo{Instance: mr1.Instance, Project: "acme/p41", Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Two API clients: the first by name is the smaller.
+	ca, cb := newAPIClient(t, s, "a-client"), newAPIClient(t, s, "b-client")
+	seedTenantUsage(t, s, ca.ID, "t", "s1", usageAt(5, 14, 0), a())
+	seedTenantUsage(t, s, cb.ID, "t", "s1", usageAt(5, 15, 0), b())
+
+	t.Run("repository", func(t *testing.T) {
+		got, err := s.UsageByRepository(ctx, usageSince)
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := func(project int64) int {
+			for i, r := range got {
+				if r.ProjectID == project {
+					return i
+				}
+			}
+			t.Fatalf("repository %d not listed in %+v", project, got)
+			return -1
+		}
+		if at(41) > at(40) {
+			t.Errorf("UsageByRepository = %+v; want the repository of 50110 tokens before 2000", got)
+		}
+	})
+	t.Run("skill", func(t *testing.T) {
+		got, err := s.UsageBySkill(ctx, mr1.Instance, 30, usageSince)
+		if err != nil || len(got) != 2 || got[0].Name != "sk-b" {
+			t.Errorf("UsageBySkill = %+v, %v; want sk-b first", got, err)
+		}
+	})
+	t.Run("model", func(t *testing.T) {
+		got, err := s.UsageByModel(ctx, mr1.Instance, 30, usageSince)
+		if err != nil || len(got) != 2 || got[0].Name != "m-b" {
+			t.Errorf("UsageByModel = %+v, %v; want m-b first", got, err)
+		}
+	})
+	t.Run("merge request", func(t *testing.T) {
+		got, err := s.UsageByMR(ctx, mr1.Instance, 30, usageSince, 10)
+		if err != nil || len(got) != 2 || got[0].IID != 2 {
+			t.Errorf("UsageByMR = %+v, %v; want merge request 2 first", got, err)
+		}
+	})
+	t.Run("api client", func(t *testing.T) {
+		got, err := s.UsageByAPIClient(ctx, usageSince)
+		if err != nil || len(got) != 2 || got[0].Name != "b-client" {
+			t.Errorf("UsageByAPIClient = %+v, %v; want b-client first", got, err)
+		}
+	})
+	t.Run("team", func(t *testing.T) {
+		got, err := s.TeamUsage(ctx, team, usageSince)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Repos) != 2 || got.Repos[0].ProjectID != 41 {
+			t.Errorf("TeamUsage repos = %+v; want project 41 first", got.Repos)
+		}
+		if len(got.Models) != 2 || got.Models[0].Name != "m-b" {
+			t.Errorf("TeamUsage models = %+v; want m-b first", got.Models)
+		}
+	})
+}
+
+// UsageBySource sums all 5 parts on each source.
+func TestUsageBySourceCountsAllTokens(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	team := newTeam(t, s, "Source")
+	seedUsage(t, s, usageMR(60, 1), usageAt(5, 10, 0), TriggerPush, false, "m", allParts("security"))
+	paid := seedUsage(t, s, usageMR(60, 2), usageAt(5, 11, 0), TriggerPush, false, "m", partsRow("security", 1, 2, 4, 8, 16))
+	if _, err := s.pool.Exec(ctx, `UPDATE run_usage SET source = 'team', team_id = $2 WHERE run_id = $1::uuid`, paid, team); err != nil {
+		t.Fatal(err)
+	}
+	global, teamTokens, err := s.UsageBySource(ctx, mr1.Instance, 60, usageSince)
+	if err != nil || global != 604542 || teamTokens != 31 {
+		t.Errorf("UsageBySource = %d, %d, %v; want 604542 and 31", global, teamTokens, err)
+	}
+}
+
+// The median and the outlier test read all tokens: reviews that are mostly
+// cache read are compared as a whole.
+func TestCostPerReviewCountsAllTokens(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	review := func(project, iid, cacheRead int64) {
+		seedUsage(t, s, usageMR(project, iid), usageAt(5, 10, int(iid)), TriggerPush, false, "m", partsRow("security", 42, cacheRead, 0, 0, 0))
+	}
+	// 600042, 600042 and 1800000: the last is under 3 times the median
+	// (1800126), so it is not an outlier.
+	review(70, 1, 600000)
+	review(70, 2, 600000)
+	review(70, 3, 1800000-42)
+	// The same pair with a review of 4000042 tokens, far above 3 times.
+	review(71, 1, 600000)
+	review(71, 2, 600000)
+	review(71, 3, 4000000)
+
+	got, err := s.UsageCostPerReview(ctx, mr1.Instance, 70, usageSince)
+	if err != nil || got.FullMedian == nil || *got.FullMedian != 600042 || len(got.Outliers) != 0 {
+		t.Errorf("UsageCostPerReview(under 3x) = %+v, %v; want median 600042 and no outlier", got, err)
+	}
+	got, err = s.UsageCostPerReview(ctx, mr1.Instance, 71, usageSince)
+	if err != nil || got.FullMedian == nil || *got.FullMedian != 600042 || len(got.Outliers) != 1 || got.Outliers[0].IID != 3 || got.Outliers[0].Total != 4000042 {
+		t.Errorf("UsageCostPerReview(over 3x) = %+v, %v; want median 600042 and review 3 of 4000042", got, err)
+	}
+}
+
+// A run's usage is the TokenSum of its skills; an old skill row with NULL
+// cache and reasoning adds its in and out, and counts as unknown.
+func TestRunUsageAllParts(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	id := reported(t, s, mr1, "head-parts", `{"schema_version":1,"status":"completed","skills":[]}`)
+	if err := s.RecordUsage(ctx, id, []SkillUsage{allParts("a"), {Skill: "b", Verdict: "no_blocking_issues", In: 5, Out: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := s.RunUsage(ctx, id)
+	want := TokenSum{In: 47, Out: 2501, CacheRead: 525000, CacheWrite: 75000, Reasoning: 2000, Unknown: 1}
+	if err != nil || !found || got != want {
+		t.Errorf("RunUsage = %+v, %v, %v; want %+v, true", got, found, err, want)
+	}
+	if got.Total() != 604549 {
+		t.Errorf("RunUsage total = %d, want 604549", got.Total())
+	}
+	if got, found, err := s.RunUsage(ctx, "00000000-0000-0000-0000-000000000001"); err != nil || found || got != (TokenSum{}) {
+		t.Errorf("RunUsage(unknown run) = %+v, %v, %v; want none", got, found, err)
+	}
+}
+
+// What a skill used on decided changes carries all 5 parts.
+func TestUsageOnDecidedChangesAllParts(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	mr := usageMR(80, 1)
+	seedUsage(t, s, mr, usageAt(5, 10, 0), TriggerPush, false, "m", allParts("security"))
+	storeFates(t, s, mr, "acme/p80", []FindingFate{fate("a", "security", "h", "blocking", "fixed")}, true, false, usageAt(6, 10, 0))
+	got, err := s.UsageOnDecidedChanges(ctx, mr.Instance, mr.ProjectID, usageSince)
+	if err != nil || len(got) != 1 || got[0].Skill != "security" || got[0].Tokens.Total() != 604542 || got[0].Tokens.CacheRead != 525000 {
+		t.Errorf("UsageOnDecidedChanges = %+v, %v; want security with 604542 tokens", got, err)
 	}
 }

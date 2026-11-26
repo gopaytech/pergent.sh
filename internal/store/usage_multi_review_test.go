@@ -329,8 +329,8 @@ func TestRecordJudgeUsageTotal(t *testing.T) {
 	if err != nil || n != 200+20+11+1 {
 		t.Errorf("TokensSince = %d, %v; want every reviewer and the judge", n, err)
 	}
-	if in, _, found, err := s.RunUsage(ctx, id); err != nil || !found || in != 211 {
-		t.Errorf("RunUsage = %d, %v, %v; want 211", in, found, err)
+	if tk, found, err := s.RunUsage(ctx, id); err != nil || !found || tk.In != 211 {
+		t.Errorf("RunUsage = %d, %v, %v; want 211", tk.In, found, err)
 	}
 	if err := s.RecordJudgeUsage(ctx, "00000000-0000-0000-0000-000000000000", j); err != nil {
 		t.Errorf("RecordJudgeUsage of an unknown run: %v", err)
@@ -419,12 +419,12 @@ func TestReviewCostsOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ReviewCost{
-		{Part: "reviewer", Reviewer: 1, RunID: id, MemberID: ms[0].ID, Entry: "main-1", Provider: "p1", Model: "m1", In: 11, Out: 2},
-		{Part: "reviewer", Reviewer: 2, RunID: id, MemberID: ms[1].ID, Entry: "team-2", Provider: "p2", Model: "m2", In: 21, Out: 1},
-		{Part: "reviewer", Reviewer: 2, RunID: id, MemberID: second, Entry: "main-2b", Provider: "p2b", Model: "m2b", In: 22, Out: 2},
-		{Part: "reviewer", Reviewer: 3, RunID: id, MemberID: ms[2].ID, Entry: "main-3", Provider: "p3", Model: "m3", In: 3, Out: 1},
-		{Part: "judge", RunID: id, Entry: "judge-team", Provider: "anthropic", Model: "judge-m", In: 7, Out: 1},
-		{Part: "judge", RunID: retry, Entry: "judge-2", Provider: "openai", Model: "judge-2", In: 6, Out: 2},
+		{Part: "reviewer", Reviewer: 1, RunID: id, MemberID: ms[0].ID, Entry: "main-1", Provider: "p1", Model: "m1", Tokens: TokenSum{In: 11, Out: 2}},
+		{Part: "reviewer", Reviewer: 2, RunID: id, MemberID: ms[1].ID, Entry: "team-2", Provider: "p2", Model: "m2", Tokens: TokenSum{In: 21, Out: 1}},
+		{Part: "reviewer", Reviewer: 2, RunID: id, MemberID: second, Entry: "main-2b", Provider: "p2b", Model: "m2b", Tokens: TokenSum{In: 22, Out: 2}},
+		{Part: "reviewer", Reviewer: 3, RunID: id, MemberID: ms[2].ID, Entry: "main-3", Provider: "p3", Model: "m3", Tokens: TokenSum{In: 3, Out: 1}},
+		{Part: "judge", RunID: id, Entry: "judge-team", Provider: "anthropic", Model: "judge-m", Tokens: TokenSum{In: 7, Out: 1}},
+		{Part: "judge", RunID: retry, Entry: "judge-2", Provider: "openai", Model: "judge-2", Tokens: TokenSum{In: 6, Out: 2}},
 	}
 	for _, from := range []string{id, retry} {
 		got, err := s.ReviewCosts(ctx, from)
@@ -678,5 +678,30 @@ func TestRecordReviewMemberUsageCacheMerge(t *testing.T) {
 		if !ok || (u.cache == nil) != (want == nil) || (want != nil && *u.cache != *want) {
 			t.Errorf("%s cache_read = %v, %v; want %v", skill, u.cache, ok, want)
 		}
+	}
+}
+
+// A reviewer's and the judge's costs carry all 5 token parts.
+func TestReviewCostsAllParts(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	id, ms := multiReviewWithEntries(t, s, mr1, "a1", 1)
+	doneReviewer(t, s, ms[0].ID, `{}`)
+	if err := s.RecordReviewMemberUsage(ctx, ms[0].ID, []SkillUsage{allParts("security")}); err != nil {
+		t.Fatal(err)
+	}
+	judgeRun(t, s, id, JudgeRow{Reviewers: []int{1}, Provider: "anthropic", Model: "judge-m", Entry: judgeEntry})
+	if err := s.RecordJudgeUsage(ctx, id, []SkillUsage{partsRow("security", 1, 2, 4, 8, 16)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ReviewCosts(ctx, id)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("ReviewCosts = %+v, %v; want a reviewer and a judge row", got, err)
+	}
+	if want := (TokenSum{In: 42, Out: 2500, CacheRead: 525000, CacheWrite: 75000, Reasoning: 2000}); got[0].Part != "reviewer" || got[0].Tokens != want {
+		t.Errorf("reviewer tokens = %+v, want %+v", got[0].Tokens, want)
+	}
+	if want := (TokenSum{In: 1, Out: 8, CacheRead: 2, CacheWrite: 4, Reasoning: 16}); got[1].Part != "judge" || got[1].Tokens != want {
+		t.Errorf("judge tokens = %+v, want %+v", got[1].Tokens, want)
 	}
 }

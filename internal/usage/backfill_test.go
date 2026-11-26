@@ -222,8 +222,8 @@ func TestBackfillJudgeRun(t *testing.T) {
 	if n := Backfill(ctx, st, slog.New(slog.DiscardHandler)); n != 1 {
 		t.Fatalf("Backfill marked %d runs; want the judge run", n)
 	}
-	if in, out, found, err := st.RunUsage(ctx, id); err != nil || !found || in != 100+200+20 || out != 10+10+2 {
-		t.Errorf("RunUsage = %d in, %d out, %v, %v; want both reviewers and the judge", in, out, found, err)
+	if tk, found, err := st.RunUsage(ctx, id); err != nil || !found || tk.In != 100+200+20 || tk.Out != 10+10+2 {
+		t.Errorf("RunUsage = %+v, %v, %v; want both reviewers and the judge", tk, found, err)
 	}
 	costs, err := st.ReviewCosts(ctx, id)
 	if err != nil {
@@ -236,14 +236,14 @@ func TestBackfillJudgeRun(t *testing.T) {
 		}
 	}
 	if len(costs) != 3 || len(judges) != 1 || judges[0].RunID != id || judges[0].Entry != "judge" ||
-		judges[0].Model != "model-judge" || judges[0].In != 20 || judges[0].Out != 2 {
+		judges[0].Model != "model-judge" || judges[0].Tokens.In != 20 || judges[0].Tokens.Out != 2 {
 		t.Errorf("ReviewCosts = %+v; want 2 reviewer rows and the judge's row of 20 in, 2 out", costs)
 	}
 	// Marked: a second fill adds nothing.
 	if n := Backfill(ctx, st, slog.New(slog.DiscardHandler)); n != 0 {
 		t.Errorf("a second Backfill marked %d runs; want none", n)
 	}
-	if in, _, _, _ := st.RunUsage(ctx, id); in != 320 {
-		t.Errorf("RunUsage after a second fill = %d; want 320", in)
+	if tk, _, _ := st.RunUsage(ctx, id); tk.In != 320 {
+		t.Errorf("RunUsage after a second fill = %d; want 320", tk.In)
 	}
 }

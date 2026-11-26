@@ -303,12 +303,12 @@ func (s *Store) RunsWithoutUsage(ctx context.Context, limit int) ([]Run, error) 
 // is false when its usage isn't recorded yet. A re-run of failed skills keeps
 // the other skills' results in its stored result, so its own tokens are only
 // in the table.
-func (s *Store) RunUsage(ctx context.Context, id string) (in, out int64, found bool, err error) {
+func (s *Store) RunUsage(ctx context.Context, id string) (t TokenSum, found bool, err error) {
 	// bool_or over no rows is NULL.
 	var recorded *bool
-	err = s.pool.QueryRow(ctx, `SELECT COALESCE(sum(tokens_in), 0), COALESCE(sum(tokens_out), 0), bool_or(true)
-		FROM run_usage WHERE run_id = $1::uuid`, id).Scan(&in, &out, &recorded)
-	return in, out, recorded != nil && *recorded, err
+	err = s.pool.QueryRow(ctx, `SELECT `+tokenSumColumns+`, bool_or(true)
+		FROM run_usage WHERE run_id = $1::uuid`, id).Scan(append(t.dests(), &recorded)...)
+	return t, recorded != nil && *recorded, err
 }
 
 // ReviewCost is what one model used in a multi review: the sum of its
@@ -319,7 +319,7 @@ type ReviewCost struct {
 	Part                                    string // "reviewer" or "judge"
 	Reviewer                                int    // 0 for the judge
 	RunID, MemberID, Entry, Provider, Model string
-	In, Out                                 int64
+	Tokens                                  TokenSum
 }
 
 // ReviewCosts returns what each model used in the multi review of run id
@@ -335,14 +335,14 @@ func (s *Store) ReviewCosts(ctx context.Context, id string) ([]ReviewCost, error
 	// Each part by its own index: reviewers by their id, judges by run.
 	rows, err := s.pool.Query(ctx, `WITH review AS (SELECT COALESCE(attempt_of, id) AS root FROM runs WHERE id = $1::uuid)
 		SELECT part, COALESCE(reviewer, 0), run_id::text, COALESCE(member_id::text, ''), entry_name, provider, model,
-			sum(tokens_in)::bigint, sum(tokens_out)::bigint
-		FROM (SELECT u.part, u.reviewer, u.run_id, u.member_id, u.entry_name, u.provider, u.model, u.tokens_in, u.tokens_out,
-				m.created_at AS at
+			`+tokenSumColumns+`
+		FROM (SELECT u.part, u.reviewer, u.run_id, u.member_id, u.entry_name, u.provider, u.model,
+				u.tokens_in, u.tokens_out, u.cache_read, u.cache_write, u.reasoning, m.created_at AS at
 			FROM run_usage_by_model u JOIN review_members m ON m.id = u.member_id
 			WHERE u.part = 'reviewer' AND m.run_id = (SELECT root FROM review)
 			UNION ALL
-			SELECT u.part, u.reviewer, u.run_id, u.member_id, u.entry_name, u.provider, u.model, u.tokens_in, u.tokens_out,
-				r.created_at AS at
+			SELECT u.part, u.reviewer, u.run_id, u.member_id, u.entry_name, u.provider, u.model,
+				u.tokens_in, u.tokens_out, u.cache_read, u.cache_write, u.reasoning, r.created_at AS at
 			FROM run_usage_by_model u JOIN runs r ON r.id = u.run_id
 			WHERE u.part = 'judge' AND (r.id = (SELECT root FROM review) OR r.attempt_of = (SELECT root FROM review))) x
 		GROUP BY part, reviewer, run_id, member_id, entry_name, provider, model
@@ -354,7 +354,7 @@ func (s *Store) ReviewCosts(ctx context.Context, id string) ([]ReviewCost, error
 	var out []ReviewCost
 	for rows.Next() {
 		var c ReviewCost
-		if err := rows.Scan(&c.Part, &c.Reviewer, &c.RunID, &c.MemberID, &c.Entry, &c.Provider, &c.Model, &c.In, &c.Out); err != nil {
+		if err := rows.Scan(append([]any{&c.Part, &c.Reviewer, &c.RunID, &c.MemberID, &c.Entry, &c.Provider, &c.Model}, c.Tokens.dests()...)...); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -500,17 +500,17 @@ const (
 	maxOutliers   = 20
 )
 
-// sourceTokensColumns are the tokens (in plus out) on global keys and on
+// sourceTokensColumns are all the tokens on global keys and on
 // teams' own, of splitUsageSQL rows.
-const sourceTokensColumns = `COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'global'), 0),
-			COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'team'), 0)`
+const sourceTokensColumns = `COALESCE(sum(` + allTokensSQL + `) FILTER (WHERE source = 'global'), 0),
+			COALESCE(sum(` + allTokensSQL + `) FILTER (WHERE source = 'team'), 0)`
 
 // sourceTokensColumnsNamed is sourceTokensColumns named global and team,
 // for a subquery.
-const sourceTokensColumnsNamed = `COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'global'), 0) AS global,
-			COALESCE(sum(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) FILTER (WHERE source = 'team'), 0) AS team`
+const sourceTokensColumnsNamed = `COALESCE(sum(` + allTokensSQL + `) FILTER (WHERE source = 'global'), 0) AS global,
+			COALESCE(sum(` + allTokensSQL + `) FILTER (WHERE source = 'team'), 0) AS team`
 
-// UsageBySource returns the tokens (in plus out) one repository used since
+// UsageBySource returns the tokens (all parts) one repository used since
 // the given time on global keys and on teams' own. A multi review counts
 // each Job on its own source (splitUsageSQL).
 func (s *Store) UsageBySource(ctx context.Context, instance string, projectID int64, since time.Time) (global, team int64, err error) {
@@ -574,7 +574,7 @@ func (s *Store) UsageByAPIClient(ctx context.Context, since time.Time) ([]Client
 		FROM run_usage u JOIN api_reviews ar ON ar.run_id = u.run_id JOIN api_clients c ON c.id = ar.client_id
 		WHERE u.reported_at >= $1::timestamptz
 		GROUP BY c.name, ar.tenant
-		ORDER BY COALESCE(sum(u.tokens_in), 0) + COALESCE(sum(u.tokens_out), 0) DESC, c.name, ar.tenant`, since)
+		ORDER BY COALESCE(sum(`+allTokensOf("u")+`), 0) DESC, c.name, ar.tenant`, since)
 	if err != nil {
 		return nil, err
 	}
@@ -604,7 +604,7 @@ func (s *Store) UsageByAPIClient(ctx context.Context, since time.Time) ([]Client
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	total := func(c ClientUsage) int64 { return c.Tokens.In + c.Tokens.Out }
+	total := func(c ClientUsage) int64 { return c.Tokens.Total() }
 	sort.SliceStable(out, func(i, j int) bool {
 		if a, b := total(out[i]), total(out[j]); a != b {
 			return a > b
@@ -638,7 +638,7 @@ func (s *Store) UsageDaily(ctx context.Context, since time.Time, instance string
 func (s *Store) UsageBySkill(ctx context.Context, instance string, projectID int64, since time.Time) ([]NamedUsage, error) {
 	return s.namedUsage(ctx, `SELECT ''::text, skill, `+tokenSumColumns+`, count(*), count(*) FILTER (WHERE verdict = 'failed')
 		FROM run_usage WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz
-		GROUP BY skill ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, skill`,
+		GROUP BY skill ORDER BY COALESCE(sum(`+allTokensSQL+`), 0) DESC, skill`,
 		instance, projectID, since)
 }
 
@@ -649,7 +649,7 @@ func (s *Store) UsageBySkill(ctx context.Context, instance string, projectID int
 func (s *Store) UsageByModel(ctx context.Context, instance string, projectID int64, since time.Time) ([]NamedUsage, error) {
 	return s.namedUsage(ctx, `SELECT provider, model, `+tokenSumColumns+`, count(DISTINCT run_id), 0::bigint
 		FROM `+splitUsageSQL+` WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz
-		GROUP BY provider, model ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, model, provider`,
+		GROUP BY provider, model ORDER BY COALESCE(sum(`+allTokensSQL+`), 0) DESC, model, provider`,
 		instance, projectID, since)
 }
 
@@ -719,7 +719,7 @@ func (s *Store) TeamUsage(ctx context.Context, team int64, since time.Time) (Tea
 	rows, err = tx.Query(ctx, `SELECT instance, project_id, (array_agg(project_path ORDER BY reported_at DESC))[1], `+tokenSumColumns+`,
 			count(DISTINCT run_id)
 		FROM `+teamUsageRows+` GROUP BY instance, project_id
-		ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, instance, project_id`, team, since)
+		ORDER BY COALESCE(sum(`+allTokensSQL+`), 0) DESC, instance, project_id`, team, since)
 	if err != nil {
 		return TeamUsage{}, err
 	}
@@ -732,7 +732,7 @@ func (s *Store) TeamUsage(ctx context.Context, team int64, since time.Time) (Tea
 	}
 	rows, err = tx.Query(ctx, `SELECT provider, model, `+tokenSumColumns+`, count(DISTINCT run_id), 0::bigint
 		FROM `+teamUsageRows+` GROUP BY provider, model
-		ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, model, provider`, team, since)
+		ORDER BY COALESCE(sum(`+allTokensSQL+`), 0) DESC, model, provider`, team, since)
 	if err != nil {
 		return TeamUsage{}, err
 	}
@@ -766,7 +766,7 @@ func (s *Store) UsageByMR(ctx context.Context, instance string, projectID int64,
 		FROM run_usage u JOIN runs r ON r.id = u.run_id
 		WHERE u.instance = $1::text AND u.project_id = $2::bigint AND u.reported_at >= $3::timestamptz
 		GROUP BY u.mr_iid
-		ORDER BY COALESCE(sum(u.tokens_in), 0) + COALESCE(sum(u.tokens_out), 0) DESC, u.mr_iid
+		ORDER BY COALESCE(sum(`+allTokensOf("u")+`), 0) DESC, u.mr_iid
 		LIMIT $4::integer`, instance, projectID, since, limit)
 	if err != nil {
 		return nil, err
@@ -860,7 +860,7 @@ func (s *Store) UsageWasted(ctx context.Context, instance string, projectID int6
 func (s *Store) UsageCostPerReview(ctx context.Context, instance string, projectID int64, since time.Time) (CostPerReview, error) {
 	rows, err := s.pool.Query(ctx, `WITH per_run AS (
 			SELECT run_id, bool_or(incremental) AS incremental, max(mr_iid) AS iid, max(reported_at) AS at,
-				sum(tokens_in + tokens_out)::bigint AS total
+				sum(`+allTokensSQL+`)::bigint AS total
 			FROM run_usage
 			WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz AND trigger <> 'rerun_failed'
 			GROUP BY run_id
@@ -967,8 +967,8 @@ func (s *Store) UsageRows(ctx context.Context, since time.Time, instance string,
 // SkillTokens is what one skill used on the changes the Skill results tab
 // counts.
 type SkillTokens struct {
-	Skill   string
-	In, Out int64
+	Skill  string
+	Tokens TokenSum
 }
 
 // UsageOnDecidedChanges returns, per skill, the tokens used on the changes
@@ -987,7 +987,7 @@ func (s *Store) UsageOnDecidedChanges(ctx context.Context, instance string, proj
 			UNION
 			SELECT mr_iid FROM finding_fates WHERE `+countedFates+`
 		)
-		SELECT u.skill, COALESCE(sum(u.tokens_in), 0), COALESCE(sum(u.tokens_out), 0)
+		SELECT u.skill, `+tokenSumColumnsOfUsage+`
 		FROM run_usage u JOIN decided d ON d.mr_iid = u.mr_iid
 		WHERE u.instance = $1::text AND u.project_id = $2::bigint
 		GROUP BY u.skill ORDER BY u.skill`, instance, projectID, since)
@@ -996,7 +996,7 @@ func (s *Store) UsageOnDecidedChanges(ctx context.Context, instance string, proj
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (SkillTokens, error) {
 		var t SkillTokens
-		err := row.Scan(&t.Skill, &t.In, &t.Out)
+		err := row.Scan(append([]any{&t.Skill}, t.Tokens.dests()...)...)
 		return t, err
 	})
 }

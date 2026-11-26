@@ -690,10 +690,10 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		// The usage table has only what this run used. Until it is filled in
 		// the sum of the result stands, and so it does when the usage can't be
 		// read: usage never breaks a review's page.
-		if in, out, found, err := d.Store.RunUsage(ctx, run.ID); err != nil {
+		if t, found, err := d.Store.RunUsage(ctx, run.ID); err != nil {
 			d.Log.Warn("dashboard: reading a run's usage failed", "run", run.ID, "error", err.Error())
 		} else if found {
-			view.Tokens = TokensView{In: in, Out: out}
+			view.Tokens = TokensView{In: t.In, Out: t.Out}
 		}
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -945,15 +945,15 @@ func (d *Dashboard) multiReviewOf(ctx context.Context, run store.Run) (*RunMulti
 		sorted[rv.Number] = i
 	}
 	for _, c := range costs {
-		mv.Total.In += c.In
-		mv.Total.Out += c.Out
+		mv.Total.In += c.Tokens.In
+		mv.Total.Out += c.Tokens.Out
 		switch i, ok := sorted[c.Reviewer]; {
 		case c.Part == "judge" && mv.Judge != nil:
-			mv.Judge.In += c.In
-			mv.Judge.Out += c.Out
+			mv.Judge.In += c.Tokens.In
+			mv.Judge.Out += c.Tokens.Out
 		case c.Part == "reviewer" && ok:
-			mv.Reviewers[i].In += c.In
-			mv.Reviewers[i].Out += c.Out
+			mv.Reviewers[i].In += c.Tokens.In
+			mv.Reviewers[i].Out += c.Tokens.Out
 		}
 	}
 	return mv, nil
