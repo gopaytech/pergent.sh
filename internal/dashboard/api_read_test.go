@@ -1947,7 +1947,7 @@ func (e *env) addJudge(run string, j store.JudgeRow) {
 		run, reviewers, j.NoJudge, j.NoJudgeReason, j.Provider, j.Model, j.Entry.Name, j.Entry.Position)
 }
 
-// addReviewUsage stores one run_usage_by_model row: a reviewer attempt's
+// addReviewUsage stores one run_usage_by_model row with every count reported: a reviewer attempt's
 // when member is set, else a judge row of run.
 func (e *env) addReviewUsage(run, member string, reviewer int, skill, entry, provider, model string, in, out int64) {
 	e.t.Helper()
@@ -1956,8 +1956,8 @@ func (e *env) addReviewUsage(run, member string, reviewer int, skill, entry, pro
 		part, number = "reviewer", reviewer
 	}
 	e.exec(`INSERT INTO run_usage_by_model (run_id, member_id, part, reviewer, skill, provider, model, entry_name, reported_at,
-			tokens_in, tokens_out)
-		VALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, now(), $9, $10)`,
+			tokens_in, tokens_out, cache_read, cache_write, reasoning)
+		VALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, now(), $9, $10, 0, 0, 0)`,
 		run, member, part, number, skill, provider, model, entry, in, out)
 }
 
@@ -2119,6 +2119,38 @@ func TestRunPageMultiReviewCountsAllParts(t *testing.T) {
 	}
 	if got := v.MultiReview.Total; got.Total != 1718 || got.CacheRead != 1300 || got.Reasoning != 25 {
 		t.Errorf("total = %+v; want total 1718", got)
+	}
+}
+
+// Rows whose pergent reported no cache or reasoning counts are Unknown, and
+// still count in and out.
+func TestRunPageMultiReviewUnknownParts(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	now := e.clock.now()
+	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a')),
+		outcome: OutcomeApproved, approved: true, at: now.Add(-time.Hour)})
+	r1 := e.addReviewer(run, reviewerFix{number: 1, state: "done", chain: []string{"sonnet"}, entry: "sonnet", provider: "anthropic",
+		model: "claude-sonnet-4", position: 1, result: cleanResult(head('a')), at: now.Add(-50 * time.Minute)})
+	e.addJudge(run, store.JudgeRow{Reviewers: []int{1}, Provider: "anthropic", Model: "claude-opus-4", Entry: store.RunEntry{Name: "opus", Position: 1}})
+	e.exec(`INSERT INTO run_usage_by_model (run_id, member_id, part, reviewer, skill, provider, model, entry_name, reported_at,
+			tokens_in, tokens_out)
+		VALUES ($1::uuid, $2::uuid, 'reviewer', 1, 'code-review', 'anthropic', 'claude-sonnet-4', 'sonnet', now(), 100, 10)`, run, r1)
+	e.exec(`INSERT INTO run_usage_by_model (run_id, part, skill, provider, model, entry_name, reported_at, tokens_in, tokens_out)
+		VALUES ($1::uuid, 'judge', 'code-review', 'anthropic', 'claude-opus-4', 'opus', now(), 30, 3)`, run)
+
+	v := getJSON[RunDetailView](e, e.userOnMain(false, "acme/widgets"), "/api/runs/"+run)
+	if v.MultiReview == nil || len(v.MultiReview.Reviewers) != 1 || v.MultiReview.Judge == nil {
+		t.Fatalf("multi review = %+v", v.MultiReview)
+	}
+	if got := v.MultiReview.Reviewers[0]; got.Total != 110 || got.Unknown != 1 {
+		t.Errorf("reviewer = %+v; want total 110, unknown 1", got.UsageTokensView)
+	}
+	if got := v.MultiReview.Judge; got.Total != 33 || got.Unknown != 1 {
+		t.Errorf("judge = %+v; want total 33, unknown 1", got.UsageTokensView)
+	}
+	if got := v.MultiReview.Total; got.Total != 143 || got.Unknown != 2 {
+		t.Errorf("total = %+v; want total 143, unknown 2", got)
 	}
 }
 
