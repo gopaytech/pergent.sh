@@ -4,7 +4,7 @@
 
 body {
   margin: 0;
-  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  font: 13.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   color: var(--text);
   background: var(--bg);
 }
@@ -34,7 +34,8 @@ input {
   gap: 12px;
   padding: 0 12px;
   background: var(--side);
-  color: #fff;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
 }
 
 .topbar .brand {
@@ -47,11 +48,11 @@ input {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  border: 1px solid var(--side-3);
-  border-radius: 8px;
-  background: transparent;
-  color: #fff;
-  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13.5px;
   cursor: pointer;
 }
 
@@ -73,6 +74,7 @@ input {
 
 aside {
   background: var(--side);
+  border-right: 1px solid var(--line);
   color: var(--side-text);
   padding: 16px 12px;
   display: flex;
@@ -88,9 +90,9 @@ aside {
   align-items: center;
   gap: 10px;
   padding: 6px 8px 16px;
-  color: #fff;
+  color: var(--text);
   font-weight: 700;
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .brand.dark {
@@ -108,9 +110,10 @@ aside {
 .org {
   margin: 0 4px 12px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--side-2);
-  font-size: 13px;
+  color: var(--text);
+  font-size: 13.5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -121,10 +124,11 @@ aside {
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
   color: var(--side-text);
   text-decoration: none;
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 .nav a:hover {
@@ -132,7 +136,8 @@ aside {
 }
 
 .nav a.active {
-  background: var(--side-2);
+  background: var(--panel);
+  border-color: var(--line);
   color: var(--side-active);
   font-weight: 600;
 }
@@ -143,10 +148,10 @@ aside {
 }
 
 .section-label {
-  font-size: 11px;
+  font-size: 11.5px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  opacity: 0.55;
+  color: var(--muted);
   margin: 14px 10px 4px;
 }
 
@@ -156,8 +161,8 @@ aside {
   align-items: center;
   gap: 10px;
   padding: 12px 10px 4px;
-  border-top: 1px solid var(--side-2);
-  font-size: 13px;
+  border-top: 1px solid var(--line);
+  font-size: 13.5px;
 }
 
 .me .who {
@@ -178,12 +183,12 @@ aside {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .me .role,
 .me .meta-line > span[aria-hidden] {
-  opacity: 0.65;
+  color: var(--muted);
 }
 
 .avatar {
@@ -195,7 +200,7 @@ aside {
   display: grid;
   place-items: center;
   color: #fff;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
 }
 
@@ -207,16 +212,15 @@ aside {
 .linkish {
   border: 0;
   background: none;
-  color: var(--side-text);
-  font-size: 12px;
-  opacity: 0.75;
+  color: var(--muted);
+  font-size: 12.5px;
   cursor: pointer;
   padding: 0;
   text-decoration: underline;
 }
 
 .linkish:hover {
-  opacity: 1;
+  color: var(--text);
 }
 
 main {
@@ -258,7 +262,7 @@ h1 {
 
 .sub {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 13.5px;
   margin-top: 2px;
 }
 
@@ -271,7 +275,7 @@ p.sub {
 }
 
 .crumbs {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--muted);
   margin-bottom: 6px;
 }
@@ -299,9 +303,9 @@ p.sub {
   display: inline-block;
   border: 1px solid var(--line);
   background: #fff;
-  border-radius: 8px;
+  border-radius: 7px;
   padding: 7px 12px;
-  font-size: 13px;
+  font-size: 13.5px;
   cursor: pointer;
   white-space: nowrap;
   text-decoration: none;
@@ -320,7 +324,7 @@ p.sub {
 }
 
 .btn.small {
-  font-size: 12px;
+  font-size: 12.5px;
   padding: 4px 9px;
 }
 
@@ -331,9 +335,9 @@ input[type="password"],
 input[type="number"],
 input[type="search"] {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 7px;
   padding: 6px 9px;
-  font-size: 13px;
+  font-size: 13.5px;
   width: 100%;
   background: #fff;
 }
@@ -360,7 +364,7 @@ select.btn {
   width: 40px;
   height: 22px;
   margin: 0;
-  border-radius: 11px;
+  border-radius: 10px;
   background: var(--toggle-off);
   position: relative;
   display: inline-block;
@@ -425,7 +429,7 @@ select.btn {
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: hidden;
   margin-bottom: 16px;
 }
@@ -436,7 +440,7 @@ select.btn {
 }
 
 .card h2 {
-  font-size: 14px;
+  font-size: 13.5px;
   margin: 0;
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
@@ -447,14 +451,14 @@ select.btn {
 }
 
 .card h2 a {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--accent);
   text-decoration: none;
   font-weight: 500;
 }
 
 .layout .card h2 {
-  font-size: 13px;
+  font-size: 13.5px;
   padding: 11px 14px;
 }
 
@@ -530,15 +534,15 @@ a.mr:hover {
 
 .meta {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .plat,
 .src {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--muted);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 7px;
   padding: 1px 6px;
   white-space: nowrap;
 }
@@ -553,13 +557,13 @@ a.mr:hover {
 }
 
 .row .why {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 
 .mono {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 /* Model and user text: shown as typed, line breaks kept. */
@@ -570,7 +574,7 @@ a.mr:hover {
 
 pre {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 12.5px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin: 0;
@@ -579,7 +583,7 @@ pre {
 /* --- pills and badges --- */
 
 .pill {
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   border-radius: 999px;
   padding: 2px 8px;
@@ -613,8 +617,8 @@ pre {
 }
 
 .badge {
-  font-size: 11px;
-  border-radius: 6px;
+  font-size: 11.5px;
+  border-radius: 7px;
   padding: 1px 6px;
   margin-left: 6px;
   background: var(--accent-soft);
@@ -639,10 +643,10 @@ pre {
 .error {
   background: var(--bad-soft);
   color: var(--bad);
-  border-radius: 8px;
+  border-radius: 7px;
   padding: 10px 14px;
   margin: 10px 0;
-  font-size: 13px;
+  font-size: 13.5px;
   white-space: pre-wrap;
 }
 
@@ -652,7 +656,7 @@ pre {
 
 .note {
   color: var(--ok);
-  font-size: 13px;
+  font-size: 13.5px;
   margin: -6px 0 12px;
 }
 
@@ -663,7 +667,7 @@ pre {
   background: var(--warn-soft);
   color: var(--warn-text);
   border-bottom: 1px solid var(--warn-line);
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .warn-text {
@@ -675,10 +679,10 @@ pre {
 .quota {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 7px;
   padding: 10px 16px;
   margin-bottom: 16px;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .quota-line {
@@ -762,23 +766,23 @@ pre {
 .stat {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 10px;
   padding: 14px 16px;
 }
 
 .stat .k {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .stat .v {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   margin-top: 4px;
 }
 
 .stat .d {
-  font-size: 12px;
+  font-size: 12.5px;
   margin-top: 2px;
 }
 
@@ -804,7 +808,7 @@ pre {
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);
   border-left: 3px solid transparent;
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--text);
   text-decoration: none;
 }
@@ -824,7 +828,7 @@ pre {
 
 .facts {
   padding: 10px 14px;
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.8;
 }
 
@@ -861,18 +865,18 @@ pre {
 
 .finding .loc {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 
 .finding p {
   margin: 6px 0 0;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .fix-label {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 
@@ -881,7 +885,7 @@ pre.log,
 pre.doc {
   background: var(--soft);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 7px;
   padding: 10px 12px;
   margin-top: 4px;
 }
@@ -902,7 +906,7 @@ pre.doc {
   gap: 10px;
   padding: 10px 14px;
   border-top: 1px solid var(--line);
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .review-actions {
@@ -940,7 +944,7 @@ pre.doc {
 }
 
 h3.group {
-  font-size: 12px;
+  font-size: 12.5px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
@@ -956,7 +960,7 @@ ul.files {
   padding: 0;
   margin: 0 0 6px;
   columns: 2;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 ul.files li {
@@ -983,7 +987,7 @@ ul.files li {
   border: 0;
   background: none;
   padding: 9px 12px;
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
@@ -1021,7 +1025,7 @@ ul.files li {
 
 .set .help {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 12.5px;
   margin-top: 2px;
 }
 
@@ -1031,7 +1035,7 @@ ul.files li {
   gap: 10px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .skill:last-child {
@@ -1076,7 +1080,7 @@ ul.files li {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 /* Not .check: its "input { width: auto }" would shrink the switch to nothing. */
@@ -1113,7 +1117,7 @@ ul.files li {
 
 .link-watched textarea {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .link-add {
@@ -1133,7 +1137,7 @@ ul.files li {
   max-height: 240px;
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 7px;
 }
 
 .link-pick .skill {
@@ -1247,7 +1251,7 @@ details.built-in-doc pre.doc {
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .card.scroll {
@@ -1257,7 +1261,7 @@ details.built-in-doc pre.doc {
 .table th {
   white-space: nowrap;
   text-align: left;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--muted);
   padding: 10px 16px;
@@ -1307,7 +1311,7 @@ details.built-in-doc pre.doc {
   grid-template-columns: 260px 1fr;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .kv:last-child {
@@ -1357,7 +1361,7 @@ details.built-in-doc pre.doc {
 .signin-buttons .btn {
   text-align: center;
   padding: 10px 12px;
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 /* --- narrow screens --- */
@@ -1435,7 +1439,7 @@ details.built-in-doc pre.doc {
 }
 
 .stack label {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   margin-top: 6px;
 }
@@ -1443,7 +1447,7 @@ details.built-in-doc pre.doc {
 .stack .btn {
   margin-top: 12px;
   padding: 10px 12px;
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 .signin-card .linkish {
@@ -1454,7 +1458,7 @@ details.built-in-doc pre.doc {
 .signin-or {
   margin: 16px 0;
   text-align: center;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 
@@ -1484,9 +1488,9 @@ details.built-in-doc pre.doc {
   margin: 4px 0 10px;
   background: #fff;
   border: 1px solid var(--warn-line);
-  border-radius: 8px;
+  border-radius: 7px;
   font-family: var(--mono);
-  font-size: 14px;
+  font-size: 13.5px;
   word-break: break-all;
   user-select: all;
 }
@@ -1500,7 +1504,7 @@ details.built-in-doc pre.doc {
 
 .inline-form label {
   display: block;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   margin-bottom: 4px;
 }
@@ -1526,7 +1530,7 @@ details.built-in-doc pre.doc {
 }
 
 .row .name {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
@@ -1537,14 +1541,14 @@ details.built-in-doc pre.doc {
 
 fieldset {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 7px;
   margin: 8px 0 0;
   padding: 8px 12px;
   background: #fff;
 }
 
 legend {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   padding: 0 4px;
 }
@@ -1555,7 +1559,7 @@ legend {
   gap: 8px;
   padding: 3px 0;
   margin: 0;
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 400;
 }
 
@@ -1567,7 +1571,7 @@ legend {
 .table select {
   width: auto;
   padding: 3px 8px;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 /* A select in a row (a member's role) keeps its own width: at 100% it took
@@ -1582,7 +1586,7 @@ legend {
   width: auto;
   flex: none;
   padding: 3px 8px;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 /* Add a member by email, inside the members group of a team. */
@@ -1608,7 +1612,7 @@ legend {
 .stack .add-email .btn {
   margin-top: 0;
   padding: 4px 9px;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .stack .meta {
@@ -1654,14 +1658,14 @@ a.skill-name:hover {
 
 textarea.skill-text {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: 12.5px;
   min-height: 360px;
   margin-bottom: 8px;
 }
 
 .problem {
   color: var(--bad);
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .check.plain {
@@ -1679,12 +1683,12 @@ textarea.skill-text {
 
 .update-row h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 pre.diff {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 12.5px;
   overflow: auto;
   max-height: 50vh;
 }
@@ -1719,7 +1723,7 @@ pre.diff .diff-del {
   gap: 10px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .checklist li:last-child {
@@ -1798,7 +1802,7 @@ select:not([multiple]) {
 
 .fold-sum {
   min-width: 0;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 400;
   color: var(--muted);
   white-space: nowrap;
@@ -1813,7 +1817,7 @@ select:not([multiple]) {
 
 .model-head {
   align-items: center;
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 400;
 }
 
@@ -1844,7 +1848,7 @@ select:not([multiple]) {
 }
 
 .add-model h3 {
-  font-size: 13px;
+  font-size: 13.5px;
   margin: 0;
   padding: 12px 16px 0;
 }
@@ -1868,7 +1872,7 @@ select:not([multiple]) {
 .stack .limit-field .inline-field .btn {
   margin-top: 0;
   padding: 6px 12px;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 /* A folded body stays hidden even where its class sets a display. */
@@ -1933,9 +1937,9 @@ select:not([multiple]) {
   padding: 10px 12px 10px 16px;
   background: var(--panel);
   border: 1px solid var(--accent);
-  border-radius: 12px;
+  border-radius: 10px;
   box-shadow: 0 6px 20px rgba(29, 29, 38, 0.14);
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 /* On a phone the review page is one column: the findings come before the
@@ -1989,7 +1993,7 @@ a.stat:hover {
    A clearer step between levels: the page title, a card's title, body text,
    and secondary text, which was mostly 12px and hard to read. */
 h1 {
-  font-size: 22px;
+  font-size: 20px;
   letter-spacing: -0.01em;
 }
 
@@ -2013,7 +2017,7 @@ h1 {
 .section-label {
   text-transform: none;
   letter-spacing: 0;
-  font-size: 12px;
+  font-size: 12.5px;
   opacity: 0.6;
 }
 
@@ -2038,15 +2042,15 @@ h1 {
   padding: 8px 12px;
   background: var(--soft);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 7px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--muted);
   white-space: pre-wrap;
 }
 
 .md {
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.6;
   max-width: 80ch;
   overflow-wrap: anywhere;
@@ -2070,16 +2074,16 @@ h1 {
 }
 
 .md-doc .md h1 {
-  font-size: 18px;
+  font-size: 20px;
 }
 
 .md-doc .md h2 {
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .md-doc .md h3,
 .md-doc .md h4 {
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 .md p,
@@ -2111,7 +2115,7 @@ h1 {
 .md pre {
   background: var(--soft);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 7px;
   padding: 10px 12px;
   overflow-x: auto;
   margin: 0 0 0.8em;
@@ -2199,7 +2203,7 @@ h1 {
 .audit-kv abbr {
   text-decoration: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .table.audit td.mr a {
@@ -2233,7 +2237,7 @@ h1 {
 
 .sort-arrow {
   margin-left: 4px;
-  font-size: 9px;
+  font-size: 11.5px;
 }
 
 /* The owner team column of the repository list: a long name wraps. */
@@ -2244,6 +2248,6 @@ td.owner {
 
 /* The line above the repository list that counts repositories with no owner. */
 .owner-line {
-  font-size: 13px;
+  font-size: 13.5px;
   margin: 0 0 12px;
 }
