@@ -1789,7 +1789,7 @@ paths:
       summary: What each skill used on the changes the Skill results tab counts
       description: |
         Admins only (404 for anyone else, as for an unknown repository). The
-        tokens, input and output, each skill used on the changes that
+        tokens, all tokens (input, cache read, cache write, output and reasoning), each skill used on the changes that
         `GET /api/repositories/{instance}/{project}/skill-results` counts for
         the same window: the changes merged in it that a person opened, and
         the changes closed in it that hold a dismissal. A change merged with no
@@ -3451,8 +3451,8 @@ paths:
         another team leaves its earlier tokens with the old one. A multi
         review counts each reviewer and the judge on its own model, once.
         `daily` is each UTC day with usage, oldest first; `repositories` and
-        `models` are busiest first. Totals and rankings add input and output
-        tokens only. `reviews` counts a review once, however many skills it
+        `models` are busiest first. Totals and rankings add all tokens: input,
+        cache read, cache write, output and reasoning. `reviews` counts a review once, however many skills it
         ran. `partialRange` is true when the range starts before the oldest
         usage row with any owner team (v0.19.0 started to record it), so
         older reviews are not counted.
@@ -3578,8 +3578,8 @@ paths:
         day (a day with no usage is left out, oldest first) and the
         repositories and the API clients, busiest first (a client lists its
         tenants). `tokens` and `reviews` cover both, as `daily` does. Every
-        total and ranking adds input and output tokens only; `cacheRead`,
-        `cacheWrite` and `reasoning` are shown apart. `unknown` counts the review-and-skill rows whose pergent
+        total and ranking adds all tokens: input, cache read, cache write, output and reasoning;
+        `cacheRead`, `cacheWrite` and `reasoning` are also given on their own. `unknown` counts the review-and-skill rows whose pergent
         did not report those three counts, so a result from an older pergent
         is unknown and never zero. `reviews` counts a review once, however
         many skills it ran. A repository switched off since, or on an
@@ -3839,7 +3839,7 @@ paths:
       tags: [Instances and settings]
       summary: Set an instance's monthly token quota
       description: |
-        Admins only. The tokens (in plus out) the reviews of the whole
+        Admins only. The tokens (input, cache read, cache write, output and reasoning) the reviews of the whole
         instance may use in a UTC calendar month: a whole number from 1 to
         1000000000000000, or null for none. Once it is used up, no review of
         any of the instance's repositories starts until the next month, unless
@@ -4032,7 +4032,7 @@ paths:
       tags: [Instances and settings]
       summary: Set a global entry's model limit
       description: |
-        Admins only. The most tokens (input plus output) reviews may spend on
+        Admins only. The most tokens (input, cache read, cache write, output and reasoning) reviews may spend on
         the entry in a UTC calendar month, on every instance and repository,
         API reviews included. When it is used up, reviews skip the entry.
         `{id}` takes `config` and `config-1` to `config-4` too. A number out
@@ -5462,7 +5462,7 @@ components:
       required: [month, tokens_used, tokens_left]
       properties:
         month: {type: string, description: 'The UTC month, as `2026-11`.'}
-        tokens_used: {type: integer, format: int64, description: Tokens in and out.}
+        tokens_used: {type: integer, format: int64, description: "All tokens: input, cache read, cache write, output and reasoning."}
         tokens_left: {type: integer, format: int64, description: What is left of the budget, never below 0.}
     ReviewApiRequest:
       type: object
@@ -6234,7 +6234,7 @@ components:
           maximum: 1000000000000000
           description: |
             Admins only (403 for a maintainer; a maintainer's reset leaves it).
-            The tokens (in plus out) the repository's reviews may use in a UTC
+            The tokens (input, cache read, cache write, output and reasoning) the repository's reviews may use in a UTC
             calendar month. A whole number: a fraction, a string or a number
             above the maximum is 400. Null means no quota of its own.
         ruleSets:
@@ -6263,7 +6263,7 @@ components:
           format: int64
           minimum: 1
           maximum: 1000000000000000
-          description: Tokens (input plus output) per UTC calendar month. Removing a limit is a `DELETE`.
+          description: All tokens (input, cache read, cache write, output and reasoning) per UTC calendar month. Removing a limit is a `DELETE`.
     InstanceTokenQuotaRequest:
       type: object
       required: [monthlyTokenQuota]
@@ -6849,7 +6849,7 @@ components:
           description: The instance's token quota per UTC month, null for none.
         tokensThisMonth:
           type: integer
-          description: The tokens (in plus out) the instance's reviews used this UTC month.
+          description: The tokens (input, cache read, cache write, output and reasoning) the instance's reviews used this UTC month.
         platform:
           type: string
           enum: [gitlab, github]
@@ -7319,7 +7319,7 @@ components:
         keys: {type: integer, description: How many keys the client has.}
         reviewsThisMonth: {type: integer, format: int64, description: Reviews of any status.}
         failedThisMonth: {type: integer, format: int64, description: Reviews whose status is `failed`.}
-        tokensThisMonth: {type: integer, format: int64, description: Input plus output tokens the reviews used.}
+        tokensThisMonth: {type: integer, format: int64, description: "All tokens the reviews used: input, cache read, cache write, output and reasoning."}
     APIClientListView:
       type: object
       required: [items]
@@ -7833,7 +7833,7 @@ components:
       properties:
         used:
           type: integer
-          description: Tokens (in plus out) used this UTC month.
+          description: All tokens (input, cache read, cache write, output and reasoning) used this UTC month.
         limit:
           type: [integer, 'null']
           description: The quota, null when there is none.
@@ -8767,11 +8767,11 @@ components:
         globalTokens:
           type: integer
           format: int64
-          description: Tokens (in plus out) on global keys. The instance quota counts these only.
+          description: All tokens (input, cache read, cache write, output and reasoning) on global keys. The instance quota counts these only.
         teamTokens:
           type: integer
           format: int64
-          description: Tokens (in plus out) on teams' own keys.
+          description: All tokens (input, cache read, cache write, output and reasoning) on teams' own keys.
         instance: {type: string}
         project:
           type: string
@@ -8945,7 +8945,7 @@ components:
         total:
           type: integer
           format: int64
-          description: Input plus output tokens.
+          description: "All tokens: input, cache read, cache write, output and reasoning."
         at:
           type: string
           format: date-time
@@ -8957,11 +8957,11 @@ components:
         globalTokens:
           type: integer
           format: int64
-          description: Tokens (in plus out) on global keys. The instance quota counts these only.
+          description: All tokens (input, cache read, cache write, output and reasoning) on global keys. The instance quota counts these only.
         teamTokens:
           type: integer
           format: int64
-          description: Tokens (in plus out) on teams' own keys.
+          description: All tokens (input, cache read, cache write, output and reasoning) on teams' own keys.
         days: {type: integer}
         daily:
           type: array

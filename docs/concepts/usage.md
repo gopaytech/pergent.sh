@@ -25,10 +25,10 @@ Totals count all tokens: input, cache read, cache write, output and reasoning. E
 
 - **Prompt** is input, cache read and cache write. **Output** is output and reasoning. **Tokens** is Prompt plus Output.
 - The cards are **Tokens**, **Prompt**, **Output** and **Reviews**. Prompt says how much of it came from cache, and Output says "incl. reasoning". Under the cards: "Prompt: input · cache read · cache write" and "Output: output · reasoning".
-- The tables have the columns **Prompt**, **Output**, **Tokens** and **Cached**. **Cached** is cache read divided by Prompt, as a whole percent. It shows "—" when there is no prompt, or when the pergent that ran did not report cache.
+- The tables have the columns **Prompt**, **Output**, **Tokens** and **Cached**. **Cached** is cache read divided by Prompt, as a whole percent. It shows "—" when there is no prompt, or when no run in the period reported cache (unknown runs, and no cache read, cache write or reasoning). A period where some runs reported cache shows a real percent.
 - Hover the **Tokens** cell, or put keyboard focus on it, to see the 5 parts.
 - A review's run card shows 3 lines: Tokens, Prompt and Output.
-- A review by a pergent that doesn't report cache and reasoning counts them as 0 in the total, and the page notes that they are unknown.
+- A review by a pergent that doesn't report cache and reasoning counts them as 0 in the total. The page says "unknown for N skill runs" in the hover and accessible name of the Tokens cell and at the end of the run card's Prompt line. The Prompt card says "cache share unknown" when Cached is "—".
 
 ## Team usage
 
