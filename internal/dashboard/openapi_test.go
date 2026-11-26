@@ -863,7 +863,6 @@ var openAPISchemas = map[string]schemaType{
 	"ReviewHeader":            outputSchema(ReviewHeader{}),
 	"RunSummary":              outputSchema(RunSummary{}),
 	"RunDetailView":           outputSchema(RunDetailView{}),
-	"TokensView":              outputSchema(TokensView{}),
 	"FilesView":               outputSchema(FilesView{}),
 	"SkippedFile":             outputSchema(SkippedFile{}),
 	"NotReviewedFile":         outputSchema(NotReviewedFile{}),

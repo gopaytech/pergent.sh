@@ -194,12 +194,12 @@ func TestSkillTokensOnDecidedChanges(t *testing.T) {
 	c := e.operator()
 
 	got := getJSON[[]SkillTokensView](e, c, tokensURL(buttonProject, ""))
-	want := []SkillTokensView{{Skill: "security", Tokens: TokensView{In: 150, Out: 15}}, {Skill: "style", Tokens: TokensView{In: 50, Out: 5}}}
+	want := []SkillTokensView{{Skill: "security", Tokens: usageTokens(store.TokenSum{In: 150, Out: 15})}, {Skill: "style", Tokens: usageTokens(store.TokenSum{In: 50, Out: 5})}}
 	if !slices.Equal(got, want) {
 		t.Errorf("30 days = %+v; want %+v", got, want)
 	}
 	got = getJSON[[]SkillTokensView](e, c, tokensURL(buttonProject, "?days=90"))
-	want[0].Tokens = TokensView{In: 151, Out: 16}
+	want[0].Tokens = usageTokens(store.TokenSum{In: 151, Out: 16})
 	if !slices.Equal(got, want) {
 		t.Errorf("90 days = %+v; want %+v", got, want)
 	}
@@ -357,4 +357,18 @@ func deref(n *int) any {
 		return nil
 	}
 	return *n
+}
+
+// A skill row's tokens count all 5 parts.
+func TestSkillTokensCountAllFiveParts(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	at := e.clock.now().Add(-24 * time.Hour)
+	e.decidedFates(buttonProject, 1, true, at)
+	e.usageRun(runFix{project: buttonProject, number: 1, head: head('a'), at: e.clock.now().Add(-48 * time.Hour)}, fiveParts("security"))
+
+	got := getJSON[[]SkillTokensView](e, e.operator(), tokensURL(buttonProject, ""))
+	if len(got) != 1 || got[0].Tokens.Total != 604542 {
+		t.Errorf("skill tokens = %+v; want one row with total 604542", got)
+	}
 }

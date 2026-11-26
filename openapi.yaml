@@ -3616,8 +3616,9 @@ paths:
         `incremental`, `model`, `skill`, `verdict`, `tokens_in`, `tokens_out`,
         `cache_read`, `cache_write`, `reasoning` (empty when pergent did not
         report them), `findings`, `blocking`, `provider` (empty for a review
-        from before providers were recorded) and `source` (`global` or `team`:
-        whose key paid). There are no titles and no
+        from before providers were recorded), `source` (`global` or `team`:
+        whose key paid) and `tokens` (all 5 token counts added up; a count
+        pergent did not report is 0). There are no titles and no
         text a person wrote, and no dismissals. A text cell that starts with
         `=`, `+`, `-`, `@`, a tab or a carriage return gets a `'` in front, so
         that a spreadsheet does not read it as a formula. The rows are streamed
@@ -5633,10 +5634,26 @@ components:
     ReviewApiUsage:
       type: object
       description: What the review's skills used.
-      required: [tokens_in, tokens_out]
+      required: [tokens_in, tokens_out, cache_read, cache_write, reasoning, tokens]
       properties:
         tokens_in: {type: integer, format: int64}
         tokens_out: {type: integer, format: int64}
+        cache_read:
+          type: integer
+          format: int64
+          description: Cache read tokens; 0 when pergent did not report them.
+        cache_write:
+          type: integer
+          format: int64
+          description: Cache write tokens; 0 when pergent did not report them.
+        reasoning:
+          type: integer
+          format: int64
+          description: Reasoning tokens; 0 when pergent did not report them.
+        tokens:
+          type: integer
+          format: int64
+          description: All tokens, `tokens_in` + `tokens_out` + `cache_read` + `cache_write` + `reasoning`.
     # ------------------------------------------------------------- shared shapes
     ErrorBody:
       type: object
@@ -8049,7 +8066,7 @@ components:
           type: [string, 'null']
           format: date-time
           description: When a run waiting for CI stops waiting; null when it is not waiting for CI.
-        tokens: {$ref: '#/components/schemas/TokensView'}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
         files: {$ref: '#/components/schemas/FilesView'}
         skills:
           type: array
@@ -8092,13 +8109,15 @@ components:
           oneOf:
           - $ref: '#/components/schemas/JudgeView'
           - type: 'null'
-        total: {$ref: '#/components/schemas/TokensView'}
+        total: {$ref: '#/components/schemas/UsageTokensView'}
     ReviewerView:
       description: One reviewer of a multi review. `entry`, `provider`, `model` and `state` are its final
         attempt's; `entry` is the name in the frozen copy of its chain (the chain's first entry when it never
-        started).
+        started). Its tokens (`in`, `out`, `total` and the rest) are those of all its attempts.
+      allOf:
+      - $ref: '#/components/schemas/UsageTokensView'
       type: object
-      required: [number, entry, provider, model, state, skipped, findings, in, out, attempts]
+      required: [number, entry, provider, model, state, skipped, findings, attempts]
       properties:
         number:
           type: integer
@@ -8116,14 +8135,6 @@ components:
         findings:
           type: integer
           description: The findings of its result, in every skill; 0 when it has none.
-        in:
-          type: integer
-          format: int64
-          description: Input tokens of all its attempts.
-        out:
-          type: integer
-          format: int64
-          description: Output tokens of all its attempts.
         attempts:
           type: array
           items: {$ref: '#/components/schemas/MemberAttemptView'}
@@ -8153,9 +8164,12 @@ components:
           type: string
           description: The step it failed at; empty when none was recorded.
     JudgeView:
-      description: The judge of a multi review on this run.
+      description: The judge of a multi review on this run. Its tokens (`in`, `out`, `total` and the rest)
+        are those of every judge run of the review.
+      allOf:
+      - $ref: '#/components/schemas/UsageTokensView'
       type: object
-      required: [entry, provider, model, noJudge, reason, attempts, in, out]
+      required: [entry, provider, model, noJudge, reason, attempts]
       properties:
         entry:
           type: string
@@ -8171,14 +8185,6 @@ components:
         attempts:
           type: integer
           description: The judge runs of the review, the run that was split and each later attempt.
-        in:
-          type: integer
-          format: int64
-          description: Input tokens of every judge run of the review.
-        out:
-          type: integer
-          format: int64
-          description: Output tokens of every judge run of the review.
     RunSummary:
       description: One run in a review's history.
       type: object
@@ -8354,7 +8360,7 @@ components:
       required: [skill, tokens]
       properties:
         skill: {type: string}
-        tokens: {$ref: '#/components/schemas/TokensView'}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
     SkillSourceView:
       description: Where an installed skill came from.
       type: object
@@ -8714,19 +8720,17 @@ components:
           items: {$ref: '#/components/schemas/TeamRepoView'}
           description: The repositories it covers; a project "" covers every repository of the instance, now
             and later.
-    TokensView:
-      type: object
-      required: [in, out]
-      properties:
-        in: {type: integer}
-        out: {type: integer}
     UsageTokensView:
       description: >-
-        Tokens used. `in` and `out` are what every total and ranking adds up;
-        the rest are reported apart.
+        Tokens used. `total` is what every total, ranking, quota and limit
+        counts: prompt (`in` + `cacheRead` + `cacheWrite`) plus output (`out` +
+        `reasoning`).
       type: object
-      required: [in, out, cacheRead, cacheWrite, reasoning, unknown]
+      required: [in, out, cacheRead, cacheWrite, reasoning, unknown, prompt, output, total]
       properties:
+        prompt: {type: integer, format: int64, description: '`in` + `cacheRead` + `cacheWrite`.'}
+        output: {type: integer, format: int64, description: '`out` + `reasoning`.'}
+        total: {type: integer, format: int64, description: '`prompt` + `output`.'}
         in: {type: integer, format: int64}
         out: {type: integer, format: int64}
         cacheRead:
