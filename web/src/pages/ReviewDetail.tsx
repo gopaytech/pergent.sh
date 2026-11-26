@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
 import {
@@ -26,7 +26,7 @@ import { useWrite } from "../layout/write";
 import RunLog from "../RunLog";
 import { Ago, CopyButton, ErrorBox, ExternalLink, Loading, NotFound, OutcomePill, Pill, Tabs, ago, bytesText, changeRef, duration, platformName, skillOrigin, type Tone, utcText } from "../ui";
 import { useUrlParam } from "../urlState";
-import { TokenLines, TokensTotal } from "./usageParts";
+import { TokenTable, TokensTotal } from "./usageParts";
 
 const triggers: Record<string, string> = {
   first: "first run",
@@ -227,16 +227,33 @@ const statusTone: Record<string, Tone> = {
 
 function ThisRun({ id, platform }: { id: string; platform: string }) {
   const run = useRun(id);
+  const status = run.data?.status;
   return (
     <section className="card" aria-label="This run">
-      <h2>This run</h2>
-      <div className="facts">
-        {run.isPending && <Loading />}
-        {run.isError && <ErrorBox error={run.error} />}
-        {run.isSuccess && <Facts run={run.data} platform={platform} />}
-      </div>
+      <h2>
+        This run
+        {status && (
+          <span title={`Status on ${platform}`}>
+            <span className="sr-only">Status on {platform}: </span>
+            <Pill tone={statusTone[status] ?? "grey"}>{status}</Pill>
+          </span>
+        )}
+      </h2>
+      {run.isPending && <Loading />}
+      {run.isError && <ErrorBox error={run.error} />}
+      {run.isSuccess && <Facts run={run.data} />}
       {run.isSuccess && run.data.kubernetes && <Kubernetes k={run.data.kubernetes} />}
     </section>
+  );
+}
+
+// Fact is one row of a card's facts: a name and its value.
+function Fact({ k, children }: { k: string; children: ReactNode }) {
+  return (
+    <div>
+      <dt>{k}</dt>
+      <dd>{children}</dd>
+    </div>
   );
 }
 
@@ -259,7 +276,7 @@ const reasonText = (outcome: string, reason: string) => (outcome === "fell_back"
 
 // entryText is the chain entry a run ran on and its place in the chain.
 const entryText = (e: NonNullable<RunDetailView["entry"]>) =>
-  `Model chain: ${e.name} · entry ${e.position} of ${e.length} · ${e.source === "team" ? `team ${e.team}` : "global"}`;
+  `${e.name} · entry ${e.position} of ${e.length} · ${e.source === "team" ? `team ${e.team}` : "global"}`;
 
 // Attempts lists every attempt of the review the run is one of, linked to
 // each but the run shown, with why an earlier one was dropped.
@@ -293,37 +310,49 @@ function Attempts({ run }: { run: RunDetailView }) {
   );
 }
 
-function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
+function Facts({ run }: { run: RunDetailView }) {
   const f = run.files;
+  const files = [`${f.reviewed.length} reviewed`, `${f.skipped.length} skipped`];
+  if (f.notReviewed.length > 0) files.push(`${f.notReviewed.length} not reviewed`);
+  const notes = run.run.outcome === "fell_back" || run.incrementalNote || run.quiet;
   return (
     <>
-      {run.run.outcome === "fell_back" && (
-        <div>
-          <OutcomePill outcome="fell_back" /> The provider refused this model ({reasonText(run.run.outcome, run.run.reason)}), so
-          the review started again on the next model of the chain.
+      {notes && (
+        <div className="run-notes">
+          {run.run.outcome === "fell_back" && (
+            <div>
+              <OutcomePill outcome="fell_back" /> The provider refused this model ({reasonText(run.run.outcome, run.run.reason)}),
+              so the review started again on the next model of the chain.
+            </div>
+          )}
+          {run.incrementalNote && <div>{run.incrementalNote.replaceAll("`", "")}</div>}
+          {run.quiet && (
+            <div>
+              <Pill tone="grey">quiet</Pill>
+            </div>
+          )}
         </div>
       )}
-      <div>
-        Status on {platform}: {run.status ? <Pill tone={statusTone[run.status] ?? "grey"}>{run.status}</Pill> : "none"}
-      </div>
-      <div>{run.approved ? "Approved: yes" : `Approved: no — ${reasonText(run.run.outcome, run.approvalReason) || "not approved"}`}</div>
-      <div>
-        pergent <span className="mono">{run.pergentVersion || "not recorded"}</span> · model{" "}
-        <span className="mono">{modelText(run.provider, run.model)}</span> · max steps{" "}
-        <span className="mono">{run.maxTurns ?? "not recorded"}</span>
-      </div>
-      {run.entry && <div>{entryText(run.entry)}</div>}
-      {run.attempts.length > 0 && <Attempts run={run} />}
-      {run.incrementalNote && <div>{run.incrementalNote.replaceAll("`", "")}</div>}
-      {run.quiet && (
-        <div>
-          <Pill tone="grey">quiet</Pill>
-        </div>
-      )}
-      <TokenLines tokens={run.tokens} />
-      <div>
-        Files: {f.reviewed.length} reviewed · {f.skipped.length} skipped
-        {f.notReviewed.length > 0 && ` · ${f.notReviewed.length} not reviewed`}
+      <dl className="run-facts">
+        <Fact k="Approved">{run.approved ? "Yes" : `No — ${reasonText(run.run.outcome, run.approvalReason) || "not approved"}`}</Fact>
+        <Fact k="Model">
+          <span className="mono">{modelText(run.provider, run.model)}</span>
+        </Fact>
+        {run.entry && <Fact k="Chain">{entryText(run.entry)}</Fact>}
+        {run.attempts.length > 0 && (
+          <Fact k="Attempts">
+            <Attempts run={run} />
+          </Fact>
+        )}
+        <Fact k="pergent">
+          <span className="mono">{run.pergentVersion || "not recorded"}</span>
+        </Fact>
+        <Fact k="Max steps">{run.maxTurns ?? "not recorded"}</Fact>
+        <Fact k="Files">{files.join(", ")}</Fact>
+      </dl>
+      <h3 className="group">Tokens</h3>
+      <div className="run-tokens">
+        <TokenTable tokens={run.tokens} />
       </div>
     </>
   );
@@ -334,30 +363,46 @@ function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
 // commands that name one are left out.
 function Kubernetes({ k }: { k: NonNullable<RunDetailView["kubernetes"]> }) {
   const base = `kubectl -n ${k.namespace}`;
-  const commands: [string, string][] = [[`${base} get pods -l job-name=${k.job}`, "kubectl get pods"]];
+  const commands: [string, string][] = [["Pod status", `${base} get pods -l job-name=${k.job}`]];
   if (k.pod !== "") {
     commands.push(
-      [`${base} logs ${k.pod} -c checkout`, "kubectl logs -c checkout"],
-      [`${base} logs ${k.pod} -c pergent`, "kubectl logs -c pergent"],
-      [`${base} describe pod ${k.pod}`, "kubectl describe pod"],
+      ["Checkout log", `${base} logs ${k.pod} -c checkout`],
+      ["Review log", `${base} logs ${k.pod} -c pergent`],
+      ["Describe pod", `${base} describe pod ${k.pod}`],
     );
   }
   return (
     <div role="group" aria-label="Kubernetes">
       <h3 className="group">Kubernetes</h3>
-      <div className="facts">
-        <div>
-          Namespace <span className="mono">{k.namespace}</span> · Job <span className="mono">{k.job}</span> · pod{" "}
-          {k.pod === "" ? "none yet" : <span className="mono">{k.pod}</span>}
-        </div>
-        {k.detail && <pre className="log">{k.detail}</pre>}
-        {commands.map(([command, what]) => (
-          <div key={what} className="kube-command">
-            <code>{command}</code> <CopyButton text={command} what={what} />
+      <dl className="run-facts">
+        <Fact k="Namespace">
+          <span className="mono">{k.namespace}</span>
+        </Fact>
+        <Fact k="Job">
+          <span className="mono clip" title={k.job}>
+            {k.job}
+          </span>
+        </Fact>
+        <Fact k="Pod">
+          {k.pod === "" ? (
+            "none yet"
+          ) : (
+            <span className="mono clip" title={k.pod}>
+              {k.pod}
+            </span>
+          )}
+        </Fact>
+      </dl>
+      {k.detail && <pre className="log kube-detail">{k.detail}</pre>}
+      {commands.map(([name, command]) => (
+        <div key={name} className="kube-command">
+          <div className="head">
+            {name} <CopyButton text={command} what={`the ${name.toLowerCase()} command`} />
           </div>
-        ))}
-        <div className="meta">The Job is deleted an hour after it finishes; after that only what was kept here is left.</div>
-      </div>
+          <code>{command}</code>
+        </div>
+      ))}
+      <div className="meta kube-note">The Job is deleted an hour after it finishes. After that, only what is shown here is left.</div>
     </div>
   );
 }

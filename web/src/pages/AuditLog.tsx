@@ -3,7 +3,7 @@ import { Fragment, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { api, paths, query, type AuditPageView, type AuditView } from "../api";
-import { ErrorBox, Loading, Pill, type Tone } from "../ui";
+import { ErrorBox, Loading, Pill, SearchField, type Tone } from "../ui";
 import { useSearchText } from "../useSearchText";
 
 // day is an RFC 3339 time's UTC day, as "Wed 25 Nov 2026" (the API sends
@@ -111,14 +111,12 @@ export default function AuditLog() {
         </div>
       </div>
       <div className="card">
-        <div className="pad search">
-          <input
-            type="search"
-            aria-label="Search the audit log"
+        <div className="pad search filters">
+          <SearchField
+            label="Search the audit log"
             placeholder="Search by who, what, repository or detail"
-            maxLength={200}
             value={typed}
-            onChange={(e) => setTyped(e.target.value)}
+            onChange={setTyped}
           />
         </div>
         {log.isPending && <Loading />}

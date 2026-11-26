@@ -48,18 +48,36 @@ export function partsText(t: UsageTokensView): string {
   return parts.join(" · ");
 }
 
-// TokenLines is a run's tokens on 3 lines: the total, then the prompt and the
-// output with the parts each adds up. The unknown runs end the prompt line,
-// where the missing cache would have been.
-export function TokenLines({ tokens }: { tokens: UsageTokensView }) {
-  const promptParts = [`Prompt ${count(prompt(tokens))}`, `input ${count(tokens.in)}`, `cache read ${count(tokens.cacheRead)}`, `cache write ${count(tokens.cacheWrite)}`];
-  if (tokens.unknown > 0) promptParts.push(unknownText(tokens.unknown));
+// TokenTable is a run's tokens: the total, then the prompt and the output,
+// each followed by the parts it adds up. The unknown runs end the prompt's
+// parts, where the missing cache would have been.
+export function TokenTable({ tokens }: { tokens: UsageTokensView }) {
+  const row = (k: string, v: number, part = false) => (
+    <tr className={part ? "part" : undefined}>
+      <th scope="row">{k}</th>
+      <td>{count(v)}</td>
+    </tr>
+  );
   return (
-    <>
-      <div>Tokens: {count(total(tokens))}</div>
-      <div>{promptParts.join(" · ")}</div>
-      <div>{`Output ${count(output(tokens))} · output ${count(tokens.out)} · reasoning ${count(tokens.reasoning)}`}</div>
-    </>
+    <div className="token-table">
+      <div className="total">{count(total(tokens))}</div>
+      <table aria-label="Tokens">
+        <tbody>
+          {row("Prompt", prompt(tokens))}
+          {row("cache read", tokens.cacheRead, true)}
+          {row("cache write", tokens.cacheWrite, true)}
+          {row("input", tokens.in, true)}
+          {tokens.unknown > 0 && (
+            <tr className="part">
+              <td colSpan={2}>{unknownText(tokens.unknown)}</td>
+            </tr>
+          )}
+          {row("Output", output(tokens))}
+          {row("output", tokens.out, true)}
+          {row("reasoning", tokens.reasoning, true)}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

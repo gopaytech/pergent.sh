@@ -1,6 +1,7 @@
 import { Link, useSearchParams } from "react-router";
 
 import { paths } from "../api";
+import { SearchField } from "../ui";
 import { SortHeader, compareRows, useTableSort } from "../TableSort";
 import { useSearchText } from "../useSearchText";
 
@@ -52,17 +53,10 @@ export default function TeamsTable({ rows, showRole }: { rows: TeamRow[]; showRo
     .sort((a, b) => compareRows(a, b, (r) => sortValue(r, sort.key), sort.desc, (r) => r.name));
   return (
     <div className="card scroll">
-      <div className="pad search">
-        <input
-          type="search"
-          aria-label="Search teams"
-          placeholder="Search by name"
-          maxLength={200}
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-        />
+      <div className="pad search filters">
+        <SearchField label="Search teams" value={typed} onChange={setTyped} />
         {needle !== "" && (
-          <span className="meta">
+          <span className="meta count">
             {shown.length} of {rows.length} shown
           </span>
         )}

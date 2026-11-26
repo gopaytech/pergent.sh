@@ -3,6 +3,7 @@
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { ApiError, safeHref, type Outcome, type SecretView, type SkillSource } from "./api";
+import { Icon } from "./icons";
 
 // Logo is the pergent mark: two lines of code, the second one dipping at a
 // finding. It draws in the text colour, so it works on the dark sidebar and on
@@ -31,6 +32,34 @@ export function CenteredCard({ children }: { children: ReactNode }) {
         {children}
       </div>
     </div>
+  );
+}
+
+// SearchField is a search box with a magnifier in front of the text. label
+// names it for screen readers.
+export function SearchField({
+  label,
+  value,
+  onChange,
+  placeholder = "Search by name",
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <span className="search-field">
+      <Icon name="search" size={16} />
+      <input
+        type="search"
+        aria-label={label}
+        placeholder={placeholder}
+        maxLength={200}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </span>
   );
 }
 

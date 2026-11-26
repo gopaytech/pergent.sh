@@ -17,7 +17,7 @@ import {
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { SortHeader, compareRows, useTableSort } from "../TableSort";
-import { ErrorBox, Loading, Pill, Switch, platformName } from "../ui";
+import { ErrorBox, Loading, Pill, SearchField, Switch, platformName } from "../ui";
 import { useSearchText } from "../useSearchText";
 
 // The columns the list sorts by, and the ones that start with the biggest first.
@@ -133,15 +133,8 @@ export default function Repositories() {
           <div className="card empty">No repositories yet.{canAdd && " Use + Add repository to switch one on."}</div>
         ) : (
           <div className="card scroll">
-            <div className="pad search">
-              <input
-                type="search"
-                aria-label="Search repositories"
-                placeholder="Search by name"
-                maxLength={200}
-                value={typed}
-                onChange={(e) => setTyped(e.target.value)}
-              />
+            <div className="pad search filters">
+              <SearchField label="Search repositories" value={typed} onChange={setTyped} />
               <select aria-label="Team" value={team} onChange={(e) => setTeam(e.target.value)}>
                 <option value="">All teams</option>
                 <option value="none">No owner</option>
@@ -152,7 +145,7 @@ export default function Repositories() {
                 ))}
               </select>
               {filtering && (
-                <span className="meta">
+                <span className="meta count">
                   {shown.length} of {all.length} shown
                 </span>
               )}

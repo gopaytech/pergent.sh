@@ -20,7 +20,7 @@ import { useWrite } from "../layout/write";
 import RunLog from "../RunLog";
 import { ErrorBox, Loading, NotFound, Pill, Tabs, utcText, type Tone } from "../ui";
 import { useUrlParam } from "../urlState";
-import { TokenLines } from "./usageParts";
+import { TokenTable } from "./usageParts";
 
 const statuses: Record<APIStatus, [Tone, string]> = {
   queued: ["grey", "Queued"],
@@ -118,7 +118,7 @@ function Facts({ view }: { view: APIReviewDetail }) {
       {view.finishedAt && <Fact k="Finished">{utcText(view.finishedAt)}</Fact>}
       {usage && (
         <Fact k="Tokens">
-          <TokenLines tokens={apiTokens(usage)} />
+          <TokenTable tokens={apiTokens(usage)} />
         </Fact>
       )}
       {review.test && <Fact k="Test review">no change was reviewed</Fact>}
