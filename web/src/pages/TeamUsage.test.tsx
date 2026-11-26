@@ -9,7 +9,6 @@ import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
 
-
 const usage: TeamUsageView = {
   days: 30,
   tokens: fiveParts,
@@ -58,7 +57,7 @@ describe("Team Usage tab", () => {
     expect(within(rows[0]).getAllByRole("cell").slice(0, 6).map((c) => c.textContent)).toEqual(["main/acme/payments", "9", "900k", "100k", "1M", "0%"]);
     expect(within(repos).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Repository", "Reviews", "Prompt", "Output", "Tokens", "Cached"]);
     // The total can be reached with Tab and names its 5 parts.
-    const parts = within(repos).getAllByLabelText("input 900k · cache read 0 · cache write 0 · output 100k · reasoning 0")[0];
+    const parts = within(repos).getAllByRole("group", { name: "1M total: input 900k · cache read 0 · cache write 0 · output 100k · reasoning 0" })[0];
     expect(parts).toHaveAttribute("tabindex", "0");
     expect(within(repos).getByRole("link", { name: "main/acme/payments" })).toHaveAttribute("href", "/repos/main/acme/payments");
     const models = screen.getByRole("region", { name: "Models" });

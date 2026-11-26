@@ -127,6 +127,17 @@ export function UsageHead({ first, children, after }: { first: string; children?
 // sourceText is a usage's tokens split by whose key paid.
 export const sourceText = (global: number, team: number) => `Tokens on global keys: ${count(global)} · on team keys: ${count(team)}`;
 
+// TokensTotal is a total that can be reached with Tab: its name is the total
+// and the 5 parts it adds up (a title shows them on hover).
+export function TokensTotal({ tokens }: { tokens: UsageTokensView }) {
+  const parts = partsText(tokens);
+  return (
+    <span role="group" tabIndex={0} title={parts} aria-label={`${count(total(tokens))} total: ${parts}`}>
+      <b>{count(total(tokens))}</b>
+    </span>
+  );
+}
+
 // UsageCells is one usage as the cells under UsageHead. The total can be
 // reached with Tab: its title and name list the 5 parts.
 export function UsageCells({ tokens }: { tokens: UsageTokensView }) {
@@ -135,9 +146,7 @@ export function UsageCells({ tokens }: { tokens: UsageTokensView }) {
       <td className="num">{count(prompt(tokens))}</td>
       <td className="num">{count(output(tokens))}</td>
       <td className="num">
-        <b tabIndex={0} title={partsText(tokens)} aria-label={partsText(tokens)}>
-          {count(total(tokens))}
-        </b>
+        <TokensTotal tokens={tokens} />
       </td>
       <td className="num meta">{cachedPercent(tokens)}</td>
     </>

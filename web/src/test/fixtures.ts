@@ -799,7 +799,6 @@ export const pastDismissals: PastDismissalView[] = [
   },
 ];
 
-
 // The usage overview: the repository with the most tokens first, one switched
 // off since (its usage is kept, it has no detail page).
 export const usageOverview: UsageOverviewView = {

@@ -41,7 +41,7 @@ describe("Usage", () => {
     const repos = (await screen.findByRole("region", { name: "Repositories" })) as HTMLElement;
     expect(within(repos).getAllByRole("columnheader").map((h) => h.textContent).slice(1, 6)).toEqual(["Reviews", "Prompt", "Output", "Tokens", "Cached"]);
     // Tokens in the first row: 900k + 200k, no cache: input 900k, output 200k.
-    const parts = within(repos).getAllByLabelText("input 900k · cache read 0 · cache write 0 · output 200k · reasoning 0")[0];
+    const parts = within(repos).getAllByRole("group", { name: "1.1M total: input 900k · cache read 0 · cache write 0 · output 200k · reasoning 0" })[0];
     expect(parts).toHaveAttribute("tabindex", "0");
     expect(parts).toHaveAttribute("title", "input 900k · cache read 0 · cache write 0 · output 200k · reasoning 0");
     expect(parts).toHaveTextContent("1.1M");
@@ -328,12 +328,12 @@ describe("Usage of a repository", () => {
     fakeApi(routes());
     renderApp("/admin/usage/main/acme/payments");
     const security = (await screen.findByText("security")).closest("tr") as HTMLElement;
-    expect(within(security).getByLabelText(/unknown for 3 skill runs/)).toBeInTheDocument();
+    expect(within(security).getByRole("group", { name: /unknown for 3 skill runs/ })).toBeInTheDocument();
     expect(within(security).getAllByRole("cell").at(-1)).toHaveTextContent("—");
     // Reported counts show as they are: 7k of 408k is 2%.
     const style = screen.getByText("style").closest("tr") as HTMLElement;
-    expect(within(style).getByLabelText(/cache read 7k · cache write 1k · output 100k · reasoning 2k/)).toBeInTheDocument();
-    expect(within(style).queryByLabelText(/unknown/)).toBeNull();
+    expect(within(style).getByRole("group", { name: /510k total: input 400k · cache read 7k · cache write 1k · output 100k · reasoning 2k/ })).toBeInTheDocument();
+    expect(within(style).queryByRole("group", { name: /unknown/ })).toBeNull();
     expect(within(style).getAllByRole("cell").at(-1)).toHaveTextContent("2%");
   });
 
