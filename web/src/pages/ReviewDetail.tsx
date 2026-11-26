@@ -231,7 +231,7 @@ function ThisRun({ id, platform }: { id: string; platform: string }) {
   return (
     <section className="card" aria-label="This run">
       <h2>
-        This run
+        This run{" "}
         {status && (
           <span title={`Status on ${platform}`}>
             <span className="sr-only">Status on {platform}: </span>
@@ -379,17 +379,13 @@ function Kubernetes({ k }: { k: NonNullable<RunDetailView["kubernetes"]> }) {
           <span className="mono">{k.namespace}</span>
         </Fact>
         <Fact k="Job">
-          <span className="mono clip" title={k.job}>
-            {k.job}
-          </span>
+          <span className="mono id">{k.job}</span>
         </Fact>
         <Fact k="Pod">
           {k.pod === "" ? (
             "none yet"
           ) : (
-            <span className="mono clip" title={k.pod}>
-              {k.pod}
-            </span>
+            <span className="mono id">{k.pod}</span>
           )}
         </Fact>
       </dl>

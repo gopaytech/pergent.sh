@@ -877,8 +877,8 @@ pre {
 /* A review run's facts: a short name on the left, its value on the right. */
 .run-facts {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
-  gap: 6px 12px;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 6px 10px;
   margin: 0;
   padding: 12px 16px;
   font-size: 13.5px;
@@ -902,12 +902,9 @@ pre {
   padding-left: 18px;
 }
 
-/* A long Job or pod name stays on one line; the whole name is on hover. */
-.clip {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* A long Job or pod name wraps in its own column, whole, never cut. */
+.run-facts .id {
+  overflow-wrap: anywhere;
 }
 
 .run-notes {
