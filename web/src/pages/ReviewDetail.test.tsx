@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Can, CIJobResult, FindingView, ReviewDetailView, RunDetailView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { allCan, ssoAdmin, reviewDetail, runDetail, runKubernetes } from "../test/fixtures";
+import { allCan, ssoAdmin, reviewDetail, runDetail, runKubernetes, tok } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -945,8 +945,7 @@ describe("ReviewDetail: multi review", () => {
           state: "done",
           skipped: "",
           findings: 2,
-          in: 155000,
-          out: 16000,
+          ...tok(155000, 16000),
           attempts: [
             { id: r1a, entry: "sonnet", position: 1, provider: "anthropic", model: "claude-sonnet", state: "fell_back", failure: "", step: "" },
             { id: r1b, entry: "qwen", position: 2, provider: "alibaba", model: "qwen3", state: "done", failure: "", step: "" },
@@ -960,8 +959,7 @@ describe("ReviewDetail: multi review", () => {
           state: "failed",
           skipped: "the reviewer Job ran out of memory",
           findings: 0,
-          in: 20000,
-          out: 2000,
+          ...tok(20000, 2000),
           attempts: [
             { id: r2, entry: "gpt", position: 1, provider: "openai", model: "gpt-5", state: "failed", failure: "the reviewer Job ran out of memory", step: "review" },
           ],
@@ -974,13 +972,12 @@ describe("ReviewDetail: multi review", () => {
           state: "skipped",
           skipped: "the entry is out of quota",
           findings: 0,
-          in: 0,
-          out: 0,
+          ...tok(0, 0),
           attempts: [{ id: r3, entry: "haiku", position: 0, provider: "", model: "", state: "skipped", failure: "the entry is out of quota", step: "" }],
         },
       ],
-      judge: { entry: "opus", provider: "anthropic", model: "claude-opus", noJudge: false, reason: "", attempts: 1, in: 30000, out: 3000 },
-      total: { in: 205000, out: 21000 },
+      judge: { entry: "opus", provider: "anthropic", model: "claude-opus", noJudge: false, reason: "", attempts: 1, ...tok(30000, 3000) },
+      total: tok(205000, 21000),
     },
   };
   const cells = (row: HTMLElement) => within(row).getAllByRole("cell").map((c) => c.textContent);
@@ -1011,7 +1008,7 @@ describe("ReviewDetail: multi review", () => {
 
   it("shows a judge run with no judge, and how many judge runs the review has", async () => {
     const run = structuredClone(multiRun);
-    run.multiReview!.judge = { entry: "", provider: "", model: "", noJudge: true, reason: "the judge failed twice", attempts: 2, in: 30000, out: 3000 };
+    run.multiReview!.judge = { entry: "", provider: "", model: "", noJudge: true, reason: "the judge failed twice", attempts: 2, ...tok(30000, 3000) };
     renderAndWait(run);
     const section = await screen.findByRole("region", { name: "Multi review" });
     const rows = within(within(section).getByRole("table", { name: "Reviewers" })).getAllByRole("row");
@@ -1074,7 +1071,7 @@ describe("ReviewDetail: multi review", () => {
   });
 
   it("shows why multi review was off", async () => {
-    renderAndWait({ ...runDetail, multiReview: { off: "the review image is too old", reviewers: [], judge: null, total: { in: 0, out: 0 } } });
+    renderAndWait({ ...runDetail, multiReview: { off: "the review image is too old", reviewers: [], judge: null, total: tok(0, 0) } });
     const section = await screen.findByRole("region", { name: "Multi review" });
     expect(section).toHaveTextContent("Multi review off: the review image is too old. The review ran with reviewer 1 alone.");
     expect(within(section).queryByRole("table")).not.toBeInTheDocument();

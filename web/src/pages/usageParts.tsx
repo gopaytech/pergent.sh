@@ -8,8 +8,12 @@ export const periods = [7, 30, 90];
 // dash stands for a number that doesn't exist, such as the median of no reviews.
 export const dash = "—";
 
-// total is the tokens a total, a ranking and a median count: input plus output.
-export const total = (t: UsageTokensView) => t.in + t.out;
+// total, prompt and output are the numbers the server adds up: every token
+// counts the same. prompt is input, cache read and cache write; output is
+// output and reasoning; total is both.
+export const total = (t: UsageTokensView) => t.total;
+export const prompt = (t: UsageTokensView) => t.prompt;
+export const output = (t: UsageTokensView) => t.output;
 
 // reviews says "1 review" or "3 reviews".
 export const reviewsText = (n: number) => `${n} ${n === 1 ? "review" : "reviews"}`;
@@ -18,14 +22,25 @@ export const reviewsText = (n: number) => `${n} ${n === 1 ? "review" : "reviews"
 // the runs of a skill, so a review of two skills is two of them.
 const skillRunsText = (n: number) => `${n} ${n === 1 ? "skill run" : "skill runs"}`;
 
-// apartText is what was reported apart from the totals. A pergent too old to
-// report cache and reasoning leaves them unknown, which is never shown as
-// zero: unknown counts the skill runs it covers.
-export function apartText(t: UsageTokensView): string {
-  const parts: string[] = [];
-  if (t.unknown === 0 || t.cacheRead + t.cacheWrite + t.reasoning > 0) {
-    parts.push(`cache read ${count(t.cacheRead)}`, `cache write ${count(t.cacheWrite)}`, `reasoning ${count(t.reasoning)}`);
-  }
+// cachedPercent is the share of the prompt read from the cache, as a whole
+// percent. It is a dash when there is no prompt, or when unknown skill runs
+// left cache and reasoning with nothing reported (a 0% would be a guess).
+export function cachedPercent(t: UsageTokensView): string {
+  if (t.prompt === 0) return dash;
+  if (t.unknown > 0 && t.cacheRead + t.cacheWrite + t.reasoning === 0) return dash;
+  return `${Math.round((t.cacheRead / t.prompt) * 100)}%`;
+}
+
+// partsText is the 5 parts a total adds up, and how many skill runs reported
+// no cache or reasoning (unknown).
+export function partsText(t: UsageTokensView): string {
+  const parts = [
+    `input ${count(t.in)}`,
+    `cache read ${count(t.cacheRead)}`,
+    `cache write ${count(t.cacheWrite)}`,
+    `output ${count(t.out)}`,
+    `reasoning ${count(t.reasoning)}`,
+  ];
   if (t.unknown > 0) parts.push(`unknown for ${skillRunsText(t.unknown)}`);
   return parts.join(" · ");
 }
@@ -53,12 +68,43 @@ export function CsvLink({ days, instance, project }: { days: number; instance?: 
   );
 }
 
+// usageIntro says what a total counts; the Usage pages and the team tab share it.
+export const usageIntro = "Totals count all tokens: input, cache read, cache write, output and reasoning.";
+
 // UsageNotes is the line both pages carry about how the numbers are made.
 export function UsageNotes() {
   return (
     <p className="sub">
-      Days are cut at midnight UTC. Totals add input and output tokens only; cache and reasoning counts are shown apart and are not in them.
+      Days are cut at midnight UTC. {usageIntro}
     </p>
+  );
+}
+
+// UsageStats is the 4 cards on top of a Usage page, and the lines that say
+// what Prompt and Output hold.
+export function UsageStats({ tokens, reviews }: { tokens: UsageTokensView; reviews: number }) {
+  const cached = cachedPercent(tokens);
+  return (
+    <>
+      <section className="stats" aria-label="Totals">
+        <Stat k="Tokens" v={count(total(tokens))} d="all token kinds added" />
+        <Stat k="Prompt" v={count(prompt(tokens))} d={cached === dash ? "cache share unknown" : `${cached} from cache`} />
+        <Stat k="Output" v={count(output(tokens))} d="incl. reasoning" />
+        <Stat k="Reviews" v={String(reviews)} d="with usage recorded" />
+      </section>
+      <p className="sub">Prompt: input · cache read · cache write</p>
+      <p className="sub">Output: output · reasoning</p>
+    </>
+  );
+}
+
+function Stat({ k, v, d }: { k: string; v: string; d: string }) {
+  return (
+    <div className="stat">
+      <div className="k">{k}</div>
+      <div className="v">{v}</div>
+      <div className="d meta">{d}</div>
+    </div>
   );
 }
 
@@ -69,10 +115,10 @@ export function UsageHead({ first, children, after }: { first: string; children?
     <tr>
       <th>{first}</th>
       {children}
-      <th className="num">Input</th>
+      <th className="num">Prompt</th>
       <th className="num">Output</th>
       <th className="num">Tokens</th>
-      <th>Cache and reasoning</th>
+      <th className="num">Cached</th>
       {after}
     </tr>
   );
@@ -81,16 +127,19 @@ export function UsageHead({ first, children, after }: { first: string; children?
 // sourceText is a usage's tokens split by whose key paid.
 export const sourceText = (global: number, team: number) => `Tokens on global keys: ${count(global)} · on team keys: ${count(team)}`;
 
-// UsageCells is one usage as the cells under UsageHead.
+// UsageCells is one usage as the cells under UsageHead. The total can be
+// reached with Tab: its title and name list the 5 parts.
 export function UsageCells({ tokens }: { tokens: UsageTokensView }) {
   return (
     <>
-      <td className="num">{count(tokens.in)}</td>
-      <td className="num">{count(tokens.out)}</td>
+      <td className="num">{count(prompt(tokens))}</td>
+      <td className="num">{count(output(tokens))}</td>
       <td className="num">
-        <b>{count(total(tokens))}</b>
+        <b tabIndex={0} title={partsText(tokens)} aria-label={partsText(tokens)}>
+          {count(total(tokens))}
+        </b>
       </td>
-      <td className="num meta">{apartText(tokens)}</td>
+      <td className="num meta">{cachedPercent(tokens)}</td>
     </>
   );
 }
@@ -120,7 +169,7 @@ export function DailyTable({ daily }: { daily: UsageDayView[] }) {
               <tr key={d.day}>
                 <td>{d.day}</td>
                 <td>
-                  <progress aria-label={`${d.day} share of the busiest day`} value={total(d.tokens)} max={peak} />
+                  <progress aria-label={`${d.day} share of the busiest day`} title={`Prompt ${count(prompt(d.tokens))} · Output ${count(output(d.tokens))}`} value={total(d.tokens)} max={peak} />
                 </td>
                 <UsageCells tokens={d.tokens} />
               </tr>

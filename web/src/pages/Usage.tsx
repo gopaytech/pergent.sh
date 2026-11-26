@@ -3,7 +3,7 @@ import { Link } from "react-router";
 
 import { api, paths, type UsageClientView, type UsageOverviewView } from "../api";
 import { ErrorBox, Loading, Pill, count } from "../ui";
-import { apartText, CsvLink, DailyTable, EmptyRow, PeriodSelect, periods, total, UsageCells, UsageHead, UsageNotes } from "./usageParts";
+import { CsvLink, DailyTable, EmptyRow, PeriodSelect, periods, UsageCells, UsageHead, UsageNotes, UsageStats } from "./usageParts";
 import { useUrlParam } from "../urlState";
 
 // Usage is where the model tokens went across every repository and API client,
@@ -39,13 +39,7 @@ function Body({ view, days }: { view: UsageOverviewView; days: number }) {
   const { tokens } = view;
   return (
     <>
-      <section className="stats" aria-label="Totals">
-        <Stat k="Tokens" v={count(total(tokens))} d="input plus output" />
-        <Stat k="Input" v={count(tokens.in)} d="tokens sent to the model" />
-        <Stat k="Output" v={count(tokens.out)} d="tokens the model wrote" />
-        <Stat k="Reviews" v={String(view.reviews)} d="with usage recorded" />
-      </section>
-      <p className="sub">Reported apart, not in the totals: {apartText(tokens)}</p>
+      <UsageStats tokens={tokens} reviews={view.reviews} />
       <section className="card scroll" aria-label="Repositories">
         <h2>Repositories</h2>
         {view.repositories.length === 0 ? (
@@ -146,15 +140,5 @@ function ClientRows({ client }: { client: UsageClientView }) {
         </tr>
       )}
     </>
-  );
-}
-
-function Stat({ k, v, d }: { k: string; v: string; d: string }) {
-  return (
-    <div className="stat">
-      <div className="k">{k}</div>
-      <div className="v">{v}</div>
-      <div className="d meta">{d}</div>
-    </div>
   );
 }

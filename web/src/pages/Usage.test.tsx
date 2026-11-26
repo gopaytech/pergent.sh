@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { operator, usageOverview, usageRepository, viewer } from "../test/fixtures";
+import { fiveParts, operator, usageOverview, usageRepository, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -19,9 +19,39 @@ describe("Usage", () => {
     const repos = (await screen.findByRole("region", { name: "Repositories" })) as HTMLElement;
     const rows = within(repos).getAllByRole("row").slice(1);
     expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["main/acme/payments", "main/acme/widgets", "main/acme/oldremovedCSV"]);
-    // Input plus output, not the cache: 1,255k + 311k.
-    expect(within(screen.getByRole("region", { name: "Totals" })).getByText("1.6M")).toBeInTheDocument();
-    expect(within(rows[0]).getAllByRole("cell").slice(0, 5).map((c) => c.textContent)).toEqual(["main/acme/payments", "30", "900k", "200k", "1.1M"]);
+    expect(within(rows[0]).getAllByRole("cell").slice(0, 6).map((c) => c.textContent)).toEqual(["main/acme/payments", "30", "900k", "200k", "1.1M", "0%"]);
+  });
+
+  it("shows prompt, output, total and cached, with what each holds", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, [`GET ${overviewPath}`]: { body: { ...usageOverview, tokens: fiveParts, reviews: 7 } } });
+    renderApp("/admin/usage");
+    const totals = await screen.findByRole("region", { name: "Totals" });
+    const cards = [...totals.querySelectorAll(".stat")].map((c) => c.textContent);
+    expect(cards).toEqual(["Tokens604.5kall token kinds added", "Prompt600k87% from cache", "Output4.5kincl. reasoning", "Reviews7with usage recorded"]);
+    expect(screen.getByText("Prompt: input · cache read · cache write")).toBeInTheDocument();
+    expect(screen.getByText("Output: output · reasoning")).toBeInTheDocument();
+    expect(screen.getByText(/Totals count all tokens: input, cache read, cache write, output and reasoning\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Reported apart/)).toBeNull();
+    expect(screen.queryByRole("columnheader", { name: "Cache and reasoning" })).toBeNull();
+  });
+
+  it("orders the heads Reviews, Prompt, Output, Tokens, Cached, and names the parts on the total", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, [`GET ${overviewPath}`]: { body: usageOverview } });
+    renderApp("/admin/usage");
+    const repos = (await screen.findByRole("region", { name: "Repositories" })) as HTMLElement;
+    expect(within(repos).getAllByRole("columnheader").map((h) => h.textContent).slice(1, 6)).toEqual(["Reviews", "Prompt", "Output", "Tokens", "Cached"]);
+    // Tokens in the first row: 900k + 200k, no cache: input 900k, output 200k.
+    const parts = within(repos).getAllByLabelText("input 900k · cache read 0 · cache write 0 · output 200k · reasoning 0")[0];
+    expect(parts).toHaveAttribute("tabindex", "0");
+    expect(parts).toHaveAttribute("title", "input 900k · cache read 0 · cache write 0 · output 200k · reasoning 0");
+    expect(parts).toHaveTextContent("1.1M");
+  });
+
+  it("names Prompt and Output on a daily bar", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, [`GET ${overviewPath}`]: { body: usageOverview } });
+    renderApp("/admin/usage");
+    const daily = await screen.findByRole("region", { name: "Daily" });
+    expect(within(daily).getByLabelText("2026-11-05 share of the busiest day")).toHaveAttribute("title", "Prompt 200k · Output 50k");
   });
 
   it("splits each repository's tokens by global and team keys", async () => {
@@ -53,8 +83,8 @@ describe("Usage", () => {
       "beta",
       "and 7 more tenants",
     ]);
-    expect(within(rows[0]).getAllByRole("cell").slice(0, 5).map((c) => c.textContent)).toEqual(["fastgateway", "6", "50k", "10k", "60k"]);
-    expect(within(rows[1]).getAllByRole("cell").slice(0, 5).map((c) => c.textContent)).toEqual(["acme", "4", "40k", "8k", "48k"]);
+    expect(within(rows[0]).getAllByRole("cell").slice(0, 6).map((c) => c.textContent)).toEqual(["fastgateway", "6", "50k", "10k", "60k", "0%"]);
+    expect(within(rows[1]).getAllByRole("cell").slice(0, 6).map((c) => c.textContent)).toEqual(["acme", "4", "40k", "8k", "48k", "0%"]);
     expect(within(clients).getByRole("link", { name: "fastgateway" })).toHaveAttribute("href", "/api-clients/fastgateway");
     // A tenant is text the caller wrote: shown as text, never as markup.
     expect(clients.querySelector("img")).toBeNull();
@@ -132,10 +162,10 @@ describe("Usage", () => {
     expect(document.querySelector("[style]")).toBeNull();
   });
 
-  it("says days end at midnight UTC and totals add input and output only", async () => {
+  it("says days end at midnight UTC and totals count all tokens", async () => {
     fakeApi({ "GET /api/me": { body: operator }, [`GET ${overviewPath}`]: { body: usageOverview } });
     renderApp("/admin/usage");
-    expect(await screen.findByText(/midnight UTC/)).toHaveTextContent(/input and output tokens only/);
+    expect(await screen.findByText(/midnight UTC/)).toHaveTextContent("Totals count all tokens: input, cache read, cache write, output and reasoning.");
   });
 
   it("shows Not found to a user and never asks for the usage", async () => {
@@ -294,17 +324,17 @@ describe("Usage of a repository", () => {
     error.mockRestore();
   });
 
-  it("says unknown cache counts are unknown for the skill runs, never zero", async () => {
+  it("says unknown cache counts are unknown for the skill runs, and shows no percent for them", async () => {
     fakeApi(routes());
     renderApp("/admin/usage/main/acme/payments");
     const security = (await screen.findByText("security")).closest("tr") as HTMLElement;
-    expect(security).toHaveTextContent("unknown for 3 skill runs");
-    expect(security).not.toHaveTextContent("cache read 0");
-    // Reported counts show as they are.
+    expect(within(security).getByLabelText(/unknown for 3 skill runs/)).toBeInTheDocument();
+    expect(within(security).getAllByRole("cell").at(-1)).toHaveTextContent("—");
+    // Reported counts show as they are: 7k of 408k is 2%.
     const style = screen.getByText("style").closest("tr") as HTMLElement;
-    expect(style).toHaveTextContent("cache read 7k");
-    expect(style).toHaveTextContent("reasoning 2k");
-    expect(style).not.toHaveTextContent("unknown");
+    expect(within(style).getByLabelText(/cache read 7k · cache write 1k · output 100k · reasoning 2k/)).toBeInTheDocument();
+    expect(within(style).queryByLabelText(/unknown/)).toBeNull();
+    expect(within(style).getAllByRole("cell").at(-1)).toHaveTextContent("2%");
   });
 
   it("shows failed and re-run tokens as separate lines, never added", async () => {

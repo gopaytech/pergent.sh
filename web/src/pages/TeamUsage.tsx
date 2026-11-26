@@ -3,8 +3,8 @@ import { useState } from "react";
 import { Link } from "react-router";
 
 import { api, paths, type TeamUsageView, type UsageNamedView } from "../api";
-import { ErrorBox, Loading, count } from "../ui";
-import { apartText, DailyTable, dash, EmptyRow, PeriodSelect, total, UsageCells, UsageHead } from "./usageParts";
+import { ErrorBox, Loading } from "../ui";
+import { DailyTable, dash, EmptyRow, PeriodSelect, UsageCells, UsageHead, UsageStats, usageIntro } from "./usageParts";
 
 // TeamUsage is the Usage tab of a team's page, for its maintainers and
 // admins: the tokens of the reviews the team owns, each day, each repository
@@ -24,7 +24,7 @@ export default function TeamUsage({ team }: { team: number }) {
         </div>
       </div>
       <p className="sub">
-        Days are cut at midnight UTC. Totals add input and output tokens only; cache and reasoning counts are shown apart and are not in them. A review counts on the team that owned the repository when it ran.
+        Days are cut at midnight UTC. {usageIntro} A review counts on the team that owned the repository when it ran.
       </p>
       {data.isPending && <Loading />}
       {data.isError && <ErrorBox error={data.error} />}
@@ -38,13 +38,7 @@ function Body({ view }: { view: TeamUsageView }) {
   return (
     <>
       {view.partialRange && <p className="sub">Counts reviews since v0.19.0</p>}
-      <section className="stats" aria-label="Totals">
-        <Stat k="Tokens" v={count(total(tokens))} d="input plus output" />
-        <Stat k="Input" v={count(tokens.in)} d="tokens sent to the model" />
-        <Stat k="Output" v={count(tokens.out)} d="tokens the model wrote" />
-        <Stat k="Reviews" v={String(view.reviews)} d="with usage recorded" />
-      </section>
-      <p className="sub">Reported apart, not in the totals: {apartText(tokens)}</p>
+      <UsageStats tokens={tokens} reviews={view.reviews} />
       <section className="card scroll" aria-label="Repositories">
         <h2>Repositories</h2>
         {view.repositories.length === 0 ? (
@@ -105,15 +99,5 @@ function Models({ rows }: { rows: UsageNamedView[] }) {
         </table>
       )}
     </section>
-  );
-}
-
-function Stat({ k, v, d }: { k: string; v: string; d: string }) {
-  return (
-    <div className="stat">
-      <div className="k">{k}</div>
-      <div className="v">{v}</div>
-      <div className="d meta">{d}</div>
-    </div>
   );
 }

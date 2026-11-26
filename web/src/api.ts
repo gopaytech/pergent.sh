@@ -213,7 +213,7 @@ export type RunDetailView = {
   ciJobs: CIJobResult[] | null;
   // When a run waiting for CI stops waiting; null when it is not waiting.
   ciDeadline: string | null;
-  tokens: { in: number; out: number };
+  tokens: UsageTokensView;
   files: {
     reviewed: string[];
     skipped: { path: string; rule: string }[];
@@ -255,7 +255,7 @@ export type RunMultiReviewView = {
   off?: string;
   reviewers: ReviewerView[];
   judge: JudgeView | null;
-  total: { in: number; out: number };
+  total: UsageTokensView;
 };
 
 export type MemberState = "queued" | "running" | "reported" | "done" | "failed" | "fell_back" | "superseded" | "skipped";
@@ -274,6 +274,13 @@ export type ReviewerView = {
   findings: number;
   in: number;
   out: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  unknown: number;
+  prompt: number;
+  output: number;
+  total: number;
   attempts: MemberAttemptView[];
 };
 
@@ -302,6 +309,13 @@ export type JudgeView = {
   attempts: number;
   in: number;
   out: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  unknown: number;
+  prompt: number;
+  output: number;
+  total: number;
 };
 
 export type RunEntryView = { name: string; position: number; length: number; source: EntrySource; team: string };
@@ -609,12 +623,12 @@ export type SkillResultView = {
 // SkillTokensView is the tokens one skill used on the changes the Skill
 // results tab counts (GET .../skill-results/tokens?days=30|90, admins only;
 // read by the Skill results tab). Rows come by skill; [] when none recorded.
-export type SkillTokensView = { skill: string; tokens: { in: number; out: number } };
+export type SkillTokensView = { skill: string; tokens: UsageTokensView };
 
-// UsageTokensView is tokens used: in and out, which every total adds up, and
-// the counts reported apart. unknown counts the review-and-skill rows whose
-// pergent didn't report the apart counts: cache and reasoning are then
-// unknown, never zero.
+// UsageTokensView is tokens used, all 5 parts: prompt is in + cacheRead +
+// cacheWrite, output is out + reasoning, total is prompt + output. unknown
+// counts the review-and-skill rows whose pergent didn't report cache and
+// reasoning: they are then unknown, never zero.
 export type UsageTokensView = {
   in: number;
   out: number;
@@ -622,6 +636,9 @@ export type UsageTokensView = {
   cacheWrite: number;
   reasoning: number;
   unknown: number;
+  prompt: number;
+  output: number;
+  total: number;
 };
 
 // UsageDayView is one UTC day's usage (day is YYYY-MM-DD).

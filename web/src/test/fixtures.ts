@@ -48,6 +48,16 @@ import type {
   BuiltInRule,
 } from "../api";
 
+// Tokens with the apart counts reported, and with none of them reported.
+export const tok = (inn: number, out: number, apart = { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 0 }): UsageTokensView => {
+  const prompt = inn + apart.cacheRead + apart.cacheWrite;
+  const output = out + apart.reasoning;
+  return { in: inn, out, ...apart, prompt, output, total: prompt + output };
+};
+
+// The 5 parts of a usage, as a card shows them: prompt 600,042 (87% from cache), output 4,500, total 604,542.
+export const fiveParts = tok(42, 2_500, { cacheRead: 525_000, cacheWrite: 75_000, reasoning: 2_000, unknown: 0 });
+
 // An SSO account an admin made an admin.
 export const ssoAdmin: Me = {
   kind: "sso",
@@ -183,7 +193,7 @@ export const runDetail: RunDetailView = {
   quiet: false,
   ciJobs: null,
   ciDeadline: null,
-  tokens: { in: 48200, out: 6100 },
+  tokens: tok(48200, 6100),
   files: {
     reviewed: ["internal/refund/handler.go", "internal/refund/key.go"],
     skipped: [{ path: "go.sum", rule: "lockfile" }],
@@ -789,8 +799,6 @@ export const pastDismissals: PastDismissalView[] = [
   },
 ];
 
-// Tokens with the apart counts reported, and with none of them reported.
-const tok = (inn: number, out: number, apart = { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 0 }): UsageTokensView => ({ in: inn, out, ...apart });
 
 // The usage overview: the repository with the most tokens first, one switched
 // off since (its usage is kept, it has no detail page).
@@ -852,10 +860,10 @@ export const usageRepository: UsageRepositoryView = {
 
 // What the Skill results tab reads for admins: tokens per skill on the same changes.
 export const skillTokens: SkillTokensView[] = [
-  { skill: "security", tokens: { in: 40_000, out: 8_000 } },
-  { skill: "code-review", tokens: { in: 150_000, out: 30_000 } },
-  { skill: "style", tokens: { in: 5_000, out: 1_000 } },
-  { skill: "docs", tokens: { in: 2_000, out: 400 } },
+  { skill: "security", tokens: tok(40_000, 8_000) },
+  { skill: "code-review", tokens: tok(150_000, 30_000) },
+  { skill: "style", tokens: tok(5_000, 1_000) },
+  { skill: "docs", tokens: tok(2_000, 400) },
 ];
 
 // --- API clients ---
