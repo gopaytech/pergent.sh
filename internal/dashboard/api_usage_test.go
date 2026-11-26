@@ -600,11 +600,12 @@ func TestUsageTotalCountsAllFiveParts(t *testing.T) {
 	e := newEnv(t, nil)
 	e.usageRun(runFix{project: "acme/widgets", number: 1, head: head('1'), at: e.clock.now().Add(-time.Hour), model: "m1"}, fiveParts("security"))
 
-	got := getJSON[UsageOverviewView](e, e.operator(), "/api/admin/usage")
+	c := e.operator()
+	got := getJSON[UsageOverviewView](e, c, "/api/admin/usage")
 	if got.Tokens.Total != 604542 || got.Tokens.Prompt != 600042 || got.Tokens.Output != 4500 {
 		t.Errorf("tokens = %+v; want total 604542", got.Tokens)
 	}
-	rows := csvRows(t, e.get(e.operator(), "/api/admin/usage.csv"))
+	rows := csvRows(t, e.get(c, "/api/admin/usage.csv"))
 	if len(rows) != 2 || rows[0][len(rows[0])-1] != "tokens" || rows[1][len(rows[1])-1] != "604542" {
 		t.Errorf("csv = %v; want a last column tokens with 604542", rows)
 	}
