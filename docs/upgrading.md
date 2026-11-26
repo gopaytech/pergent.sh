@@ -1,5 +1,16 @@
 # ⬆️ Upgrading
 
+## Upgrading to 0.25.0
+
+**The dashboard moves to shadcn/ui on Tailwind v4, and its page CSP carries a style nonce.** No migration, no new config key and no API change.
+
+- **The page's CSP changed.** `index.html` is now served with `style-src 'self' 'nonce-<random>'`, a new nonce on every response, and the same nonce in `<meta name="csp-nonce">`. Dialogs and menus use it for the one `<style>` tag that stops the page scrolling under them. `script-src` stays `'self'`, and every other file keeps the old CSP. A proxy in front of pergent.sh needs no change if it passes the header through. If it sets its own CSP on the dashboard, add the nonce from pergent.sh's header, or dialogs and menus still work but the page scrolls under them. Never cache `index.html` (pergent.sh serves it `no-cache`): a cached page keeps an old nonce.
+- **A new look on every page**, with the same pages, routes and text. Cards, tables, buttons, fields and badges are shadcn/ui components, and the menu icons are new. Colours keep the light look, and all text stays at a contrast of 4.5 to 1 or more.
+- **New team is a dialog.** **+ New team** on `/admin/teams` asks for the name alone, then opens the new team on its **Members** tab. Cancel, Escape or a click outside closes it.
+- **A review's run card is easier to read.** Its facts are a list of names and values, tokens are a small table, and each `kubectl` command has a name and its own **Copy**: **Pod status**, **Checkout log**, **Review log** and **Describe pod**.
+- **The search row** on Repositories, Teams and the audit log is one compact line: the search box with an icon, the filters, and the count on the right.
+- **Rolling back** to 0.24.0 needs no step.
+
 ## Upgrading to 0.24.0
 
 **Tokens count all 5 parts, so raise your limits before you upgrade. The lists show each repository's owner team and can be searched, filtered and sorted, and the dashboard has a new logo and a lighter look.** No migration and no new config key.
