@@ -1,6 +1,8 @@
 # ⬆️ Upgrading
 
-## Unreleased
+## Upgrading to 0.24.0
+
+**Tokens count all 5 parts, so raise your limits before you upgrade. The lists show each repository's owner team and can be searched, filtered and sorted, and the dashboard has a new logo and a lighter look.** No migration and no new config key.
 
 > **Tokens now count all tokens: input, cache read, cache write, output and reasoning.** Before, they counted input and output only. With pergent v0.11.0 and later, most prompt tokens are reported as cache read and cache write, so usage looked about 100 times lower than it was, and token limits did almost nothing. **This counts against every quota and limit.** Before you upgrade, on the old release, add the Input + Output of the last 30 days to the cache read, cache write and reasoning numbers that Usage shows apart, and raise each limit to cover it.
 
@@ -15,11 +17,15 @@ Do these steps on the old release, before you upgrade. There, **Tokens** in [Usa
 Worked example: a team used 285.4k tokens in 30 days under the old count, and about 36.8M under the new one. Its 1M limit would hold every review after the upgrade, so raise it, for example to 50M.
 
 - **What counts.** The [monthly token quota](concepts/token-quota.md), the model and team limits, an API client's monthly token budget, the Usage pages and CSV, and the Review API's `usage` all use the new total. The Prometheus `pergent_tokens_total` series are the same as before. Only the example dashboard changed: its token panels no longer filter on `kind`.
-- **No migration and no new config key.** Rolling back needs no step, but the old release counts input and output only.
+- **Rolling back** to 0.23.0 needs no step. The old release counts input and output only again, so the limits you raised are then far away. Lower them again if you want the old effect. It ignores `?team=` on `GET /api/reviews`.
 - **New fields.** The Review API's `usage` has `cache_read`, `cache_write`, `reasoning` and `tokens`, and `tokens_in` and `tokens_out` stay. The Usage CSV has a `tokens` column at the end. Older columns keep their places.
 - **If you forget.** The limit bars turn red and a review that a limit holds waits. It is never passed by mistake. An admin can start a held review from the dashboard.
 - `GET /api/repositories` gives each repository its `ownerTeam` (null when none). `OwnerTeamView` gets `viaInstance`.
-- `GET /api/reviews` takes `team`: a team's id, or `none` for repositories with no owner. It only narrows what you can already see.
+- `GET /api/reviews` takes `team`: a team's id, or `none` for repositories with no owner. It only narrows what you can already see. A value that is not a number or `none`, or a team id that is not there, gets 400.
+- **Repositories shows each repository's owner team.** An admin sees `⚠ No owner`, linked to the admin **Teams** page, and a line with the number of repositories in use that have no owner. Anyone else sees `None`. The page has a search by path, a team filter (or `No owner`) and sort by a column header. The search, filter and sort stay in the address. See [the dashboard](concepts/dashboard.md).
+- **Teams pages are tables.** `/teams` and `/admin/teams` list teams in a table with a search and sort, in place of the long cards. **Reviews** has a **Team** filter before **Repository**.
+- **A new logo and a favicon.** The owl emoji is gone from the sidebar, the phone top bar and the sign-in card. The browser tab shows the new mark. Both files are served by pergent.sh itself, so the page's content policy needs no change.
+- **A lighter look.** The sidebar, the phone top bar and the sign-in page are light grey, not near black. Body text is 13.5px, was 14px. Green, amber and blue text is a little darker, for a contrast of 5 to 1 or more. No page, route or text changed.
 
 ## Upgrading to 0.23.0
 
