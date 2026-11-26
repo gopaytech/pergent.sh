@@ -80,7 +80,7 @@ On the **Settings** tab press **Remove client**. Its keys stop at once, the Jobs
 
 ## Check a key
 
-`GET /v1/client` says which client a key belongs to, its limits and the tokens its reviews used this UTC month. It is a good first call.
+`GET /v1/client` says which client a key belongs to, its limits and the tokens its reviews used this UTC month. `tokens_used` counts all tokens: input, cache read, cache write, output and reasoning. It is a good first call.
 
 ```json
 {
@@ -211,7 +211,7 @@ Poll until the status is `completed`, `failed` or `superseded`; a review takes m
 | `failed` | yes | `failed` | left out | yes | only if the Job left a result that can be read |
 | `superseded` | left out | left out | left out | no | left out |
 
-`usage` is `tokens_in` and `tokens_out`. A `completed` body looks like this:
+`usage` has `tokens_in`, `tokens_out`, `cache_read`, `cache_write`, `reasoning` and `tokens`. `tokens` is the total of all 5 parts: input, cache read, cache write, output and reasoning. `tokens_in` and `tokens_out` keep their meaning. A `completed` body looks like this:
 
 ```json
 {
@@ -247,7 +247,7 @@ Poll until the status is `completed`, `failed` or `superseded`; a review takes m
       }
     }
   ],
-  "usage": {"tokens_in": 12000, "tokens_out": 800}
+  "usage": {"tokens_in": 12000, "tokens_out": 800, "cache_read": 40000, "cache_write": 2000, "reasoning": 300, "tokens": 55100}
 }
 ```
 
@@ -461,7 +461,7 @@ An admin sets the limits of each client (the defaults are [above](#what-a-client
 
 There is no cap on how many reviews a client may queue. Each queued review keeps its sealed files in the database until it is dispatched, so send an `Idempotency-Key` on a retry, or a repeated request queues a second review.
 
-Wait the `Retry-After` seconds after a `429`, then try again; do not retry at once. The tokens are counted as on the **API clients** list: tokens in and out, by the month each review was asked for. A review that is running counts once its result is in, so the budget can be passed by the reviews running when it is reached. `GET /v1/client` shows what is used and left.
+Wait the `Retry-After` seconds after a `429`, then try again; do not retry at once. The tokens are counted as on the **API clients** list: all tokens (input, cache read, cache write, output and reasoning), by the month each review was asked for. A review that is running counts once its result is in, so the budget can be passed by the reviews running when it is reached. `GET /v1/client` shows what is used and left.
 
 ## How a review runs
 

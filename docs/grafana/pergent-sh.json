@@ -403,7 +403,7 @@
     {
       "type": "stat",
       "title": "Tokens",
-      "description": "Input plus output, as on the Usage page.",
+      "description": "All tokens (input, cache read, cache write, output and reasoning), as on the Usage page.",
       "targets": [
         {
           "datasource": {
@@ -411,7 +411,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\",kind=~\"input|output\"}[$__range]))",
+          "expr": "sum(increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\"}[$__range]))",
           "legendFormat": "__auto",
           "refId": "A",
           "instant": true,
@@ -1024,8 +1024,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Input and output tokens",
-      "description": "A total is input plus output.",
+      "title": "Prompt and output tokens",
+      "description": "A total counts all tokens: input, cache read, cache write, output and reasoning. The five kinds stack.",
       "interval": "1h",
       "targets": [
         {
@@ -1034,7 +1034,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (kind) (increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\",kind=~\"input|output\"}[$__interval]))",
+          "expr": "sum by (kind) (increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\"}[$__interval]))",
           "legendFormat": "{{kind}}",
           "refId": "A",
           "instant": false,
@@ -1093,7 +1093,7 @@
     {
       "type": "timeseries",
       "title": "Tokens by model",
-      "description": "Input plus output. The model name alone, with no provider: the same name from two providers is one series.",
+      "description": "All tokens (input, cache read, cache write, output and reasoning). The model name alone, with no provider: the same name from two providers is one series.",
       "interval": "1h",
       "targets": [
         {
@@ -1102,7 +1102,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (model) (increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\",kind=~\"input|output\"}[$__interval]))",
+          "expr": "sum by (model) (increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\"}[$__interval]))",
           "legendFormat": "{{model}}",
           "refId": "A",
           "instant": false,
@@ -1161,7 +1161,7 @@
     {
       "type": "timeseries",
       "title": "Cache and reasoning tokens",
-      "description": "Not part of the input and output total. Absent until a Job runs a pergent that reports them.",
+      "description": "These kinds are also in every total. Shown apart here. Absent until a Job runs a pergent that reports them.",
       "interval": "1h",
       "targets": [
         {
@@ -1229,7 +1229,7 @@
     {
       "type": "bargauge",
       "title": "Tokens per review by repository",
-      "description": "Input plus output tokens divided by reviews that left a result, for the time range.",
+      "description": "All tokens (input, cache read, cache write, output and reasoning) divided by reviews that left a result, for the time range.",
       "targets": [
         {
           "datasource": {
@@ -1237,7 +1237,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "topk(15, sum by (repository) (increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\",kind=~\"input|output\"}[$__range])) / sum by (repository) (increase(pergent_reviews_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\"}[$__range])))",
+          "expr": "topk(15, sum by (repository) (increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\"}[$__range])) / sum by (repository) (increase(pergent_reviews_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\"}[$__range])))",
           "legendFormat": "{{repository}}",
           "refId": "A",
           "instant": true,
@@ -1305,7 +1305,7 @@
     {
       "type": "bargauge",
       "title": "Tokens by repository",
-      "description": "Input plus output, the 15 repositories that used the most in the time range.",
+      "description": "All tokens (input, cache read, cache write, output and reasoning), the 15 repositories that used the most in the time range.",
       "targets": [
         {
           "datasource": {
@@ -1313,7 +1313,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "topk(15, sum by (repository) (increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\",kind=~\"input|output\"}[$__range])))",
+          "expr": "topk(15, sum by (repository) (increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\"}[$__range])))",
           "legendFormat": "{{repository}}",
           "refId": "A",
           "instant": true,
@@ -1381,7 +1381,7 @@
     {
       "type": "bargauge",
       "title": "Tokens by skill",
-      "description": "Input plus output, the 15 skills that used the most in the time range.",
+      "description": "All tokens (input, cache read, cache write, output and reasoning), the 15 skills that used the most in the time range.",
       "targets": [
         {
           "datasource": {
@@ -1389,7 +1389,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "topk(15, sum by (skill) (increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\",kind=~\"input|output\"}[$__range])))",
+          "expr": "topk(15, sum by (skill) (increase(pergent_tokens_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\",skill=~\"$skill\",model=~\"$model\"}[$__range])))",
           "legendFormat": "{{skill}}",
           "refId": "A",
           "instant": true,
@@ -1890,7 +1890,7 @@
     {
       "type": "timeseries",
       "title": "API tokens by client",
-      "description": "Input and output tokens used by the reviews asked for through the API, by client.",
+      "description": "All tokens (input, cache read, cache write, output and reasoning) used by the reviews asked for through the API, by client.",
       "interval": "1h",
       "targets": [
         {
@@ -1899,7 +1899,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (client) (increase(pergent_api_tokens_total{client=~\".+\",kind=~\"input|output\"}[$__interval]))",
+          "expr": "sum by (client) (increase(pergent_api_tokens_total{client=~\".+\"}[$__interval]))",
           "legendFormat": "{{client}}",
           "refId": "A",
           "instant": false,

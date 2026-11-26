@@ -1,5 +1,22 @@
 # ⬆️ Upgrading
 
+## Upgrading to the next release
+
+> **Tokens now count all tokens: input, cache read, cache write, output and reasoning.** Before, they counted input and output only. With pergent v0.11.0 and later, most prompt tokens are reported as cache read and cache write, so usage looked about 100 times lower than it was, and token limits did almost nothing. **This counts against every quota and limit.** Before you upgrade, open Usage, add Input + Output + cache read + cache write + reasoning for the last 30 days, and raise each limit to cover it.
+
+**Raise your limits before you upgrade.** The new count is much larger, so a limit that was far away can be used up on the first day.
+
+1. Open [Usage](concepts/usage.md) and choose the last 30 days. **Tokens** now counts all 5 parts.
+2. Take the Tokens of each repository, team, model, API client and the instance that has a limit, quota or budget.
+3. Raise each limit you set to cover that number. A limit that is empty needs nothing.
+
+Worked example: a team used 285.4k tokens in 30 days under the old count, and about 36.8M under the new one. Its 1M limit would hold every review after the upgrade, so raise it, for example to 50M.
+
+- **What counts.** The [monthly token quota](concepts/token-quota.md), the model and team limits, an API client's monthly token budget, the Usage pages and CSV, and the Review API's `usage` all use the new total. The Prometheus `pergent_tokens_total` series are the same as before. Only the example dashboard changed: its token panels no longer filter on `kind`.
+- **No migration and no new config key.** Rolling back needs no step, but the old release counts input and output only.
+- **New fields.** The Review API's `usage` has `cache_read`, `cache_write`, `reasoning` and `tokens`, and `tokens_in` and `tokens_out` stay. The Usage CSV has a `tokens` column at the end. Older columns keep their places.
+- **If you forget.** The limit bars turn red and a review that a limit holds waits. It is never passed by mistake. An admin can start a held review from the dashboard.
+
 ## Upgrading to 0.23.0
 
 **Teams can onboard and claim their own repositories, and the audit log has a search:** [Roles](concepts/roles.md). The switch for teams is off on every instance after the upgrade.

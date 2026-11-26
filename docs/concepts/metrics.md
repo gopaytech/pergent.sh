@@ -39,7 +39,7 @@ Values are read from the database at each scrape, so they survive a restart and 
 
 **`platform_instance`** is the GitLab or GitHub instance's name in pergent.sh. It isn't called `instance` because Prometheus sets that label to the scrape address.
 
-**Tokens** add up like the Usage page: a total is `input` plus `output`. The `reasoning`, `cache_read` and `cache_write` series are absent until a Job runs a pergent that reports them. Absent means unknown; there's no zero standing in for it.
+**Tokens** add up like the Usage page: a total is all 5 kinds: `input`, `cache_read`, `cache_write`, `output` and `reasoning`. The `reasoning`, `cache_read` and `cache_write` series are absent until a Job runs a pergent that reports them. Absent means unknown; there's no zero standing in for it.
 
 **`model`** is the model name alone, with no provider. The same name from two providers is one series. The [Usage](usage.md) page and its CSV show the provider.
 

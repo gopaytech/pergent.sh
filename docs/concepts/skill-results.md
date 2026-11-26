@@ -17,7 +17,7 @@ Only merged changes opened by people count. A change closed without a merge, and
 
 When a skill was edited inside the window, its row says so, for example `Edited 12 days ago: numbers include the old version`. Rows aren't split by version, because that would leave too few findings in each.
 
-**Skill cost on these changes.** Admins also see a section under the table with the tokens each skill used on the changes the table counts, over the same 30 or 90 days, and the tokens it spent per fixed finding: input plus output, divided by its Fixed. A skill with nothing fixed shows none. Read it with these in mind:
+**Skill cost on these changes.** Admins also see a section under the table with the tokens each skill used on the changes the table counts, over the same 30 or 90 days, and the tokens it spent per fixed finding: all tokens (input, cache read, cache write, output and reasoning), divided by its Fixed. A skill with nothing fixed shows none. Read it with these in mind:
 
 - A change merged with no findings is counted, so the section covers more changes than the table.
 - A bot-opened change merged with no findings is counted too, because a bot is known only from its findings. The table leaves bot changes out.
