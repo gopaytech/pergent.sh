@@ -31,6 +31,8 @@ describe("TeamModels: model limits", () => {
     expect(within(own).getByLabelText("Limit of qwen3.5")).toHaveValue("500");
     const sonnet = within(c).getByRole("group", { name: "Claude Sonnet limit" });
     expect(sonnet).toHaveTextContent("Tokens this month: 150 of 1,000");
+    expect(c).toHaveTextContent("Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. The repositories this team owns may use this many on a model.");
+    expect(c).not.toHaveTextContent("input plus output");
     expect(sonnet).toHaveTextContent("Set by an admin.");
     expect(sonnet).toHaveTextContent("Model limit for all teams: used up");
     expect(within(sonnet).queryByRole("textbox")).not.toBeInTheDocument();

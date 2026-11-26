@@ -955,7 +955,7 @@ export const apiReviewDone: APIReviewDetail = {
     created_at: "2026-11-10T09:00:00Z",
     finished_at: "2026-11-10T09:04:00Z",
     verdict: "has_blocking_issues",
-    usage: { tokens_in: 12_000, tokens_out: 3_400 },
+    usage: { tokens_in: 42, tokens_out: 2_500, cache_read: 525_000, cache_write: 75_000, reasoning: 2_000, tokens: 604_542 },
     skills: [
       {
         name: "code-review",

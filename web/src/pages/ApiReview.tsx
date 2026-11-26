@@ -12,12 +12,15 @@ import {
   type APIReviewDetail,
   type APISkill,
   type APIStatus,
+  type APIReviewBody,
   type APIVerdict,
+  type UsageTokensView,
 } from "../api";
 import { useWrite } from "../layout/write";
 import RunLog from "../RunLog";
-import { ErrorBox, Loading, NotFound, Pill, Tabs, count, utcText, type Tone } from "../ui";
+import { ErrorBox, Loading, NotFound, Pill, Tabs, utcText, type Tone } from "../ui";
 import { useUrlParam } from "../urlState";
+import { TokenLines } from "./usageParts";
 
 const statuses: Record<APIStatus, [Tone, string]> = {
   queued: ["grey", "Queued"],
@@ -115,13 +118,27 @@ function Facts({ view }: { view: APIReviewDetail }) {
       {view.finishedAt && <Fact k="Finished">{utcText(view.finishedAt)}</Fact>}
       {usage && (
         <Fact k="Tokens">
-          {count(usage.tokens_in)} in, {count(usage.tokens_out)} out
+          <TokenLines tokens={apiTokens(usage)} />
         </Fact>
       )}
       {review.test && <Fact k="Test review">no change was reviewed</Fact>}
     </dl>
   );
 }
+
+// apiTokens reads the Review API's usage as the tokens of a run. Its parts
+// are already counted as 0 when pergent did not report them, so none is unknown.
+const apiTokens = (u: NonNullable<APIReviewBody["usage"]>): UsageTokensView => ({
+  in: u.tokens_in,
+  out: u.tokens_out,
+  cacheRead: u.cache_read,
+  cacheWrite: u.cache_write,
+  reasoning: u.reasoning,
+  unknown: 0,
+  prompt: u.tokens_in + u.cache_read + u.cache_write,
+  output: u.tokens_out + u.reasoning,
+  total: u.tokens,
+});
 
 function Fact({ k, children }: { k: string; children: ReactNode }) {
   return (

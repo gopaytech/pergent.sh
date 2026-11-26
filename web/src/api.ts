@@ -1252,7 +1252,7 @@ export type APIReviewBody = {
   verdict?: APIVerdict;
   skills?: APISkill[];
   failure?: { step: string; reason: string };
-  usage?: { tokens_in: number; tokens_out: number };
+  usage?: { tokens_in: number; tokens_out: number; cache_read: number; cache_write: number; reasoning: number; tokens: number };
   test?: boolean;
 };
 

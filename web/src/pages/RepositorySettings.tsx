@@ -795,7 +795,7 @@ function Form({
           <Setting
             name="Monthly token quota"
             overridden={settings.monthlyTokenQuota.overridden}
-            help="Tokens per calendar month (UTC), input plus output. Empty: limited only by the instance's quota."
+            help="Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. Empty: limited only by the instance's quota."
           >
             <input
               type="text"

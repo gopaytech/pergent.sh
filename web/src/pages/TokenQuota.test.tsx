@@ -49,7 +49,7 @@ describe("Token quota: repository settings", () => {
     const fake = fakeApi(settingsRoutes(repoDetail(repoPayments)));
     renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     const input = await screen.findByLabelText("Monthly token quota");
-    expect(screen.getByText("Tokens per calendar month (UTC), input plus output. Empty: limited only by the instance's quota.")).toBeInTheDocument();
+    expect(screen.getByText("Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. Empty: limited only by the instance's quota.")).toBeInTheDocument();
     await userEvent.type(input, "5,000,000");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     const [put] = fake.find("PUT", "/api/repositories/main/acme/payments/settings");

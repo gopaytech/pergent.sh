@@ -852,7 +852,7 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
           key={String(m.limit)}
           label={`Model limit of ${m.name}`}
           saveLabel={`Save the model limit of ${m.name}`}
-          hint="Tokens per calendar month (UTC), input plus output, on every instance and repository. Empty: no limit."
+          hint="Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. On every instance and repository. Empty: no limit."
           limit={m.limit}
           path={paths.apiAdminModelLimit(m.id)}
           onSaved={limitsChanged}

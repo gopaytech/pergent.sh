@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Can, CIJobResult, FindingView, ReviewDetailView, RunDetailView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { allCan, ssoAdmin, reviewDetail, runDetail, runKubernetes, tok } from "../test/fixtures";
+import { allCan, ssoAdmin, fiveParts, reviewDetail, runDetail, runKubernetes, tok } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -72,6 +72,19 @@ describe("ReviewDetail", () => {
     expect(full).not.toHaveTextContent("carried over");
   });
 
+  it("shows the run's tokens on 3 lines: the total, the prompt and the output", async () => {
+    const { unmount } = renderAndWait({ ...runDetail, tokens: fiveParts });
+    const run = await screen.findByRole("region", { name: "This run" });
+    expect(await within(run).findByText("Tokens: 604.5k")).toBeInTheDocument();
+    expect(within(run).getByText("Prompt 600k · input 42 · cache read 525k · cache write 75k")).toBeInTheDocument();
+    expect(within(run).getByText("Output 4.5k · output 2.5k · reasoning 2k")).toBeInTheDocument();
+    unmount();
+
+    renderAndWait({ ...runDetail, tokens: tok(1000, 200, { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 1 }) });
+    const unknown = await screen.findByRole("region", { name: "This run" });
+    expect(await within(unknown).findByText("Prompt 1k · input 1k · cache read 0 · cache write 0 · unknown for 1 skill run")).toBeInTheDocument();
+  });
+
   it("labels a quiet run quiet, and says nothing for a run that was not", async () => {
     const { unmount } = renderAndWait({ ...runDetail, quiet: true });
     const quiet = await screen.findByRole("region", { name: "This run" });
@@ -106,7 +119,7 @@ describe("ReviewDetail", () => {
     expect(run).toHaveTextContent("Status on GitLab: failed");
     expect(run).toHaveTextContent("Approved: no — Blocking issues were found.");
     expect(run).toHaveTextContent("model anthropic / claude-sonnet · max steps 40");
-    expect(run).toHaveTextContent("Tokens: 48.2k in · 6.1k out");
+    expect(run).toHaveTextContent("Tokens: 54.3k");
     expect(run).toHaveTextContent("Files: 2 reviewed · 1 skipped · 1 not reviewed");
 
     const skills = screen.getByRole("region", { name: "Skills" });
@@ -988,11 +1001,16 @@ describe("ReviewDetail: multi review", () => {
     const rows = within(within(section).getByRole("table", { name: "Reviewers" })).getAllByRole("row");
     // The header, 3 reviewers, the judge and the total.
     expect(rows).toHaveLength(6);
-    expect(cells(rows[1])).toEqual(["Reviewer 1", "qwen", "alibaba / qwen3", "done", "2", "155k", "16k"]);
-    expect(cells(rows[2])).toEqual(["Reviewer 2", "gpt", "openai / gpt-5", "failed: the reviewer Job ran out of memory", "", "20k", "2k"]);
-    expect(cells(rows[3])).toEqual(["Reviewer 3", "haiku", "", "skipped: the entry is out of quota", "", "0", "0"]);
-    expect(cells(rows[4])).toEqual(["Judge", "opus", "anthropic / claude-opus", "judged", "", "30k", "3k"]);
-    expect(cells(rows[5])).toEqual(["Total", "", "", "", "", "205k", "21k"]);
+    expect(cells(rows[1])).toEqual(["Reviewer 1", "qwen", "alibaba / qwen3", "done", "2", "171k"]);
+    expect(cells(rows[2])).toEqual(["Reviewer 2", "gpt", "openai / gpt-5", "failed: the reviewer Job ran out of memory", "", "22k"]);
+    expect(cells(rows[3])).toEqual(["Reviewer 3", "haiku", "", "skipped: the entry is out of quota", "", "0"]);
+    expect(cells(rows[4])).toEqual(["Judge", "opus", "anthropic / claude-opus", "judged", "", "33k"]);
+    expect(cells(rows[5])).toEqual(["Total", "", "", "", "", "226k"]);
+
+    // Each total names its 5 parts for a screen reader.
+    expect(within(rows[1]).getByRole("group", { name: "171k total: input 155k · cache read 0 · cache write 0 · output 16k · reasoning 0" })).toHaveAttribute("title", "input 155k · cache read 0 · cache write 0 · output 16k · reasoning 0");
+    expect(within(rows[4]).getByRole("group", { name: /^33k total: input 30k/ })).toBeInTheDocument();
+    expect(within(rows[5]).getByRole("group", { name: /^226k total: input 205k/ })).toBeInTheDocument();
 
     const one = within(within(section).getByRole("list", { name: "Reviewer 1 attempts" })).getAllByRole("listitem");
     expect(one[0]).toHaveTextContent("Attempt 1: sonnet (entry 1) · anthropic / claude-sonnet · fell back to the next model");
@@ -1012,7 +1030,7 @@ describe("ReviewDetail: multi review", () => {
     renderAndWait(run);
     const section = await screen.findByRole("region", { name: "Multi review" });
     const rows = within(within(section).getByRole("table", { name: "Reviewers" })).getAllByRole("row");
-    expect(cells(rows[4])).toEqual(["Judge", "", "", "no judge: the judge failed twice · 2 judge runs", "", "30k", "3k"]);
+    expect(cells(rows[4])).toEqual(["Judge", "", "", "no judge: the judge failed twice · 2 judge runs", "", "33k"]);
   });
 
   it("says when no judge ran on this run", async () => {

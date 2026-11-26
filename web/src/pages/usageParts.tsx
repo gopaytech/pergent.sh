@@ -31,6 +31,9 @@ export function cachedPercent(t: UsageTokensView): string {
   return `${Math.round((t.cacheRead / t.prompt) * 100)}%`;
 }
 
+// unknownText says how many skill runs reported no cache or reasoning.
+const unknownText = (n: number) => `unknown for ${skillRunsText(n)}`;
+
 // partsText is the 5 parts a total adds up, and how many skill runs reported
 // no cache or reasoning (unknown).
 export function partsText(t: UsageTokensView): string {
@@ -41,8 +44,23 @@ export function partsText(t: UsageTokensView): string {
     `output ${count(t.out)}`,
     `reasoning ${count(t.reasoning)}`,
   ];
-  if (t.unknown > 0) parts.push(`unknown for ${skillRunsText(t.unknown)}`);
+  if (t.unknown > 0) parts.push(unknownText(t.unknown));
   return parts.join(" · ");
+}
+
+// TokenLines is a run's tokens on 3 lines: the total, then the prompt and the
+// output with the parts each adds up. The unknown runs end the prompt line,
+// where the missing cache would have been.
+export function TokenLines({ tokens }: { tokens: UsageTokensView }) {
+  const promptParts = [`Prompt ${count(prompt(tokens))}`, `input ${count(tokens.in)}`, `cache read ${count(tokens.cacheRead)}`, `cache write ${count(tokens.cacheWrite)}`];
+  if (tokens.unknown > 0) promptParts.push(unknownText(tokens.unknown));
+  return (
+    <>
+      <div>Tokens: {count(total(tokens))}</div>
+      <div>{promptParts.join(" · ")}</div>
+      <div>{`Output ${count(output(tokens))} · output ${count(tokens.out)} · reasoning ${count(tokens.reasoning)}`}</div>
+    </>
+  );
 }
 
 // PeriodSelect is the period menu of the Usage pages.
