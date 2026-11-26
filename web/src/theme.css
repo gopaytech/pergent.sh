@@ -9,11 +9,11 @@
   --side-text: #3b3e48;
   --side-active: var(--text);
   --text: #1d1d26;
-  --muted: #6b6b7b;
+  --text-muted: #6b6b7b;
   --line: #e7e8ec;
   --soft: #fafafc;
-  --accent: #3d4ba8;
-  --accent-soft: #eceefb;
+  --brand: #3d4ba8;
+  --brand-soft: #eceefb;
   --avatar: #5b6bd6;
   --ok: #18773f;
   --ok-soft: #e6f5ec;

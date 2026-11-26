@@ -40,7 +40,7 @@ export default function SignOut() {
   });
   return (
     <>
-      <button type="button" className="linkish" onClick={() => out.mutate()} disabled={out.isPending}>
+      <button type="button" className="linkish hover:text-foreground underline-offset-4 hover:underline" onClick={() => out.mutate()} disabled={out.isPending}>
         Sign out
       </button>
       {out.isError && <ErrorBox error={out.error} />}

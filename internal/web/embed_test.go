@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -118,6 +119,35 @@ func TestSecurityHeaders(t *testing.T) {
 				t.Errorf("GET %s %s = %q, want %q", p, k, got, v)
 			}
 		}
+	}
+}
+
+// index.html gets a new style nonce on every response, in its meta tag and in
+// its CSP's style-src; script-src never gets one, and other files keep the
+// plain CSP.
+func TestPageStyleNonce(t *testing.T) {
+	fsys := testFS()
+	fsys["index.html"] = &fstest.MapFile{Data: []byte(`<meta name="csp-nonce" nonce="__CSP_NONCE__"><div id="root"></div>`)}
+	h := newHandler(fsys)
+	re := regexp.MustCompile(`nonce="([A-Za-z0-9+/=]{24})"`)
+	seen := map[string]bool{}
+	for _, p := range []string{"/", "/index.html", "/repos/x"} {
+		rec := get(h, http.MethodGet, p)
+		m := re.FindStringSubmatch(rec.Body.String())
+		if m == nil {
+			t.Fatalf("GET %s body %q has no nonce", p, rec.Body.String())
+		}
+		if seen[m[1]] {
+			t.Errorf("GET %s reused nonce %s", p, m[1])
+		}
+		seen[m[1]] = true
+		want := "default-src 'self'; img-src 'self' data:; style-src 'self' 'nonce-" + m[1] + "'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+		if got := rec.Header().Get("Content-Security-Policy"); got != want {
+			t.Errorf("GET %s CSP = %q, want %q", p, got, want)
+		}
+	}
+	if got := get(h, http.MethodGet, "/assets/index-abc.js").Header().Get("Content-Security-Policy"); got != csp {
+		t.Errorf("asset CSP = %q, want the plain one", got)
 	}
 }
 

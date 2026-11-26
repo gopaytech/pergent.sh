@@ -2,15 +2,24 @@
 // React as a child, so it is shown as text: no HTML is ever built from it.
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
+import { SearchIcon } from "lucide-react";
+
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Switch as SwitchBox } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
+
 import { ApiError, safeHref, type Outcome, type SecretView, type SkillSource } from "./api";
-import { Icon } from "./icons";
 
 // Logo is the pergent mark: two lines of code, the second one dipping at a
 // finding. It draws in the text colour, so it works on the dark sidebar and on
 // the light sign-in card. This is the small cut, with thicker lines for 24 px.
 export function Logo() {
   return (
-    <svg className="logo" viewBox="32 48 192 144" aria-hidden="true" focusable="false">
+    <svg className="logo size-6 shrink-0" viewBox="32 48 192 144" aria-hidden="true" focusable="false">
       <path
         fill="currentColor"
         d="M48 80L160 80A16 16 0 0 0 160 48L48 48A16 16 0 0 0 48 80ZM48 144L110.76 144L133.86 184A16 16 0 0 0 161.57 184L184.66 144L208 144A16 16 0 0 0 208 112L175.43 112A16 16 0 0 0 161.57 120L147.71 144L133.86 120A16 16 0 0 0 120 112L48 112A16 16 0 0 0 48 144Z"
@@ -20,17 +29,41 @@ export function Logo() {
 }
 
 // CenteredCard is the page the signed-out and gated screens (sign-in,
-// password change, waiting) show: one card on the dark background.
+// password change, waiting) show: one card on the page grey.
 export function CenteredCard({ children }: { children: ReactNode }) {
   return (
-    <div className="signin">
-      <div className="card signin-card">
-        <div className="brand dark">
+    <div className="signin bg-background grid min-h-svh place-items-center p-4">
+      <Card className="signin-card w-full max-w-sm gap-4 px-6 py-6">
+        <div className="flex items-center gap-2 text-[15px] font-semibold">
           <Logo />
           pergent.sh
         </div>
         {children}
+      </Card>
+    </div>
+  );
+}
+
+// PageHeader is the top of a page: its title, a line under it, and the
+// page's own buttons on the right.
+export function PageHeader({
+  title,
+  description,
+  actions,
+  className,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("top mb-6 flex flex-wrap items-start justify-between gap-4", className)}>
+      <div className="min-w-0">
+        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        {description && <div className="sub text-muted-foreground mt-1 text-sm">{description}</div>}
       </div>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }
@@ -49,9 +82,10 @@ export function SearchField({
   placeholder?: string;
 }) {
   return (
-    <span className="search-field">
-      <Icon name="search" size={16} />
-      <input
+    <span className="search-field relative min-w-[180px] flex-[0_1_320px] max-sm:flex-[1_1_100%]">
+      <SearchIcon className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" aria-hidden="true" />
+      <Input
+        className="pl-8"
         type="search"
         aria-label={label}
         placeholder={placeholder}
@@ -65,8 +99,14 @@ export function SearchField({
 
 export type Tone = "ok" | "bad" | "warn" | "run" | "draft" | "grey";
 
+// Pill is a review state as a badge. "pill" and the tone stay as class
+// names: the tab title drops .pill from the h1, and tests read the tone.
 export function Pill({ tone, children }: { tone: Tone; children: ReactNode }) {
-  return <span className={`pill ${tone}`}>{children}</span>;
+  return (
+    <Badge variant={tone} className={`pill ${tone}`}>
+      {children}
+    </Badge>
+  );
 }
 
 const outcomes: Record<Outcome, [Tone, string]> = {
@@ -248,28 +288,23 @@ export function CopyButton({ text, what }: { text: string; what: string }) {
     }
   };
   return (
-    <button type="button" className="btn small" aria-label={copied ? "Copied" : `Copy ${what}`} onClick={copy}>
+    <Button type="button" variant="outline" size="sm" aria-label={copied ? "Copied" : `Copy ${what}`} onClick={copy}>
       {copied ? "Copied" : "Copy"}
-    </button>
+    </Button>
   );
 }
 
 export function NotFound() {
   return (
     <>
-      <div className="top">
-        <div>
-          <h1>Not found</h1>
-          <div className="sub">This page doesn't exist or you don't have access to it.</div>
-        </div>
-      </div>
-      <div className="card empty">Check the address, or ask an admin for access.</div>
+      <PageHeader title="Not found" description="This page doesn't exist or you don't have access to it." />
+      <Card className="text-muted-foreground px-4 py-8 text-center">Check the address, or ask an admin for access.</Card>
     </>
   );
 }
 
 export function Loading() {
-  return <div className="loading">Loading…</div>;
+  return <div className="loading text-muted-foreground p-6 text-sm">Loading…</div>;
 }
 
 // ErrorBox shows why something failed. With onRetry, a page's own read that
@@ -277,14 +312,14 @@ export function Loading() {
 export function ErrorBox({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
   return (
-    <div className="error" role="alert">
+    <Alert variant="destructive" className="error flex items-center gap-3">
       <span className="grow">{message}</span>
       {onRetry && (
-        <button type="button" className="btn small" onClick={onRetry}>
+        <Button type="button" variant="outline" size="sm" className="text-foreground" onClick={onRetry}>
           Try again
-        </button>
+        </Button>
       )}
-    </div>
+    </Alert>
   );
 }
 
@@ -318,7 +353,14 @@ export function Tabs<T extends string>({
     buttons[to]?.focus();
   };
   return (
-    <div className={inCard ? "tabs in-card" : "tabs"} role="tablist" onKeyDown={move}>
+    <div
+      className={cn(
+        "tabs bg-muted text-muted-foreground inline-flex h-9 w-fit max-w-full items-center overflow-x-auto rounded-lg p-[3px]",
+        inCard ? "in-card mx-4 mt-3" : "mb-4",
+      )}
+      role="tablist"
+      onKeyDown={move}
+    >
       {tabs.map(([key, label]) => (
         <button
           key={key}
@@ -326,7 +368,10 @@ export function Tabs<T extends string>({
           role="tab"
           aria-selected={key === value}
           tabIndex={key === value ? 0 : -1}
-          className={key === value ? "on" : undefined}
+          className={cn(
+            "inline-flex h-full items-center justify-center rounded-md border border-transparent px-3 text-sm font-medium whitespace-nowrap transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            key === value ? "on bg-card text-foreground shadow-sm" : "hover:text-foreground",
+          )}
           onClick={() => onChange(key)}
         >
           {label}
@@ -349,10 +394,7 @@ export function Switch({
   onChange?: (on: boolean) => void;
 }) {
   return (
-    <input
-      type="checkbox"
-      role="switch"
-      className="toggle"
+    <SwitchBox
       aria-label={label}
       checked={checked}
       disabled={disabled}

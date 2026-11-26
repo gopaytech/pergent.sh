@@ -1,0 +1,143 @@
+/* The dashboard's styles: Tailwind with the shadcn/ui tokens.
+
+   Layer order matters. The old stylesheet (theme.css, styles.css) sits in
+   "legacy", above Tailwind's reset and below its components and utilities,
+   so a Tailwind class on an element always wins over an old rule. The old
+   files shrink as pages move to the components in components/ui. */
+@layer theme, base, legacy, components, utilities;
+
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./theme.css" layer(legacy);
+@import "./styles.css" layer(legacy);
+
+/* The light look of docs/superpowers/specs/2026-11-26-light-look-design.md,
+   as shadcn tokens: one light grey page, white cards, the indigo accent as
+   the primary colour. Every text colour passes WCAG AA on white and on the
+   page grey. */
+:root {
+  --radius: 0.625rem;
+  --background: #f6f7f9;
+  --foreground: #1d1d26;
+  --card: #ffffff;
+  --card-foreground: #1d1d26;
+  --popover: #ffffff;
+  --popover-foreground: #1d1d26;
+  --primary: #3d4ba8;
+  --primary-foreground: #ffffff;
+  --secondary: #eceef2;
+  --secondary-foreground: #1d1d26;
+  --muted: #eceef2;
+  --muted-foreground: #62627a;
+  --accent: #eceef2;
+  --accent-foreground: #1d1d26;
+  --destructive: #c2343a;
+  --border: #e7e8ec;
+  --input: #dcdee4;
+  --ring: #3d4ba8;
+
+  /* Review states: text on a soft fill of the same hue. */
+  --ok: #18773f;
+  --ok-soft: #e6f5ec;
+  --bad: #c2343a;
+  --bad-soft: #fbe9ea;
+  --warn: #8a5800;
+  --warn-soft: #fdf3e1;
+  --run: #2459b8;
+  --run-soft: #e7f0fd;
+  --grey: #55556a;
+  --grey-soft: #efeff4;
+
+  --sidebar: #f6f7f9;
+  --sidebar-foreground: #3b3e48;
+  --sidebar-primary: #3d4ba8;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eceef2;
+  --sidebar-accent-foreground: #1d1d26;
+  --sidebar-border: #e7e8ec;
+  --sidebar-ring: #3d4ba8;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-run: var(--run);
+  --color-run-soft: var(--run-soft);
+  --color-grey: var(--grey);
+  --color-grey-soft: var(--grey-soft);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* The few element rules the old stylesheet gave every page. */
+@layer base {
+  a {
+    color: var(--primary);
+  }
+  pre {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  fieldset {
+    @apply bg-card mt-2 rounded-md border px-3 py-2;
+  }
+  legend {
+    @apply px-1 text-xs font-semibold;
+  }
+  [hidden] {
+    display: none !important;
+  }
+}
