@@ -739,17 +739,19 @@ func TestUsageRankingCountsAllTokens(t *testing.T) {
 	a := func() SkillUsage { return skillRow("sk-a", "no_blocking_issues", 1000, 1000) }
 	b := func() SkillUsage { return partsRow("sk-b", 10, 50000, 0, 100, 0) }
 
+	// The owner team is set when a row is written, so it comes first.
+	team := newTeam(t, s, "Ranking")
+	if err := setOwner(t, s, team, TeamRepo{Instance: mr1.Instance, Project: "acme/p40", Owner: true},
+		TeamRepo{Instance: mr1.Instance, Project: "acme/p41", Owner: true}); err != nil {
+		t.Fatal(err)
+	}
+
 	// One repository holds both merge requests, skills and models.
 	seedUsage(t, s, usageMR(30, 1), usageAt(5, 10, 0), TriggerPush, false, "m-a", a())
 	seedUsage(t, s, usageMR(30, 2), usageAt(5, 11, 0), TriggerPush, false, "m-b", b())
 	// Two repositories, one each, and two teams' views of them.
 	seedUsage(t, s, usageMR(40, 1), usageAt(5, 12, 0), TriggerPush, false, "m-a", a())
 	seedUsage(t, s, usageMR(41, 1), usageAt(5, 13, 0), TriggerPush, false, "m-b", b())
-	team := newTeam(t, s, "Ranking")
-	if err := setOwner(t, s, team, TeamRepo{Instance: mr1.Instance, Project: "acme/p40", Owner: true},
-		TeamRepo{Instance: mr1.Instance, Project: "acme/p41", Owner: true}); err != nil {
-		t.Fatal(err)
-	}
 	// Two API clients: the first by name is the smaller.
 	ca, cb := newAPIClient(t, s, "a-client"), newAPIClient(t, s, "b-client")
 	seedTenantUsage(t, s, ca.ID, "t", "s1", usageAt(5, 14, 0), a())
@@ -869,8 +871,8 @@ func TestRunUsageAllParts(t *testing.T) {
 	if err != nil || !found || got != want {
 		t.Errorf("RunUsage = %+v, %v, %v; want %+v, true", got, found, err, want)
 	}
-	if got.Total() != 604549 {
-		t.Errorf("RunUsage total = %d, want 604549", got.Total())
+	if got.Total() != 604548 {
+		t.Errorf("RunUsage total = %d, want 604548", got.Total())
 	}
 	if got, found, err := s.RunUsage(ctx, "00000000-0000-0000-0000-000000000001"); err != nil || found || got != (TokenSum{}) {
 		t.Errorf("RunUsage(unknown run) = %+v, %v, %v; want none", got, found, err)

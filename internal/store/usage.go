@@ -406,7 +406,7 @@ func (t *TokenSum) dests() []any {
 }
 
 // RepoUsage is what one repository used.
-// GlobalTokens and TeamTokens are its tokens (in plus out) on global keys
+// GlobalTokens and TeamTokens are its tokens (all parts) on global keys
 // and on teams' own.
 type RepoUsage struct {
 	Instance                 string
@@ -536,7 +536,7 @@ func (s *Store) UsageByRepository(ctx context.Context, since time.Time) ([]RepoU
 		LEFT JOIN (SELECT instance, project_id, `+sourceTokensColumnsNamed+`
 			FROM `+splitUsageSQL+` WHERE reported_at >= $1::timestamptz AND instance <> ''
 			GROUP BY instance, project_id) src USING (instance, project_id)
-		ORDER BY a.t_in + a.t_out DESC, a.instance, a.project_id`, since)
+		ORDER BY a.t_in + a.cr + a.cw + a.t_out + a.rs DESC, a.instance, a.project_id`, since)
 	if err != nil {
 		return nil, err
 	}
