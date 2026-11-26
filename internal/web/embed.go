@@ -4,7 +4,9 @@ package web
 
 import (
 	"bytes"
+	"crypto/rand"
 	"embed"
+	"encoding/base64"
 	"io/fs"
 	"net/http"
 	"path"
@@ -26,6 +28,24 @@ var fallback []byte
 // csp lets the page load only its own scripts, styles and images (and data:
 // images); Vite emits no inline script or style.
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+
+// noncePlaceholder is where index.html takes its style nonce
+// (<meta name="csp-nonce" nonce="__CSP_NONCE__">). The page hands it to the
+// Radix dialogs and menus, which add one <style> tag to stop the page
+// scrolling under them. Scripts get no nonce: script-src stays 'self'.
+var noncePlaceholder = []byte("__CSP_NONCE__")
+
+// pageCSP is csp for an HTML page that carries a style nonce.
+func pageCSP(nonce string) string {
+	return strings.Replace(csp, "style-src 'self'", "style-src 'self' 'nonce-"+nonce+"'", 1)
+}
+
+// newNonce is 128 random bits, base64: a new one for every page served.
+func newNonce() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b) // crypto/rand.Read never fails (Go 1.24+)
+	return base64.StdEncoding.EncodeToString(b)
+}
 
 // reserved are the paths other routes of the server own; an unknown path
 // under them is a 404, never the HTML shell.
@@ -66,7 +86,11 @@ func newHandler(fsys fs.FS) http.Handler {
 			name = "index.html"
 		}
 		if data, ok := readFile(fsys, name); ok {
-			serve(w, r, name, data)
+			if name == "index.html" {
+				servePage(w, r, data)
+			} else {
+				serve(w, r, name, data)
+			}
 			return
 		}
 		// A missing hashed asset is an error, not the shell: the page would
@@ -86,7 +110,7 @@ func newHandler(fsys fs.FS) http.Handler {
 		if !ok {
 			data = fallback
 		}
-		serve(w, r, "index.html", data)
+		servePage(w, r, data)
 	})
 }
 
@@ -105,6 +129,17 @@ func readFile(fsys fs.FS, name string) ([]byte, bool) {
 		return nil, false
 	}
 	return data, true
+}
+
+// servePage serves the HTML shell with a fresh style nonce in it and in its
+// CSP. A page with no placeholder (the fallback) keeps the plain CSP.
+func servePage(w http.ResponseWriter, r *http.Request, data []byte) {
+	if bytes.Contains(data, noncePlaceholder) {
+		nonce := newNonce()
+		data = bytes.ReplaceAll(data, noncePlaceholder, []byte(nonce))
+		w.Header().Set("Content-Security-Policy", pageCSP(nonce))
+	}
+	serve(w, r, "index.html", data)
 }
 
 func serve(w http.ResponseWriter, r *http.Request, name string, data []byte) {

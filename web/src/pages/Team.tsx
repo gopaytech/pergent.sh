@@ -2,10 +2,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
 import { api, isStatus, paths, type TeamPageView, type TeamTab } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, NotFound, Tabs } from "../ui";
+import { ErrorBox, Loading, NotFound, PageHeader, Tabs } from "../ui";
 import TeamLimits from "./TeamLimits";
 import TeamMembers from "./TeamMembers";
 import TeamModelsTab from "./TeamModels";
@@ -44,23 +49,25 @@ export default function Team() {
   const tab: TeamTab = tabs.some(([t]) => t === asked) ? (asked as TeamTab) : "repositories";
 
   return (
-    <div className="narrow">
-      <div className="crumbs">
-        <Link to="/teams">Teams</Link> / {v.team.name}
+    <div className="max-w-[1100px]">
+      <div className="text-muted-foreground mb-1.5 text-xs">
+        <Link className="text-muted-foreground hover:underline" to="/teams">
+          Teams
+        </Link>{" "}
+        / {v.team.name}
       </div>
-      <h1>{v.team.name}</h1>
-      <div className="sub spaced">Your role: {v.role}</div>
+      <PageHeader title={v.team.name} description={`Your role: ${v.role}`} className="mb-4" />
       {v.canEdit && <AdminActions v={v} />}
       {/* A maintainer adds repositories through the picker, for this team. */}
       {v.role === "maintainer" && me.onboardInstances.length > 0 && (
-        <div className="actions-row">
-          <Link className="btn small primary" to={`/repos?add=1&team=${v.team.id}`}>
-            + Add repository
-          </Link>
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Button asChild size="sm">
+            <Link to={`/repos?add=1&team=${v.team.id}`}>+ Add repository</Link>
+          </Button>
         </div>
       )}
       <Tabs<TeamTab> tabs={tabs} value={tab} onChange={(t) => setSearch(t === "repositories" ? {} : { tab: t }, { replace: true })} />
-      <div role="tabpanel">
+      <div role="tabpanel" className="flex flex-col gap-4">
         {tab === "repositories" && <TeamRepositories view={v} />}
         {tab === "members" && <TeamMembers view={v} />}
         {tab === "models" && <TeamModelsTab team={v.team.id} />}
@@ -100,33 +107,35 @@ function AdminActions({ v }: { v: TeamPageView }) {
     save.mutate({ name: name.trim() }, { onSuccess: () => setRenaming(false) });
   };
   return (
-    <div className="stack team-actions">
-      <div className="actions-row">
-        <button type="button" className="btn small" onClick={() => setRenaming(!renaming)}>
+    <div className="team-actions mb-4 flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={() => setRenaming(!renaming)}>
           Rename
-        </button>
-        <button type="button" className="btn small danger" disabled={remove.isPending} onClick={confirmRemove}>
+        </Button>
+        <Button type="button" variant="destructive-outline" size="sm" disabled={remove.isPending} onClick={confirmRemove}>
           Remove team
-        </button>
+        </Button>
       </div>
       {renaming && (
-        <form className="card pad inline-form" aria-label="Rename the team" onSubmit={submit}>
-          <div className="grow">
-            <label htmlFor="team-rename">Name</label>
-            <input
-              id="team-rename"
-              type="text"
-              autoComplete="off"
-              maxLength={100}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </div>
-          <button type="submit" className="btn primary" disabled={save.isPending}>
-            Save
-          </button>
-        </form>
+        <Card>
+          <form className="flex items-end gap-3 px-4" aria-label="Rename the team" onSubmit={submit}>
+            <div className="grid min-w-0 grow gap-2">
+              <Label htmlFor="team-rename">Name</Label>
+              <Input
+                id="team-rename"
+                type="text"
+                autoComplete="off"
+                maxLength={100}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </div>
+            <Button type="submit" disabled={save.isPending}>
+              Save
+            </Button>
+          </form>
+        </Card>
       )}
       {save.isError && <ErrorBox error={save.error} />}
       {remove.isError && <ErrorBox error={remove.error} />}

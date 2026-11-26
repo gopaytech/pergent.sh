@@ -16,11 +16,31 @@ import {
   type APIVerdict,
   type UsageTokensView,
 } from "../api";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+
 import { useWrite } from "../layout/write";
 import RunLog from "../RunLog";
-import { ErrorBox, Loading, NotFound, Pill, Tabs, utcText, type Tone } from "../ui";
+import { ErrorBox, Loading, NotFound, PageHeader, Pill, Tabs, utcText, type Tone } from "../ui";
 import { useUrlParam } from "../urlState";
 import { TokenTable } from "./usageParts";
+
+// The class names the page's cards share.
+// listCard is a card of rows under a title; each row draws its own top line.
+const listCard = "gap-0 overflow-hidden py-0";
+// line is one row or block of a card, under a line.
+const line = "border-t px-4 py-3 text-sm";
+// muted is a note in the card's smaller, lighter text.
+const muted = "text-muted-foreground text-xs";
+// groupHead is the small heading over a group of rows in a card.
+const groupHead = "text-muted-foreground text-[13px] font-semibold";
+// codeBox is model or Job text shown as written, in a box of its own.
+const codeBox = "bg-muted/50 rounded-md border px-3 py-2.5 font-mono text-xs break-words whitespace-pre-wrap";
+// crumb is a link of the path under the title.
+const crumb = "text-muted-foreground hover:text-foreground hover:underline";
 
 const statuses: Record<APIStatus, [Tone, string]> = {
   queued: ["grey", "Queued"],
@@ -66,15 +86,21 @@ export default function ApiReview() {
   if (review.isError) return <ErrorBox error={review.error} />;
   const view = review.data;
   return (
-    <div className="narrow">
-      <div className="top">
-        <div>
-          <h1>{view.title || view.subject}</h1>
-          <div className="sub">
-            <Link to="/api-clients">API clients</Link> / <Link to={paths.clientPage(view.client)}>{view.client}</Link>
-          </div>
-        </div>
-      </div>
+    <div className="max-w-[1100px]">
+      <PageHeader
+        title={view.title || view.subject}
+        description={
+          <>
+            <Link className={crumb} to="/api-clients">
+              API clients
+            </Link>{" "}
+            /{" "}
+            <Link className={crumb} to={paths.clientPage(view.client)}>
+              {view.client}
+            </Link>
+          </>
+        }
+      />
       <Facts view={view} />
       <Tabs
         tabs={[
@@ -84,13 +110,13 @@ export default function ApiReview() {
         value={tab}
         onChange={setTab}
       />
-      <div role="tabpanel">
+      <div role="tabpanel" className="flex flex-col gap-4">
         {tab === "review" ? (
           <Result view={view} />
         ) : (
-          <section className="card" aria-label="Log">
+          <Card role="region" aria-label="Log" className="gap-0 py-1">
             <RunLog logPath={paths.apiAdminReviewLog(view.id)} diagnosticsPath={paths.apiAdminReviewDiagnostics(view.id)} />
-          </section>
+          </Card>
         )}
       </div>
     </div>
@@ -101,28 +127,30 @@ function Facts({ view }: { view: APIReviewDetail }) {
   const { review } = view;
   const usage = review.usage;
   return (
-    <dl className="card kvs" role="group" aria-label="Review">
-      <Fact k="Subject">{view.subject}</Fact>
-      <Fact k="Tenant">{view.tenant || "none"}</Fact>
-      <Fact k="Key">{view.keyName}</Fact>
-      <Fact k="Model">{view.model ?? "not chosen"}</Fact>
-      <Fact k="Status">
-        <StatusPill status={view.status} />
-      </Fact>
-      {review.verdict && (
-        <Fact k="Verdict">
-          <VerdictPill verdict={review.verdict} />
+    <Card role="group" aria-label="Review" className={cn(listCard, "mb-4")}>
+      <dl>
+        <Fact k="Subject">{view.subject}</Fact>
+        <Fact k="Tenant">{view.tenant || "none"}</Fact>
+        <Fact k="Key">{view.keyName}</Fact>
+        <Fact k="Model">{view.model ?? "not chosen"}</Fact>
+        <Fact k="Status">
+          <StatusPill status={view.status} />
         </Fact>
-      )}
-      <Fact k="Created">{utcText(view.createdAt)}</Fact>
-      {view.finishedAt && <Fact k="Finished">{utcText(view.finishedAt)}</Fact>}
-      {usage && (
-        <Fact k="Tokens">
-          <TokenTable tokens={apiTokens(usage)} />
-        </Fact>
-      )}
-      {review.test && <Fact k="Test review">no change was reviewed</Fact>}
-    </dl>
+        {review.verdict && (
+          <Fact k="Verdict">
+            <VerdictPill verdict={review.verdict} />
+          </Fact>
+        )}
+        <Fact k="Created">{utcText(view.createdAt)}</Fact>
+        {view.finishedAt && <Fact k="Finished">{utcText(view.finishedAt)}</Fact>}
+        {usage && (
+          <Fact k="Tokens">
+            <TokenTable tokens={apiTokens(usage)} />
+          </Fact>
+        )}
+        {review.test && <Fact k="Test review">no change was reviewed</Fact>}
+      </dl>
+    </Card>
   );
 }
 
@@ -151,9 +179,11 @@ const apiTokens = (u: NonNullable<APIReviewBody["usage"]>): UsageTokensView => {
 
 function Fact({ k, children }: { k: string; children: ReactNode }) {
   return (
-    <div className="kv">
-      <dt>{k}</dt>
-      <dd>{children}</dd>
+    // A name on the left and its value on the right; one under the other on
+    // a phone.
+    <div className="grid gap-x-4 gap-y-1 border-t px-4 py-2.5 text-sm first:border-t-0 sm:grid-cols-[180px_minmax(0,1fr)]">
+      <dt className="text-muted-foreground">{k}</dt>
+      <dd className="min-w-0 font-medium">{children}</dd>
     </div>
   );
 }
@@ -166,12 +196,18 @@ function Result({ view }: { view: APIReviewDetail }) {
   return (
     <>
       {failure && (
-        <div className="error" role="alert">
-          Failed at {failure.step}: {failure.reason}
-          {failure.detail && <pre className="log">{failure.detail}</pre>}
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle className="line-clamp-none">
+            Failed at {failure.step}: {failure.reason}
+          </AlertTitle>
+          {failure.detail && (
+            <AlertDescription>
+              <pre className={cn(codeBox, "bg-card text-foreground max-h-80 w-full overflow-auto")}>{failure.detail}</pre>
+            </AlertDescription>
+          )}
+        </Alert>
       )}
-      {skills.length === 0 && !failure && <div className="card empty">{noResult(view.status)}</div>}
+      {skills.length === 0 && !failure && <Card className="text-muted-foreground px-4 py-6 text-sm">{noResult(view.status)}</Card>}
       {skills.map((s) => (
         <Skill key={s.name} skill={s} view={view} />
       ))}
@@ -191,19 +227,23 @@ const callbackStates: Record<string, string> = {
 // try, oldest first. The error is the redacted text pergent.sh stored.
 function Callback({ callback }: { callback: APICallback }) {
   return (
-    <section className="card pad" aria-label="Callback">
-      <h3 className="group">Callback</h3>
-      <div className="meta">{callbackStates[callback.state] ?? callback.state}</div>
-      <ul className="files">
-        {callback.attempts.map((a, i) => (
-          <li key={`${a.at}/${i}`}>
-            <span className="meta">{utcText(a.at)}</span>{" "}
-            {a.statusCode === 0 ? `No answer: ${a.error}` : `Answered ${a.statusCode}${a.error ? `. ${a.error}` : ""}`}{" "}
-            <span className="meta">{a.durationMs} ms</span>
-          </li>
-        ))}
-      </ul>
-    </section>
+    <Card role="region" aria-label="Callback" className={listCard}>
+      <CardHeader className="py-3">
+        <CardTitle>Callback</CardTitle>
+      </CardHeader>
+      <div className={line}>
+        <div className="text-muted-foreground">{callbackStates[callback.state] ?? callback.state}</div>
+        <ul className="mt-1.5 flex flex-col gap-1">
+          {callback.attempts.map((a, i) => (
+            <li key={`${a.at}/${i}`} className="wrap-anywhere">
+              <span className={muted}>{utcText(a.at)}</span>{" "}
+              {a.statusCode === 0 ? `No answer: ${a.error}` : `Answered ${a.statusCode}${a.error ? `. ${a.error}` : ""}`}{" "}
+              <span className={muted}>{a.durationMs} ms</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Card>
   );
 }
 
@@ -226,37 +266,37 @@ function Skill({ skill, view }: { skill: APISkill; view: APIReviewDetail }) {
   const findings = [...skill.findings].sort((a, b) => rank(a) - rank(b));
   const { reviewed, skipped, not_reviewed: notReviewed } = skill.files;
   return (
-    <section className="card" aria-label={`Skill ${skill.name}`}>
-      <div className="verdict">
+    <Card role="region" aria-label={`Skill ${skill.name}`} className={listCard}>
+      <div className="flex items-center gap-2.5 px-4 py-3">
         <VerdictPill verdict={skill.verdict} />
-        <div className="grow">
-          <b>{skill.name}</b>
-          <div className="meta">{findings.length === 1 ? "1 finding" : `${findings.length} findings`}</div>
+        <div className="min-w-0 grow text-sm">
+          <b className="font-semibold">{skill.name}</b>
+          <div className={muted}>{findings.length === 1 ? "1 finding" : `${findings.length} findings`}</div>
         </div>
       </div>
       {findings.map((f, i) => (
         <Finding key={`${f.id}/${i}`} f={f} view={view} />
       ))}
-      <div className="pad">
-        <h3 className="group">Reviewed ({reviewed.length})</h3>
+      <div className={line}>
+        <h3 className={cn(groupHead, "mb-1.5")}>Reviewed ({reviewed.length})</h3>
         {reviewed.length > 0 && (
           <div role="group" aria-label="Reviewed files">
-            <ul className="files">
+            <ul className={fileList}>
               {reviewed.map((p) => (
-                <li key={p} className="mono">
+                <li key={p} className={cn(fileItem, "font-mono text-xs")}>
                   {p}
                 </li>
               ))}
             </ul>
           </div>
         )}
-        <h3 className="group">Skipped ({skipped.length})</h3>
+        <h3 className={cn(groupHead, "mt-3 mb-1.5")}>Skipped ({skipped.length})</h3>
         {skipped.length > 0 && (
           <div role="group" aria-label="Skipped files">
-            <ul className="files">
+            <ul className={fileList}>
               {skipped.map((s) => (
-                <li key={s.path}>
-                  <span className="mono">{s.path}</span> <span className="meta">{s.rule}</span>
+                <li key={s.path} className={fileItem}>
+                  <span className="font-mono text-xs">{s.path}</span> <span className={muted}>{s.rule}</span>
                 </li>
               ))}
             </ul>
@@ -264,12 +304,12 @@ function Skill({ skill, view }: { skill: APISkill; view: APIReviewDetail }) {
         )}
         {notReviewed.length > 0 && (
           <>
-            <h3 className="group">Not reviewed ({notReviewed.length})</h3>
+            <h3 className={cn(groupHead, "mt-3 mb-1.5")}>Not reviewed ({notReviewed.length})</h3>
             <div role="group" aria-label="Files not reviewed">
-              <ul className="files">
+              <ul className={fileList}>
                 {notReviewed.map((s) => (
-                  <li key={s.path}>
-                    <span className="mono">{s.path}</span> <span className="meta">{s.reason}</span>
+                  <li key={s.path} className={fileItem}>
+                    <span className="font-mono text-xs">{s.path}</span> <span className={muted}>{s.reason}</span>
                   </li>
                 ))}
               </ul>
@@ -277,9 +317,14 @@ function Skill({ skill, view }: { skill: APISkill; view: APIReviewDetail }) {
           </>
         )}
       </div>
-    </section>
+    </Card>
   );
 }
+
+// fileList is a list of file paths, in two columns on a wide screen; a long
+// path wraps in its column, never cut.
+const fileList = "mt-1 mb-1 text-sm sm:columns-2";
+const fileItem = "break-inside-avoid py-0.5 wrap-anywhere";
 
 // Finding is a finding of the review. A completed review's finding can be
 // dismissed for the subject, and a finding dismissed for it can be stopped.
@@ -290,33 +335,34 @@ function Finding({ f, view }: { f: APIFinding; view: APIReviewDetail }) {
   const now = view.dismissals.find((d) => d.fingerprint === f.fingerprint);
   const may = view.status === "completed";
   return (
-    <div className="finding">
-      <Pill tone={f.severity === "blocking" ? "bad" : "grey"}>{f.severity}</Pill> <span className="t">{f.title}</span>{" "}
-      <span className="mono meta">{f.id}</span>
-      <div className="loc">{where}</div>
-      {f.explanation && <p className="prose">{f.explanation}</p>}
+    // "finding" stays as a name the tests find a finding by.
+    <div className={cn("finding", line)}>
+      <Pill tone={f.severity === "blocking" ? "bad" : "grey"}>{f.severity}</Pill> <span className="font-semibold">{f.title}</span>{" "}
+      <span className="text-muted-foreground font-mono text-xs">{f.id}</span>
+      <div className="text-muted-foreground mt-0.5 font-mono text-xs wrap-anywhere">{where}</div>
+      {f.explanation && <p className="prose mt-1.5">{f.explanation}</p>}
       {f.fix && (
         <>
-          <div className="fix-label">Suggested fix</div>
+          <div className={cn(muted, "mt-2")}>Suggested fix</div>
           <p className="prose">{f.fix}</p>
         </>
       )}
       {f.suggestion && (
         <>
-          <div className="fix-label">Replacement</div>
-          <pre className="fix">{f.suggestion}</pre>
+          <div className={cn(muted, "mt-2 mb-1")}>Replacement</div>
+          <pre className={codeBox}>{f.suggestion}</pre>
         </>
       )}
       {now ? (
-        <div className="dismissal">
-          <div className="meta">
+        <div className="mt-1.5 border-l-[3px] pl-2.5">
+          <div className={muted}>
             Dismissed by {now.actor} · {utcText(now.createdAt)}
           </div>
           <div className="prose">Reason: {now.reason}</div>
         </div>
       ) : (
         f.dismissed && (
-          <div className="meta">
+          <div className={cn(muted, "mt-1.5")}>
             Dismissed: {f.dismissed.reason} · {utcText(f.dismissed.at)}
           </div>
         )
@@ -363,16 +409,16 @@ function DismissControl({ view, f }: { view: APIReviewDetail; f: APIFinding }) {
   };
   if (!open) {
     return (
-      <div className="finding-actions">
-        <button type="button" className="btn small" onClick={() => setOpen(true)}>
+      <div className="mt-2">
+        <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
           Dismiss
-        </button>
+        </Button>
       </div>
     );
   }
   return (
-    <form className="dismiss-form" onSubmit={submit}>
-      <textarea
+    <form className="mt-2 flex flex-col gap-2" onSubmit={submit}>
+      <Textarea
         aria-label="Reason"
         placeholder="Why is this not a problem? (required)"
         rows={2}
@@ -381,14 +427,14 @@ function DismissControl({ view, f }: { view: APIReviewDetail; f: APIFinding }) {
         disabled={dismiss.isPending}
         onChange={(e) => setReason(e.target.value)}
       />
-      <div className="actions-row">
-        <button type="submit" className="btn small primary" disabled={dismiss.isPending}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="submit" size="sm" disabled={dismiss.isPending}>
           Dismiss finding
-        </button>
-        <button type="button" className="btn small" disabled={dismiss.isPending} onClick={() => setOpen(false)}>
+        </Button>
+        <Button type="button" variant="outline" size="sm" disabled={dismiss.isPending} onClick={() => setOpen(false)}>
           Cancel
-        </button>
-        {problem && <span className="meta problem">{problem}</span>}
+        </Button>
+        {problem && <span className="text-bad text-xs">{problem}</span>}
       </div>
       {dismiss.isError && <ErrorBox error={dismiss.error} />}
     </form>
@@ -400,10 +446,10 @@ function DismissControl({ view, f }: { view: APIReviewDetail; f: APIFinding }) {
 function StopControl({ view, f }: { view: APIReviewDetail; f: APIFinding }) {
   const stop = useDismissal(view, f, "DELETE", () => {});
   return (
-    <div className="finding-actions">
-      <button type="button" className="btn small" disabled={stop.isPending} onClick={() => stop.mutate("")}>
+    <div className="mt-2 flex flex-col items-start gap-2">
+      <Button type="button" variant="outline" size="sm" disabled={stop.isPending} onClick={() => stop.mutate("")}>
         Restore
-      </button>
+      </Button>
       {stop.isError && <ErrorBox error={stop.error} />}
     </div>
   );
@@ -413,17 +459,19 @@ function StopControl({ view, f }: { view: APIReviewDetail; f: APIFinding }) {
 // with who did it. actor, title and reason are text people or the model wrote.
 function History({ view }: { view: APIReviewDetail }) {
   return (
-    <section className="card pad" aria-label="History">
-      <h3 className="group">History</h3>
-      <ul className="files">
+    <Card role="region" aria-label="History" className={listCard}>
+      <CardHeader className="py-3">
+        <CardTitle>History</CardTitle>
+      </CardHeader>
+      <ul className={cn(line, "flex flex-col gap-1.5")}>
         {view.history.map((e, i) => (
-          <li key={`${e.at}/${i}`}>
-            <span className="meta">{utcText(e.at)}</span> {e.kind === "dismissed" ? "Dismissed" : "Stopped dismissing"}{" "}
-            <b>{e.title}</b> <span className="meta">by {e.actor}</span>
+          <li key={`${e.at}/${i}`} className="wrap-anywhere">
+            <span className={muted}>{utcText(e.at)}</span> {e.kind === "dismissed" ? "Dismissed" : "Stopped dismissing"}{" "}
+            <b className="font-semibold">{e.title}</b> <span className={muted}>by {e.actor}</span>
             {e.reason && <div className="prose">Reason: {e.reason}</div>}
           </li>
         ))}
       </ul>
-    </section>
+    </Card>
   );
 }

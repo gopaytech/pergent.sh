@@ -30,6 +30,10 @@ afterEach(() => vi.unstubAllGlobals());
 // folded lists the cards and model rows still folded.
 const folded = () => [...document.querySelectorAll<HTMLButtonElement>("button[data-fold][aria-expanded='false']")];
 
+// inSaveBar says whether a button sits in a save bar: the row that holds it
+// is the last thing in the card's body, below every field.
+const inSaveBar = (button: HTMLElement) => button.parentElement !== null && button.parentElement.nextElementSibling === null;
+
 // unfold opens every folded card and model row, as an admin reading the whole page would.
 async function unfold() {
   for (let shut = folded(); shut.length > 0; shut = folded()) {
@@ -1397,7 +1401,7 @@ describe("AdminSettings folding", () => {
     await userEvent.click(title(/^Comment footer/));
     expect(title(/^Comment footer/)).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("textbox", { name: "Text" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save footer" }).closest(".foot")).not.toBeNull();
+    expect(inSaveBar(screen.getByRole("button", { name: "Save footer" }))).toBe(true);
     await userEvent.click(title(/^Comment footer/));
     expect(screen.queryByRole("textbox", { name: "Text" })).not.toBeInTheDocument();
   });
@@ -1428,7 +1432,7 @@ describe("AdminSettings folding", () => {
     // The card unfolds with the form at its foot; the title's button hides while it is open.
     expect(title(/^Models/)).toHaveAttribute("aria-expanded", "true");
     const form = within(card).getByRole("form", { name: "Add a model" });
-    expect(within(card).getByRole("button", { name: "Add model" }).closest(".foot")).not.toBeNull();
+    expect(inSaveBar(within(card).getByRole("button", { name: "Add model" }))).toBe(true);
     await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
     expect(within(card).queryByRole("form", { name: "Add a model" })).not.toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "Add model" })).toBeInTheDocument();
@@ -1454,6 +1458,6 @@ describe("AdminSettings folding", () => {
     fakeApi(routes(operator));
     await openSettings();
     const card = screen.getByRole("region", { name: "Global chain" });
-    expect(within(card).getByRole("button", { name: "Save chain" }).closest(".foot")).not.toBeNull();
+    expect(inSaveBar(within(card).getByRole("button", { name: "Save chain" }))).toBe(true);
   });
 });

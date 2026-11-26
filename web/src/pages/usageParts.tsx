@@ -1,5 +1,11 @@
 import type { ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+
 import { paths, type UsageDayView, type UsageTokensView } from "../api";
 import { count } from "../ui";
 
@@ -52,24 +58,29 @@ export function partsText(t: UsageTokensView): string {
 // each followed by the parts it adds up. The unknown runs end the prompt's
 // parts, where the missing cache would have been.
 export function TokenTable({ tokens }: { tokens: UsageTokensView }) {
+  // A part is muted and set in under the sum it adds to.
   const row = (k: string, v: number, part = false) => (
-    <tr className={part ? "part" : undefined}>
-      <th scope="row">{k}</th>
-      <td>{count(v)}</td>
+    <tr className={part ? "text-muted-foreground" : undefined}>
+      <th scope="row" className={cn("py-0.5 text-left", part ? "pl-3 font-normal" : "font-medium")}>
+        {k}
+      </th>
+      <td className="py-0.5 text-right">{count(v)}</td>
     </tr>
   );
   return (
-    <div className="token-table">
-      <div className="total">{count(total(tokens))}</div>
-      <table aria-label="Tokens">
+    <div className="flex flex-col gap-1">
+      <div className="text-xl leading-tight font-semibold tabular-nums">{count(total(tokens))}</div>
+      <table aria-label="Tokens" className="w-full max-w-72 text-sm tabular-nums">
         <tbody>
           {row("Prompt", prompt(tokens))}
           {row("cache read", tokens.cacheRead, true)}
           {row("cache write", tokens.cacheWrite, true)}
           {row("input", tokens.in, true)}
           {tokens.unknown > 0 && (
-            <tr className="part">
-              <td colSpan={2}>{unknownText(tokens.unknown)}</td>
+            <tr className="text-muted-foreground">
+              <td colSpan={2} className="py-0.5 pl-3">
+                {unknownText(tokens.unknown)}
+              </td>
             </tr>
           )}
           {row("Output", output(tokens))}
@@ -84,13 +95,13 @@ export function TokenTable({ tokens }: { tokens: UsageTokensView }) {
 // PeriodSelect is the period menu of the Usage pages.
 export function PeriodSelect({ days, onChange }: { days: number; onChange: (d: number) => void }) {
   return (
-    <select aria-label="Period" className="btn" value={days} onChange={(e) => onChange(Number(e.target.value))}>
+    <NativeSelect aria-label="Period" className="w-40" value={days} onChange={(e) => onChange(Number(e.target.value))}>
       {periods.map((d) => (
         <option key={d} value={d}>
           Last {d} days
         </option>
       ))}
-    </select>
+    </NativeSelect>
   );
 }
 
@@ -98,9 +109,11 @@ export function PeriodSelect({ days, onChange }: { days: number; onChange: (d: n
 // session cookie, and it needs no CSRF token.
 export function CsvLink({ days, instance, project }: { days: number; instance?: string; project?: string }) {
   return (
-    <a className="btn" href={paths.apiUsageCSV(days, instance, project)} download>
-      Download CSV
-    </a>
+    <Button asChild variant="outline">
+      <a href={paths.apiUsageCSV(days, instance, project)} download>
+        Download CSV
+      </a>
+    </Button>
   );
 }
 
@@ -110,7 +123,7 @@ export const usageIntro = "Totals count all tokens: input, cache read, cache wri
 // UsageNotes is the line both pages carry about how the numbers are made.
 export function UsageNotes() {
   return (
-    <p className="sub">
+    <p className="text-muted-foreground mb-4 text-sm">
       Days are cut at midnight UTC. {usageIntro}
     </p>
   );
@@ -121,26 +134,50 @@ export function UsageNotes() {
 export function UsageStats({ tokens, reviews }: { tokens: UsageTokensView; reviews: number }) {
   const cached = cachedPercent(tokens);
   return (
-    <>
-      <section className="stats" aria-label="Totals">
+    <div className="flex flex-col gap-2">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Totals">
         <Stat k="Tokens" v={count(total(tokens))} d="all token kinds added" />
         <Stat k="Prompt" v={count(prompt(tokens))} d={cached === dash ? "cache share unknown" : `${cached} from cache`} />
         <Stat k="Output" v={count(output(tokens))} d="incl. reasoning" />
         <Stat k="Reviews" v={String(reviews)} d="with usage recorded" />
       </section>
-      <p className="sub">Prompt: input · cache read · cache write</p>
-      <p className="sub">Output: output · reasoning</p>
-    </>
+      <div className="text-muted-foreground mt-1 text-sm">
+        <p>Prompt: input · cache read · cache write</p>
+        <p>Output: output · reasoning</p>
+      </div>
+    </div>
   );
 }
 
 function Stat({ k, v, d }: { k: string; v: string; d: string }) {
   return (
-    <div className="stat">
-      <div className="k">{k}</div>
-      <div className="v">{v}</div>
-      <div className="d meta">{d}</div>
-    </div>
+    // "stat" stays as a class name: the tests read the cards by it.
+    <Card className="stat gap-1 px-4 py-4">
+      <div className="text-muted-foreground text-sm">{k}</div>
+      <div className="text-3xl font-semibold tracking-tight tabular-nums">{v}</div>
+      <div className="text-muted-foreground text-xs">{d}</div>
+    </Card>
+  );
+}
+
+// num is a column of numbers: right-aligned, every digit the same width.
+export const num = "text-right tabular-nums";
+
+// usageTable is a usage card's table: the first and last columns line up
+// with the card's title, and the first column's names stay on one line (the
+// table scrolls sideways on a phone instead).
+export const usageTable = "[&_tr>*:first-child]:pl-4 [&_tr>*:last-child]:pr-4 [&_td:first-child]:whitespace-nowrap";
+
+// UsageCard is a card of the Usage pages: its title, then its table or its
+// empty line under a line of its own.
+export function UsageCard({ label, title, children }: { label: string; title?: string; children: ReactNode }) {
+  return (
+    <Card role="region" aria-label={label} className="gap-0 overflow-hidden py-0">
+      <CardHeader className="py-3">
+        <CardTitle>{title ?? label}</CardTitle>
+      </CardHeader>
+      <div className="border-t">{children}</div>
+    </Card>
   );
 }
 
@@ -148,15 +185,15 @@ function Stat({ k, v, d }: { k: string; v: string; d: string }) {
 // column before them, children the heads between, after those after them.
 export function UsageHead({ first, children, after }: { first: string; children?: ReactNode; after?: ReactNode }) {
   return (
-    <tr>
-      <th>{first}</th>
+    <TableRow className="hover:bg-transparent">
+      <TableHead>{first}</TableHead>
       {children}
-      <th className="num">Prompt</th>
-      <th className="num">Output</th>
-      <th className="num">Tokens</th>
-      <th className="num">Cached</th>
+      <TableHead className={num}>Prompt</TableHead>
+      <TableHead className={num}>Output</TableHead>
+      <TableHead className={num}>Tokens</TableHead>
+      <TableHead className={num}>Cached</TableHead>
       {after}
-    </tr>
+    </TableRow>
   );
 }
 
@@ -168,8 +205,14 @@ export const sourceText = (global: number, team: number) => `Tokens on global ke
 export function TokensTotal({ tokens }: { tokens: UsageTokensView }) {
   const parts = partsText(tokens);
   return (
-    <span role="group" tabIndex={0} title={parts} aria-label={`${count(total(tokens))} total: ${parts}`}>
-      <b>{count(total(tokens))}</b>
+    <span
+      role="group"
+      tabIndex={0}
+      title={parts}
+      aria-label={`${count(total(tokens))} total: ${parts}`}
+      className="focus-visible:ring-ring/50 rounded-sm font-semibold outline-none focus-visible:ring-[3px]"
+    >
+      {count(total(tokens))}
     </span>
   );
 }
@@ -179,18 +222,18 @@ export function TokensTotal({ tokens }: { tokens: UsageTokensView }) {
 export function UsageCells({ tokens }: { tokens: UsageTokensView }) {
   return (
     <>
-      <td className="num">{count(prompt(tokens))}</td>
-      <td className="num">{count(output(tokens))}</td>
-      <td className="num">
+      <TableCell className={num}>{count(prompt(tokens))}</TableCell>
+      <TableCell className={num}>{count(output(tokens))}</TableCell>
+      <TableCell className={num}>
         <TokensTotal tokens={tokens} />
-      </td>
-      <td className="num meta">{cachedPercent(tokens)}</td>
+      </TableCell>
+      <TableCell className={cn(num, "text-muted-foreground")}>{cachedPercent(tokens)}</TableCell>
     </>
   );
 }
 
 export function EmptyRow({ children }: { children: ReactNode }) {
-  return <div className="row empty-row">{children}</div>;
+  return <div className="text-muted-foreground px-4 py-6 text-sm">{children}</div>;
 }
 
 // DailyTable is the days, each with its share of the busiest day as a
@@ -198,30 +241,35 @@ export function EmptyRow({ children }: { children: ReactNode }) {
 export function DailyTable({ daily }: { daily: UsageDayView[] }) {
   const peak = Math.max(1, ...daily.map((d) => total(d.tokens)));
   return (
-    <section className="card scroll" aria-label="Daily">
-      <h2>Daily</h2>
+    <UsageCard label="Daily">
       {daily.length === 0 ? (
         <EmptyRow>No usage in this period.</EmptyRow>
       ) : (
-        <table className="table">
-          <thead>
+        <Table className={usageTable}>
+          <TableHeader className="bg-muted/40">
             <UsageHead first="Day (UTC)">
-              <th>Share of the busiest day</th>
+              <TableHead>Share of the busiest day</TableHead>
             </UsageHead>
-          </thead>
-          <tbody>
+          </TableHeader>
+          <TableBody>
             {daily.map((d) => (
-              <tr key={d.day}>
-                <td>{d.day}</td>
-                <td>
-                  <progress aria-label={`${d.day} share of the busiest day`} title={`Prompt ${count(prompt(d.tokens))} · Output ${count(output(d.tokens))}`} value={total(d.tokens)} max={peak} />
-                </td>
+              <TableRow key={d.day}>
+                <TableCell>{d.day}</TableCell>
+                <TableCell>
+                  <progress
+                    className="accent-primary w-full min-w-24"
+                    aria-label={`${d.day} share of the busiest day`}
+                    title={`Prompt ${count(prompt(d.tokens))} · Output ${count(output(d.tokens))}`}
+                    value={total(d.tokens)}
+                    max={peak}
+                  />
+                </TableCell>
                 <UsageCells tokens={d.tokens} />
-              </tr>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
-    </section>
+    </UsageCard>
   );
 }

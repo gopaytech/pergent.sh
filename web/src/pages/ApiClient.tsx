@@ -2,6 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 import {
   api,
   isStatus,
@@ -15,7 +22,7 @@ import {
 } from "../api";
 import { useWrite } from "../layout/write";
 import OnceSecret from "../OnceSecret";
-import { ErrorBox, Loading, NotFound, Tabs, utcText } from "../ui";
+import { ErrorBox, Loading, NotFound, PageHeader, Tabs, utcText } from "../ui";
 import ClientReviews from "./ApiClientReviews";
 import { clientsKey } from "./ApiClients";
 import { ClientFields, inLibraryOrder, type ClientFieldsValue } from "./ApiClientFields";
@@ -58,15 +65,15 @@ function ClientPage({ client, refreshError }: { client: APIClientView; refreshEr
     setShown((list) => [...list, { ...s, id }]);
   }, []);
   return (
-    <div className="narrow">
-      <div className="top">
-        <div>
-          <h1>{client.name}</h1>
-          <div className="sub">
-            <Link to="/api-clients">API clients</Link>
-          </div>
-        </div>
-      </div>
+    <div className="max-w-[1100px]">
+      <PageHeader
+        title={client.name}
+        description={
+          <Link className="text-muted-foreground underline-offset-4 hover:underline" to="/api-clients">
+            API clients
+          </Link>
+        }
+      />
       {refreshError !== null && <ErrorBox error={refreshError} />}
       {shown.map((s) => (
         <OnceSecret
@@ -118,6 +125,9 @@ function Settings({ client, show }: { client: APIClientView; show: (s: Omit<Show
   );
 }
 
+// formCard is a card that holds a form of stacked fields.
+const formCard = "mb-4 gap-4 px-4 py-4";
+
 // SettingsForm changes the skills, model, callback URL and limits. The name
 // never changes.
 function SettingsForm({ client }: { client: APIClientView }) {
@@ -164,35 +174,38 @@ function SettingsForm({ client }: { client: APIClientView }) {
     });
   };
   return (
-    <form className="card pad stack" aria-label="Settings" onSubmit={submit}>
-      <ClientFields value={fields} onChange={setFields} />
-      <h3 className="group">Limits</h3>
-      {limitFields.map(([key, label, hint]) => (
-        <div key={key}>
-          <label htmlFor={`limit-${key}`}>{label}</label>
-          <input
-            id={`limit-${key}`}
-            type="number"
-            min={1}
-            step={1}
-            value={limits[key]}
-            onChange={(e) => setLimits({ ...limits, [key]: e.target.value })}
-            required
-          />
-          <div className="meta">{hint}</div>
+    <form aria-label="Settings" onSubmit={submit}>
+      <Card className={formCard}>
+        <ClientFields value={fields} onChange={setFields} />
+        <h3 className="text-muted-foreground m-0 text-[13px] font-semibold">Limits</h3>
+        {limitFields.map(([key, label, hint]) => (
+          <div className="grid gap-2" key={key}>
+            <Label htmlFor={`limit-${key}`}>{label}</Label>
+            <Input
+              id={`limit-${key}`}
+              className="max-w-64"
+              type="number"
+              min={1}
+              step={1}
+              value={limits[key]}
+              onChange={(e) => setLimits({ ...limits, [key]: e.target.value })}
+              required
+            />
+            <div className="text-muted-foreground text-sm">{hint}</div>
+          </div>
+        ))}
+        {save.isError && <ErrorBox error={save.error} />}
+        {note && (
+          <div className="text-ok text-sm" role="status">
+            {note}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <Button type="submit" disabled={save.isPending}>
+            Save settings
+          </Button>
         </div>
-      ))}
-      {save.isError && <ErrorBox error={save.error} />}
-      {note && (
-        <div className="note" role="status">
-          {note}
-        </div>
-      )}
-      <div className="actions-row">
-        <button type="submit" className="btn primary" disabled={save.isPending}>
-          Save settings
-        </button>
-      </div>
+      </Card>
     </form>
   );
 }
@@ -218,23 +231,21 @@ function CallbackSecret({ client, show }: { client: APIClientView; show: (s: Omi
     }
   };
   return (
-    <>
-      <section className="card pad stack" aria-label="Callback secret">
-        <h2>Callback secret</h2>
-        <div className="meta">
-          It signs every callback pergent.sh sends to this client. The secret is shown only when it is made.
-        </div>
+    <Card role="region" aria-label="Callback secret" className="mb-4">
+      <CardHeader>
+        <CardTitle>Callback secret</CardTitle>
+        <CardDescription>It signs every callback pergent.sh sends to this client. The secret is shown only when it is made.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid justify-items-start gap-3">
         {client.previousSecretUntil && (
-          <div className="note">The old secret also works until {utcText(client.previousSecretUntil)}.</div>
+          <div className="text-ok text-sm">The old secret also works until {utcText(client.previousSecretUntil)}.</div>
         )}
         {rotate.isError && <ErrorBox error={rotate.error} />}
-        <div className="actions-row">
-          <button type="button" className="btn" disabled={rotate.isPending} onClick={confirmRotate}>
-            Rotate secret
-          </button>
-        </div>
-      </section>
-    </>
+        <Button type="button" variant="outline" size="sm" disabled={rotate.isPending} onClick={confirmRotate}>
+          Rotate secret
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -259,29 +270,29 @@ function TestCallback({ client }: { client: APIClientView }) {
   });
   const answer = send.data ? answerOf(send.data) : null;
   return (
-    <section className="card pad stack" aria-label="Test callback">
-      <h2>Test callback</h2>
-      <div className="meta">
-        Sends the saved callback URL a test review, signed like a real one. Its verdict is nothing reviewed and it says it is a test.
-      </div>
-      {!client.callbackUrl && <div className="meta">Save a callback URL first.</div>}
-      {send.isError && <ErrorBox error={send.error} />}
-      {answer &&
-        (answer.ok ? (
-          <div className="note" role="status">
-            {answer.text}
-          </div>
-        ) : (
-          <div className="error" role="alert">
-            {answer.text}
-          </div>
-        ))}
-      <div className="actions-row">
-        <button type="button" className="btn" disabled={send.isPending || !client.callbackUrl} onClick={() => send.mutate()}>
+    <Card role="region" aria-label="Test callback" className="mb-4">
+      <CardHeader>
+        <CardTitle>Test callback</CardTitle>
+        <CardDescription>
+          Sends the saved callback URL a test review, signed like a real one. Its verdict is nothing reviewed and it says it is a test.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid justify-items-start gap-3">
+        {!client.callbackUrl && <div className="text-muted-foreground text-sm">Save a callback URL first.</div>}
+        {send.isError && <ErrorBox error={send.error} />}
+        {answer &&
+          (answer.ok ? (
+            <div className="text-ok text-sm" role="status">
+              {answer.text}
+            </div>
+          ) : (
+            <Alert variant="destructive">{answer.text}</Alert>
+          ))}
+        <Button type="button" variant="outline" size="sm" disabled={send.isPending || !client.callbackUrl} onClick={() => send.mutate()}>
           Send test callback
-        </button>
-      </div>
-    </section>
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -308,16 +319,18 @@ function RemoveClient({ client }: { client: APIClientView }) {
     }
   };
   return (
-    <section className="card pad stack" aria-label="Remove client">
-      <h2>Remove client</h2>
-      <div className="meta">This cannot be undone.</div>
-      {remove.isError && <ErrorBox error={remove.error} />}
-      <div className="actions-row">
-        <button type="button" className="btn danger" disabled={remove.isPending} onClick={confirmRemove}>
+    <Card role="region" aria-label="Remove client" className="mb-4">
+      <CardHeader>
+        <CardTitle>Remove client</CardTitle>
+        <CardDescription>This cannot be undone.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid justify-items-start gap-3">
+        {remove.isError && <ErrorBox error={remove.error} />}
+        <Button type="button" variant="destructive-outline" size="sm" disabled={remove.isPending} onClick={confirmRemove}>
           Remove client
-        </button>
-      </div>
-    </section>
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -353,51 +366,57 @@ function Keys({ client, show }: { client: APIClientView; show: (s: Omit<Shown, "
   };
   return (
     <>
-      <form className="card pad inline-form" aria-label="New API key form" onSubmit={submit}>
-        <div className="grow">
-          <label htmlFor="key-name">Key name</label>
-          <input
-            id="key-name"
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            maxLength={100}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-        </div>
-        <div>
-          <label htmlFor="key-expires">Expires (optional)</label>
-          <input id="key-expires" type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
-        </div>
-        <button type="submit" className="btn primary" disabled={create.isPending}>
-          Create key
-        </button>
-        {create.isError && <ErrorBox error={create.error} />}
+      <form aria-label="New API key form" onSubmit={submit}>
+        <Card className="mb-4 flex-row flex-wrap items-end gap-3 px-4 py-4">
+          <div className="grid min-w-48 flex-1 gap-2">
+            <Label htmlFor="key-name">Key name</Label>
+            <Input
+              id="key-name"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={100}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="key-expires">Expires (optional)</Label>
+            <Input id="key-expires" className="w-44" type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
+          </div>
+          <Button type="submit" disabled={create.isPending}>
+            Create key
+          </Button>
+          {create.isError && (
+            <div className="basis-full">
+              <ErrorBox error={create.error} />
+            </div>
+          )}
+        </Card>
       </form>
       {client.keys.length === 0 ? (
-        <div className="card empty">No keys yet. A caller needs one to send a review.</div>
+        <Card className="text-muted-foreground px-4 py-8 text-center text-sm">No keys yet. A caller needs one to send a review.</Card>
       ) : (
-        <div className="card scroll">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Prefix</th>
-                <th>Created</th>
-                <th>Expires</th>
-                <th>Last used</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
+        <Card className="gap-0 overflow-hidden py-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Prefix</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead>Expires</TableHead>
+                <TableHead>Last used</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {client.keys.map((k) => (
                 <KeyRow key={k.id} client={client.name} apiKey={k} />
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </Card>
       )}
     </>
   );
@@ -414,18 +433,18 @@ function KeyRow({ client, apiKey: k }: { client: string; apiKey: APIKeyView }) {
     if (window.confirm(`Revoke the key ${k.name} (${k.prefix})? A caller using it is refused at once.`)) revoke.mutate();
   };
   return (
-    <tr>
-      <td>{k.name}</td>
-      <td className="mono">{k.prefix}</td>
-      <td className="nowrap">{utcText(k.createdAt)}</td>
-      <td className="nowrap">{k.expiresAt ? utcText(k.expiresAt) : "never"}</td>
-      <td className="nowrap">{k.lastUsedAt ? utcText(k.lastUsedAt) : "never"}</td>
-      <td>
-        <button type="button" className="btn small danger" disabled={revoke.isPending} onClick={confirmRevoke}>
+    <TableRow>
+      <TableCell className="font-medium">{k.name}</TableCell>
+      <TableCell className="font-mono text-xs">{k.prefix}</TableCell>
+      <TableCell className="text-muted-foreground whitespace-nowrap">{utcText(k.createdAt)}</TableCell>
+      <TableCell className="text-muted-foreground whitespace-nowrap">{k.expiresAt ? utcText(k.expiresAt) : "never"}</TableCell>
+      <TableCell className="text-muted-foreground whitespace-nowrap">{k.lastUsedAt ? utcText(k.lastUsedAt) : "never"}</TableCell>
+      <TableCell className="text-right">
+        <Button type="button" variant="destructive-outline" size="sm" disabled={revoke.isPending} onClick={confirmRevoke}>
           Revoke
-        </button>
+        </Button>
         {revoke.isError && <ErrorBox error={revoke.error} />}
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }

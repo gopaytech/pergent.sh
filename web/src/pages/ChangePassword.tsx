@@ -1,10 +1,16 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
 import { api } from "../api";
 import { useCSRFRetry } from "../layout/write";
 import SignOut from "../layout/SignOut";
 import { CenteredCard, ErrorBox } from "../ui";
+import { SignInHead } from "./SignIn";
 
 // minLength is the server's rule (characters, not bytes); it is checked
 // here too so a short one doesn't cost a round trip.
@@ -50,45 +56,48 @@ export default function ChangePassword() {
   };
   return (
     <CenteredCard>
-      <h1>Choose a new password</h1>
-      <p className="sub">You must change the password you were given before you can use pergent.sh.</p>
-      <form className="stack" onSubmit={submit}>
-        <label htmlFor="current-password">Current password</label>
-        <input
-          id="current-password"
-          type="password"
-          autoComplete="current-password"
-          value={current}
-          onChange={(e) => setCurrent(e.target.value)}
-          required
-        />
-        <label htmlFor="new-password">New password</label>
-        <input
-          id="new-password"
-          type="password"
-          autoComplete="new-password"
-          value={next}
-          onChange={(e) => setNext(e.target.value)}
-          required
-        />
-        <label htmlFor="new-password-again">New password again</label>
-        <input
-          id="new-password-again"
-          type="password"
-          autoComplete="new-password"
-          value={again}
-          onChange={(e) => setAgain(e.target.value)}
-          required
-        />
-        {problem && (
-          <div className="error" role="alert">
-            {problem}
-          </div>
-        )}
+      <SignInHead title="Choose a new password">
+        You must change the password you were given before you can use pergent.sh.
+      </SignInHead>
+      <form className="flex flex-col gap-4" onSubmit={submit}>
+        <div className="grid gap-2">
+          <Label htmlFor="current-password">Current password</Label>
+          <Input
+            id="current-password"
+            type="password"
+            autoComplete="current-password"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            required
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="new-password">New password</Label>
+          <Input
+            id="new-password"
+            type="password"
+            autoComplete="new-password"
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+            required
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="new-password-again">New password again</Label>
+          <Input
+            id="new-password-again"
+            type="password"
+            autoComplete="new-password"
+            value={again}
+            onChange={(e) => setAgain(e.target.value)}
+            required
+          />
+        </div>
+        {problem && <Alert variant="destructive">{problem}</Alert>}
         {change.isError && <ErrorBox error={change.error} />}
-        <button type="submit" className="btn primary" disabled={change.isPending}>
+        <Button type="submit" className="w-full" disabled={change.isPending}>
           Change password
-        </button>
+        </Button>
       </form>
       <SignOut />
     </CenteredCard>

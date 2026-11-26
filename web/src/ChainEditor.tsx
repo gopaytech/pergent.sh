@@ -1,5 +1,10 @@
 import { useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
+import { cn } from "@/lib/utils";
+
 import type { ChainEntryView, ChainRef, ChainView } from "./api";
 import { utcText } from "./ui";
 
@@ -108,96 +113,103 @@ export default function ChainEditor({
     <div>
       <div role="list" aria-label={label}>
         {draft.map((e, i) => (
-          <div className="link-row" role="listitem" key={refKey(e)}>
-            <div className="link-head">
-              <span className="meta">{i + 1}.</span>
-              <span className="grow">
-                <b>{e.name}</b>{" "}
-                <span className="meta">
+          <div className="grid gap-2 border-t px-4 py-3" role="listitem" key={refKey(e)}>
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span className="text-muted-foreground tabular-nums">{i + 1}.</span>
+              <span className="min-w-0 grow">
+                <b className="font-semibold">{e.name}</b>{" "}
+                <span className="text-muted-foreground">
                   {e.provider} / {e.model} · {entryWhose(e)}
                 </span>
               </span>
-              {e.fixed && <span className="badge cfg">from the config file</span>}
-              <span className={e.state === "ready" ? "meta" : "meta warn-text"}>{entryStateText(e)}</span>
+              {e.fixed && (
+                <Badge variant="grey" className="badge cfg">
+                  from the config file
+                </Badge>
+              )}
+              <span className={cn("text-xs", e.state === "ready" ? "text-muted-foreground" : "warn-text text-warn")}>{entryStateText(e)}</span>
               {e.canClear && e.class !== "" && (
-                <button type="button" className="btn small" aria-label={`Clear mark of ${e.name}`} onClick={() => onClear(e)}>
+                <Button type="button" variant="outline" size="sm" aria-label={`Clear mark of ${e.name}`} onClick={() => onClear(e)}>
                   Clear mark
-                </button>
+                </Button>
               )}
               {!readOnly && !e.fixed && (
-                <span className="actions-row">
-                  <button
+                <span className="flex gap-2">
+                  <Button
                     type="button"
-                    className="btn small"
+                    variant="outline"
+                    size="sm"
                     aria-label={`Move ${e.name} up`}
                     disabled={i <= fixed}
                     onClick={() => move(i, -1)}
                   >
                     Up
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="btn small"
+                    variant="outline"
+                    size="sm"
                     aria-label={`Move ${e.name} down`}
                     disabled={i === draft.length - 1}
                     onClick={() => move(i, 1)}
                   >
                     Down
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="btn small"
+                    variant="outline"
+                    size="sm"
                     aria-label={`Remove ${e.name}`}
                     onClick={() => setDraft(draft.filter((_, k) => k !== i))}
                   >
                     Remove
-                  </button>
+                  </Button>
                 </span>
               )}
             </div>
-            {!readOnly && !kept(e) && <div className="problem">You can't keep this entry here. Remove it to save.</div>}
+            {!readOnly && !kept(e) && <div className="text-bad text-sm">You can't keep this entry here. Remove it to save.</div>}
           </div>
         ))}
       </div>
-      {empty && <div className="pad meta">No entries.</div>}
+      {empty && <div className="text-muted-foreground border-t px-4 py-2.5 text-sm">No entries.</div>}
       {!readOnly && (
-        <div className="pad stack">
-          <div className="actions-row">
-            <select aria-label="Entry to add" value={pick} onChange={(ev) => setPick(ev.target.value)}>
+        <div className="grid gap-2 border-t px-4 py-3">
+          <div className="flex items-center gap-2">
+            <NativeSelect className="max-w-sm" aria-label="Entry to add" value={pick} onChange={(ev) => setPick(ev.target.value)}>
               <option value="">{toAdd.length === 0 ? "Nothing more to add" : "Choose an entry to add"}</option>
               {toAdd.map((c) => (
                 <option key={refKey(c)} value={refKey(c)}>
                   {c.name} ({entryWhose(c)})
                 </option>
               ))}
-            </select>
-            <button type="button" className="btn small" disabled={pick === ""} onClick={add}>
+            </NativeSelect>
+            <Button type="button" variant="outline" size="sm" disabled={pick === ""} onClick={add}>
               Add
-            </button>
+            </Button>
           </div>
-          {tooLong && <div className="problem">A chain holds at most {maxChain} entries. Remove one to save.</div>}
+          {tooLong && <div className="text-bad text-sm">A chain holds at most {maxChain} entries. Remove one to save.</div>}
         </div>
       )}
       {!readOnly && (
-        <div className="foot">
+        <div className="bg-muted/40 flex items-center justify-end gap-2 border-t px-4 py-3">
           {note && (
-            <span className="meta grow" role="status">
+            <span className="text-muted-foreground grow text-sm" role="status">
               {note}
             </span>
           )}
           {onCancel && (
-            <button type="button" className="btn" disabled={busy} onClick={onCancel}>
+            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onCancel}>
               Cancel
-            </button>
+            </Button>
           )}
-          <button
+          <Button
             type="button"
-            className="btn primary"
+            size="sm"
             disabled={!canSave}
             onClick={() => onSave(draft.filter((e) => !e.fixed).map((e) => ({ source: e.source, id: e.id })))}
           >
             Save chain
-          </button>
+          </Button>
         </div>
       )}
     </div>

@@ -5,8 +5,8 @@ import { RouterProvider, createBrowserRouter } from "react-router";
 
 import { ApiError } from "./api";
 import App from "./App";
-import "./theme.css";
-import "./styles.css";
+import "./index.css";
+import { applyCspNonce } from "./nonce";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -17,6 +17,8 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+applyCspNonce();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root is missing from index.html");

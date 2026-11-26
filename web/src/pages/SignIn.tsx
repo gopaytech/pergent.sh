@@ -1,5 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { Navigate, useSearchParams } from "react-router";
+
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 
 import { ApiError, api, type Me, type SignInOptions } from "../api";
 import { CenteredCard, ErrorBox, Loading } from "../ui";
@@ -54,12 +58,31 @@ export function SignedInRedirect({ me, admin }: { me: Me; admin: boolean }) {
   return <Navigate to={admin && me.admin ? "/admin" : "/"} replace />;
 }
 
+// SignInHead is the title of a sign-in screen and the line under it.
+export function SignInHead({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <h1 className="m-0 text-xl font-semibold tracking-tight">{title}</h1>
+      <p className="text-muted-foreground text-sm">{children}</p>
+    </div>
+  );
+}
+
+// SSOButton is the button to the OIDC login route.
+export function SSOButton({ label }: { label: string }) {
+  return (
+    <Button asChild className="w-full">
+      <a href="/auth/oidc/login">Sign in with {label}</a>
+    </Button>
+  );
+}
+
 export function Refusal({ text }: { text: string | null }) {
   return (
     text && (
-      <div className="error" role="alert">
+      <Alert variant="destructive">
         {text}
-      </div>
+      </Alert>
     )
   );
 }
@@ -75,21 +98,18 @@ export default function SignIn() {
   const jwt = options.data?.jwt === true;
   return (
     <CenteredCard>
-      <h1>Sign in to pergent.sh</h1>
-      <p className="sub">See why a merge request or pull request wasn't approved, and the repositories pergent reviews.</p>
+      <SignInHead title="Sign in to pergent.sh">
+        See why a merge request or pull request wasn't approved, and the repositories pergent reviews.
+      </SignInHead>
       <Refusal text={refusal} />
       {options.isPending && <Loading />}
       {options.isError && <ErrorBox error={options.error} />}
       {options.isSuccess && sso && (
-        <div className="signin-buttons">
-          <a className="btn primary" href="/auth/oidc/login">
-            Sign in with {sso.label}
-          </a>
-        </div>
+        <SSOButton label={sso.label} />
       )}
-      {options.isSuccess && jwt && !refusal && <p className="sub">{jwtWords}</p>}
+      {options.isSuccess && jwt && !refusal && <p className="text-muted-foreground text-sm">{jwtWords}</p>}
       {jwt && probeError?.status === 503 && <ErrorBox error={probeError} />}
-      {options.isSuccess && !sso && !jwt && <p className="sub">Sign-in isn't set up yet. Ask your admin.</p>}
+      {options.isSuccess && !sso && !jwt && <p className="text-muted-foreground text-sm">Sign-in isn't set up yet. Ask your admin.</p>}
     </CenteredCard>
   );
 }

@@ -2,10 +2,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
 import { ApiError, api, paths, type LibrarySkill, type SkillInUse } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Pill, SkillSourceText, ago, bytesText } from "../ui";
+import { ErrorBox, Loading, PageHeader, Pill, SkillSourceText, ago, bytesText } from "../ui";
 
 // Skills lists pergent.sh's skill library. Everyone signed in reads it;
 // admins also write it: New skill, Install from git, and per skill Edit
@@ -15,32 +21,32 @@ export default function Skills() {
   const me = useMe();
   const skills = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
   return (
-    <div className="narrow">
-      <div className="top">
-        <div>
-          <h1>Skills</h1>
-          <div className="sub">The skill library a repository's reviews can use. A repository's own skill of the same name replaces it.</div>
-        </div>
-        {me.admin && (
-          <div className="actions-row">
-            <Link to="/skills/install" className="btn">
-              Install from git
-            </Link>
-            <Link to="/skills/new" className="btn primary">
-              New skill
-            </Link>
-          </div>
-        )}
-      </div>
+    <div className="max-w-[1100px]">
+      <PageHeader
+        title="Skills"
+        description="The skill library a repository's reviews can use. A repository's own skill of the same name replaces it."
+        actions={
+          me.admin && (
+            <>
+              <Button asChild variant="outline" size="sm">
+                <Link to="/skills/install">Install from git</Link>
+              </Button>
+              <Button asChild size="sm">
+                <Link to="/skills/new">New skill</Link>
+              </Button>
+            </>
+          )
+        }
+      />
       {skills.isPending && <Loading />}
       {skills.isError && <ErrorBox error={skills.error} />}
       {skills.isSuccess && (
-        <section className="card" aria-label="Library skills">
-          {skills.data.length === 0 && <div className="row empty-row">The library has no skills.</div>}
+        <Card role="region" aria-label="Library skills" className="gap-0 py-0">
+          {skills.data.length === 0 && <div className="text-muted-foreground px-4 py-3 text-sm">The library has no skills.</div>}
           {skills.data.map((s) => (
             <SkillRow key={s.name} skill={s} admin={me.admin} />
           ))}
-        </section>
+        </Card>
       )}
     </div>
   );
@@ -72,43 +78,43 @@ function SkillRow({ skill, admin }: { skill: LibrarySkill; admin: boolean }) {
   };
   const inUse = remove.isError ? inUseBody(remove.error) : null;
   return (
-    <div className="skill-row" data-skill={skill.name}>
-      <div className="skill">
-        <div className="grow">
-          <Link to={paths.skill(skill.name)} className="skill-name">
+    <div className="border-b text-sm last:border-b-0" data-skill={skill.name}>
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+        <div className="min-w-0 grow">
+          <Link to={paths.skill(skill.name)} className="text-foreground font-semibold hover:underline">
             {skill.name}
           </Link>{" "}
           {skill.inDefaults && <Pill tone="run">default</Pill>}
-          <div className="meta">
+          <div className="text-muted-foreground mt-0.5 text-xs">
             v{skill.version} · <SkillSourceText source={skill.source} /> · {bytesText(skill.size)} · changed {ago(skill.updatedAt)}
             {skill.updatedBy ? ` by ${skill.updatedBy}` : ""}
           </div>
         </div>
         {admin && (
-          <span className="actions-row">
+          <span className="flex flex-wrap items-center gap-2">
             {skill.source === null ? (
-              <Link to={paths.skill(skill.name)} className="btn small">
-                Edit
-              </Link>
+              <Button asChild variant="outline" size="sm">
+                <Link to={paths.skill(skill.name)}>Edit</Link>
+              </Button>
             ) : (
-              <Link to={paths.skillUpdates(skill.name)} className="btn small">
-                Check for updates
-              </Link>
+              <Button asChild variant="outline" size="sm">
+                <Link to={paths.skillUpdates(skill.name)}>Check for updates</Link>
+              </Button>
             )}
-            <button type="button" className="btn small" onClick={() => setCopying(!copying)}>
+            <Button type="button" variant="outline" size="sm" onClick={() => setCopying(!copying)}>
               Copy
-            </button>
-            <button type="button" className="btn small danger" disabled={remove.isPending} onClick={confirmDelete}>
+            </Button>
+            <Button type="button" variant="destructive-outline" size="sm" disabled={remove.isPending} onClick={confirmDelete}>
               Delete
-            </button>
+            </Button>
           </span>
         )}
       </div>
       {copying && (
-        <form className="pad inline-form" aria-label={`Copy ${skill.name}`} onSubmit={submitCopy}>
-          <div className="grow">
-            <label htmlFor={`copy-${skill.name}`}>New name</label>
-            <input
+        <form className="flex items-end gap-3 px-4 pb-3" aria-label={`Copy ${skill.name}`} onSubmit={submitCopy}>
+          <div className="grid min-w-0 grow gap-2">
+            <Label htmlFor={`copy-${skill.name}`}>New name</Label>
+            <Input
               id={`copy-${skill.name}`}
               type="text"
               autoComplete="off"
@@ -120,13 +126,17 @@ function SkillRow({ skill, admin }: { skill: LibrarySkill; admin: boolean }) {
               required
             />
           </div>
-          <button type="submit" className="btn primary" disabled={copy.isPending}>
+          <Button type="submit" disabled={copy.isPending}>
             Copy skill
-          </button>
+          </Button>
         </form>
       )}
-      {copy.isError && <ErrorBox error={copy.error} />}
-      {remove.isError && (inUse ? <InUseBox name={skill.name} inUse={inUse} /> : <ErrorBox error={remove.error} />)}
+      {(copy.isError || remove.isError) && (
+        <div className="px-4 pb-3">
+          {copy.isError && <ErrorBox error={copy.error} />}
+          {remove.isError && (inUse ? <InUseBox name={skill.name} inUse={inUse} /> : <ErrorBox error={remove.error} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -142,14 +152,15 @@ function inUseBody(err: unknown): SkillInUse | null {
 
 function InUseBox({ name, inUse }: { name: string; inUse: SkillInUse }) {
   return (
-    <div className="error" role="alert">
+    // Alert is a grid with an icon column: block puts the text in the box.
+    <Alert variant="destructive" className="block">
       {name} is in use. Take it off these first:
-      <ul>
+      <ul className="mt-1.5 list-disc pl-5">
         {inUse.repositories.map((r) => (
           <li key={`${r.instance}/${r.project}`}>{`${r.instance}: ${r.project}`}</li>
         ))}
         {inUse.inDefaults && <li>the default skills</li>}
       </ul>
-    </div>
+    </Alert>
   );
 }

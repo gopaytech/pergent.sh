@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+
 import { ApiError, api, paths, type BuiltInRule, type RuleSet, type SkillInUse } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, ExternalLink, Loading, Pill, Tabs, ago } from "../ui";
+import { ErrorBox, ExternalLink, Loading, PageHeader, Pill, Tabs, ago } from "../ui";
 import { useUrlParam } from "../urlState";
 import Markdown from "../MarkdownLazy";
 
@@ -16,22 +20,19 @@ export default function Rules() {
   const me = useMe();
   const [tab, setTab] = useUrlParam<"sets" | "built-in">("tab", "sets", ["sets", "built-in"]);
   return (
-    <div className="narrow">
-      <div className="top">
-        <div>
-          <h1>Rules</h1>
-          <div className="sub">
-            Checklists for kinds of files, added to the review that already runs on them. A rule never says what is blocking.
-          </div>
-        </div>
-        {me.admin && tab === "sets" && (
-          <div className="actions-row">
-            <Link to="/rules/new" className="btn primary">
-              New rule set
-            </Link>
-          </div>
-        )}
-      </div>
+    <div className="max-w-[1100px]">
+      <PageHeader
+        title="Rules"
+        description="Checklists for kinds of files, added to the review that already runs on them. A rule never says what is blocking."
+        actions={
+          me.admin &&
+          tab === "sets" && (
+            <Button asChild size="sm">
+              <Link to="/rules/new">New rule set</Link>
+            </Button>
+          )
+        }
+      />
       <Tabs<"sets" | "built-in">
         tabs={[
           ["sets", "Rule sets"],
@@ -50,12 +51,12 @@ function RuleSetList({ admin }: { admin: boolean }) {
   if (sets.isPending) return <Loading />;
   if (sets.isError) return <ErrorBox error={sets.error} />;
   return (
-    <section className="card" aria-label="Rule sets">
-      {sets.data.length === 0 && <div className="row empty-row">The library has no rule sets.</div>}
+    <Card role="region" aria-label="Rule sets" className="gap-0 py-0">
+      {sets.data.length === 0 && <div className="text-muted-foreground px-4 py-3 text-sm">The library has no rule sets.</div>}
       {sets.data.map((s) => (
         <RuleSetRow key={s.name} set={s} admin={admin} />
       ))}
-    </section>
+    </Card>
   );
 }
 
@@ -72,30 +73,32 @@ function RuleSetRow({ set, admin }: { set: RuleSet; admin: boolean }) {
   const inUse = remove.isError ? inUseBody(remove.error) : null;
   const config = set.source === "config";
   return (
-    <div className="skill-row" data-rule-set={set.name}>
-      <div className="skill">
-        <div className="grow">
-          <Link to={paths.ruleSet(set.name)} className="skill-name">
+    <div className="border-b text-sm last:border-b-0" data-rule-set={set.name}>
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+        <div className="min-w-0 grow">
+          <Link to={paths.ruleSet(set.name)} className="text-foreground font-semibold hover:underline">
             {set.name}
           </Link>{" "}
           {set.inDefaults && <Pill tone="run">default</Pill>} {config && <Pill tone="grey">config file</Pill>}
-          <div className="meta">
+          <div className="text-muted-foreground mt-0.5 text-xs">
             {set.entries} {set.entries === 1 ? "entry" : "entries"}
             {config ? " · read-only: change it in the config file" : ` · v${set.version} · changed ${ago(set.updatedAt)}`}
           </div>
         </div>
         {admin && !config && (
-          <span className="actions-row">
-            <Link to={paths.ruleSet(set.name)} className="btn small">
-              Edit
-            </Link>
-            <button type="button" className="btn small danger" disabled={remove.isPending} onClick={confirmDelete}>
+          <span className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link to={paths.ruleSet(set.name)}>Edit</Link>
+            </Button>
+            <Button type="button" variant="destructive-outline" size="sm" disabled={remove.isPending} onClick={confirmDelete}>
               Delete
-            </button>
+            </Button>
           </span>
         )}
       </div>
-      {remove.isError && (inUse ? <InUseBox name={set.name} inUse={inUse} /> : <ErrorBox error={remove.error} />)}
+      {remove.isError && (
+        <div className="px-4 pb-3">{inUse ? <InUseBox name={set.name} inUse={inUse} /> : <ErrorBox error={remove.error} />}</div>
+      )}
     </div>
   );
 }
@@ -105,8 +108,8 @@ function BuiltInList() {
   if (rules.isPending) return <Loading />;
   if (rules.isError) return <ErrorBox error={rules.error} />;
   return (
-    <section className="card" aria-label="Built-in rules">
-      <div className="row meta">
+    <Card role="region" aria-label="Built-in rules" className="gap-0 py-0">
+      <div className="text-muted-foreground border-b px-4 py-3 text-sm">
         pergent's own rules, after the repository's and the rule sets'. A file gets the first rule with a glob that matches it, in
         this order. Copy one into a rule set to change it. A repository gets none until you choose them: tick the ones it needs
         under Built-in rules on the repository's Settings, or list them in repositories[].built_in_rules. Each one adds its text to
@@ -114,28 +117,31 @@ function BuiltInList() {
         comes with the pergent version this pergent.sh is built with. A review uses the rules of the pergent in jobs.image, which
         can be a different version.
       </div>
-      {rules.data.length === 0 && <div className="row empty-row">No built-in rules yet.</div>}
+      {rules.data.length === 0 && <div className="text-muted-foreground px-4 py-3 text-sm">No built-in rules yet.</div>}
       {rules.data.length > 0 && (
-        <div className="row meta">
+        <div className="text-muted-foreground border-b px-4 py-3 text-sm">
           The texts are adapted from{" "}
           <ExternalLink href="https://github.com/alibaba/open-code-review">alibaba/open-code-review</ExternalLink> and keep its
           license, Apache-2.0.
         </div>
       )}
       {rules.data.map((r) => (
-        <details className="skill-doc" key={r.name} data-built-in={r.name}>
-          <summary className="skill">
-            <b>{r.name}</b>
-            <span className="grow built-in-paths">
+        // "skill-doc" stays as a class name: it draws the open and closed arrow.
+        <details className="skill-doc text-sm" key={r.name} data-built-in={r.name}>
+          <summary className="flex cursor-pointer items-center gap-2.5 px-4 py-2.5">
+            <b className="font-semibold">{r.name}</b>
+            <span className="flex min-w-0 grow flex-wrap gap-x-2 gap-y-1">
               {r.paths.map((p) => (
-                <code key={p}>{p}</code>
+                <code key={p} className="bg-muted rounded px-1 font-mono text-xs">
+                  {p}
+                </code>
               ))}
             </span>
           </summary>
           <Markdown text={r.rule} />
         </details>
       ))}
-    </section>
+    </Card>
   );
 }
 
@@ -150,14 +156,15 @@ function inUseBody(err: unknown): SkillInUse | null {
 
 function InUseBox({ name, inUse }: { name: string; inUse: SkillInUse }) {
   return (
-    <div className="error" role="alert">
+    // Alert is a grid with an icon column: block puts the text in the box.
+    <Alert variant="destructive" className="block">
       {name} is in use. Take it off these first:
-      <ul>
+      <ul className="mt-1.5 list-disc pl-5">
         {inUse.repositories.map((r) => (
           <li key={`${r.instance}/${r.project}`}>{`${r.instance}: ${r.project}`}</li>
         ))}
         {inUse.inDefaults && <li>the default rule sets</li>}
       </ul>
-    </div>
+    </Alert>
   );
 }

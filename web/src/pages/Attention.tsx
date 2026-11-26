@@ -15,17 +15,19 @@ const kinds: Record<string, [Tone, string]> = {
 
 // AttentionRows lists a repository's setup problems, on its Setup checks tab.
 export default function AttentionRows({ items }: { items: AttentionView[] }) {
-  if (items.length === 0) return <div className="row empty-row">Nothing needs attention.</div>;
+  if (items.length === 0) return <div className="text-muted-foreground border-t px-4 py-6 text-sm">Nothing needs attention.</div>;
   return (
     <>
       {items.map((a) => {
         const [tone, label] = kinds[a.kind] ?? ["warn", "Setup"];
         return (
-          <div className="row" key={`${a.instance}/${a.project}/${a.kind}`}>
-            <Pill tone={tone}>{label}</Pill>
-            <div className="grow">
-              <div className="title">{a.project}</div>
-              <div className="why prose">{a.message}</div>
+          <div className="flex items-start gap-3 border-t px-4 py-3" key={`${a.instance}/${a.project}/${a.kind}`}>
+            <div className="flex min-w-20 shrink-0 pt-0.5">
+              <Pill tone={tone}>{label}</Pill>
+            </div>
+            <div className="min-w-0 grow">
+              <div className="truncate text-sm font-medium">{a.project}</div>
+              <div className="prose text-muted-foreground mt-0.5 text-sm">{a.message}</div>
             </div>
           </div>
         );

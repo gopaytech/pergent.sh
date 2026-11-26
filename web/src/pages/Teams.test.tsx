@@ -120,12 +120,13 @@ describe("Teams", () => {
     await userEvent.click(open);
     await userEvent.click(within(screen.getByRole("dialog", { name: "New team" })).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(open).toHaveFocus();
+    // The dialog moves the focus back on the next tick, once it is gone.
+    await vi.waitFor(() => expect(open).toHaveFocus());
     await userEvent.click(open);
     await userEvent.type(screen.getByLabelText("Team name"), "Gone");
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(open).toHaveFocus();
+    await vi.waitFor(() => expect(open).toHaveFocus());
     expect(fake.find("POST", "/api/teams")).toHaveLength(0);
   });
 });

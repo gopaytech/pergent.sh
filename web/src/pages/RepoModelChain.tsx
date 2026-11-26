@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { Button } from "@/components/ui/button";
+
 import { paths, type ChainEntryView, type ChainRef, type ChainView } from "../api";
 import ChainEditor from "../ChainEditor";
 import { useWrite } from "../layout/write";
@@ -55,13 +57,14 @@ function ReviewerOne({ instance, project }: { instance: string; project: string 
   const clear = useClearMark();
   const busy = save.isPending || reset.isPending;
   return (
-    <div role="group" aria-label="Reviewer 1">
-      <div className="pad actions-row">
-        <b className="grow">Reviewer 1</b>
+    <div role="group" aria-label="Reviewer 1" className="border-b">
+      <div className="flex items-center gap-2 px-4 py-3 text-sm">
+        <b className="min-w-0 grow font-semibold">Reviewer 1</b>
         {chain.isSuccess && !chain.data.readOnly && !editing && (
-          <button
+          <Button
             type="button"
-            className="btn small"
+            variant="outline"
+            size="sm"
             aria-label="Edit reviewer 1"
             disabled={busy}
             onClick={() => {
@@ -70,11 +73,15 @@ function ReviewerOne({ instance, project }: { instance: string; project: string 
             }}
           >
             Edit
-          </button>
+          </Button>
         )}
       </div>
       {chain.isPending && <Loading />}
-      {chain.isError && <ErrorBox error={chain.error} />}
+      {chain.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={chain.error} />
+        </div>
+      )}
       {chain.isSuccess && (
         <ChainBody
           chain={chain.data}
@@ -91,13 +98,25 @@ function ReviewerOne({ instance, project }: { instance: string; project: string 
         />
       )}
       {note && (
-        <div className="pad note" role="status">
+        <div className="text-ok border-t px-4 py-3 text-sm" role="status">
           {note}
         </div>
       )}
-      {save.isError && <ErrorBox error={save.error} />}
-      {reset.isError && <ErrorBox error={reset.error} />}
-      {clear.isError && <ErrorBox error={clear.error} />}
+      {save.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={save.error} />
+        </div>
+      )}
+      {reset.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={reset.error} />
+        </div>
+      )}
+      {clear.isError && (
+        <div className="px-4 py-3">
+          <ErrorBox error={clear.error} />
+        </div>
+      )}
     </div>
   );
 }
@@ -125,8 +144,8 @@ function ChainBody({
   const editing = !chain.readOnly && asked;
   return (
     <>
-      <div className="pad meta">{own ? "This repository has its own chain." : inheritText(chain)}</div>
-      {own && chain.savedByAdmin && <div className="pad meta">An admin saved this chain.</div>}
+      <div className="text-muted-foreground px-4 pb-3 text-sm">{own ? "This repository has its own chain." : inheritText(chain)}</div>
+      {own && chain.savedByAdmin && <div className="text-muted-foreground px-4 pb-3 text-sm">An admin saved this chain.</div>}
       <ChainEditor
         // A new answer from the server, or the start of an edit, starts the editor again.
         key={`${JSON.stringify(chain)}:${editing}`}
@@ -139,14 +158,14 @@ function ChainBody({
         onClear={onClear}
       />
       {editing && (
-        <div className="pad actions-row">
-          <button type="button" className="btn small" disabled={busy} onClick={onCancel}>
+        <div className="flex gap-2 border-t px-4 py-3">
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
           {own && (
-            <button type="button" className="btn small" disabled={busy} onClick={onReset}>
+            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onReset}>
               Inherit again
-            </button>
+            </Button>
           )}
         </div>
       )}

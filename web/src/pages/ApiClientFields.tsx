@@ -1,6 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useId } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+
 import { api, type LibrarySkill, type ModelsAdminView } from "../api";
 import { ErrorBox, Loading, Switch } from "../ui";
 
@@ -28,50 +33,64 @@ export function ClientFields({ value, onChange }: { value: ClientFieldsValue; on
   const def = choices.find((m) => m.default);
   return (
     <>
-      <h3 className="group">Skills</h3>
-      {skills.isPending && <Loading />}
-      {skills.isError && <ErrorBox error={skills.error} />}
-      {skills.isSuccess && names.length === 0 && (
-        <div className="meta">The library has no skills yet. A client with no skills can't review.</div>
-      )}
-      {names.map((n) => (
-        <div className="skill" key={n}>
-          <Switch
-            label={`Skill ${n}`}
-            checked={value.skills.includes(n)}
-            onChange={(on) =>
-              onChange({ ...value, skills: inLibraryOrder(on ? [...value.skills, n] : value.skills.filter((x) => x !== n), library) })
-            }
-          />
-          <b className="grow">{n}</b>
-          <span className="src">{library.includes(n) ? "library" : "not in the library"}</span>
-        </div>
-      ))}
-      <label htmlFor={`${id}-model`}>Model</label>
-      <select id={`${id}-model`} value={value.modelId} onChange={(e) => onChange({ ...value, modelId: e.target.value })}>
-        <option value="">{def ? `Default model (${label(def)})` : "Default model"}</option>
-        {choices.map((m) => (
-          <option key={m.id} value={m.id}>
-            {label(m)}
-          </option>
-        ))}
-        {models.isSuccess && value.modelId !== "" && !choices.some((m) => m.id === value.modelId) && (
-          <option value={value.modelId}>{value.modelId} (no longer in the list)</option>
+      <div className="grid gap-2">
+        <h3 className="text-muted-foreground m-0 text-[13px] font-semibold">Skills</h3>
+        {skills.isPending && <Loading />}
+        {skills.isError && <ErrorBox error={skills.error} />}
+        {skills.isSuccess && names.length === 0 && (
+          <div className="text-muted-foreground text-sm">The library has no skills yet. A client with no skills can't review.</div>
         )}
-      </select>
-      {models.isError && <ErrorBox error={models.error} />}
-      <label htmlFor={`${id}-callback`}>Callback URL</label>
-      <input
-        id={`${id}-callback`}
-        type="text"
-        autoComplete="off"
-        spellCheck={false}
-        maxLength={2000}
-        placeholder="https://example.com/hooks/pergent"
-        value={value.callbackUrl}
-        onChange={(e) => onChange({ ...value, callbackUrl: e.target.value })}
-      />
-      <div className="meta">Empty means no callbacks: the caller reads each review with GET. Only http and https are allowed.</div>
+        {names.length > 0 && (
+          <div className="rounded-md border">
+            {names.map((n) => (
+              <div className="skill flex items-center gap-3 border-b px-3 py-2.5 text-sm last:border-b-0" key={n}>
+                <Switch
+                  label={`Skill ${n}`}
+                  checked={value.skills.includes(n)}
+                  onChange={(on) =>
+                    onChange({ ...value, skills: inLibraryOrder(on ? [...value.skills, n] : value.skills.filter((x) => x !== n), library) })
+                  }
+                />
+                <b className="min-w-0 grow font-semibold">{n}</b>
+                <Badge variant="outline" className="text-muted-foreground font-normal">
+                  {library.includes(n) ? "library" : "not in the library"}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor={`${id}-model`}>Model</Label>
+        <NativeSelect id={`${id}-model`} value={value.modelId} onChange={(e) => onChange({ ...value, modelId: e.target.value })}>
+          <option value="">{def ? `Default model (${label(def)})` : "Default model"}</option>
+          {choices.map((m) => (
+            <option key={m.id} value={m.id}>
+              {label(m)}
+            </option>
+          ))}
+          {models.isSuccess && value.modelId !== "" && !choices.some((m) => m.id === value.modelId) && (
+            <option value={value.modelId}>{value.modelId} (no longer in the list)</option>
+          )}
+        </NativeSelect>
+        {models.isError && <ErrorBox error={models.error} />}
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor={`${id}-callback`}>Callback URL</Label>
+        <Input
+          id={`${id}-callback`}
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={2000}
+          placeholder="https://example.com/hooks/pergent"
+          value={value.callbackUrl}
+          onChange={(e) => onChange({ ...value, callbackUrl: e.target.value })}
+        />
+        <div className="text-muted-foreground text-sm">
+          Empty means no callbacks: the caller reads each review with GET. Only http and https are allowed.
+        </div>
+      </div>
     </>
   );
 }

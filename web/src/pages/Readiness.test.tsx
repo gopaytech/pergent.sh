@@ -218,7 +218,7 @@ describe("Readiness", () => {
     expect(screen.getByText("<b>bold</b>.js")).toBeInTheDocument();
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("b")).toBeNull();
-    expect(container.querySelector(".card a")).toBeNull();
+    expect(container.querySelector('[data-slot="card"] a')).toBeNull();
   });
 
   it("queues a scan and shows Scanning… while it runs", async () => {

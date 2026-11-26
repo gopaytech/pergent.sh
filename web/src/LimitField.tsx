@@ -1,6 +1,9 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
 import { useWrite } from "./layout/write";
 import { limitProblem, parseQuota, quotaText } from "./quota";
 import { ErrorBox } from "./ui";
@@ -45,10 +48,11 @@ export default function LimitField({
   // Save waits for a change; Enter in the input saves too.
   const changed = text.trim() !== quotaText(limit);
   return (
-    <div className="limit-field">
-      <div className="name">Monthly token limit</div>
-      <div className="inline-field">
-        <input
+    <div className="grid gap-1.5">
+      <div className="text-sm font-medium">Monthly token limit</div>
+      <div className="flex items-center gap-2">
+        <Input
+          className="max-w-48"
           type="text"
           inputMode="numeric"
           aria-label={label}
@@ -62,12 +66,12 @@ export default function LimitField({
             }
           }}
         />
-        <button type="button" className="btn small" aria-label={saveLabel} disabled={save.isPending || !changed} onClick={submit}>
+        <Button type="button" variant="outline" size="sm" aria-label={saveLabel} disabled={save.isPending || !changed} onClick={submit}>
           Save
-        </button>
+        </Button>
       </div>
-      {hint && <div className="meta">{hint}</div>}
-      {problem && <div className="meta problem">{problem}</div>}
+      {hint && <div className="text-muted-foreground text-sm">{hint}</div>}
+      {problem && <div className="text-bad text-sm">{problem}</div>}
       {save.isError && <ErrorBox error={save.error} />}
     </div>
   );

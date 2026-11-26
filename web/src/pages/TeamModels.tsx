@@ -1,12 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+
 import { api, paths, type ChainEntryView, type ChainRef, type ChainView, type TeamModelsView, type TeamModelView } from "../api";
 import ChainEditor from "../ChainEditor";
 import { useWrite } from "../layout/write";
 import MarkBanner, { markText } from "../MarkBanner";
 import { AddModelForm, EditModelForm } from "../ModelForms";
 import { ErrorBox, Loading, secretText } from "../ui";
+
+// muted is a small grey line under a model's name.
+const muted = "text-muted-foreground text-xs";
+// pad is the room around a line in a card.
+const pad = "px-4 py-3";
 
 // TeamModelsTab is the Models tab of a team's page: the team's own models
 // and keys, and its chain. Every member sees them (never a key, and a viewer
@@ -22,17 +31,19 @@ export default function TeamModelsTab({ team }: { team: number }) {
   const v = models.data;
   return (
     <>
-      <section className="card" aria-label="Models">
-        <h2>Models</h2>
+      <Card role="region" aria-label="Models" className="gap-0 py-0">
+        <CardHeader className="border-b py-4">
+          <CardTitle>Models</CardTitle>
+          <CardDescription>
+            The team's own models and keys. They run only for repositories this team owns, and only where a chain names them.
+          </CardDescription>
+        </CardHeader>
         <MarkBanner entries={v.models} />
-        <div className="pad meta">
-          The team's own models and keys. They run only for repositories this team owns, and only where a chain names them.
-        </div>
-        {v.models.length === 0 && <div className="pad meta">No model of the team's own yet.</div>}
+        {v.models.length === 0 && <div className="text-muted-foreground px-4 py-3 text-sm">No model of the team's own yet.</div>}
         {v.models.map((m) => (
           <TeamModelRow key={m.id} team={team} m={m} canEdit={v.canEdit} />
         ))}
-      </section>
+      </Card>
       <TeamChain team={team} />
       {v.canEdit && <AddTeamModel team={team} />}
     </>
@@ -68,34 +79,32 @@ function TeamModelRow({ team, m, canEdit }: { team: number; m: TeamModelView; ca
     if (window.confirm(`Remove ${m.name}? Its key is deleted${chains}.`)) remove.mutate();
   };
   return (
-    <div className="pad stack" role="group" aria-label={m.name}>
-      <div className="row">
-        <b className="grow">{m.name}</b>
-      </div>
-      <div className="meta mono">
+    <div className="flex flex-col gap-1 border-b px-4 py-3 text-sm last:border-b-0" role="group" aria-label={m.name}>
+      <b className="font-semibold">{m.name}</b>
+      <div className="text-muted-foreground font-mono text-xs">
         {m.provider} / {m.model}
       </div>
-      {m.baseURL && <div className="meta">Base URL {m.baseURL}</div>}
-      <div className="meta">Key {secretText(m.key)}</div>
-      {m.usedIn.length > 0 && <div className="meta">In chains: {m.usedIn.join(", ")}</div>}
+      {m.baseURL && <div className={muted}>Base URL {m.baseURL}</div>}
+      <div className={muted}>Key {secretText(m.key)}</div>
+      {m.usedIn.length > 0 && <div className={muted}>In chains: {m.usedIn.join(", ")}</div>}
       {m.mark?.live && (
-        <div className="row">
-          <span className="grow meta warn-text">Marked: {markText(m.mark)}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-warn min-w-0 grow text-xs">Marked: {markText(m.mark)}</span>
           {canEdit && (
-            <button type="button" className="btn small" aria-label={`Clear mark of ${m.name}`} disabled={clear.isPending} onClick={() => clear.mutate()}>
+            <Button type="button" variant="outline" size="sm" aria-label={`Clear mark of ${m.name}`} disabled={clear.isPending} onClick={() => clear.mutate()}>
               Clear mark
-            </button>
+            </Button>
           )}
         </div>
       )}
       {canEdit && !editing && (
-        <div className="actions-row">
-          <button type="button" className="btn small" aria-label={`Edit ${m.name}`} disabled={remove.isPending} onClick={() => setEditing(true)}>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" aria-label={`Edit ${m.name}`} disabled={remove.isPending} onClick={() => setEditing(true)}>
             Edit
-          </button>
-          <button type="button" className="btn small danger" aria-label={`Remove ${m.name}`} disabled={remove.isPending} onClick={confirmRemove}>
+          </Button>
+          <Button type="button" variant="destructive-outline" size="sm" aria-label={`Remove ${m.name}`} disabled={remove.isPending} onClick={confirmRemove}>
             Remove
-          </button>
+          </Button>
         </div>
       )}
       {editing && <EditModelForm m={m} path={paths.apiTeamModel(team, m.id)} onDone={() => setEditing(false)} onSaved={changed} />}
@@ -138,25 +147,31 @@ function TeamChain({ team }: { team: number }) {
   });
   const own = chain.data?.source === "team";
   return (
-    <section className="card" aria-label="Team chain">
-      <h2>Team chain</h2>
-      <div className="pad meta">
-        Reviews of the repositories this team owns try these entries in order, unless a repository has its own chain. When the
-        provider says an entry is out of quota or credit, or rejects its key, the review starts again on the next one.
-      </div>
+    <Card role="region" aria-label="Team chain" className="gap-0 py-0">
+      <CardHeader className="border-b py-4">
+        <CardTitle>Team chain</CardTitle>
+        <CardDescription>
+          Reviews of the repositories this team owns try these entries in order, unless a repository has its own chain. When the
+          provider says an entry is out of quota or credit, or rejects its key, the review starts again on the next one.
+        </CardDescription>
+      </CardHeader>
       {chain.isPending && <Loading />}
-      {chain.isError && <ErrorBox error={chain.error} />}
+      {chain.isError && (
+        <div className={pad}>
+          <ErrorBox error={chain.error} />
+        </div>
+      )}
       {chain.isSuccess && !own && (
         <>
-          <div className="pad meta">This team has no chain of its own: its repositories use the global chain.</div>
+          <div className={cn(pad, "text-muted-foreground text-sm")}>This team has no chain of its own: its repositories use the global chain.</div>
           {!starting && (
             <>
               <ChainEditor key={JSON.stringify(chain.data)} value={chain.data} choices={[]} readOnly onSave={() => {}} onClear={(e) => clear.mutate(e)} />
               {!chain.data.readOnly && (
-                <div className="pad">
-                  <button type="button" className="btn small" onClick={() => setStarting(true)}>
+                <div className={pad}>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setStarting(true)}>
                     Make a team chain
-                  </button>
+                  </Button>
                 </div>
               )}
             </>
@@ -176,7 +191,7 @@ function TeamChain({ team }: { team: number }) {
       )}
       {chain.isSuccess && own && (
         <>
-          {!chain.data.readOnly && <div className="pad meta">Save it with no entries to use the global chain again.</div>}
+          {!chain.data.readOnly && <div className={cn(pad, "text-muted-foreground text-sm")}>Save it with no entries to use the global chain again.</div>}
           <ChainEditor
             // A new answer from the server starts the editor again from it.
             key={JSON.stringify(chain.data)}
@@ -191,12 +206,20 @@ function TeamChain({ team }: { team: number }) {
         </>
       )}
       {note && (
-        <div className="pad note" role="status">
+        <div className={cn(pad, "text-ok text-sm")} role="status">
           {note}
         </div>
       )}
-      {save.isError && <ErrorBox error={save.error} />}
-      {clear.isError && <ErrorBox error={clear.error} />}
-    </section>
+      {save.isError && (
+        <div className={pad}>
+          <ErrorBox error={save.error} />
+        </div>
+      )}
+      {clear.isError && (
+        <div className={pad}>
+          <ErrorBox error={clear.error} />
+        </div>
+      )}
+    </Card>
   );
 }

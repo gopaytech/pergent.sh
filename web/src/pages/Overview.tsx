@@ -1,9 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
+import { CheckIcon, CircleIcon } from "lucide-react";
 import { Link } from "react-router";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardHeader, CardTitle } from "@/components/ui/card";
+import { NativeSelect } from "@/components/ui/native-select";
+import { cn } from "@/lib/utils";
 
 import { api, type OverviewView, type SetupView } from "../api";
 import { useMe } from "../layout/me";
-import { ErrorBox, Loading } from "../ui";
+import { ErrorBox, Loading, PageHeader } from "../ui";
 import ReviewRows from "./ReviewRows";
 import { useUrlParam } from "../urlState";
 
@@ -20,26 +26,26 @@ export default function Overview() {
   });
   return (
     <>
-      <div className="top">
-        <div>
-          <h1>Overview</h1>
-          <div className="sub">Last {days} days across the repositories you can see</div>
-        </div>
-        <div className="actions-row">
-          <select aria-label="Period" className="btn" value={days} onChange={(e) => setDays(Number(e.target.value))}>
-            {periods.map((d) => (
-              <option key={d} value={d}>
-                Last {d} days
-              </option>
-            ))}
-          </select>
-          {me.admin && (
-            <Link className="btn primary" to="/repos?add=1">
-              + Add repository
-            </Link>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Overview"
+        description={`Last ${days} days across the repositories you can see`}
+        actions={
+          <>
+            <NativeSelect aria-label="Period" className="w-40" value={days} onChange={(e) => setDays(Number(e.target.value))}>
+              {periods.map((d) => (
+                <option key={d} value={d}>
+                  Last {d} days
+                </option>
+              ))}
+            </NativeSelect>
+            {me.admin && (
+              <Button asChild>
+                <Link to="/repos?add=1">+ Add repository</Link>
+              </Button>
+            )}
+          </>
+        }
+      />
       {data.isPending && <Loading />}
       {data.isError && <ErrorBox error={data.error} onRetry={() => void data.refetch()} />}
       {data.isSuccess && <Body view={data.data} days={days} />}
@@ -53,9 +59,9 @@ function Body({ view, days }: { view: OverviewView; days: number }) {
   // Each number opens the reviews behind it, over the same days.
   const reviews = (outcome?: string) => `/reviews?${outcome ? `outcome=${outcome}&` : ""}days=${days}`;
   return (
-    <>
+    <div className="flex flex-col gap-6">
       {view.setup && <Checklist setup={view.setup} />}
-      <section className="stats" aria-label="Numbers">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Numbers">
         <Stat k="Reviews" v={stats.reviews} d="not counting superseded or skipped runs" to={reviews()} />
         <Stat k="Approved by pergent" v={stats.approved} d={`${pct}% of reviews`} to={reviews("approved")} />
         <Stat k="Blocking findings" v={stats.blocking} d="reviews with blocking issues" to={reviews("blocking")} />
@@ -67,13 +73,18 @@ function Body({ view, days }: { view: OverviewView; days: number }) {
           to={stats.failed > 0 ? reviews("failed") : undefined}
         />
       </section>
-      <section className="card" aria-label="Recent reviews">
-        <h2>
-          Recent reviews <Link to={reviews()}>View all →</Link>
-        </h2>
+      <Card role="region" aria-label="Recent reviews" className="gap-0 overflow-hidden py-0">
+        <CardHeader className="py-3">
+          <CardTitle>Recent reviews</CardTitle>
+          <CardAction>
+            <Link className="text-primary text-sm font-medium hover:underline" to={reviews()}>
+              View all →
+            </Link>
+          </CardAction>
+        </CardHeader>
         <ReviewRows items={view.recent} empty="No reviews yet." />
-      </section>
-    </>
+      </Card>
+    </div>
   );
 }
 
@@ -89,36 +100,53 @@ const setupSteps: [keyof SetupView, string, string][] = [
 // setup only while something is left, so it goes away once all four are done.
 function Checklist({ setup }: { setup: SetupView }) {
   return (
-    <section className="card" aria-label="Setup checklist">
-      <h2>Get started</h2>
-      <ul className="checklist">
+    <Card role="region" aria-label="Setup checklist" className="gap-0 overflow-hidden py-0">
+      <CardHeader className="py-3">
+        <CardTitle>Get started</CardTitle>
+      </CardHeader>
+      <ul>
         {setupSteps.map(([key, label, to]) => (
-          <li key={key} className={setup[key] ? "done" : undefined}>
-            <span aria-label={setup[key] ? "done" : "to do"} role="img" className="tick">
-              {setup[key] ? "✓" : "○"}
+          // "done" stays as a class name: the tests read a step's state from it.
+          <li key={key} className={cn("flex items-center gap-2.5 border-t px-4 py-2.5 text-sm", setup[key] && "done")}>
+            <span
+              aria-label={setup[key] ? "done" : "to do"}
+              role="img"
+              className={cn("flex size-4 shrink-0 items-center justify-center", setup[key] ? "text-ok" : "text-muted-foreground")}
+            >
+              {setup[key] ? <CheckIcon className="size-4" aria-hidden="true" /> : <CircleIcon className="size-3.5" aria-hidden="true" />}
             </span>
-            <Link to={to}>{label}</Link>
+            <Link
+              className={setup[key] ? "text-muted-foreground line-through" : "text-primary font-medium hover:underline"}
+              to={to}
+            >
+              {label}
+            </Link>
           </li>
         ))}
       </ul>
-    </section>
+    </Card>
   );
 }
 
-// Stat is one number; with to, the whole card opens the reviews behind it.
+// Stat is one number as a card; with to, the whole card opens the reviews
+// behind it.
 function Stat({ k, v, d, bad, to }: { k: string; v: number; d: string; bad?: boolean; to?: string }) {
   const body = (
-    <>
-      <div className="k">{k}</div>
-      <div className="v">{v}</div>
-      <div className={bad ? "d down" : "d meta"}>{d}</div>
-    </>
+    <Card className={cn("h-full gap-1 px-4 py-4", to && "group-hover:border-primary transition-colors")}>
+      <div className="text-muted-foreground text-sm">{k}</div>
+      <div className="text-3xl font-semibold tracking-tight tabular-nums">{v}</div>
+      <div className={cn("text-xs", bad ? "text-bad" : "text-muted-foreground")}>{d}</div>
+    </Card>
   );
   return to ? (
-    <Link className="stat" to={to} aria-label={`${k}: ${v}. Open these reviews`}>
+    <Link
+      className="group focus-visible:ring-ring/50 block rounded-xl outline-none focus-visible:ring-[3px]"
+      to={to}
+      aria-label={`${k}: ${v}. Open these reviews`}
+    >
       {body}
     </Link>
   ) : (
-    <div className="stat">{body}</div>
+    body
   );
 }

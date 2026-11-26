@@ -1,9 +1,27 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
 
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 import { api, isStatus, paths, safeHref, type UsageNamedView, type UsageRepositoryView } from "../api";
-import { ErrorBox, ExternalLink, Loading, NotFound, count } from "../ui";
-import { CsvLink, DailyTable, dash, EmptyRow, PeriodSelect, periods, UsageCells, UsageHead, UsageNotes, reviewsText, sourceText } from "./usageParts";
+import { ErrorBox, ExternalLink, Loading, NotFound, PageHeader, count } from "../ui";
+import {
+  CsvLink,
+  DailyTable,
+  dash,
+  EmptyRow,
+  PeriodSelect,
+  periods,
+  num,
+  UsageCard,
+  UsageCells,
+  UsageHead,
+  UsageNotes,
+  reviewsText,
+  sourceText,
+  usageTable,
+} from "./usageParts";
 import { useUrlParam } from "../urlState";
 
 // when is an RFC 3339 time as "2026-10-30 14:02 UTC" (the API sends UTC).
@@ -33,21 +51,22 @@ export default function UsageRepository() {
   if (project === "" || isStatus(data.error, 404)) return <NotFound />;
   return (
     <>
-      <div className="crumbs">
-        <Link to="/admin/usage">Usage</Link> / {project}
+      <div className="text-muted-foreground mb-2 text-sm">
+        <Link className="text-muted-foreground hover:text-foreground hover:underline" to="/admin/usage">
+          Usage
+        </Link>{" "}
+        / {project}
       </div>
-      <div className="top">
-        <div>
-          <h1>{project}</h1>
-          <div className="sub">
-            {instance} · the last {days} days
-          </div>
-        </div>
-        <div className="actions-row">
-          <PeriodSelect days={days} onChange={setDays} />
-          <CsvLink days={days} instance={instance} project={project} />
-        </div>
-      </div>
+      <PageHeader
+        title={project}
+        description={`${instance} · the last ${days} days`}
+        actions={
+          <>
+            <PeriodSelect days={days} onChange={setDays} />
+            <CsvLink days={days} instance={instance} project={project} />
+          </>
+        }
+      />
       <UsageNotes />
       {data.isPending && <Loading />}
       {data.isError && <ErrorBox error={data.error} />}
@@ -59,99 +78,107 @@ export default function UsageRepository() {
 function Body({ view, instance, project }: { view: UsageRepositoryView; instance: string; project: string }) {
   const { wasted } = view;
   return (
-    <>
-      <p className="sub">{sourceText(view.globalTokens, view.teamTokens)}</p>
+    <div className="flex flex-col gap-6">
+      <p className="text-muted-foreground text-sm">{sourceText(view.globalTokens, view.teamTokens)}</p>
       <Named title="Skills" first="Skill" rows={view.skills} failed />
-      <section className="card scroll" aria-label="Merge requests">
-        <h2>Merge requests</h2>
+      <UsageCard label="Merge requests">
         {view.mergeRequests.length === 0 ? (
           <EmptyRow>No usage in this period.</EmptyRow>
         ) : (
-          <table className="table">
-            <thead>
+          <Table className={usageTable}>
+            <TableHeader className="bg-muted/40">
               <UsageHead first="Merge request">
-                <th>Models</th>
-                <th className="num">Reviews</th>
+                <TableHead>Models</TableHead>
+                <TableHead className={num}>Reviews</TableHead>
               </UsageHead>
-            </thead>
-            <tbody>
+            </TableHeader>
+            <TableBody>
               {view.mergeRequests.map((m) => (
-                <tr key={m.iid}>
-                  <td>
-                    <Link to={paths.review(instance, project, m.iid)}>{m.iid}</Link>{" "}
+                <TableRow key={m.iid}>
+                  <TableCell>
+                    <Link className="text-primary font-medium hover:underline" to={paths.review(instance, project, m.iid)}>
+                      {m.iid}
+                    </Link>{" "}
                     {safeHref(m.webURL) ? <ExternalLink href={m.webURL}>{m.title}</ExternalLink> : m.title}
-                  </td>
-                  <td>{m.models.map(modelText).join(", ")}</td>
-                  <td className="num">{m.reviews}</td>
+                  </TableCell>
+                  <TableCell>{m.models.map(modelText).join(", ")}</TableCell>
+                  <TableCell className={num}>{m.reviews}</TableCell>
                   <UsageCells tokens={m.tokens} />
-                </tr>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </UsageCard>
       <Named title="Models" first="Model" rows={view.models} provider />
       <DailyTable daily={view.daily} />
-      <section className="card scroll" aria-label="Wasted">
-        <h2>Wasted</h2>
-        <table className="table">
-          <thead>
+      <UsageCard label="Wasted">
+        <Table className={usageTable}>
+          <TableHeader className="bg-muted/40">
             <UsageHead first="Kind" />
-          </thead>
-          <tbody>
-            <tr>
-              <td>Failed skills</td>
+          </TableHeader>
+          <TableBody>
+            <TableRow>
+              <TableCell>Failed skills</TableCell>
               <UsageCells tokens={wasted.failed} />
-            </tr>
-            <tr>
-              <td>Re-runs someone asked for ({wasted.rerunCount})</td>
+            </TableRow>
+            <TableRow>
+              <TableCell>Re-runs someone asked for ({wasted.rerunCount})</TableCell>
               <UsageCells tokens={wasted.reruns} />
-            </tr>
-          </tbody>
-        </table>
-        <p className="meta pad">
+            </TableRow>
+          </TableBody>
+        </Table>
+        <p className="text-muted-foreground border-t px-4 py-3 text-xs">
           A skill that failed in a re-run is in both lines, so they are not added. {reviewsText(wasted.noResult)} without a result and {wasted.superseded} superseded: their tokens are unknown.
         </p>
-      </section>
-      <section className="card scroll" aria-label="Cost per review">
-        <h2>Cost per review</h2>
-        <div className="row">
+      </UsageCard>
+      <Card role="region" aria-label="Cost per review" className="gap-0 overflow-hidden py-0">
+        <CardHeader className="py-3">
+          <CardTitle>Cost per review</CardTitle>
+        </CardHeader>
+        <div className="flex items-center gap-3 border-t px-4 py-3 text-sm">
           <div className="grow">Full review median</div>
-          <div className="num">{median(view.fullMedian)}</div>
+          <div className={num}>{median(view.fullMedian)}</div>
         </div>
-        <div className="row">
+        <div className="flex items-center gap-3 border-t px-4 py-3 text-sm">
           <div className="grow">Incremental review median</div>
-          <div className="num">{median(view.incrementalMedian)}</div>
+          <div className={num}>{median(view.incrementalMedian)}</div>
         </div>
-        <h2>Reviews over three times their kind's median</h2>
-        {view.outliers.length === 0 ? (
-          <EmptyRow>None in this period.</EmptyRow>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Review</th>
-                <th>Kind</th>
-                <th className="num">Tokens</th>
-                <th>When</th>
-              </tr>
-            </thead>
-            <tbody>
-              {view.outliers.map((o) => (
-                <tr key={o.runID}>
-                  <td>
-                    <Link to={paths.review(instance, project, o.iid)}>Change {o.iid}</Link>
-                  </td>
-                  <td>{o.incremental ? "Incremental" : "Full"}</td>
-                  <td className="num">{count(o.total)}</td>
-                  <td>{when(o.at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-    </>
+        <CardHeader className="border-t py-3">
+          <CardTitle>Reviews over three times their kind's median</CardTitle>
+        </CardHeader>
+        <div className="border-t">
+          {view.outliers.length === 0 ? (
+            <EmptyRow>None in this period.</EmptyRow>
+          ) : (
+            <Table className={usageTable}>
+              <TableHeader className="bg-muted/40">
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Review</TableHead>
+                  <TableHead>Kind</TableHead>
+                  <TableHead className={num}>Tokens</TableHead>
+                  <TableHead>When</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {view.outliers.map((o) => (
+                  <TableRow key={o.runID}>
+                    <TableCell>
+                      <Link className="text-primary hover:underline" to={paths.review(instance, project, o.iid)}>
+                        Change {o.iid}
+                      </Link>
+                    </TableCell>
+                    <TableCell>{o.incremental ? "Incremental" : "Full"}</TableCell>
+                    <TableCell className={num}>{count(o.total)}</TableCell>
+                    <TableCell>{when(o.at)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      </Card>
+    </div>
   );
 }
 
@@ -173,32 +200,31 @@ function Named({
   provider?: boolean;
 }) {
   return (
-    <section className="card scroll" aria-label={title}>
-      <h2>{title}</h2>
+    <UsageCard label={title}>
       {rows.length === 0 ? (
         <EmptyRow>No usage in this period.</EmptyRow>
       ) : (
-        <table className="table">
-          <thead>
+        <Table className={usageTable}>
+          <TableHeader className="bg-muted/40">
             <UsageHead first={first}>
-              {provider && <th>Provider</th>}
-              <th className="num">Runs</th>
-              {failed && <th className="num">Failed</th>}
+              {provider && <TableHead>Provider</TableHead>}
+              <TableHead className={num}>Runs</TableHead>
+              {failed && <TableHead className={num}>Failed</TableHead>}
             </UsageHead>
-          </thead>
-          <tbody>
+          </TableHeader>
+          <TableBody>
             {rows.map((r) => (
-              <tr key={`${r.provider}\0${r.name}`}>
-                <td>{r.name}</td>
-                {provider && <td>{r.provider === "" ? dash : r.provider}</td>}
-                <td className="num">{r.runs}</td>
-                {failed && <td className="num">{r.failed}</td>}
+              <TableRow key={`${r.provider}\0${r.name}`}>
+                <TableCell>{r.name}</TableCell>
+                {provider && <TableCell>{r.provider === "" ? dash : r.provider}</TableCell>}
+                <TableCell className={num}>{r.runs}</TableCell>
+                {failed && <TableCell className={num}>{r.failed}</TableCell>}
                 <UsageCells tokens={r.tokens} />
-              </tr>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
-    </section>
+    </UsageCard>
   );
 }

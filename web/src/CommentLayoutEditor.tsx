@@ -1,5 +1,10 @@
 import { useState } from "react";
 
+import { ArrowDown, ArrowUp } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
+
 // The labels of the comment's blocks. The server sends the layout, so the
 // default order and states live there; this only names the blocks, and holds
 // the list a left-out block is picked from. A block it doesn't know is shown
@@ -22,6 +27,9 @@ const parse = (list: string[]): Entry[] =>
 
 const text = (e: Entry) => `${e.block}:${e.state}`;
 
+// rowClass is one block's row: show box, name, state and the move buttons.
+const rowClass = "flex flex-wrap items-center gap-2.5 border-b px-4 py-2.5 text-sm";
+
 // CommentLayoutEditor edits the layout of a review comment: one row per block,
 // in the order of value, each with a show box, a state and the buttons that
 // move it. A block left out of value is an unticked row at the end, with the
@@ -43,12 +51,12 @@ export default function CommentLayoutEditor({
   const [hidden, setHidden] = useState<Record<string, string>>({});
   const list = value ?? defaults ?? null;
   if (list === null) {
-    return <div className="pad meta">Will follow the default layout once you save. Reload to undo.</div>;
+    return <div className="text-muted-foreground px-4 py-2.5 text-sm">Will follow the default layout once you save. Reload to undo.</div>;
   }
   const reset = (
-    <button type="button" className="btn small" disabled={disabled || value === null} onClick={() => onChange(null)}>
+    <Button type="button" variant="outline" size="sm" disabled={disabled || value === null} onClick={() => onChange(null)}>
       Reset to default
-    </button>
+    </Button>
   );
   const entries = parse(list);
   const left = Object.keys(labels).filter((b) => !entries.some((e) => e.block === b));
@@ -69,20 +77,22 @@ export default function CommentLayoutEditor({
     <div>
       <div role="list" aria-label="Comment layout">
         {entries.map((e, i) => (
-          <div className="skill layout-row" role="listitem" key={e.block}>
+          <div className={rowClass} role="listitem" key={e.block}>
             {e.block === "findings" ? (
-              <span className="nobox" aria-hidden="true" />
+              <span className="size-4 shrink-0" aria-hidden="true" />
             ) : (
               <input
                 type="checkbox"
+                className="accent-primary size-4 shrink-0"
                 aria-label={`Show ${label(e.block)}`}
                 checked
                 disabled={disabled}
                 onChange={() => hide(i)}
               />
             )}
-            <b className="grow">{label(e.block)}</b>
-            <select
+            <b className="min-w-0 grow font-semibold">{label(e.block)}</b>
+            <NativeSelect
+              className="w-36"
               aria-label={`${label(e.block)} state`}
               value={e.state}
               disabled={disabled}
@@ -90,48 +100,55 @@ export default function CommentLayoutEditor({
             >
               <option value="open">Open</option>
               <option value="collapsed">Collapsed</option>
-            </select>
-            <button
+            </NativeSelect>
+            <Button
               type="button"
-              className="btn small"
+              variant="outline"
+              size="icon-sm"
               aria-label={`Move ${label(e.block)} up`}
               disabled={disabled || i === 0}
               onClick={() => move(i, -1)}
             >
-              ↑
-            </button>
-            <button
+              <ArrowUp aria-hidden="true" />
+            </Button>
+            <Button
               type="button"
-              className="btn small"
+              variant="outline"
+              size="icon-sm"
               aria-label={`Move ${label(e.block)} down`}
               disabled={disabled || i === entries.length - 1}
               onClick={() => move(i, 1)}
             >
-              ↓
-            </button>
+              <ArrowDown aria-hidden="true" />
+            </Button>
             {e.block === "findings" && (
-              <span className="meta layout-note">Blocking findings always stay open; collapsed applies to suggestions.</span>
+              <span className="text-muted-foreground basis-full pl-6.5 text-xs">
+                Blocking findings always stay open; collapsed applies to suggestions.
+              </span>
             )}
           </div>
         ))}
         {left.map((b) => (
-          <div className="skill layout-row" role="listitem" key={b}>
+          <div className={rowClass} role="listitem" key={b}>
             <input
               type="checkbox"
+              className="accent-primary size-4 shrink-0"
               aria-label={`Show ${label(b)}`}
               checked={false}
               disabled={disabled}
               onChange={() => emit([...entries, { block: b, state: lastState(b) }])}
             />
-            <b className="grow">{label(b)}</b>
-            <select aria-label={`${label(b)} state`} value={lastState(b)} disabled>
+            <b className="min-w-0 grow font-semibold">{label(b)}</b>
+            <NativeSelect className="w-36" aria-label={`${label(b)} state`} value={lastState(b)} disabled>
               <option value="open">Open</option>
               <option value="collapsed">Collapsed</option>
-            </select>
+            </NativeSelect>
           </div>
         ))}
       </div>
-      <div className="pad meta">A block that is not shown is left out of the comment. {reset}</div>
+      <div className="text-muted-foreground flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm">
+        A block that is not shown is left out of the comment. {reset}
+      </div>
     </div>
   );
 }

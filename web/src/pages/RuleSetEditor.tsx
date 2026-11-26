@@ -2,10 +2,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+
 import { api, isStatus, paths, type RuleSetDetail, type RuleSetWritten } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, NotFound, Pill, bytesText } from "../ui";
+import { ErrorBox, Loading, NotFound, PageHeader, Pill, bytesText } from "../ui";
 import { useUnsavedGuard } from "../unsaved";
 
 // maxRuleSetBytes is the most a rule set may be (pergent's rule.MaxFileBytes,
@@ -19,10 +26,27 @@ const formatHelp =
 
 const example = 'rules:\n  - path: "internal/api/**/*.go"\n    rule: |\n      Every handler that starts a transaction must defer tx.Rollback().\n';
 
+// ruleText is the rules text box: monospace, tall enough to read a set.
+const ruleText = "min-h-[360px] font-mono text-xs";
+// hint is the small grey line under a field.
+const hint = "text-muted-foreground text-xs";
+
+// Crumbs is the way back to the rule list, over the page's title.
+function Crumbs({ here }: { here: string }) {
+  return (
+    <div className="text-muted-foreground mb-1.5 text-xs">
+      <Link className="text-muted-foreground hover:underline" to="/rules">
+        Rules
+      </Link>{" "}
+      / {here}
+    </div>
+  );
+}
+
 function SizeCounter({ text }: { text: string }) {
   const n = sizeOf(text);
   return (
-    <span className={n > maxRuleSetBytes ? "problem" : "meta"}>
+    <span className={cn("text-xs", n > maxRuleSetBytes ? "problem text-bad" : "text-muted-foreground")}>
       {bytesText(n)} of {bytesText(maxRuleSetBytes)}
     </span>
   );
@@ -33,7 +57,7 @@ function SizeCounter({ text }: { text: string }) {
 function Notes({ notes }: { notes: string[] }) {
   if (notes.length === 0) return null;
   return (
-    <ul className="note" aria-label="Notes">
+    <ul className="text-ok list-disc pl-5 text-sm" aria-label="Notes">
       {notes.map((n) => (
         <li key={n}>{n}</li>
       ))}
@@ -62,42 +86,40 @@ export function NewRuleSet() {
     create.mutate();
   };
   return (
-    <div className="narrow">
-      <div className="crumbs">
-        <Link to="/rules">Rules</Link> / New rule set
-      </div>
-      <div className="top">
-        <h1>New rule set</h1>
-      </div>
-      <form className="card pad stack" aria-label="New rule set" onSubmit={submit}>
-        <div>
-          <label htmlFor="rule-set-name">Name</label>
-          <input
-            id="rule-set-name"
-            type="text"
-            autoComplete="off"
-            maxLength={100}
-            pattern="[A-Za-z0-9][A-Za-z0-9._\-]*"
-            title="Letters, digits, dots, dashes and underscores, starting with a letter or digit"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-          <div className="meta">The name can't change later.</div>
-        </div>
-        <div>
-          <label htmlFor="rule-set-text">Rules</label>
-          <textarea id="rule-set-text" className="skill-text" spellCheck={false} value={content} onChange={(e) => setContent(e.target.value)} required />
-          <div className="meta">{formatHelp}</div>
-        </div>
-        <div className="actions-row end">
-          <SizeCounter text={content} />
-          <button type="submit" className="btn primary" disabled={create.isPending || sizeOf(content) > maxRuleSetBytes}>
-            Create rule set
-          </button>
-        </div>
-        {create.isError && <ErrorBox error={create.error} />}
-      </form>
+    <div className="max-w-[1100px]">
+      <Crumbs here="New rule set" />
+      <PageHeader title="New rule set" />
+      <Card>
+        <form className="flex flex-col gap-4 px-4" aria-label="New rule set" onSubmit={submit}>
+          <div className="grid gap-2">
+            <Label htmlFor="rule-set-name">Name</Label>
+            <Input
+              id="rule-set-name"
+              type="text"
+              autoComplete="off"
+              maxLength={100}
+              pattern="[A-Za-z0-9][A-Za-z0-9._\-]*"
+              title="Letters, digits, dots, dashes and underscores, starting with a letter or digit"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+            <div className={hint}>The name can't change later.</div>
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="rule-set-text">Rules</Label>
+            <Textarea id="rule-set-text" className={ruleText} spellCheck={false} value={content} onChange={(e) => setContent(e.target.value)} required />
+            <div className={hint}>{formatHelp}</div>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <SizeCounter text={content} />
+            <Button type="submit" disabled={create.isPending || sizeOf(content) > maxRuleSetBytes}>
+              Create rule set
+            </Button>
+          </div>
+          {create.isError && <ErrorBox error={create.error} />}
+        </form>
+      </Card>
     </div>
   );
 }
@@ -140,51 +162,50 @@ function RuleSetPage({ set }: { set: RuleSetDetail }) {
     save.mutate({ content: draft, version: base.version });
   };
   return (
-    <div className="narrow">
-      <div className="crumbs">
-        <Link to="/rules">Rules</Link> / {set.name}
-      </div>
-      <div className="top">
-        <div>
-          <h1>
+    <div className="max-w-[1100px]">
+      <Crumbs here={set.name} />
+      <PageHeader
+        title={
+          <>
             {set.name} {set.inDefaults && <Pill tone="run">default</Pill>} {config && <Pill tone="grey">config file</Pill>}
-          </h1>
-          <div className="sub">
+          </>
+        }
+        description={
+          <>
             {set.entries} {set.entries === 1 ? "entry" : "entries"}
             {config ? "" : ` · v${set.version}`}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
       {editable ? (
-        <form className="card pad stack" aria-label="Edit rule set" onSubmit={submit}>
-          <label htmlFor="rule-set-text">Rules</label>
-          <textarea id="rule-set-text" className="skill-text" spellCheck={false} value={draft} onChange={(e) => setDraft(e.target.value)} />
-          <div className="meta">{formatHelp}</div>
-          <div className="actions-row end">
-            <SizeCounter text={draft} />
-            {dirty && <span className="meta">Unsaved changes</span>}
-            <button
-              type="submit"
-              className="btn primary"
-              disabled={save.isPending || draft === base.content || draft.trim() === "" || sizeOf(draft) > maxRuleSetBytes}
-            >
-              Save
-            </button>
-          </div>
-          {saved && (
-            <div className="note" role="status">
-              Saved as v{saved.version}.
+        <Card>
+          <form className="flex flex-col gap-3 px-4" aria-label="Edit rule set" onSubmit={submit}>
+            <Label htmlFor="rule-set-text">Rules</Label>
+            <Textarea id="rule-set-text" className={ruleText} spellCheck={false} value={draft} onChange={(e) => setDraft(e.target.value)} />
+            <div className={hint}>{formatHelp}</div>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <SizeCounter text={draft} />
+              {dirty && <span className={hint}>Unsaved changes</span>}
+              <Button type="submit" disabled={save.isPending || draft === base.content || draft.trim() === "" || sizeOf(draft) > maxRuleSetBytes}>
+                Save
+              </Button>
             </div>
-          )}
-          <Notes notes={saved ? saved.notes : set.notes} />
-          {save.isError && <ErrorBox error={save.error} />}
-        </form>
+            {saved && (
+              <div className="text-ok text-sm" role="status">
+                Saved as v{saved.version}.
+              </div>
+            )}
+            <Notes notes={saved ? saved.notes : set.notes} />
+            {save.isError && <ErrorBox error={save.error} />}
+          </form>
+        </Card>
       ) : (
-        <section className="card" aria-label="Rule set text">
-          {config && <div className="pad meta">This rule set is defined in the config file. Change it there.</div>}
-          <pre className="doc">{set.content}</pre>
+        <Card role="region" aria-label="Rule set text" className="px-4">
+          {config && <div className="text-muted-foreground text-sm">This rule set is defined in the config file. Change it there.</div>}
+          {/* "doc" stays: it draws the text as a code block. */}
+          <pre className="doc m-0 overflow-auto">{set.content}</pre>
           <Notes notes={set.notes} />
-        </section>
+        </Card>
       )}
     </div>
   );

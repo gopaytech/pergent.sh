@@ -1,5 +1,8 @@
 import { useSearchParams } from "react-router";
 
+import { TableHead } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+
 // SortState is the column a table is sorted by and which way.
 export type SortState<K extends string> = { key: K; desc: boolean };
 
@@ -54,16 +57,23 @@ export function SortHeader<K extends string>({
   const on = sort.key === sortKey;
   const aria = on ? (sort.desc ? "descending" : "ascending") : "none";
   return (
-    <th className={num ? "num" : undefined} aria-sort={aria}>
-      <button type="button" className="sort-btn" onClick={() => onSort(sortKey)}>
+    <TableHead className={cn(num && "num text-right")} aria-sort={aria}>
+      <button
+        type="button"
+        className={cn(
+          "hover:text-foreground focus-visible:ring-ring/50 inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none focus-visible:ring-[3px]",
+          on && "text-foreground",
+        )}
+        onClick={() => onSort(sortKey)}
+      >
         {label}
         {on && (
-          <span className="sort-arrow" aria-hidden="true">
+          <span className="text-[11px]" aria-hidden="true">
             {sort.desc ? "▼" : "▲"}
           </span>
         )}
       </button>
-    </th>
+    </TableHead>
   );
 }
 

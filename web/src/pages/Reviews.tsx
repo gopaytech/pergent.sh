@@ -2,8 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useSearchParams } from "react-router";
 
+import { NativeSelect } from "@/components/ui/native-select";
+
 import { api, query, type RepositoryView } from "../api";
-import { outcomeOptions } from "../ui";
+import { PageHeader, outcomeOptions } from "../ui";
 import ReviewList from "./ReviewList";
 
 const times: [number, string][] = [
@@ -13,6 +15,10 @@ const times: [number, string][] = [
   [365, "Last year"],
 ];
 const defaultDays = 90;
+
+// selectWidth is the width of each select in the filter row: one line on a wide
+// screen, the whole width on a phone.
+const selectWidth = "sm:w-52";
 
 // Reviews lists every merge request or pull request reviewed, filtered by
 // repository, result and time; the filters live in the address.
@@ -57,15 +63,10 @@ export default function Reviews() {
 
   return (
     <>
-      <div className="top">
-        <div>
-          <h1>Reviews</h1>
-          <div className="sub">Every merge request and pull request pergent reviewed, newest first</div>
-        </div>
-      </div>
-      <div className="filters">
+      <PageHeader title="Reviews" description="Every merge request and pull request pergent reviewed, newest first" />
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         {!repos.isPending && (
-          <select aria-label="Team" value={team} onChange={(e) => set({ team: e.target.value })}>
+          <NativeSelect className={selectWidth} aria-label="Team" value={team} onChange={(e) => set({ team: e.target.value })}>
             <option value="">All teams</option>
             <option value="none">No owner</option>
             {teams.map(([id, name]) => (
@@ -73,33 +74,33 @@ export default function Reviews() {
                 {name}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         )}
         {!repos.isPending && (
-          <select aria-label="Repository" value={project} onChange={(e) => set({ project: e.target.value })}>
+          <NativeSelect className={selectWidth} aria-label="Repository" value={project} onChange={(e) => set({ project: e.target.value })}>
             <option value="">All repositories</option>
             {projects.map((p) => (
               <option key={p} value={p}>
                 {p}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         )}
-        <select aria-label="Result" value={outcome} onChange={(e) => set({ outcome: e.target.value })}>
+        <NativeSelect className={selectWidth} aria-label="Result" value={outcome} onChange={(e) => set({ outcome: e.target.value })}>
           <option value="">Any result</option>
           {outcomeOptions.map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </select>
-        <select aria-label="Time" value={days} onChange={(e) => set({ days: Number(e.target.value) })}>
+        </NativeSelect>
+        <NativeSelect className={selectWidth} aria-label="Time" value={days} onChange={(e) => set({ days: Number(e.target.value) })}>
           {times.map(([d, label]) => (
             <option key={d} value={d}>
               {label}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       </div>
       {/* A ?team= is checked against the list, so wait for it. */}
       {!(repos.isPending && teamParam) && (

@@ -1,6 +1,8 @@
 /// <reference types="vitest/config" />
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 
 // emptyOutDir removes the .keep that keeps dist/ in git; put it back.
@@ -15,7 +17,8 @@ const keepFile = (): Plugin => ({
 // The build goes straight into the Go package that embeds it. The server's CSP
 // allows no inline script or style, so nothing here may inline either.
 export default defineConfig({
-  plugins: [react(), keepFile()],
+  plugins: [react(), tailwindcss(), keepFile()],
+  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   build: {
     outDir: "../internal/web/dist",
     emptyOutDir: true,

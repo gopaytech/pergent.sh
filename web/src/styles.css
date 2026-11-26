@@ -1,25 +1,3 @@
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  font: 13.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
-  color: var(--text);
-  background: var(--bg);
-}
-
-a {
-  color: var(--accent);
-}
-
-button,
-select,
-input {
-  font: inherit;
-  color: inherit;
-}
-
 /* --- shell --- */
 
 /* The phone's top bar: the menu button and the name. Hidden on a wide
@@ -70,19 +48,6 @@ input {
   display: grid;
   grid-template-columns: 232px 1fr;
   min-height: 100vh;
-}
-
-aside {
-  background: var(--side);
-  border-right: 1px solid var(--line);
-  color: var(--side-text);
-  padding: 16px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  position: sticky;
-  top: 0;
-  height: 100vh;
 }
 
 .brand {
@@ -151,7 +116,7 @@ aside {
   font-size: 11.5px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--muted);
+  color: var(--text-muted);
   margin: 14px 10px 4px;
 }
 
@@ -188,7 +153,7 @@ aside {
 
 .me .role,
 .me .meta-line > span[aria-hidden] {
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .avatar {
@@ -212,7 +177,7 @@ aside {
 .linkish {
   border: 0;
   background: none;
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 12.5px;
   cursor: pointer;
   padding: 0;
@@ -223,21 +188,11 @@ aside {
   color: var(--text);
 }
 
-main {
-  padding: 24px 32px;
-  /* clip, not auto: auto would make main the scroll box that sticky items
-     (the save bar) measure against, and it never scrolls. Wide tables scroll
-     in their own .card.scroll. */
-  overflow-x: clip;
-  min-width: 0;
-}
-
 .narrow {
   max-width: 1100px;
 }
 
 /* --- page heads --- */
-
 .top {
   display: flex;
   align-items: center;
@@ -246,47 +201,18 @@ main {
   margin-bottom: 18px;
 }
 
-.actions-row {
-  display: flex;
-  gap: 8px;
-}
-
-h1 {
-  font-size: 20px;
-  margin: 0 0 4px;
-}
-
 .top h1 {
   margin: 0;
 }
 
 .sub {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 13.5px;
   margin-top: 2px;
 }
 
-.sub.spaced {
-  margin-bottom: 14px;
-}
-
 p.sub {
   margin: 0 0 14px;
-}
-
-.crumbs {
-  font-size: 12.5px;
-  color: var(--muted);
-  margin-bottom: 6px;
-}
-
-.crumbs a {
-  color: var(--muted);
-  text-decoration: none;
-}
-
-.crumbs a:hover {
-  text-decoration: underline;
 }
 
 .head {
@@ -297,66 +223,9 @@ p.sub {
   margin-bottom: 16px;
 }
 
-/* --- buttons and form controls --- */
-
-.btn {
-  display: inline-block;
-  border: 1px solid var(--line);
-  background: #fff;
-  border-radius: 7px;
-  padding: 7px 12px;
-  font-size: 13.5px;
-  cursor: pointer;
-  white-space: nowrap;
-  text-decoration: none;
-  color: var(--text);
-}
-
-.btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.btn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.btn.small {
-  font-size: 12.5px;
-  padding: 4px 9px;
-}
-
-select,
-textarea,
-input[type="text"],
-input[type="password"],
-input[type="number"],
-input[type="search"] {
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 6px 9px;
-  font-size: 13.5px;
-  width: 100%;
-  background: #fff;
-}
-
-textarea {
-  font-family: inherit;
-  resize: vertical;
-}
-
-select:disabled,
-textarea:disabled,
 input:not(.toggle):disabled {
   background-color: var(--soft);
-  color: var(--muted);
-}
-
-select.btn {
-  width: auto;
-  padding: 7px 10px;
+  color: var(--text-muted);
 }
 
 .toggle {
@@ -387,7 +256,7 @@ select.btn {
 }
 
 .toggle:checked {
-  background: var(--accent);
+  background: var(--brand);
 }
 
 .toggle:checked::after {
@@ -400,9 +269,8 @@ select.btn {
 }
 
 .toggle:focus-visible,
-.btn:focus-visible,
 .tabs button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--brand);
   outline-offset: 2px;
 }
 
@@ -438,15 +306,6 @@ select.btn {
   min-width: 180px;
 }
 
-.search-field .icon-svg {
-  position: absolute;
-  left: 9px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--muted);
-  pointer-events: none;
-}
-
 .search-field input[type="search"] {
   padding-left: 30px;
 }
@@ -463,7 +322,6 @@ select.btn {
 }
 
 /* --- cards and rows --- */
-
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -474,7 +332,7 @@ select.btn {
 
 .card.empty {
   padding: 24px 16px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .card h2 {
@@ -490,7 +348,7 @@ select.btn {
 
 .card h2 a {
   font-size: 12.5px;
-  color: var(--accent);
+  color: var(--brand);
   text-decoration: none;
   font-weight: 500;
 }
@@ -512,9 +370,8 @@ select.btn {
   border-bottom: 0;
 }
 
-.empty-row,
 .loading {
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .loading {
@@ -571,14 +428,13 @@ a.mr:hover {
 }
 
 .meta {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 12.5px;
 }
 
-.plat,
 .src {
   font-size: 11.5px;
-  color: var(--muted);
+  color: var(--text-muted);
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 1px 6px;
@@ -596,12 +452,7 @@ a.mr:hover {
 
 .row .why {
   font-size: 12.5px;
-  color: var(--muted);
-}
-
-.mono {
-  font-family: var(--mono);
-  font-size: 12.5px;
+  color: var(--text-muted);
 }
 
 /* Model and user text: shown as typed, line breaks kept. */
@@ -610,16 +461,7 @@ a.mr:hover {
   overflow-wrap: anywhere;
 }
 
-pre {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  margin: 0;
-}
-
 /* --- pills and badges --- */
-
 .pill {
   font-size: 11.5px;
   font-weight: 600;
@@ -659,8 +501,8 @@ pre {
   border-radius: 7px;
   padding: 1px 6px;
   margin-left: 6px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--brand-soft);
+  color: var(--brand);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -713,7 +555,6 @@ pre {
 }
 
 /* --- token quota --- */
-
 .quota {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -721,19 +562,6 @@ pre {
   padding: 10px 16px;
   margin-bottom: 16px;
   font-size: 13.5px;
-}
-
-.quota-line {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  padding: 4px 0;
-}
-
-.quota-line .name {
-  min-width: 110px;
-  font-weight: 600;
 }
 
 /* The bar: calm, amber from 80%, red when the quota is used up (the colours
@@ -759,12 +587,12 @@ pre {
 .quota-meter::-webkit-meter-suboptimum-value,
 .quota-meter::-webkit-meter-even-less-good-value {
   border-radius: 4px;
-  background: var(--accent);
+  background: var(--brand);
 }
 
 .quota-meter::-moz-meter-bar {
   border-radius: 4px;
-  background: var(--accent);
+  background: var(--brand);
 }
 
 .quota-meter.warn,
@@ -793,7 +621,6 @@ pre {
 }
 
 /* --- overview --- */
-
 .stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -809,7 +636,7 @@ pre {
 }
 
 .stat .k {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 12.5px;
 }
 
@@ -833,7 +660,6 @@ pre {
 }
 
 /* --- review detail --- */
-
 .layout {
   display: grid;
   grid-template-columns: 280px 1fr;
@@ -841,205 +667,10 @@ pre {
   align-items: start;
 }
 
-.run-item {
-  display: block;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-  border-left: 3px solid transparent;
-  font-size: 13.5px;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.run-item:last-child {
-  border-bottom: 0;
-}
-
-.run-item:hover {
-  background: var(--soft);
-}
-
-.run-item.sel {
-  background: var(--accent-soft);
-  border-left-color: var(--accent);
-}
-
 .facts {
   padding: 10px 14px;
   font-size: 13.5px;
   line-height: 1.8;
-}
-
-.webhook-url code {
-  overflow-wrap: anywhere;
-}
-
-/* A review run's facts: a short name on the left, its value on the right. */
-.run-facts {
-  display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
-  gap: 6px 10px;
-  margin: 0;
-  padding: 12px 16px;
-  font-size: 13.5px;
-}
-
-.run-facts > div {
-  display: contents;
-}
-
-.run-facts dt {
-  color: var(--muted);
-}
-
-.run-facts dd {
-  margin: 0;
-  min-width: 0;
-}
-
-.run-facts .attempts {
-  margin: 0;
-  padding-left: 18px;
-}
-
-/* A long Job or pod name wraps in its own column, whole, never cut. */
-.run-facts .id {
-  overflow-wrap: anywhere;
-}
-
-.run-notes {
-  display: grid;
-  gap: 6px;
-  padding: 12px 16px 0;
-  font-size: 13.5px;
-}
-
-.run-tokens {
-  padding: 0 16px 12px;
-}
-
-.token-table .total {
-  font-size: 20px;
-  font-weight: 650;
-  line-height: 1.3;
-}
-
-.token-table table {
-  border-collapse: collapse;
-  width: 100%;
-  max-width: 280px;
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
-}
-
-.token-table th,
-.token-table td {
-  padding: 2px 0;
-  text-align: left;
-  font-weight: 400;
-}
-
-.token-table td:last-child {
-  text-align: right;
-}
-
-.token-table tr:not(.part) th {
-  font-weight: 600;
-}
-
-.token-table tr.part th,
-.token-table tr.part td {
-  color: var(--muted);
-}
-
-.token-table tr.part th,
-.token-table tr.part td[colspan] {
-  padding-left: 12px;
-}
-
-/* Each kubectl command: its name and Copy on top, the command on one line
-   below, scrolling in its box when it is longer than the card. */
-.kube-command {
-  margin: 0 16px 8px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  overflow: hidden;
-}
-
-.kube-command .head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 6px 4px 10px;
-  background: var(--soft);
-  border-bottom: 1px solid var(--line);
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.kube-command code {
-  display: block;
-  padding: 7px 10px;
-  overflow-x: auto;
-  white-space: nowrap;
-  font-size: 12.5px;
-}
-
-.kube-detail {
-  margin: 0 16px 8px;
-}
-
-.kube-note {
-  padding: 4px 16px 12px;
-}
-
-/* A dialog over the page: a light shade behind it, the card near the top. */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: grid;
-  place-items: start center;
-  padding: 12vh 16px 16px;
-  background: rgba(29, 29, 38, 0.28);
-}
-
-.modal {
-  width: 100%;
-  max-width: 420px;
-  margin: 0;
-  box-shadow: 0 12px 32px rgba(29, 29, 38, 0.16);
-}
-
-.card.modal h2 {
-  padding: 0;
-  margin: 0 0 12px;
-  border-bottom: 0;
-  font-size: 15px;
-}
-
-.modal label {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.modal .meta {
-  margin-top: 8px;
-}
-
-.modal .error {
-  margin-top: 10px;
-}
-
-.modal-foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--line);
-  background: var(--soft);
 }
 
 .sr-only {
@@ -1083,18 +714,12 @@ pre {
 .finding .loc {
   font-family: var(--mono);
   font-size: 12.5px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .finding p {
   margin: 6px 0 0;
   font-size: 13.5px;
-}
-
-.fix-label {
-  margin-top: 8px;
-  font-size: 12.5px;
-  color: var(--muted);
 }
 
 pre.fix,
@@ -1126,34 +751,6 @@ pre.doc {
   font-size: 13.5px;
 }
 
-.review-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-}
-
-.review-actions .error {
-  margin: 0;
-}
-
-.finding-actions {
-  margin-top: 8px;
-}
-
-.dismiss-form {
-  margin-top: 8px;
-}
-
-.dismiss-form textarea {
-  display: block;
-  margin-bottom: 8px;
-}
-
-.dismiss-form .problem {
-  align-self: center;
-}
-
 .dismissal {
   margin-top: 6px;
   padding-left: 10px;
@@ -1164,7 +761,7 @@ h3.group {
   font-size: 12.5px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--muted);
+  color: var(--text-muted);
   margin: 12px 14px 6px;
 }
 
@@ -1187,7 +784,6 @@ ul.files li {
 }
 
 /* --- tabs --- */
-
 .tabs {
   display: flex;
   gap: 2px;
@@ -1205,7 +801,7 @@ ul.files li {
   background: none;
   padding: 9px 12px;
   font-size: 13.5px;
-  color: var(--muted);
+  color: var(--text-muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
@@ -1217,12 +813,11 @@ ul.files li {
 
 .tabs button.on {
   color: var(--text);
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--brand);
   font-weight: 600;
 }
 
 /* --- repository settings --- */
-
 .set {
   display: grid;
   grid-template-columns: 1fr 280px;
@@ -1241,7 +836,7 @@ ul.files li {
 }
 
 .set .help {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 12.5px;
   margin-top: 2px;
 }
@@ -1257,113 +852,6 @@ ul.files li {
 
 .skill:last-child {
   border-bottom: 0;
-}
-
-/* The comment layout editor: a row per block. The select takes its own width
-   (the global one is 100%), the name keeps room, and a note gets its own line. */
-.layout-row {
-  flex-wrap: wrap;
-}
-
-.layout-row .grow {
-  min-width: 7em;
-}
-
-.layout-row select {
-  width: auto;
-}
-
-.layout-row .nobox {
-  width: 20px;
-}
-
-.layout-row .layout-note {
-  flex-basis: 100%;
-  padding-left: 30px;
-}
-
-/* The linked repositories editor: a row per link (target, Can block, Remove,
-   then the watched paths), and under them a search and a list to add from. A
-   textarea and an input are 100% wide by default, which is what the rows want;
-   there is no select here, but one would need width: auto as in .table. */
-.link-row {
-  display: grid;
-  gap: 8px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
-}
-
-.link-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 13.5px;
-}
-
-/* Not .check: its "input { width: auto }" would shrink the switch to nothing. */
-.link-block {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-  margin: 0;
-  font-weight: 400;
-}
-
-/* A CI job row (name, what to read, Blocks approval, Remove). The select takes
-   its own width, not the global 100%, the name keeps room to type, and a narrow
-   card wraps the row instead of pushing the switch and Remove out of it. */
-.ci-job .link-head {
-  flex-wrap: wrap;
-}
-
-.ci-job .link-head input.grow {
-  min-width: 12em;
-}
-
-.ci-job .link-head select {
-  width: auto;
-  flex: none;
-}
-
-.link-watched {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-}
-
-.link-watched textarea {
-  font-family: var(--mono);
-  font-size: 12.5px;
-}
-
-.link-add {
-  display: grid;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--line);
-}
-
-.link-add label {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-}
-
-.link-pick {
-  max-height: 240px;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-}
-
-.link-pick .skill {
-  padding: 7px 12px;
-}
-
-.link-pick .skill .problem {
-  max-width: 65%;
-  text-align: right;
 }
 
 /* A settings row whose control needs the full width, on a line of its own. */
@@ -1392,87 +880,18 @@ details.skill-doc summary::-webkit-details-marker {
 
 details.skill-doc summary::before {
   content: "▸";
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 details.skill-doc[open] summary::before {
   content: "▾";
 }
 
-/* A built-in rule's globs, one per {a,b} choice, wrapped on the summary line. */
-.built-in-paths {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-}
-
-/* The built-in rule picker on a repository's Settings: a search, the count
-   and Select none on one line, then the rules in a list that scrolls on its
-   own, so 67 rows don't push the rest of the page down. */
-.built-in-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border-bottom: 1px solid var(--line);
-}
-
-.built-in-bar .meta {
-  white-space: nowrap;
-}
-
-ul.built-in-pick {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 360px;
-  overflow-y: auto;
-  border-bottom: 1px solid var(--line);
-}
-
-ul.built-in-pick:empty {
-  display: none;
-}
-
-ul.built-in-pick li.skill {
-  align-items: flex-start;
-}
-
-/* A built-in rule in the picker: its name and globs, which open to its text. */
-details.built-in-doc summary {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  list-style: none;
-}
-
-details.built-in-doc summary::-webkit-details-marker {
-  display: none;
-}
-
-details.built-in-doc summary::before {
-  content: "▸";
-  color: var(--muted);
-}
-
-details.built-in-doc[open] summary::before {
-  content: "▾";
-}
-
-details.built-in-doc pre.doc {
-  margin: 8px 0 0;
-}
-
 /* --- tables --- */
-
 .table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13.5px;
-}
-
-.card.scroll {
-  overflow-x: auto;
 }
 
 .table th {
@@ -1480,7 +899,7 @@ details.built-in-doc pre.doc {
   text-align: left;
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--text-muted);
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--soft);
@@ -1501,14 +920,6 @@ details.built-in-doc pre.doc {
   font-variant-numeric: tabular-nums;
 }
 
-/* A tenant's row under its API client on the Usage page. */
-.table .tenant-row td:first-child {
-  padding-left: 28px;
-}
-.table .tenant-row td {
-  color: var(--muted);
-}
-
 .table progress {
   width: 100%;
 }
@@ -1517,35 +928,7 @@ details.built-in-doc pre.doc {
   margin: 6px 0 0;
 }
 
-/* --- admin settings --- */
-
-.kvs {
-  margin: 0;
-}
-
-.kv {
-  display: grid;
-  grid-template-columns: 260px 1fr;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line);
-  font-size: 13.5px;
-}
-
-.kv:last-child {
-  border-bottom: 0;
-}
-
-.kv dt {
-  color: var(--muted);
-}
-
-.kv dd {
-  margin: 0;
-  font-weight: 600;
-}
-
 /* --- sign-in --- */
-
 .signin {
   min-height: 100vh;
   display: grid;
@@ -1566,57 +949,32 @@ details.built-in-doc pre.doc {
 }
 
 .signin-card .empty {
-  color: var(--muted);
-}
-
-.signin-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.signin-buttons .btn {
-  text-align: center;
-  padding: 10px 12px;
-  font-size: 13.5px;
+  color: var(--text-muted);
 }
 
 /* --- narrow screens --- */
-
 @media (max-width: 900px) {
-  .shell {
+.shell {
     grid-template-columns: 1fr;
   }
 
   /* The menu folds behind the top bar's button, so a page starts at the top
      of the screen instead of under the whole menu. Rows keep their own
      height: the page grid must not stretch the bar to fill the screen. */
-  .shell {
+.shell {
     align-content: start;
   }
 
-  .topbar {
+.topbar {
     display: flex;
   }
 
-  /* A review's title wraps to a second line instead of being cut off. */
-  .review-row .title {
-    white-space: normal;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-
-  aside {
-    display: none;
-  }
-
   /* The top bar already shows the name. */
-  aside .brand {
+aside .brand {
     display: none;
   }
 
-  .menu-open aside {
+.menu-open aside {
     display: flex;
     position: fixed;
     top: 52px;
@@ -1628,126 +986,36 @@ details.built-in-doc pre.doc {
     z-index: 30;
   }
 
-  main {
-    padding: 16px;
-  }
-
-  .search-field {
+.search-field {
     flex: 1 1 100%;
   }
 
-  .filters select {
+.filters select {
     flex: 1 1 auto;
   }
 
-  .stats {
+.stats {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .layout,
-  .set {
+.layout,
+.set {
     grid-template-columns: 1fr;
   }
 
-  .top,
-  .head {
+.top,
+.head {
     flex-wrap: wrap;
   }
 }
 
-/* --- forms on the sign-in, password and waiting pages --- */
-
-.stack {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.stack label {
-  font-size: 12.5px;
-  font-weight: 600;
-  margin-top: 6px;
-}
-
-.stack .btn {
-  margin-top: 12px;
-  padding: 10px 12px;
-  font-size: 13.5px;
-}
-
 .signin-card .linkish {
   margin-top: 16px;
-  color: var(--muted);
-}
-
-.signin-or {
-  margin: 16px 0;
-  text-align: center;
-  font-size: 12.5px;
-  color: var(--muted);
-}
-
-/* --- users, teams, audit log, integrations, settings --- */
-
-.nowrap {
-  white-space: nowrap;
+  color: var(--text-muted);
 }
 
 .table td .pill {
   margin-left: 8px;
-}
-
-.secret-box {
-  border-color: var(--warn-line);
-  background: var(--warn-soft);
-  color: var(--warn-text);
-}
-
-.secret-box p {
-  margin: 4px 0 10px;
-}
-
-.secret-value {
-  display: block;
-  padding: 10px 12px;
-  margin: 4px 0 10px;
-  background: #fff;
-  border: 1px solid var(--warn-line);
-  border-radius: 7px;
-  font-family: var(--mono);
-  font-size: 13.5px;
-  word-break: break-all;
-  user-select: all;
-}
-
-.inline-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 8px;
-}
-
-.inline-form label {
-  display: block;
-  font-size: 12.5px;
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-
-.inline-form input[type="text"],
-.inline-form input[type="password"] {
-  width: 260px;
-  max-width: 100%;
-}
-
-.card.pad.stack,
-.card.pad.inline-form {
-  padding: 14px 16px;
-}
-
-.card.pad.stack h2 {
-  padding: 0 0 10px;
-  border-bottom: 0;
 }
 
 .row.wrap {
@@ -1762,20 +1030,6 @@ details.built-in-doc pre.doc {
 .editor {
   border-top: 1px solid var(--line);
   background: var(--soft);
-}
-
-fieldset {
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  margin: 8px 0 0;
-  padding: 8px 12px;
-  background: #fff;
-}
-
-legend {
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 0 4px;
 }
 
 .check {
@@ -1834,43 +1088,6 @@ legend {
   max-width: 320px;
 }
 
-.stack .add-email .btn {
-  margin-top: 0;
-  padding: 4px 9px;
-  font-size: 12.5px;
-}
-
-.stack .meta {
-  margin-bottom: 2px;
-}
-
-.stack .actions-row .btn {
-  margin-top: 12px;
-}
-
-/* --- skill library --- */
-
-.skill-row {
-  border-bottom: 1px solid var(--line);
-}
-
-.skill-row:last-child {
-  border-bottom: 0;
-}
-
-.skill-row .skill {
-  border-bottom: 0;
-}
-
-.skill-row .error {
-  margin: 0 16px 12px;
-}
-
-.skill-row .error ul {
-  margin: 6px 0 0;
-  padding-left: 18px;
-}
-
 a.skill-name {
   font-weight: 600;
   color: var(--text);
@@ -1898,19 +1115,6 @@ textarea.skill-text {
   padding: 0;
 }
 
-.update-row {
-  border-bottom: 1px solid var(--line);
-}
-
-.update-row:last-of-type {
-  border-bottom: 0;
-}
-
-.update-row h3 {
-  margin: 0;
-  font-size: 13.5px;
-}
-
 pre.diff {
   font-family: var(--mono);
   font-size: 12.5px;
@@ -1924,18 +1128,7 @@ pre.diff span {
   overflow-wrap: anywhere;
 }
 
-pre.diff .diff-add {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-
-pre.diff .diff-del {
-  background: var(--bad-soft);
-  color: var(--bad);
-}
-
 /* --- setup checklist --- */
-
 .checklist {
   list-style: none;
   margin: 0;
@@ -1958,7 +1151,7 @@ pre.diff .diff-del {
 .checklist .tick {
   width: 16px;
   text-align: center;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .checklist li.done .tick {
@@ -1966,33 +1159,8 @@ pre.diff .diff-del {
 }
 
 .checklist li.done a {
-  color: var(--muted);
+  color: var(--text-muted);
   text-decoration: line-through;
-}
-
-/* --- dropdowns: the browser's own arrow sits on the edge; draw one with room.
-   :not([multiple]) leaves a list box alone and outranks .table select and
-   .check select, so the compact ones keep the room on the right too. --- */
-
-select:not([multiple]) {
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-  background-size: 10px 6px;
-  padding-right: 32px;
-}
-
-/* --- a card whose title folds and unfolds it --- */
-
-.card h2.fold-head {
-  padding: 0;
-  padding-right: 16px;
-}
-
-.card.folded h2.fold-head {
-  border-bottom: 0;
 }
 
 .fold {
@@ -2012,7 +1180,7 @@ select:not([multiple]) {
 
 .fold::before {
   content: "▸";
-  color: var(--muted);
+  color: var(--text-muted);
   flex: none;
   width: 10px;
 }
@@ -2021,96 +1189,9 @@ select:not([multiple]) {
   content: "▾";
 }
 
-.fold-title {
-  flex: none;
-}
-
-.fold-sum {
-  min-width: 0;
-  font-size: 12.5px;
-  font-weight: 400;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* A model in the admin's list: one line, the rest unfolds under it. */
-.model-row {
-  border-top: 1px solid var(--line);
-}
-
-.model-head {
-  align-items: center;
-  font-size: 13.5px;
-  font-weight: 400;
-}
-
-.model-head .badge {
-  margin-left: 0;
-}
-
-.model-head .mono {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-body {
-  padding-top: 0;
-  padding-left: 36px;
-}
-
 .badge.warn {
   background: var(--warn-soft);
   color: var(--warn);
-}
-
-/* The form Add model opens at the foot of the Models card. */
-.add-model {
-  border-top: 1px solid var(--line);
-}
-
-.add-model h3 {
-  font-size: 13.5px;
-  margin: 0;
-  padding: 12px 16px 0;
-}
-
-.actions-row.end {
-  justify-content: flex-end;
-}
-
-/* A monthly token limit: its name, then the input with Save beside it. */
-.limit-field .inline-field {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-top: 4px;
-}
-
-.limit-field .inline-field input {
-  width: 220px;
-}
-
-.stack .limit-field .inline-field .btn {
-  margin-top: 0;
-  padding: 6px 12px;
-  font-size: 13.5px;
-}
-
-/* A folded body stays hidden even where its class sets a display. */
-[hidden] {
-  display: none !important;
-}
-
-/* A review row's outcome sits in a column of its own width, so every title
-   starts at the same place whatever the outcome's word. */
-.review-row > .pill:first-child {
-  flex: none;
-  min-width: 92px;
-  text-align: center;
 }
 
 /* A line of text with one button at its end, inside a card. */
@@ -2120,57 +1201,14 @@ select:not([multiple]) {
   gap: 12px;
 }
 
-.limit-field .inline-field .btn {
-  margin-top: 0;
-}
-
-/* Usage tables scroll sideways: keep each name on one line, and give the
-   cache and reasoning note room so it wraps less. */
-.card.scroll .table td:first-child {
-  white-space: nowrap;
-}
-
-.card.scroll .table td.num.meta {
-  min-width: 240px;
-}
-
-/* A button that deletes, removes, revokes or resets: red, so it never looks
-   like Save. */
-.btn.danger {
-  color: var(--bad);
-  border-color: #e9b7ba;
-}
-
-.btn.danger:hover:not(:disabled) {
-  background: var(--bad-soft);
-}
-
 .foot.start {
   justify-content: flex-start;
-}
-
-/* The bar a long form saves from: it stays at the bottom of the window while
-   the draft differs from what is saved. */
-.save-bar {
-  position: sticky;
-  bottom: 16px;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 16px 0;
-  padding: 10px 12px 10px 16px;
-  background: var(--panel);
-  border: 1px solid var(--accent);
-  border-radius: 10px;
-  box-shadow: 0 6px 20px rgba(29, 29, 38, 0.14);
-  font-size: 13.5px;
 }
 
 /* On a phone the review page is one column: the findings come before the
    run history and the run's facts. */
 @media (max-width: 900px) {
-  .layout > div:last-child {
+.layout > div:last-child {
     order: -1;
   }
 }
@@ -2183,17 +1221,7 @@ a.stat {
 }
 
 a.stat:hover {
-  border-color: var(--accent);
-}
-
-.actions-row.end {
-  align-items: center;
-}
-
-/* A note at the start of a right-aligned row (Unsaved changes, a size
-   counter) sits at the left, away from the buttons. */
-.actions-row.end > :first-child:not(button) {
-  margin-right: auto;
+  border-color: var(--brand);
 }
 
 .error {
@@ -2212,14 +1240,6 @@ a.stat:hover {
 .tabs button {
   white-space: nowrap;
   flex: none;
-}
-
-/* --- type scale ---
-   A clearer step between levels: the page title, a card's title, body text,
-   and secondary text, which was mostly 12px and hard to read. */
-h1 {
-  font-size: 20px;
-  letter-spacing: -0.01em;
 }
 
 .meta,
@@ -2247,31 +1267,12 @@ h1 {
 }
 
 /* --- rendered markdown: skills, instructions and rules --- */
-
 .md-doc {
   margin: 0 16px 12px;
 }
 
 .md-doc pre.doc {
   margin: 0;
-}
-
-.md-bar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 6px;
-}
-
-.md-front {
-  margin: 0 0 10px;
-  padding: 8px 12px;
-  background: var(--soft);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  font-family: var(--mono);
-  font-size: 12.5px;
-  color: var(--muted);
-  white-space: pre-wrap;
 }
 
 .md {
@@ -2355,7 +1356,7 @@ h1 {
 .md blockquote {
   border-left: 3px solid var(--line);
   padding-left: 12px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .md table {
@@ -2377,20 +1378,10 @@ h1 {
   margin: 1em 0;
 }
 
-.pad-top {
-  padding-top: 12px;
-}
-
 /* A task list item has its checkbox, not a bullet too. */
 .md li:has(> input[type="checkbox"]) {
   list-style: none;
   margin-left: -1.2em;
-}
-
-/* --- the audit log: a day per group, details that wrap --- */
-
-.table-scroll {
-  overflow-x: auto;
 }
 
 .table.audit td {
@@ -2415,22 +1406,6 @@ h1 {
   font-weight: 400;
 }
 
-.audit-kvs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-}
-
-.audit-kv .k {
-  color: var(--muted);
-}
-
-.audit-kv abbr {
-  text-decoration: none;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12.5px;
-}
-
 .table.audit td.mr a {
   text-decoration: none;
 }
@@ -2444,35 +1419,8 @@ h1 {
   margin-bottom: 14px;
 }
 
-/* A column heading that sorts its table: the button looks like the heading. */
-.sort-btn {
-  font: inherit;
-  color: inherit;
-  background: none;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-  text-align: inherit;
-}
-
-.sort-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.sort-arrow {
-  margin-left: 4px;
-  font-size: 11.5px;
-}
-
 /* The owner team column of the repository list: a long name wraps. */
 td.owner {
   max-width: 220px;
   overflow-wrap: anywhere;
-}
-
-/* The line above the repository list that counts repositories with no owner. */
-.owner-line {
-  font-size: 13.5px;
-  margin: 0 0 12px;
 }
