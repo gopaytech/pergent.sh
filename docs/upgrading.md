@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+> **Tokens now count all tokens: input, cache read, cache write, output and reasoning.** Before, they counted input and output only. With pergent v0.11.0 and later, most prompt tokens are reported as cache read and cache write, so usage looked about 100 times lower than it was, and token limits did almost nothing. **This counts against every quota and limit.** Before you upgrade, on the old release, add the Input + Output of the last 30 days to the cache read, cache write and reasoning numbers that Usage shows apart, and raise each limit to cover it.
+
+**Raise your limits before you upgrade.** The new count is much larger, so a limit that was far away can be used up on the first day.
+
+Do these steps on the old release, before you upgrade. There, **Tokens** in [Usage](concepts/usage.md) is still input plus output.
+
+1. Open Usage and choose the last 30 days.
+2. For each repository, team, model, API client and the instance that has a limit, quota or budget, add Input + Output + the cache read, cache write and reasoning numbers shown apart. You can also sum the 5 columns of the CSV.
+3. Raise each limit you set to cover that number. A limit that is empty needs nothing.
+
+Worked example: a team used 285.4k tokens in 30 days under the old count, and about 36.8M under the new one. Its 1M limit would hold every review after the upgrade, so raise it, for example to 50M.
+
+- **What counts.** The [monthly token quota](concepts/token-quota.md), the model and team limits, an API client's monthly token budget, the Usage pages and CSV, and the Review API's `usage` all use the new total. The Prometheus `pergent_tokens_total` series are the same as before. Only the example dashboard changed: its token panels no longer filter on `kind`.
+- **No migration and no new config key.** Rolling back needs no step, but the old release counts input and output only.
+- **New fields.** The Review API's `usage` has `cache_read`, `cache_write`, `reasoning` and `tokens`, and `tokens_in` and `tokens_out` stay. The Usage CSV has a `tokens` column at the end. Older columns keep their places.
+- **If you forget.** The limit bars turn red and a review that a limit holds waits. It is never passed by mistake. An admin can start a held review from the dashboard.
 - `GET /api/repositories` gives each repository its `ownerTeam` (null when none). `OwnerTeamView` gets `viaInstance`.
 - `GET /api/reviews` takes `team`: a team's id, or `none` for repositories with no owner. It only narrows what you can already see.
 

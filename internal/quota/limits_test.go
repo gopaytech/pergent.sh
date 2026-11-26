@@ -2,6 +2,7 @@ package quota
 
 import (
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -44,5 +45,39 @@ func TestLimitsFrom(t *testing.T) {
 	}
 	if !needsUsage(limits, 0) || needsUsage([]store.ModelLimit{{Ref: h, TeamID: 8, MonthlyTokens: 5}}, 7) {
 		t.Error("needsUsage: a model limit needs the usage, another team's limit alone does not")
+	}
+}
+
+// A review that reads mostly from the cache still uses its team's limit: the
+// limit counts input, cache read, cache write, output and reasoning, so
+// 42 + 525000 + 2500 is over a limit of 100000.
+func TestLimitReachedByCacheRead(t *testing.T) {
+	t.Parallel()
+	st := newStore(t)
+	at := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	team, err := st.CreateTeam(ctx, "Payments", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateTeam(ctx, team.ID, func(tm *store.Team) error {
+		tm.Repos = []store.TeamRepo{{Instance: "main", Project: "acme/p1", Owner: true}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := store.EntryRef{Source: store.SourceGlobal, ID: "g1"}
+	seedRowOn(t, st, "main", 1, 1, at, store.SkillUsage{Skill: "a", Verdict: "no_blocking_issues", In: 42, Out: 2500,
+		CacheRead: i64(525000), CacheWrite: i64(0), Reasoning: i64(0)},
+		&store.RunEntry{Source: g.Source, ID: g.ID, Name: "g", Position: 1, Length: 1})
+	if err := st.SetModelLimit(ctx, store.ModelLimit{Ref: g, TeamID: team.ID, MonthlyTokens: 100000, UpdatedAt: at, UpdatedBy: "test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadLimits(ctx, st, at, team.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Team[g] {
+		t.Errorf("ReadLimits = %+v; want the team limit on g used up by cache read", got)
 	}
 }

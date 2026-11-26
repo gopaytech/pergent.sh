@@ -241,6 +241,12 @@ func TestDeleteTeamDropsItsLimits(t *testing.T) {
 // expiry). It returns the run.
 func entryUsage(t *testing.T, s *Store, ref EntryRef, at time.Time, in, out int64) string {
 	t.Helper()
+	return entryUsageRow(t, s, ref, at, skillRow("security", "no_blocking_issues", in, out))
+}
+
+// entryUsageRow is entryUsage of a skill row with any of the 5 token parts.
+func entryUsageRow(t *testing.T, s *Store, ref EntryRef, at time.Time, row SkillUsage) string {
+	t.Helper()
 	n := usageSeq.Add(1)
 	head := fmt.Sprintf("limit%d", n)
 	mr := MRKey{Instance: mr1.Instance, ProjectID: mr1.ProjectID, IID: 1000 + n}
@@ -253,10 +259,69 @@ func entryUsage(t *testing.T, s *Store, ref EntryRef, at time.Time, in, out int6
 	if res, err := s.StoreResult(ctx, id, "tok-"+head, []byte(`{"schema_version":1,"status":"completed","skills":[]}`), at); err != nil || res != ResultStored {
 		t.Fatalf("StoreResult = %v, %v", res, err)
 	}
-	if err := s.RecordUsage(ctx, id, []SkillUsage{skillRow("security", "no_blocking_issues", in, out)}); err != nil {
+	if err := s.RecordUsage(ctx, id, []SkillUsage{row}); err != nil {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// allParts is a row with all 5 token parts set: 604542 tokens.
+func allParts(skill string) SkillUsage {
+	return SkillUsage{Skill: skill, Verdict: "no_blocking_issues", In: 42, Out: 2500,
+		CacheRead: ptrTo(int64(525000)), CacheWrite: ptrTo(int64(75000)), Reasoning: ptrTo(int64(2000))}
+}
+
+// A limit counts in, cache read, cache write, out and reasoning: a run, a
+// multi review's reviewer and its judge each count all 5. A row an old
+// pergent reported (cache and reasoning NULL) counts in plus out.
+func TestEntryTokensCountAllParts(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	g := EntryRef{Source: SourceGlobal, ID: "m1"}
+	entryUsageRow(t, s, g, t0, allParts("security"))
+
+	// A multi review: the reviewer's and the judge's rows, each on its entry.
+	id, ms := multiReviewWithEntries(t, s, mr2, "a1", 1)
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET model_source = 'global', model_entry_id = 'e1' WHERE id = $1::uuid`, id); err != nil {
+		t.Fatal(err)
+	}
+	doneReviewer(t, s, ms[0].ID, `{"status":"completed"}`)
+	if err := s.RecordReviewMemberUsage(ctx, ms[0].ID, []SkillUsage{allParts("security")}); err != nil {
+		t.Fatal(err)
+	}
+	judgeRun(t, s, id, JudgeRow{Reviewers: []int{1}, Provider: "anthropic", Model: "judge-m", Entry: judgeEntry})
+	if err := s.RecordJudgeUsage(ctx, id, []SkillUsage{allParts("security")}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.EntryTokensSince(ctx, t0.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []EntryTokens{
+		{Ref: EntryRef{Source: SourceGlobal, ID: "e1"}, Tokens: 604542},
+		{Ref: g, Tokens: 604542},
+		{Ref: EntryRef{Source: SourceTeam, ID: "j1"}, Tokens: 604542},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("EntryTokensSince = %+v\nwant %+v", got, want)
+	}
+}
+
+// A row with cache and reasoning NULL counts in plus out, never NULL.
+func TestEntryTokensNullParts(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	g := EntryRef{Source: SourceGlobal, ID: "m1"}
+	entryUsageRow(t, s, g, t0, SkillUsage{Skill: "security", Verdict: "no_blocking_issues", In: 100, Out: 20})
+
+	got, err := s.EntryTokensSince(ctx, t0.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []EntryTokens{{Ref: g, Tokens: 120}}; !slices.Equal(got, want) {
+		t.Errorf("EntryTokensSince = %+v\nwant %+v", got, want)
+	}
 }
 
 // The sums: per entry and owner team, from the 1st of the month in UTC on; a

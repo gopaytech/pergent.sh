@@ -1796,7 +1796,7 @@ paths:
       summary: What each skill used on the changes the Skill results tab counts
       description: |
         Admins only (404 for anyone else, as for an unknown repository). The
-        tokens, input and output, each skill used on the changes that
+        tokens (input, cache read, cache write, output and reasoning), each skill used on the changes that
         `GET /api/repositories/{instance}/{project}/skill-results` counts for
         the same window: the changes merged in it that a person opened, and
         the changes closed in it that hold a dismissal. A change merged with no
@@ -3458,8 +3458,8 @@ paths:
         another team leaves its earlier tokens with the old one. A multi
         review counts each reviewer and the judge on its own model, once.
         `daily` is each UTC day with usage, oldest first; `repositories` and
-        `models` are busiest first. Totals and rankings add input and output
-        tokens only. `reviews` counts a review once, however many skills it
+        `models` are busiest first. Totals and rankings add all tokens: input,
+        cache read, cache write, output and reasoning. `reviews` counts a review once, however many skills it
         ran. `partialRange` is true when the range starts before the oldest
         usage row with any owner team (v0.19.0 started to record it), so
         older reviews are not counted.
@@ -3585,8 +3585,8 @@ paths:
         day (a day with no usage is left out, oldest first) and the
         repositories and the API clients, busiest first (a client lists its
         tenants). `tokens` and `reviews` cover both, as `daily` does. Every
-        total and ranking adds input and output tokens only; `cacheRead`,
-        `cacheWrite` and `reasoning` are shown apart. `unknown` counts the review-and-skill rows whose pergent
+        total and ranking adds all tokens: input, cache read, cache write, output and reasoning;
+        `cacheRead`, `cacheWrite` and `reasoning` are also given on their own. `unknown` counts the review-and-skill rows whose pergent
         did not report those three counts, so a result from an older pergent
         is unknown and never zero. `reviews` counts a review once, however
         many skills it ran. A repository switched off since, or on an
@@ -3623,8 +3623,9 @@ paths:
         `incremental`, `model`, `skill`, `verdict`, `tokens_in`, `tokens_out`,
         `cache_read`, `cache_write`, `reasoning` (empty when pergent did not
         report them), `findings`, `blocking`, `provider` (empty for a review
-        from before providers were recorded) and `source` (`global` or `team`:
-        whose key paid). There are no titles and no
+        from before providers were recorded), `source` (`global` or `team`:
+        whose key paid) and `tokens` (all 5 token counts added up; a count
+        pergent did not report is 0). There are no titles and no
         text a person wrote, and no dismissals. A text cell that starts with
         `=`, `+`, `-`, `@`, a tab or a carriage return gets a `'` in front, so
         that a spreadsheet does not read it as a formula. The rows are streamed
@@ -3845,7 +3846,7 @@ paths:
       tags: [Instances and settings]
       summary: Set an instance's monthly token quota
       description: |
-        Admins only. The tokens (in plus out) the reviews of the whole
+        Admins only. The tokens (input, cache read, cache write, output and reasoning) the reviews of the whole
         instance may use in a UTC calendar month: a whole number from 1 to
         1000000000000000, or null for none. Once it is used up, no review of
         any of the instance's repositories starts until the next month, unless
@@ -4038,7 +4039,7 @@ paths:
       tags: [Instances and settings]
       summary: Set a global entry's model limit
       description: |
-        Admins only. The most tokens (input plus output) reviews may spend on
+        Admins only. The most tokens (input, cache read, cache write, output and reasoning) reviews may spend on
         the entry in a UTC calendar month, on every instance and repository,
         API reviews included. When it is used up, reviews skip the entry.
         `{id}` takes `config` and `config-1` to `config-4` too. A number out
@@ -5468,7 +5469,7 @@ components:
       required: [month, tokens_used, tokens_left]
       properties:
         month: {type: string, description: 'The UTC month, as `2026-11`.'}
-        tokens_used: {type: integer, format: int64, description: Tokens in and out.}
+        tokens_used: {type: integer, format: int64, description: "All tokens: input, cache read, cache write, output and reasoning."}
         tokens_left: {type: integer, format: int64, description: What is left of the budget, never below 0.}
     ReviewApiRequest:
       type: object
@@ -5640,10 +5641,26 @@ components:
     ReviewApiUsage:
       type: object
       description: What the review's skills used.
-      required: [tokens_in, tokens_out]
+      required: [tokens_in, tokens_out, cache_read, cache_write, reasoning, tokens]
       properties:
         tokens_in: {type: integer, format: int64}
         tokens_out: {type: integer, format: int64}
+        cache_read:
+          type: integer
+          format: int64
+          description: Cache read tokens; 0 when pergent did not report them. Missing in a review that finished before this release, which carries only `tokens_in` and `tokens_out`.
+        cache_write:
+          type: integer
+          format: int64
+          description: Cache write tokens; 0 when pergent did not report them. Missing in a review that finished before this release, which carries only `tokens_in` and `tokens_out`.
+        reasoning:
+          type: integer
+          format: int64
+          description: Reasoning tokens; 0 when pergent did not report them. Missing in a review that finished before this release, which carries only `tokens_in` and `tokens_out`.
+        tokens:
+          type: integer
+          format: int64
+          description: All tokens, `tokens_in` + `tokens_out` + `cache_read` + `cache_write` + `reasoning`. Missing in a review that finished before this release, which carries only `tokens_in` and `tokens_out`.
     # ------------------------------------------------------------- shared shapes
     ErrorBody:
       type: object
@@ -6224,7 +6241,7 @@ components:
           maximum: 1000000000000000
           description: |
             Admins only (403 for a maintainer; a maintainer's reset leaves it).
-            The tokens (in plus out) the repository's reviews may use in a UTC
+            The tokens (input, cache read, cache write, output and reasoning) the repository's reviews may use in a UTC
             calendar month. A whole number: a fraction, a string or a number
             above the maximum is 400. Null means no quota of its own.
         ruleSets:
@@ -6253,7 +6270,7 @@ components:
           format: int64
           minimum: 1
           maximum: 1000000000000000
-          description: Tokens (input plus output) per UTC calendar month. Removing a limit is a `DELETE`.
+          description: All tokens (input, cache read, cache write, output and reasoning) per UTC calendar month. Removing a limit is a `DELETE`.
     InstanceTokenQuotaRequest:
       type: object
       required: [monthlyTokenQuota]
@@ -6839,7 +6856,7 @@ components:
           description: The instance's token quota per UTC month, null for none.
         tokensThisMonth:
           type: integer
-          description: The tokens (in plus out) the instance's reviews used this UTC month.
+          description: The tokens (input, cache read, cache write, output and reasoning) the instance's reviews used this UTC month.
         platform:
           type: string
           enum: [gitlab, github]
@@ -7309,7 +7326,7 @@ components:
         keys: {type: integer, description: How many keys the client has.}
         reviewsThisMonth: {type: integer, format: int64, description: Reviews of any status.}
         failedThisMonth: {type: integer, format: int64, description: Reviews whose status is `failed`.}
-        tokensThisMonth: {type: integer, format: int64, description: Input plus output tokens the reviews used.}
+        tokensThisMonth: {type: integer, format: int64, description: "All tokens the reviews used: input, cache read, cache write, output and reasoning."}
     APIClientListView:
       type: object
       required: [items]
@@ -7826,7 +7843,7 @@ components:
       properties:
         used:
           type: integer
-          description: Tokens (in plus out) used this UTC month.
+          description: All tokens (input, cache read, cache write, output and reasoning) used this UTC month.
         limit:
           type: [integer, 'null']
           description: The quota, null when there is none.
@@ -8064,7 +8081,7 @@ components:
           type: [string, 'null']
           format: date-time
           description: When a run waiting for CI stops waiting; null when it is not waiting for CI.
-        tokens: {$ref: '#/components/schemas/TokensView'}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
         files: {$ref: '#/components/schemas/FilesView'}
         skills:
           type: array
@@ -8107,13 +8124,15 @@ components:
           oneOf:
           - $ref: '#/components/schemas/JudgeView'
           - type: 'null'
-        total: {$ref: '#/components/schemas/TokensView'}
+        total: {$ref: '#/components/schemas/UsageTokensView'}
     ReviewerView:
       description: One reviewer of a multi review. `entry`, `provider`, `model` and `state` are its final
         attempt's; `entry` is the name in the frozen copy of its chain (the chain's first entry when it never
-        started).
+        started). Its tokens (`in`, `out`, `total` and the rest) are those of all its attempts.
+      allOf:
+      - $ref: '#/components/schemas/UsageTokensView'
       type: object
-      required: [number, entry, provider, model, state, skipped, findings, in, out, attempts]
+      required: [number, entry, provider, model, state, skipped, findings, attempts]
       properties:
         number:
           type: integer
@@ -8131,14 +8150,6 @@ components:
         findings:
           type: integer
           description: The findings of its result, in every skill; 0 when it has none.
-        in:
-          type: integer
-          format: int64
-          description: Input tokens of all its attempts.
-        out:
-          type: integer
-          format: int64
-          description: Output tokens of all its attempts.
         attempts:
           type: array
           items: {$ref: '#/components/schemas/MemberAttemptView'}
@@ -8168,9 +8179,12 @@ components:
           type: string
           description: The step it failed at; empty when none was recorded.
     JudgeView:
-      description: The judge of a multi review on this run.
+      description: The judge of a multi review on this run. Its tokens (`in`, `out`, `total` and the rest)
+        are those of every judge run of the review.
+      allOf:
+      - $ref: '#/components/schemas/UsageTokensView'
       type: object
-      required: [entry, provider, model, noJudge, reason, attempts, in, out]
+      required: [entry, provider, model, noJudge, reason, attempts]
       properties:
         entry:
           type: string
@@ -8186,14 +8200,6 @@ components:
         attempts:
           type: integer
           description: The judge runs of the review, the run that was split and each later attempt.
-        in:
-          type: integer
-          format: int64
-          description: Input tokens of every judge run of the review.
-        out:
-          type: integer
-          format: int64
-          description: Output tokens of every judge run of the review.
     RunSummary:
       description: One run in a review's history.
       type: object
@@ -8369,7 +8375,7 @@ components:
       required: [skill, tokens]
       properties:
         skill: {type: string}
-        tokens: {$ref: '#/components/schemas/TokensView'}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
     SkillSourceView:
       description: Where an installed skill came from.
       type: object
@@ -8729,19 +8735,17 @@ components:
           items: {$ref: '#/components/schemas/TeamRepoView'}
           description: The repositories it covers; a project "" covers every repository of the instance, now
             and later.
-    TokensView:
-      type: object
-      required: [in, out]
-      properties:
-        in: {type: integer}
-        out: {type: integer}
     UsageTokensView:
       description: >-
-        Tokens used. `in` and `out` are what every total and ranking adds up;
-        the rest are reported apart.
+        Tokens used. `total` is what every total, ranking, quota and limit
+        counts: prompt (`in` + `cacheRead` + `cacheWrite`) plus output (`out` +
+        `reasoning`).
       type: object
-      required: [in, out, cacheRead, cacheWrite, reasoning, unknown]
+      required: [in, out, cacheRead, cacheWrite, reasoning, unknown, prompt, output, total]
       properties:
+        prompt: {type: integer, format: int64, description: '`in` + `cacheRead` + `cacheWrite`.'}
+        output: {type: integer, format: int64, description: '`out` + `reasoning`.'}
+        total: {type: integer, format: int64, description: '`prompt` + `output`.'}
         in: {type: integer, format: int64}
         out: {type: integer, format: int64}
         cacheRead:
@@ -8778,11 +8782,11 @@ components:
         globalTokens:
           type: integer
           format: int64
-          description: Tokens (in plus out) on global keys. The instance quota counts these only.
+          description: All tokens (input, cache read, cache write, output and reasoning) on global keys. The instance quota counts these only.
         teamTokens:
           type: integer
           format: int64
-          description: Tokens (in plus out) on teams' own keys.
+          description: All tokens (input, cache read, cache write, output and reasoning) on teams' own keys.
         instance: {type: string}
         project:
           type: string
@@ -8956,7 +8960,7 @@ components:
         total:
           type: integer
           format: int64
-          description: Input plus output tokens.
+          description: "All tokens: input, cache read, cache write, output and reasoning."
         at:
           type: string
           format: date-time
@@ -8968,11 +8972,11 @@ components:
         globalTokens:
           type: integer
           format: int64
-          description: Tokens (in plus out) on global keys. The instance quota counts these only.
+          description: All tokens (input, cache read, cache write, output and reasoning) on global keys. The instance quota counts these only.
         teamTokens:
           type: integer
           format: int64
-          description: Tokens (in plus out) on teams' own keys.
+          description: All tokens (input, cache read, cache write, output and reasoning) on teams' own keys.
         days: {type: integer}
         daily:
           type: array

@@ -846,6 +846,8 @@ describe("AdminSettings models", () => {
     await openSettings();
     const sonnet = await entry("Claude Sonnet");
     expect(sonnet).toHaveTextContent("Tokens this month: 1,234");
+    expect(sonnet).toHaveTextContent("Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. On every instance and repository. Empty: no limit.");
+    expect(sonnet).not.toHaveTextContent("input plus output");
     expect(within(sonnet).queryByRole("meter")).not.toBeInTheDocument();
     expect(within(sonnet).getByLabelText("Model limit of Claude Sonnet")).toHaveValue("");
     const opus = await entry("Claude Opus");

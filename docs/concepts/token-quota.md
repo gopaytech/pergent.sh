@@ -22,7 +22,7 @@ Only admins set or change a quota. Maintainers and viewers see neither the field
 
 ## What counts
 
-- **Input plus output tokens**, the same measure as [Usage](usage.md). Cache and reasoning tokens are not added.
+- **All tokens: input, cache read, cache write, output and reasoning**, the same measure as [Usage](usage.md). All 5 parts count equally.
 - The tokens of reviews that **finished in the current calendar month, in UTC**. A review that started on the 31st and finished on the 1st counts in the new month.
 - A repository's usage is its own reviews, on any key. An instance's usage is all its repositories' tokens on global keys, switched-off and removed ones included: those tokens were spent. Tokens on a team's own keys are not in the instance's usage.
 - An attempt dropped for the next entry of its chain counts too, on the entry that used the tokens ([Attempts](models.md#attempts)).
@@ -73,7 +73,7 @@ A quota caps a repository or an instance. A **limit** caps one model entry. Limi
 
 - Each limit is its own number, from 1 to 1,000,000,000,000,000. An entry is skipped when any limit on it is used up. A team limit may be larger than the model limit: then the model limit stops the entry first.
 - **The owner team** is the one models use ([Models](models.md#the-owner-team)). Each usage row keeps the owner team it had when the review finished, so a repository that moves to another team leaves its earlier tokens with the old team. A repository with no owner team, and an API review, has no team limit.
-- Usage is the same measure as the quotas: input plus output tokens of reviews that finished in the current UTC month, dropped attempts included, on the entry that spent them. A multi review counts each Job on its own entry: each reviewer and the judge.
+- Usage is the same measure as the quotas: all tokens (input, cache read, cache write, output and reasoning) of reviews that finished in the current UTC month, dropped attempts included, on the entry that spent them. A multi review counts each Job on its own entry: each reviewer and the judge.
 - **The check** runs where the chain picks an entry, after the quotas. A review skips an entry at its limit and runs on the next one. A chain of 1 entry ignores marks, not limits: at its limit it is held.
 - **When only the quotas and the limits stop the entries a review has not tried yet**, it is held as for a used-up quota: the same pending status and note, which name no limit and no number. The API gives the change waiting for a start the reason `limit_used_up` (`quota_used_up` when only quotas stopped it). The repository page lists it under **Waiting for a start** with the line `No model in the chain has room this month.`, and only admins get its **Start review** button. When a mark or an unusable key is part of it, the review fails with `all models exhausted:`, such as `all models exhausted: main (out of quota), backup (team limit used up)`.
 - **A request by hand** (`@<bot> review`, a maintainer's **Re-run** or **Start review**) asks the chain the same way, and is refused with `the monthly token quota is used up` when the quotas and the limits leave no entry with room.

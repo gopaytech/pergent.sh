@@ -1028,10 +1028,10 @@ describe("RepositoryDetail", () => {
         const rows = within(section).getAllByRole("row").slice(1);
         // security fixed 3 + 1; no fixed finding is a dash, not a division by zero.
         expect(rows.map((r) => within(r).getAllByRole("cell").map((c) => c.textContent))).toEqual([
-          ["security", "40k", "8k", "4", "12k"],
-          ["code-review", "150k", "30k", "15", "12k"],
-          ["style", "5k", "1k", "1", "6k"],
-          ["docs", "2k", "400", "0", "—"],
+          ["security", "40k", "8k", "48k", "4", "12k"],
+          ["code-review", "150k", "30k", "180k", "15", "12k"],
+          ["style", "5k", "1k", "6k", "1", "6k"],
+          ["docs", "2k", "400", "2.4k", "0", "—"],
         ]);
         expect(fake.find("GET", tokensPath)).toHaveLength(1);
       });

@@ -117,10 +117,15 @@ type Failure struct {
 	Reason string `json:"reason"`
 }
 
-// Usage is what the review's skills used.
+// Usage is what the review's skills used. Tokens is all of it: input, cache
+// read, cache write, output and reasoning. A count pergent did not report is 0.
 type Usage struct {
-	TokensIn  int64 `json:"tokens_in"`
-	TokensOut int64 `json:"tokens_out"`
+	TokensIn   int64 `json:"tokens_in"`
+	TokensOut  int64 `json:"tokens_out"`
+	CacheRead  int64 `json:"cache_read"`
+	CacheWrite int64 `json:"cache_write"`
+	Reasoning  int64 `json:"reasoning"`
+	Tokens     int64 `json:"tokens"`
 }
 
 // DismissalRef is a dismissal on the review's subject. Severity "blocking"
@@ -150,7 +155,16 @@ func Map(res *result.Result, usage []store.SkillUsage, dismissals []DismissalRef
 	for _, s := range usage {
 		u.TokensIn += s.In
 		u.TokensOut += s.Out
+		for _, c := range []struct {
+			to *int64
+			n  *int64
+		}{{&u.CacheRead, s.CacheRead}, {&u.CacheWrite, s.CacheWrite}, {&u.Reasoning, s.Reasoning}} {
+			if c.n != nil {
+				*c.to += *c.n
+			}
+		}
 	}
+	u.Tokens = u.TokensIn + u.TokensOut + u.CacheRead + u.CacheWrite + u.Reasoning
 	if res == nil || res.Status != "completed" {
 		return VerdictFailed, nil, u
 	}

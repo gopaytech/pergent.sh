@@ -101,3 +101,38 @@ func TestDashboardAPIQueriesUseClient(t *testing.T) {
 		t.Error("the dashboard has no API query")
 	}
 }
+
+// A total counts all 5 kinds (input, cache read, cache write, output and
+// reasoning), so no token query filters on the input and output kinds.
+func TestDashboardTokenPanelsCountEveryKind(t *testing.T) {
+	for _, expr := range dashboardExprs(t) {
+		if !regexp.MustCompile(`pergent_(api_)?tokens_total`).MatchString(expr) {
+			continue
+		}
+		if strings.Contains(expr, `kind=~\"input|output\"`) || strings.Contains(expr, `kind=~"input|output"`) {
+			t.Errorf("a token query leaves out cache and reasoning: %s", expr)
+		}
+	}
+	b, err := os.ReadFile(dashboardFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d struct {
+		Panels []struct {
+			Title string `json:"title"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal(b, &d); err != nil {
+		t.Fatal(err)
+	}
+	var titles []string
+	for _, p := range d.Panels {
+		titles = append(titles, p.Title)
+	}
+	if !slices.Contains(titles, "Prompt and output tokens") {
+		t.Error(`no panel is titled "Prompt and output tokens"`)
+	}
+	if slices.Contains(titles, "Input and output tokens") {
+		t.Error(`a panel is still titled "Input and output tokens"`)
+	}
+}

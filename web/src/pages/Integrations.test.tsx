@@ -111,6 +111,8 @@ describe("Integrations", () => {
     const main = await card("GitLab · main");
     expect(onlyCopy(main)).toBe(true);
     // The token quota is shown, but cannot be edited.
+    expect(within(main).getByText(`Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. Empty: no quota.`)).toBeInTheDocument();
+    expect(main).not.toHaveTextContent("input plus output");
     expect(within(main).queryAllByRole("textbox").filter((el) => !(el as HTMLInputElement).disabled)).toEqual([]);
     expect(main).toHaveTextContent("managed by the config file");
     // The others have them.

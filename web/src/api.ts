@@ -213,7 +213,7 @@ export type RunDetailView = {
   ciJobs: CIJobResult[] | null;
   // When a run waiting for CI stops waiting; null when it is not waiting.
   ciDeadline: string | null;
-  tokens: { in: number; out: number };
+  tokens: UsageTokensView;
   files: {
     reviewed: string[];
     skipped: { path: string; rule: string }[];
@@ -255,7 +255,7 @@ export type RunMultiReviewView = {
   off?: string;
   reviewers: ReviewerView[];
   judge: JudgeView | null;
-  total: { in: number; out: number };
+  total: UsageTokensView;
 };
 
 export type MemberState = "queued" | "running" | "reported" | "done" | "failed" | "fell_back" | "superseded" | "skipped";
@@ -274,6 +274,13 @@ export type ReviewerView = {
   findings: number;
   in: number;
   out: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  unknown: number;
+  prompt: number;
+  output: number;
+  total: number;
   attempts: MemberAttemptView[];
 };
 
@@ -302,6 +309,13 @@ export type JudgeView = {
   attempts: number;
   in: number;
   out: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  unknown: number;
+  prompt: number;
+  output: number;
+  total: number;
 };
 
 export type RunEntryView = { name: string; position: number; length: number; source: EntrySource; team: string };
@@ -431,7 +445,7 @@ export type RepoSettings = {
   // overridden, else its instance's.
   trustedAuthorsOnly: SettingView<TrustMode>;
   trustedAuthors: SettingView<TrustedAuthor[]>;
-  // monthlyTokenQuota is the tokens (in plus out) the repository's reviews may
+  // monthlyTokenQuota is the tokens (all parts) the repository's reviews may
   // use in a UTC month; null is none of its own. Only an admin is sent it.
   monthlyTokenQuota?: SettingView<number | null>;
   // ruleSets is null for the default list, otherwise the library rule sets
@@ -611,12 +625,12 @@ export type SkillResultView = {
 // SkillTokensView is the tokens one skill used on the changes the Skill
 // results tab counts (GET .../skill-results/tokens?days=30|90, admins only;
 // read by the Skill results tab). Rows come by skill; [] when none recorded.
-export type SkillTokensView = { skill: string; tokens: { in: number; out: number } };
+export type SkillTokensView = { skill: string; tokens: UsageTokensView };
 
-// UsageTokensView is tokens used: in and out, which every total adds up, and
-// the counts reported apart. unknown counts the review-and-skill rows whose
-// pergent didn't report the apart counts: cache and reasoning are then
-// unknown, never zero.
+// UsageTokensView is tokens used, all 5 parts: prompt is in + cacheRead +
+// cacheWrite, output is out + reasoning, total is prompt + output. unknown
+// counts the review-and-skill rows whose pergent didn't report cache and
+// reasoning: they are then unknown, never zero.
 export type UsageTokensView = {
   in: number;
   out: number;
@@ -624,6 +638,9 @@ export type UsageTokensView = {
   cacheWrite: number;
   reasoning: number;
   unknown: number;
+  prompt: number;
+  output: number;
+  total: number;
 };
 
 // UsageDayView is one UTC day's usage (day is YYYY-MM-DD).
@@ -640,7 +657,7 @@ export type UsageRepositoryRowView = {
   paused: boolean;
   tokens: UsageTokensView;
   reviews: number;
-  // globalTokens and teamTokens split its tokens (in plus out) by whose key
+  // globalTokens and teamTokens split its tokens (all parts) by whose key
   // paid: the global entries' or the teams' own.
   globalTokens: number;
   teamTokens: number;
@@ -715,7 +732,7 @@ export type UsageRepositoryView = {
   fullMedian: number | null;
   incrementalMedian: number | null;
   outliers: UsageOutlierView[];
-  // globalTokens and teamTokens split its tokens (in plus out) by whose key
+  // globalTokens and teamTokens split its tokens (all parts) by whose key
   // paid, as on the overview's row.
   globalTokens: number;
   teamTokens: number;
@@ -1130,7 +1147,7 @@ export type APIKeyView = {
 };
 
 // APIClientRow is one line of GET /api/admin/api-clients. The counts are of
-// the reviews created from the 1st of the UTC month; tokens are in plus out.
+// the reviews created from the 1st of the UTC month; tokens are all parts.
 export type APIClientRow = {
   name: string;
   keys: number;
@@ -1237,7 +1254,9 @@ export type APIReviewBody = {
   verdict?: APIVerdict;
   skills?: APISkill[];
   failure?: { step: string; reason: string };
-  usage?: { tokens_in: number; tokens_out: number };
+  // cache_read, cache_write, reasoning and tokens are missing in a review that finished
+  // before the release that counted all tokens: its body is kept as it was stored.
+  usage?: { tokens_in: number; tokens_out: number; cache_read?: number; cache_write?: number; reasoning?: number; tokens?: number };
   test?: boolean;
 };
 

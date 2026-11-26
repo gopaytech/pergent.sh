@@ -247,7 +247,7 @@ func TestCSVCell(t *testing.T) {
 }
 
 const csvHeader = "reported_at,instance,repository,merge_request,trigger,incremental,model,skill,verdict," +
-	"tokens_in,tokens_out,cache_read,cache_write,reasoning,findings,blocking,provider,source"
+	"tokens_in,tokens_out,cache_read,cache_write,reasoning,findings,blocking,provider,source,tokens"
 
 func csvRows(t *testing.T, rec *httptest.ResponseRecorder) [][]string {
 	t.Helper()
@@ -286,8 +286,8 @@ func TestUsageCSV(t *testing.T) {
 		t.Fatalf("%d rows, want the header and 5: %v", len(rows), rows)
 	}
 	for _, r := range rows[1:] {
-		if len(r) != 18 || r[17] != store.SourceGlobal {
-			t.Errorf("row %v has %d cells, want 18 and source global", r, len(r))
+		if len(r) != 19 || r[17] != store.SourceGlobal {
+			t.Errorf("row %v has %d cells, want 19 and source global", r, len(r))
 		}
 	}
 	// Oldest first: the first review of acme/widgets, two days ago.
@@ -314,12 +314,12 @@ func TestUsageCSV(t *testing.T) {
 	}
 }
 
-// A new column goes last, provider and then source, so a script reading the
+// A new column goes last, provider, source and then tokens, so a script reading the
 // others by position keeps working.
 func TestUsageCSVAddsColumnsLast(t *testing.T) {
 	old := []string{"reported_at", "instance", "repository", "merge_request", "trigger", "incremental", "model",
 		"skill", "verdict", "tokens_in", "tokens_out", "cache_read", "cache_write", "reasoning", "findings", "blocking"}
-	want := append(slices.Clone(old), "provider", "source")
+	want := append(slices.Clone(old), "provider", "source", "tokens")
 	if !slices.Equal(usageCSVHeader, want) {
 		t.Errorf("header = %v; want %v", usageCSVHeader, want)
 	}
@@ -544,7 +544,7 @@ func TestTeamUsageAccess(t *testing.T) {
 				t.Errorf("totals = %+v over %d reviews; want 105 in, 11 out, 2 reviews", v.Tokens, v.Reviews)
 			}
 			if len(v.Repositories) != 1 || v.Repositories[0] != (TeamUsageRepoView{Instance: "main", Project: "acme/payments",
-				Tokens: UsageTokensView{In: 105, Out: 11}, Reviews: 2}) {
+				Tokens: usageTokens(store.TokenSum{In: 105, Out: 11}), Reviews: 2}) {
 				t.Errorf("repositories = %+v; want acme/payments only", v.Repositories)
 			}
 			if len(v.Models) != 2 || v.Models[0].Name != "m2" || v.Models[1].Name != "m1" || v.Models[1].Tokens.In != 5 {
@@ -574,4 +574,39 @@ func TestTeamUsageAccess(t *testing.T) {
 			t.Errorf("days=7: partialRange = %v, tokens %+v; want false and the last row only", v.PartialRange, v.Tokens)
 		}
 	})
+}
+
+// fiveParts is a skill that used all 5 token parts: prompt 600,042, output
+// 4,500, total 604,542.
+func fiveParts(skill string) store.SkillUsage {
+	return store.SkillUsage{Skill: skill, Verdict: "no_blocking_issues", In: 42, Out: 2500,
+		CacheRead: ptr(int64(525000)), CacheWrite: ptr(int64(75000)), Reasoning: ptr(int64(2000))}
+}
+
+func TestUsageTokensViewComputed(t *testing.T) {
+	t.Parallel()
+	got := usageTokens(store.TokenSum{In: 42, CacheRead: 525000, CacheWrite: 75000, Out: 2500, Reasoning: 2000})
+	if got.Prompt != 600042 || got.Output != 4500 || got.Total != 604542 {
+		t.Errorf("prompt %d, output %d, total %d; want 600042, 4500, 604542", got.Prompt, got.Output, got.Total)
+	}
+	if got.In != 42 || got.Out != 2500 || got.CacheRead != 525000 || got.CacheWrite != 75000 || got.Reasoning != 2000 {
+		t.Errorf("the parts = %+v", got)
+	}
+}
+
+// The usage total and the CSV's last column count all 5 parts.
+func TestUsageTotalCountsAllFiveParts(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	e.usageRun(runFix{project: "acme/widgets", number: 1, head: head('1'), at: e.clock.now().Add(-time.Hour), model: "m1"}, fiveParts("security"))
+
+	c := e.operator()
+	got := getJSON[UsageOverviewView](e, c, "/api/admin/usage")
+	if got.Tokens.Total != 604542 || got.Tokens.Prompt != 600042 || got.Tokens.Output != 4500 {
+		t.Errorf("tokens = %+v; want total 604542", got.Tokens)
+	}
+	rows := csvRows(t, e.get(c, "/api/admin/usage.csv"))
+	if len(rows) != 2 || rows[0][len(rows[0])-1] != "tokens" || rows[1][len(rows[1])-1] != "604542" {
+		t.Errorf("csv = %v; want a last column tokens with 604542", rows)
+	}
 }

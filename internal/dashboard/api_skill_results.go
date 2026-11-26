@@ -85,7 +85,7 @@ func (d *Dashboard) repositorySkillTokens(w http.ResponseWriter, r *http.Request
 			return
 		}
 		for _, t := range rows {
-			out = append(out, SkillTokensView{Skill: t.Skill, Tokens: TokensView{In: t.In, Out: t.Out}})
+			out = append(out, SkillTokensView{Skill: t.Skill, Tokens: usageTokens(t.Tokens)})
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

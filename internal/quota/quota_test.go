@@ -90,6 +90,14 @@ func seedUsage(t *testing.T, st *store.Store, instance string, projectID, iid in
 // a global key).
 func seedUsageOn(t *testing.T, st *store.Store, instance string, projectID, iid int64, at time.Time, in, out int64, entry *store.RunEntry) {
 	t.Helper()
+	zero := int64(0)
+	seedRowOn(t, st, instance, projectID, iid, at, store.SkillUsage{Skill: "a", Verdict: "no_blocking_issues", In: in, Out: out,
+		CacheRead: &zero, CacheWrite: &zero, Reasoning: &zero}, entry)
+}
+
+// seedRowOn is seedUsageOn of a skill row with any of the 5 token parts.
+func seedRowOn(t *testing.T, st *store.Store, instance string, projectID, iid int64, at time.Time, row store.SkillUsage, entry *store.RunEntry) {
+	t.Helper()
 	mr := store.MRKey{Instance: instance, ProjectID: projectID, IID: iid}
 	id, _, err := st.EnqueueRun(ctx, mr, fmt.Sprintf("acme/p%d", projectID), fmt.Sprintf("head%d", iid), "main")
 	if err != nil {
@@ -112,8 +120,7 @@ func seedUsageOn(t *testing.T, st *store.Store, instance string, projectID, iid 
 	if out, err := st.StoreResult(ctx, id, token, body, at); err != nil || out != store.ResultStored {
 		t.Fatalf("StoreResult = %v, %v", out, err)
 	}
-	zero := int64(0)
-	if err := st.RecordUsage(ctx, id, []store.SkillUsage{{Skill: "a", Verdict: "no_blocking_issues", In: in, Out: out, CacheRead: &zero, CacheWrite: &zero, Reasoning: &zero}}); err != nil {
+	if err := st.RecordUsage(ctx, id, []store.SkillUsage{row}); err != nil {
 		t.Fatalf("RecordUsage: %v", err)
 	}
 }

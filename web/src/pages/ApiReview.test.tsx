@@ -32,8 +32,17 @@ describe("API review", () => {
     expect(facts).toHaveTextContent("Blocking issues");
     expect(facts).toHaveTextContent("2026-11-10 09:00 UTC");
     expect(facts).toHaveTextContent("2026-11-10 09:04 UTC");
-    expect(facts).toHaveTextContent("12k in, 3.4k out");
+    expect(screen.getByText("Tokens: 604.5k")).toBeInTheDocument();
+    expect(screen.getByText("Prompt 600k · input 42 · cache read 525k · cache write 75k")).toBeInTheDocument();
+    expect(screen.getByText("Output 4.5k · output 2.5k · reasoning 2k")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "fastgateway" })).toHaveAttribute("href", "/api-clients/fastgateway");
+  });
+
+  it("shows the tokens of a review that finished before all tokens were counted", async () => {
+    fakeApi(routes({ ...apiReviewDone, review: { ...apiReviewDone.review, usage: { tokens_in: 100, tokens_out: 20 } } }));
+    renderApp(page(done));
+    expect(await screen.findByText("Tokens: 120")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("NaN");
   });
 
   it("shows each skill's findings: file:line, severity, title, explanation, fix and suggestion as text", async () => {

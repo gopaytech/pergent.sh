@@ -24,8 +24,9 @@ import {
 } from "../api";
 import { useWrite } from "../layout/write";
 import RunLog from "../RunLog";
-import { Ago, CopyButton, ErrorBox, ExternalLink, Loading, NotFound, OutcomePill, Pill, Tabs, ago, bytesText, changeRef, count, duration, platformName, skillOrigin, type Tone, utcText } from "../ui";
+import { Ago, CopyButton, ErrorBox, ExternalLink, Loading, NotFound, OutcomePill, Pill, Tabs, ago, bytesText, changeRef, duration, platformName, skillOrigin, type Tone, utcText } from "../ui";
 import { useUrlParam } from "../urlState";
+import { TokenLines, TokensTotal } from "./usageParts";
 
 const triggers: Record<string, string> = {
   first: "first run",
@@ -319,9 +320,7 @@ function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
           <Pill tone="grey">quiet</Pill>
         </div>
       )}
-      <div>
-        Tokens: {count(run.tokens.in)} in · {count(run.tokens.out)} out
-      </div>
+      <TokenLines tokens={run.tokens} />
       <div>
         Files: {f.reviewed.length} reviewed · {f.skipped.length} skipped
         {f.notReviewed.length > 0 && ` · ${f.notReviewed.length} not reviewed`}
@@ -499,8 +498,7 @@ function MultiReview({ runId, review }: { runId: string; review: RunMultiReviewV
             <th>Model</th>
             <th>State</th>
             <th>Findings</th>
-            <th>In</th>
-            <th>Out</th>
+            <th>Tokens</th>
           </tr>
         </thead>
         <tbody>
@@ -511,8 +509,9 @@ function MultiReview({ runId, review }: { runId: string; review: RunMultiReviewV
               <td className="mono">{optionalModel(r.provider, r.model)}</td>
               <td>{reviewerState(r)}</td>
               <td>{r.skipped === "" && !liveStates.includes(r.state) ? r.findings : ""}</td>
-              <td>{count(r.in)}</td>
-              <td>{count(r.out)}</td>
+              <td>
+                <TokensTotal tokens={r} />
+              </td>
             </tr>
           ))}
           {judge && (
@@ -522,8 +521,9 @@ function MultiReview({ runId, review }: { runId: string; review: RunMultiReviewV
               <td className="mono">{optionalModel(judge.provider, judge.model)}</td>
               <td>{judgeState(judge)}</td>
               <td></td>
-              <td>{count(judge.in)}</td>
-              <td>{count(judge.out)}</td>
+              <td>
+                <TokensTotal tokens={judge} />
+              </td>
             </tr>
           )}
           <tr>
@@ -534,8 +534,9 @@ function MultiReview({ runId, review }: { runId: string; review: RunMultiReviewV
             <td></td>
             <td></td>
             <td></td>
-            <td>{count(review.total.in)}</td>
-            <td>{count(review.total.out)}</td>
+            <td>
+              <TokensTotal tokens={review.total} />
+            </td>
           </tr>
         </tbody>
       </table>

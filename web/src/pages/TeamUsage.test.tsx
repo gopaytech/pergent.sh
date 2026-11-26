@@ -2,18 +2,16 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { TeamUsageView, UsageTokensView } from "../api";
+import type { TeamUsageView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { maintainer, myTeams, teamPagePayments } from "../test/fixtures";
+import { maintainer, myTeams, teamPagePayments, tok, fiveParts } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
 
-const tok = (inn: number, out: number, apart = { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 0 }): UsageTokensView => ({ in: inn, out, ...apart });
-
 const usage: TeamUsageView = {
   days: 30,
-  tokens: tok(1_000_000, 200_000, { cacheRead: 500_000, cacheWrite: 20_000, reasoning: 7_000, unknown: 0 }),
+  tokens: fiveParts,
   reviews: 12,
   daily: [
     { day: "2026-11-06", tokens: tok(600_000, 150_000) },
@@ -43,14 +41,24 @@ describe("Team Usage tab", () => {
     fakeApi(routes());
     renderApp("/teams/2?tab=usage");
     const totals = await screen.findByRole("region", { name: "Totals" });
-    // Input plus output, not the cache: 1,000k + 200k.
-    expect(within(totals).getByText("1.2M")).toBeInTheDocument();
-    expect(within(totals).getByText("12")).toBeInTheDocument();
-    expect(screen.getByText(/cache read 500k · cache write 20k · reasoning 7k/)).toBeInTheDocument();
+    expect([...totals.querySelectorAll(".stat")].map((c) => c.textContent)).toEqual([
+      "Tokens604.5kall token kinds added",
+      "Prompt600k87% from cache",
+      "Output4.5kincl. reasoning",
+      "Reviews12with usage recorded",
+    ]);
+    expect(screen.getByText("Prompt: input · cache read · cache write")).toBeInTheDocument();
+    expect(screen.getByText("Output: output · reasoning")).toBeInTheDocument();
+    expect(screen.getByText(/Totals count all tokens: input, cache read, cache write, output and reasoning\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Reported apart/)).toBeNull();
     const repos = screen.getByRole("region", { name: "Repositories" });
     const rows = within(repos).getAllByRole("row").slice(1);
     expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["main/acme/payments", "main/acme/widgets"]);
-    expect(within(rows[0]).getAllByRole("cell").slice(0, 5).map((c) => c.textContent)).toEqual(["main/acme/payments", "9", "900k", "100k", "1M"]);
+    expect(within(rows[0]).getAllByRole("cell").slice(0, 6).map((c) => c.textContent)).toEqual(["main/acme/payments", "9", "900k", "100k", "1M", "0%"]);
+    expect(within(repos).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Repository", "Reviews", "Prompt", "Output", "Tokens", "Cached"]);
+    // The total can be reached with Tab and names its 5 parts.
+    const parts = within(repos).getAllByRole("group", { name: "1M total: input 900k · cache read 0 · cache write 0 · output 100k · reasoning 0" })[0];
+    expect(parts).toHaveAttribute("tabindex", "0");
     expect(within(repos).getByRole("link", { name: "main/acme/payments" })).toHaveAttribute("href", "/repos/main/acme/payments");
     const models = screen.getByRole("region", { name: "Models" });
     expect(within(models).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["sonnet", "local"]);

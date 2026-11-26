@@ -450,8 +450,8 @@ func TestE2EMultiReviewUsage(t *testing.T) {
 	e.judgeAndPublish(t, id, withMultiReview(t, withTokens(t, clean(t, head), 30, 4), 3))
 	waitUsage(env)
 
-	if in, out, found, err := env.Store.RunUsage(env.ctx, id); err != nil || !found || in != 630 || out != 10 {
-		t.Errorf("RunUsage = %d in, %d out, %v, %v; want 630 and 10: every reviewer and the judge", in, out, found, err)
+	if tk, found, err := env.Store.RunUsage(env.ctx, id); err != nil || !found || tk.In != 630 || tk.Out != 10 {
+		t.Errorf("RunUsage = %+v, %v, %v; want 630 and 10: every reviewer and the judge", tk, found, err)
 	}
 	cfg, err := pgx.ParseConfig(env.dbURL)
 	if err != nil {

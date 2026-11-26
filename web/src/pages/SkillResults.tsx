@@ -4,6 +4,7 @@ import { api, paths, type SkillResultView, type SkillTokensView } from "../api";
 import { useMe } from "../layout/me";
 import { ErrorBox, Loading, Pill, count } from "../ui";
 import { useUrlParam } from "../urlState";
+import { TokensTotal, output, prompt, total } from "./usageParts";
 
 const periods: (30 | 90)[] = [30, 90];
 const dayMs = 24 * 3600 * 1000;
@@ -102,7 +103,7 @@ export default function SkillResults({ instance, project }: { instance: string; 
 }
 
 // SkillCost is the tokens each skill used on the changes the table counts,
-// with what a fixed finding cost: tokens in and out over the findings fixed,
+// with what a fixed finding cost: all tokens over the findings fixed,
 // summed over the skill's rows (blocking and suggestion). A skill with no
 // fixed finding has no such number.
 function SkillCost({ tokens, results }: { tokens: UseQueryResult<SkillTokensView[]>; results: SkillResultView[] }) {
@@ -121,8 +122,9 @@ function SkillCost({ tokens, results }: { tokens: UseQueryResult<SkillTokensView
             <thead>
               <tr>
                 <th>Skill</th>
-                <th className="num">Tokens in</th>
-                <th className="num">Tokens out</th>
+                <th className="num">Prompt</th>
+                <th className="num">Output</th>
+                <th className="num">Tokens</th>
                 <th className="num">Fixed</th>
                 <th className="num">Tokens per fixed finding</th>
               </tr>
@@ -133,10 +135,13 @@ function SkillCost({ tokens, results }: { tokens: UseQueryResult<SkillTokensView
                 return (
                   <tr key={t.skill}>
                     <td>{t.skill}</td>
-                    <td className="num">{count(t.tokens.in)}</td>
-                    <td className="num">{count(t.tokens.out)}</td>
+                    <td className="num">{count(prompt(t.tokens))}</td>
+                    <td className="num">{count(output(t.tokens))}</td>
+                    <td className="num">
+                      <TokensTotal tokens={t.tokens} />
+                    </td>
                     <td className="num">{n}</td>
-                    <td className="num">{n > 0 ? count(Math.round((t.tokens.in + t.tokens.out) / n)) : "—"}</td>
+                    <td className="num">{n > 0 ? count(Math.round(total(t.tokens) / n)) : "—"}</td>
                   </tr>
                 );
               })}

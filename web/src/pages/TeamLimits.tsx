@@ -36,7 +36,7 @@ export default function TeamLimits({ team, role, canEdit }: { team: number; role
     <section className="card" aria-label="Model limits">
       <h2>Model limits</h2>
       <div className="pad meta">
-        Tokens per calendar month (UTC), input plus output, that the repositories this team owns may use on a model. Reviews skip
+        Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. The repositories this team owns may use this many on a model. Reviews skip
         a model at its limit. Empty: no limit.
       </div>
       {limits.isPending && <Loading />}

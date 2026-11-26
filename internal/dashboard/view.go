@@ -220,10 +220,10 @@ type RunDetailView struct {
 	CIJobs []CIJobResultView `json:"ciJobs"`
 	// CIDeadline is when a run waiting for CI stops waiting; null when it
 	// isn't waiting for CI.
-	CIDeadline *time.Time  `json:"ciDeadline"`
-	Tokens     TokensView  `json:"tokens"`
-	Files      FilesView   `json:"files"`
-	Skills     []SkillView `json:"skills"`
+	CIDeadline *time.Time      `json:"ciDeadline"`
+	Tokens     UsageTokensView `json:"tokens"`
+	Files      FilesView       `json:"files"`
+	Skills     []SkillView     `json:"skills"`
 	// RulesUsed is whether the image that reviewed knows path rules (its
 	// result has a rules object); false for an older image or no result.
 	RulesUsed bool `json:"rulesUsed"`
@@ -266,24 +266,23 @@ type RunMultiReviewView struct {
 	// Total is every token of the review: each reviewer attempt and each
 	// judge run, the same on each attempt's page. The run's own tokens stay
 	// in its Tokens.
-	Total TokensView `json:"total"`
+	Total UsageTokensView `json:"total"`
 }
 
 // ReviewerView is one reviewer of a multi review, by its number (1 to 5).
 // Entry is the name, in the frozen copy of its chain, of the entry its final
 // attempt ran on (the chain's first entry when it never started); Provider,
-// Model and State are that attempt's. In and Out are the tokens of all its
+// Model and State are that attempt's. The embedded tokens are those of all its
 // attempts.
 type ReviewerView struct {
-	Number   int                 `json:"number"`
-	Entry    string              `json:"entry"` // from the frozen copy
-	Provider string              `json:"provider"`
-	Model    string              `json:"model"`
-	State    string              `json:"state"`   // the final attempt's
-	Skipped  string              `json:"skipped"` // the reason, "" when it has a result
-	Findings int                 `json:"findings"`
-	In       int64               `json:"in"`
-	Out      int64               `json:"out"`
+	Number   int    `json:"number"`
+	Entry    string `json:"entry"` // from the frozen copy
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	State    string `json:"state"`   // the final attempt's
+	Skipped  string `json:"skipped"` // the reason, "" when it has a result
+	Findings int    `json:"findings"`
+	UsageTokensView
 	Attempts []MemberAttemptView `json:"attempts"` // each with its log link by ID
 }
 
@@ -307,7 +306,7 @@ type MemberAttemptView struct {
 // JudgeView is the judge of a multi review: the entry, provider and model
 // this run judged with, or NoJudge and why (Reason) when it ran with no
 // judge. Attempts is how many judge runs the review has (the run that was
-// split and each later attempt); In and Out are the tokens of all of them.
+// split and each later attempt); The embedded tokens are those of all of them.
 type JudgeView struct {
 	Entry    string `json:"entry"`
 	Provider string `json:"provider"`
@@ -315,8 +314,7 @@ type JudgeView struct {
 	NoJudge  bool   `json:"noJudge"`
 	Reason   string `json:"reason"`
 	Attempts int    `json:"attempts"`
-	In       int64  `json:"in"`
-	Out      int64  `json:"out"`
+	UsageTokensView
 }
 
 // RunEntryView is the entry a run ran on: its name, its place in the chain
@@ -350,12 +348,6 @@ type KubernetesView struct {
 	Job       string `json:"job"`
 	Pod       string `json:"pod"`
 	Detail    string `json:"detail"`
-}
-
-// TokensView sums the skills' token counts.
-type TokensView struct {
-	In  int64 `json:"in"`
-	Out int64 `json:"out"`
 }
 
 // FilesView is the files of every skill together, each path once.
@@ -613,7 +605,7 @@ type QuotaView struct {
 	Instance   QuotaUseView `json:"instance"`
 }
 
-// QuotaUseView is the tokens (in plus out) used this month and the quota they
+// QuotaUseView is the tokens (all 5 parts) used this month and the quota they
 // count against; Limit is null when there is none.
 type QuotaUseView struct {
 	Used  int64  `json:"used"`
@@ -823,8 +815,8 @@ type SkillResultView struct {
 // change, not only those inside the window. Rows come by skill, and the list
 // is [] when no change was counted or none has recorded usage.
 type SkillTokensView struct {
-	Skill  string     `json:"skill"`
-	Tokens TokensView `json:"tokens"`
+	Skill  string          `json:"skill"`
+	Tokens UsageTokensView `json:"tokens"`
 }
 
 // SkillSourceView is where an installed skill came from. Kind is "instance"
@@ -1777,8 +1769,9 @@ type RepoRefView struct {
 	Project  string `json:"project"`
 }
 
-// UsageTokensView is tokens used: input and output, which every total and
-// ranking adds up, and the counts reported apart. Unknown counts the
+// UsageTokensView is tokens used. Total (prompt plus output) is what every
+// total, ranking, quota and limit adds up; the 5 parts are In, CacheRead,
+// CacheWrite, Out and Reasoning. Unknown counts the
 // review-and-skill rows whose pergent didn't report the apart counts.
 type UsageTokensView struct {
 	In         int64 `json:"in"`
@@ -1787,6 +1780,11 @@ type UsageTokensView struct {
 	CacheWrite int64 `json:"cacheWrite"`
 	Reasoning  int64 `json:"reasoning"`
 	Unknown    int64 `json:"unknown"`
+	// Prompt is In + CacheRead + CacheWrite, Output is Out + Reasoning and
+	// Total is both: what every total, ranking, quota and limit counts.
+	Prompt int64 `json:"prompt"`
+	Output int64 `json:"output"`
+	Total  int64 `json:"total"`
 }
 
 // UsageDayView is one UTC day's usage.
@@ -1798,7 +1796,7 @@ type UsageDayView struct {
 // UsageRepositoryRowView is one repository in GET /api/admin/usage.
 // SwitchedOn is false for a repository paused (Paused) or removed since, or
 // on an instance that was removed: its usage is kept.
-// GlobalTokens and TeamTokens split its tokens (in plus out) by whose key
+// GlobalTokens and TeamTokens split its tokens (all 5 parts) by whose key
 // paid: the global entries' or teams' own.
 type UsageRepositoryRowView struct {
 	Instance     string          `json:"instance"`
@@ -1926,7 +1924,7 @@ type UsageRepositoryView struct {
 	FullMedian        *float64           `json:"fullMedian"`
 	IncrementalMedian *float64           `json:"incrementalMedian"`
 	Outliers          []UsageOutlierView `json:"outliers"`
-	// GlobalTokens and TeamTokens split its tokens (in plus out) by whose key
+	// GlobalTokens and TeamTokens split its tokens (all 5 parts) by whose key
 	// paid, as UsageRepositoryRowView does.
 	GlobalTokens int64 `json:"globalTokens"`
 	TeamTokens   int64 `json:"teamTokens"`
@@ -1973,7 +1971,7 @@ type APIKeyInput struct {
 }
 
 // APIClientRowView is one line of the list of clients. The counts are of the
-// reviews created from the 1st of the UTC month; tokens are in plus out.
+// reviews created from the 1st of the UTC month; tokens are all 5 parts.
 type APIClientRowView struct {
 	Name             string `json:"name"`
 	Keys             int    `json:"keys"`

@@ -211,9 +211,13 @@ func TestMapRedacts(t *testing.T) {
 
 func TestMapUsage(t *testing.T) {
 	res := parse(t, skillJSON("a", "no_blocking_issues", one), skillJSON("b", "no_blocking_issues", one))
-	_, _, u := Map(res, []store.SkillUsage{{Skill: "a", In: 10, Out: 2}, {Skill: "b", In: 5, Out: 1}}, nil, nil)
-	if u.TokensIn != 15 || u.TokensOut != 3 {
-		t.Fatalf("usage = %+v", u)
+	p := func(n int64) *int64 { return &n }
+	_, _, u := Map(res, []store.SkillUsage{
+		{Skill: "a", In: 10, Out: 2, CacheRead: p(100), CacheWrite: p(20), Reasoning: p(4)},
+		{Skill: "b", In: 5, Out: 1}}, nil, nil)
+	want := Usage{TokensIn: 15, TokensOut: 3, CacheRead: 100, CacheWrite: 20, Reasoning: 4, Tokens: 142}
+	if u != want {
+		t.Fatalf("usage = %+v; want %+v", u, want)
 	}
 }
 

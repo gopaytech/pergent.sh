@@ -28,7 +28,7 @@ const (
 // usageTokens is t as the views carry it.
 func usageTokens(t store.TokenSum) UsageTokensView {
 	return UsageTokensView{In: t.In, Out: t.Out, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite,
-		Reasoning: t.Reasoning, Unknown: t.Unknown}
+		Reasoning: t.Reasoning, Unknown: t.Unknown, Prompt: t.Prompt(), Output: t.Output(), Total: t.Total()}
 }
 
 func usageDays(days []store.DayUsage) []UsageDayView {
@@ -248,7 +248,19 @@ const msgBadUsageRepository = "instance and project go together: give both or ne
 // usageCSVHeader is the first row of an export.
 var usageCSVHeader = []string{"reported_at", "instance", "repository", "merge_request", "trigger", "incremental", "model",
 	"skill", "verdict", "tokens_in", "tokens_out", "cache_read", "cache_write", "reasoning", "findings", "blocking", "provider",
-	"source"}
+	"source", "tokens"}
+
+// rowTokens is all the tokens of a usage row: a count pergent did not report
+// is 0.
+func rowTokens(u store.UsageRow) int64 {
+	n := u.In + u.Out
+	for _, c := range []*int64{u.CacheRead, u.CacheWrite, u.Reasoning} {
+		if c != nil {
+			n += *c
+		}
+	}
+	return n
+}
 
 // csvCell keeps a spreadsheet from reading a cell as a formula.
 func csvCell(s string) string {
@@ -325,7 +337,8 @@ func (d *Dashboard) usageCSV(w http.ResponseWriter, r *http.Request) {
 				strconv.FormatInt(u.MR, 10), csvCell(u.Trigger), strconv.FormatBool(u.Incremental), csvCell(u.Model),
 				csvCell(u.Skill), csvCell(u.Verdict), strconv.FormatInt(u.In, 10), strconv.FormatInt(u.Out, 10),
 				optionalCount(u.CacheRead), optionalCount(u.CacheWrite), optionalCount(u.Reasoning),
-				strconv.Itoa(u.Findings), strconv.Itoa(u.Blocking), csvCell(u.Provider), csvCell(u.Source)})
+				strconv.Itoa(u.Findings), strconv.Itoa(u.Blocking), csvCell(u.Provider), csvCell(u.Source),
+				strconv.FormatInt(rowTokens(u), 10)})
 		})
 		if err != nil {
 			if ctx.Err() != nil {

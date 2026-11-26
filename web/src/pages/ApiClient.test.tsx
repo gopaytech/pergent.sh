@@ -47,6 +47,7 @@ describe("API client: settings", () => {
     expect(screen.getByLabelText("Callback URL")).toHaveValue("https://fastgateway.example.com/hooks/pergent");
     expect(screen.getByLabelText("Max request bytes")).toHaveValue(524288);
     expect(screen.getByLabelText("Monthly token budget")).toHaveValue(10_000_000);
+    expect(screen.getByText(/Tokens per calendar month \(UTC\): input, cache read, cache write, output and reasoning\. A request over it is refused\./)).toBeInTheDocument();
   });
 
   it("saves the settings with exactly {skills, modelId, callbackUrl, limits}", async () => {

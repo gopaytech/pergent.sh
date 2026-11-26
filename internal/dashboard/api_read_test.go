@@ -838,7 +838,7 @@ func TestRunDetail(t *testing.T) {
 		v.Model == nil || *v.Model != "claude-sonnet-4" || v.Provider == nil || *v.Provider != "anthropic" {
 		t.Errorf("status %q approved %v reason %q version %q provider %v model %v", v.Status, v.Approved, v.ApprovalReason, v.PergentVersion, v.Provider, v.Model)
 	}
-	if v.Tokens != (TokensView{In: 52410, Out: 1850}) {
+	if v.Tokens != usageTokens(store.TokenSum{In: 52410, Out: 1850}) {
 		t.Errorf("tokens = %+v", v.Tokens)
 	}
 	if strings.Join(v.Files.Reviewed, ",") != "api/handler.go,api/handler_test.go" ||
@@ -904,19 +904,19 @@ func TestRunDetailTokensComeFromUsage(t *testing.T) {
 	e := newEnv(t, nil)
 	kept := skillJSON("kept", "no_blocking_issues")
 	own := skillJSON("own", "no_blocking_issues")
-	own["tokens"] = map[string]any{"input": 5, "output": 1}
+	own["tokens"] = map[string]any{"input": 5, "output": 1, "reasoning": 2, "cache_read": 40, "cache_write": 7}
 	f := runFix{project: "acme/widgets", number: 3, head: head('a'), result: resultJSON(head('a'), kept, own), outcome: OutcomeApproved, approved: true}
 	c := e.userOnMain(false, "acme/widgets")
 
 	id := e.addRun(f)
-	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != (TokensView{In: 105, Out: 11}) {
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != usageTokens(store.TokenSum{In: 105, Out: 11, Reasoning: 2, CacheRead: 40, CacheWrite: 7}) {
 		t.Errorf("tokens before usage is recorded = %+v; want the sum of the result", v.Tokens)
 	}
-	if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{usageSkill("own", "no_blocking_issues", 5, 1)}); err != nil {
+	if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{fiveParts("own")}); err != nil {
 		t.Fatal(err)
 	}
-	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != (TokensView{In: 5, Out: 1}) {
-		t.Errorf("tokens = %+v; want the run's own, 5 and 1", v.Tokens)
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != usageTokens(store.TokenSum{In: 42, CacheRead: 525000, CacheWrite: 75000, Out: 2500, Reasoning: 2000}) || v.Tokens.Total != 604542 {
+		t.Errorf("tokens = %+v; want the run's own, total 604542", v.Tokens)
 	}
 }
 
@@ -1607,7 +1607,7 @@ func TestRunDetailKeepsThePageWhenUsageCannotBeRead(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
 		t.Fatal(err)
 	}
-	if v.Tokens != (TokensView{In: 100, Out: 10}) || len(v.Skills) != 1 {
+	if v.Tokens != usageTokens(store.TokenSum{In: 100, Out: 10}) || len(v.Skills) != 1 {
 		t.Errorf("tokens = %+v, skills = %d; want the sum of the result and its skill", v.Tokens, len(v.Skills))
 	}
 	if !strings.Contains(e.logs.String(), "reading a run's usage failed") {
@@ -2020,7 +2020,7 @@ func (e *env) addJudge(run string, j store.JudgeRow) {
 		run, reviewers, j.NoJudge, j.NoJudgeReason, j.Provider, j.Model, j.Entry.Name, j.Entry.Position)
 }
 
-// addReviewUsage stores one run_usage_by_model row: a reviewer attempt's
+// addReviewUsage stores one run_usage_by_model row with every count reported: a reviewer attempt's
 // when member is set, else a judge row of run.
 func (e *env) addReviewUsage(run, member string, reviewer int, skill, entry, provider, model string, in, out int64) {
 	e.t.Helper()
@@ -2029,8 +2029,8 @@ func (e *env) addReviewUsage(run, member string, reviewer int, skill, entry, pro
 		part, number = "reviewer", reviewer
 	}
 	e.exec(`INSERT INTO run_usage_by_model (run_id, member_id, part, reviewer, skill, provider, model, entry_name, reported_at,
-			tokens_in, tokens_out)
-		VALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, now(), $9, $10)`,
+			tokens_in, tokens_out, cache_read, cache_write, reasoning)
+		VALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, now(), $9, $10, 0, 0, 0)`,
 		run, member, part, number, skill, provider, model, entry, in, out)
 }
 
@@ -2082,13 +2082,13 @@ func TestRunPageMultiReview(t *testing.T) {
 	}
 	want := RunMultiReviewView{
 		Reviewers: []ReviewerView{
-			{Number: 1, Entry: "qwen", Provider: "alibaba", Model: "qwen3", State: "done", Findings: 2, In: 155, Out: 16,
+			{Number: 1, Entry: "qwen", Provider: "alibaba", Model: "qwen3", State: "done", Findings: 2, UsageTokensView: usageTokens(store.TokenSum{In: 155, Out: 16}),
 				Attempts: []MemberAttemptView{
 					{ID: r1a, Entry: "sonnet", Position: 1, Provider: "anthropic", Model: "claude-sonnet-4", State: "fell_back"},
 					{ID: r1b, Entry: "qwen", Position: 2, Provider: "alibaba", Model: "qwen3", State: "done"},
 				}},
 			{Number: 2, Entry: "gpt", Provider: "openai", Model: "gpt-5", State: "failed",
-				Skipped: "the reviewer Job ran out of memory (OOMKilled)", In: 20, Out: 2,
+				Skipped: "the reviewer Job ran out of memory (OOMKilled)", UsageTokensView: usageTokens(store.TokenSum{In: 20, Out: 2}),
 				Attempts: []MemberAttemptView{
 					{ID: r2, Entry: "gpt", Position: 1, Provider: "openai", Model: "gpt-5", State: "failed",
 						Failure: "the reviewer Job ran out of memory (OOMKilled)", Step: "review"},
@@ -2098,8 +2098,8 @@ func TestRunPageMultiReview(t *testing.T) {
 					{ID: r3, Entry: "haiku", State: "skipped", Failure: "the entry is out of quota"},
 				}},
 		},
-		Judge: &JudgeView{Entry: "opus", Provider: "anthropic", Model: "claude-opus-4", Attempts: 1, In: 30, Out: 3},
-		Total: TokensView{In: 205, Out: 21},
+		Judge: &JudgeView{Entry: "opus", Provider: "anthropic", Model: "claude-opus-4", Attempts: 1, UsageTokensView: usageTokens(store.TokenSum{In: 30, Out: 3})},
+		Total: usageTokens(store.TokenSum{In: 205, Out: 21}),
 	}
 	if !reflect.DeepEqual(*v.MultiReview, want) {
 		t.Errorf("multi review = %+v\nwant %+v", *v.MultiReview, want)
@@ -2147,8 +2147,8 @@ func TestRunPageMultiReviewJudgeRetry(t *testing.T) {
 
 	c := e.userOnMain(false, "acme/widgets")
 	judges := map[string]JudgeView{
-		split: {Entry: "opus", Provider: "anthropic", Model: "claude-opus-4", Attempts: 2, In: 30, Out: 3},
-		retry: {NoJudge: true, Reason: "the judge failed twice", Attempts: 2, In: 30, Out: 3},
+		split: {Entry: "opus", Provider: "anthropic", Model: "claude-opus-4", Attempts: 2, UsageTokensView: usageTokens(store.TokenSum{In: 30, Out: 3})},
+		retry: {NoJudge: true, Reason: "the judge failed twice", Attempts: 2, UsageTokensView: usageTokens(store.TokenSum{In: 30, Out: 3})},
 	}
 	for id, judge := range judges {
 		v := getJSON[RunDetailView](e, c, "/api/runs/"+id)
@@ -2156,12 +2156,74 @@ func TestRunPageMultiReviewJudgeRetry(t *testing.T) {
 			t.Errorf("run %s judge = %+v; want %+v", id, v.MultiReview, judge)
 			continue
 		}
-		if v.MultiReview.Total != (TokensView{In: 130, Out: 13}) || len(v.MultiReview.Reviewers) != 1 {
+		if v.MultiReview.Total != usageTokens(store.TokenSum{In: 130, Out: 13}) || len(v.MultiReview.Reviewers) != 1 {
 			t.Errorf("run %s multi review = %+v", id, v.MultiReview)
 		}
 	}
-	if v := getJSON[RunDetailView](e, c, "/api/runs/"+retry); v.Tokens != (TokensView{In: 20, Out: 2}) {
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+retry); v.Tokens != usageTokens(store.TokenSum{In: 20, Out: 2}) {
 		t.Errorf("retry tokens = %+v; want its own, 20 and 2", v.Tokens)
+	}
+}
+
+// A multi review's total, its judge and each reviewer count all 5 parts.
+func TestRunPageMultiReviewCountsAllParts(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	now := e.clock.now()
+	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a')),
+		outcome: OutcomeApproved, approved: true, at: now.Add(-time.Hour)})
+	r1 := e.addReviewer(run, reviewerFix{number: 1, state: "done", chain: []string{"sonnet"}, entry: "sonnet", provider: "anthropic",
+		model: "claude-sonnet-4", position: 1, result: cleanResult(head('a')), at: now.Add(-50 * time.Minute)})
+	e.addJudge(run, store.JudgeRow{Reviewers: []int{1}, Provider: "anthropic", Model: "claude-opus-4", Entry: store.RunEntry{Name: "opus", Position: 1}})
+	e.addReviewUsage(run, r1, 1, "code-review", "sonnet", "anthropic", "claude-sonnet-4", 100, 10)
+	e.addReviewUsage(run, "", 0, "judge", "opus", "anthropic", "claude-opus-4", 30, 3)
+	e.exec(`UPDATE run_usage_by_model SET cache_read = 1000, cache_write = 200, reasoning = 20 WHERE run_id = $1::uuid AND part = 'reviewer'`, run)
+	e.exec(`UPDATE run_usage_by_model SET cache_read = 300, cache_write = 50, reasoning = 5 WHERE run_id = $1::uuid AND part = 'judge'`, run)
+
+	v := getJSON[RunDetailView](e, e.userOnMain(false, "acme/widgets"), "/api/runs/"+run)
+	if v.MultiReview == nil || len(v.MultiReview.Reviewers) != 1 || v.MultiReview.Judge == nil {
+		t.Fatalf("multi review = %+v", v.MultiReview)
+	}
+	if got := v.MultiReview.Reviewers[0]; got.Total != 1330 || got.Prompt != 1300 || got.Output != 30 {
+		t.Errorf("reviewer = %+v; want total 1330", got.UsageTokensView)
+	}
+	if got := v.MultiReview.Judge; got.Total != 388 {
+		t.Errorf("judge = %+v; want total 388", got.UsageTokensView)
+	}
+	if got := v.MultiReview.Total; got.Total != 1718 || got.CacheRead != 1300 || got.Reasoning != 25 {
+		t.Errorf("total = %+v; want total 1718", got)
+	}
+}
+
+// Rows whose pergent reported no cache or reasoning counts are Unknown, and
+// still count in and out.
+func TestRunPageMultiReviewUnknownParts(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	now := e.clock.now()
+	run := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a')),
+		outcome: OutcomeApproved, approved: true, at: now.Add(-time.Hour)})
+	r1 := e.addReviewer(run, reviewerFix{number: 1, state: "done", chain: []string{"sonnet"}, entry: "sonnet", provider: "anthropic",
+		model: "claude-sonnet-4", position: 1, result: cleanResult(head('a')), at: now.Add(-50 * time.Minute)})
+	e.addJudge(run, store.JudgeRow{Reviewers: []int{1}, Provider: "anthropic", Model: "claude-opus-4", Entry: store.RunEntry{Name: "opus", Position: 1}})
+	e.exec(`INSERT INTO run_usage_by_model (run_id, member_id, part, reviewer, skill, provider, model, entry_name, reported_at,
+			tokens_in, tokens_out)
+		VALUES ($1::uuid, $2::uuid, 'reviewer', 1, 'code-review', 'anthropic', 'claude-sonnet-4', 'sonnet', now(), 100, 10)`, run, r1)
+	e.exec(`INSERT INTO run_usage_by_model (run_id, part, skill, provider, model, entry_name, reported_at, tokens_in, tokens_out)
+		VALUES ($1::uuid, 'judge', 'code-review', 'anthropic', 'claude-opus-4', 'opus', now(), 30, 3)`, run)
+
+	v := getJSON[RunDetailView](e, e.userOnMain(false, "acme/widgets"), "/api/runs/"+run)
+	if v.MultiReview == nil || len(v.MultiReview.Reviewers) != 1 || v.MultiReview.Judge == nil {
+		t.Fatalf("multi review = %+v", v.MultiReview)
+	}
+	if got := v.MultiReview.Reviewers[0]; got.Total != 110 || got.Unknown != 1 {
+		t.Errorf("reviewer = %+v; want total 110, unknown 1", got.UsageTokensView)
+	}
+	if got := v.MultiReview.Judge; got.Total != 33 || got.Unknown != 1 {
+		t.Errorf("judge = %+v; want total 33, unknown 1", got.UsageTokensView)
+	}
+	if got := v.MultiReview.Total; got.Total != 143 || got.Unknown != 2 {
+		t.Errorf("total = %+v; want total 143, unknown 2", got)
 	}
 }
 

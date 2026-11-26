@@ -1145,3 +1145,27 @@ func TestMetricsTotalsAPIClients(t *testing.T) {
 		t.Errorf("APICallbacks = %v, want %v", callbacks, wantCallbacks)
 	}
 }
+
+// The budget and the dashboard count all 5 parts: in, cache read, cache
+// write, out and reasoning.
+func TestAPITokensSinceCountsAllParts(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	a := newAPIClient(t, s, "client-a")
+	since := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	inMonth := since.Add(48 * time.Hour)
+	id := seedAPIUsage(t, s, a.ID, "s1", inMonth, allParts("security"))
+	if _, err := s.pool.Exec(ctx, `UPDATE api_reviews SET created_at = $2 WHERE run_id = $1::uuid`, id, inMonth); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.APITokensSince(ctx, a.ID, since); err != nil || got != 604542 {
+		t.Errorf("APITokensSince = %d, %v; want 604542", got, err)
+	}
+	stats, err := s.APIClientStats(ctx, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats[a.ID].Tokens != 604542 {
+		t.Errorf("APIClientStats Tokens = %d; want 604542", stats[a.ID].Tokens)
+	}
+}

@@ -301,7 +301,7 @@ function TokenQuota({ inst, locked }: { inst: InstanceAdminView; locked: boolean
           </button>
         )}
       </div>
-      <div className="meta">Tokens per calendar month (UTC), input plus output. Empty: no quota.</div>
+      <div className="meta">Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. Empty: no quota.</div>
       {problem && <div className="meta problem">{problem}</div>}
       {change.isError && <ErrorBox error={change.error} />}
     </div>

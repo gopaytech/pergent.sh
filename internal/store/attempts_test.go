@@ -409,7 +409,7 @@ func TestDigestsCountAttempts(t *testing.T) {
 	}
 }
 
-// UsageBySource splits one repository's tokens (input plus output) by whose
+// UsageBySource splits one repository's tokens (all parts) by whose
 // key paid, in the period only.
 func TestUsageBySource(t *testing.T) {
 	t.Parallel()

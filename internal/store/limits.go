@@ -74,7 +74,7 @@ type EntryTokens struct {
 	Tokens    int64
 }
 
-// entryTokensSQL sums the tokens (in plus out) reported from $1 on, per
+// entryTokensSQL sums all the tokens reported from $1 on, per
 // entry and owner team. A multi review's run has rows per model
 // (run_usage_by_model, Ruling L8) and counts from those, each on its own
 // entry: each reviewer attempt on its review_members entry, each judge run on
@@ -86,19 +86,19 @@ type EntryTokens struct {
 // Any other run counts its run_usage rows on the run's entry. A run with no
 // entry (before chains) counts on none. A pinned Review API review counts on
 // its entry, which its run records.
-const entryTokensSQL = `SELECT source, entry_id, COALESCE(owner_team_id, 0), sum(tokens)::bigint FROM (
+var entryTokensSQL = `SELECT source, entry_id, COALESCE(owner_team_id, 0), sum(tokens)::bigint FROM (
 		SELECT COALESCE(r.model_source, 'global') AS source, r.model_entry_id AS entry_id, u.owner_team_id,
-			u.tokens_in + u.tokens_out AS tokens
+			` + allTokensOf("u") + ` AS tokens
 		FROM run_usage u JOIN runs r ON r.id = u.run_id
 		WHERE u.reported_at >= $1 AND COALESCE(r.model_entry_id, '') <> ''
 		  AND NOT EXISTS (SELECT 1 FROM run_usage_by_model b WHERE b.run_id = u.run_id)
 		UNION ALL
-		SELECT COALESCE(NULLIF(rm.model_source, ''), 'global'), rm.model_entry_id, u.owner_team_id, b.tokens_in + b.tokens_out
+		SELECT COALESCE(NULLIF(rm.model_source, ''), 'global'), rm.model_entry_id, u.owner_team_id, ` + allTokensOf("b") + `
 		FROM run_usage_by_model b JOIN review_members rm ON rm.id = b.member_id
 			LEFT JOIN run_usage u ON u.run_id = b.run_id AND u.skill = b.skill
 		WHERE b.part = 'reviewer' AND b.reported_at >= $1 AND rm.model_entry_id <> ''
 		UNION ALL
-		SELECT COALESCE(NULLIF(j.model_source, ''), 'global'), j.model_entry_id, u.owner_team_id, b.tokens_in + b.tokens_out
+		SELECT COALESCE(NULLIF(j.model_source, ''), 'global'), j.model_entry_id, u.owner_team_id, ` + allTokensOf("b") + `
 		FROM run_usage_by_model b JOIN review_judges j ON j.run_id = b.run_id AND NOT j.no_judge
 			LEFT JOIN run_usage u ON u.run_id = b.run_id AND u.skill = b.skill
 		WHERE b.part = 'judge' AND b.reported_at >= $1 AND j.model_entry_id <> '') x

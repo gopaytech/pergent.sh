@@ -753,10 +753,10 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		// The usage table has only what this run used. Until it is filled in
 		// the sum of the result stands, and so it does when the usage can't be
 		// read: usage never breaks a review's page.
-		if in, out, found, err := d.Store.RunUsage(ctx, run.ID); err != nil {
+		if t, found, err := d.Store.RunUsage(ctx, run.ID); err != nil {
 			d.Log.Warn("dashboard: reading a run's usage failed", "run", run.ID, "error", err.Error())
 		} else if found {
-			view.Tokens = TokensView{In: in, Out: out}
+			view.Tokens = usageTokens(t)
 		}
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -774,8 +774,11 @@ type skillExtra struct {
 		} `json:"checks"`
 	} `json:"checks"`
 	Tokens struct {
-		Input  int64 `json:"input"`
-		Output int64 `json:"output"`
+		Input      int64 `json:"input"`
+		Output     int64 `json:"output"`
+		Reasoning  int64 `json:"reasoning"`
+		CacheRead  int64 `json:"cache_read"`
+		CacheWrite int64 `json:"cache_write"`
 	} `json:"tokens"`
 }
 
@@ -801,6 +804,7 @@ func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map
 	for _, dm := range dismissals {
 		at[dm.Fingerprint] = dm.CreatedAt
 	}
+	var sum store.TokenSum
 	reviewed, skipped, notReviewed, ruled := map[string]bool{}, map[SkippedFile]bool{}, map[string]bool{}, map[string]bool{}
 	for i, s := range res.Skills {
 		sv := SkillView{Name: s.Name, Verdict: decided[i].Verdict, Findings: []FindingView{}, Dismissed: []FindingView{},
@@ -826,8 +830,11 @@ func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map
 							Status: c.Status, Detail: c.Detail})
 					}
 				}
-				view.Tokens.In += x.Tokens.Input
-				view.Tokens.Out += x.Tokens.Output
+				sum.In += x.Tokens.Input
+				sum.Out += x.Tokens.Output
+				sum.Reasoning += x.Tokens.Reasoning
+				sum.CacheRead += x.Tokens.CacheRead
+				sum.CacheWrite += x.Tokens.CacheWrite
 			}
 		}
 		for _, p := range s.Files.Reviewed {
@@ -860,6 +867,7 @@ func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map
 		}
 		view.Skills = append(view.Skills, sv)
 	}
+	view.Tokens = usageTokens(sum)
 }
 
 // findingView is f as the page shows it.
@@ -1007,17 +1015,23 @@ func (d *Dashboard) multiReviewOf(ctx context.Context, run store.Run) (*RunMulti
 	for i, rv := range mv.Reviewers {
 		sorted[rv.Number] = i
 	}
+	var total store.TokenSum
+	judge := make([]store.TokenSum, 1+len(mv.Reviewers))
 	for _, c := range costs {
-		mv.Total.In += c.In
-		mv.Total.Out += c.Out
+		total.Add(c.Tokens)
 		switch i, ok := sorted[c.Reviewer]; {
 		case c.Part == "judge" && mv.Judge != nil:
-			mv.Judge.In += c.In
-			mv.Judge.Out += c.Out
+			judge[0].Add(c.Tokens)
 		case c.Part == "reviewer" && ok:
-			mv.Reviewers[i].In += c.In
-			mv.Reviewers[i].Out += c.Out
+			judge[1+i].Add(c.Tokens)
 		}
+	}
+	mv.Total = usageTokens(total)
+	if mv.Judge != nil {
+		mv.Judge.UsageTokensView = usageTokens(judge[0])
+	}
+	for i := range mv.Reviewers {
+		mv.Reviewers[i].UsageTokensView = usageTokens(judge[1+i])
 	}
 	return mv, nil
 }
