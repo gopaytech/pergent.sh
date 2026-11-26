@@ -1,16 +1,16 @@
-/* The color tokens of the agreed mockups
-   (docs/superpowers/specs/2026-10-31-dashboard-mockups/). */
+/* The color tokens. The sidebar and the page share one light grey, so the
+   app reads as one surface (docs/superpowers/specs/2026-11-26-light-look-design.md). */
 :root {
-  --bg: #f7f7f9;
+  --bg: #f6f7f9;
   --panel: #ffffff;
-  --side: #1f1f2b;
-  --side-2: #2a2a3a;
-  --side-3: #3a3a4e;
-  --side-text: #c9c9d6;
-  --side-active: #ffffff;
+  --side: #f6f7f9;
+  --side-2: #eceef2;
+  --side-3: #e1e3ea;
+  --side-text: #3b3e48;
+  --side-active: var(--text);
   --text: #1d1d26;
   --muted: #6b6b7b;
-  --line: #e6e6ee;
+  --line: #e7e8ec;
   --soft: #fafafc;
   --accent: #3d4ba8;
   --accent-soft: #eceefb;
