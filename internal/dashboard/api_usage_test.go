@@ -544,7 +544,7 @@ func TestTeamUsageAccess(t *testing.T) {
 				t.Errorf("totals = %+v over %d reviews; want 105 in, 11 out, 2 reviews", v.Tokens, v.Reviews)
 			}
 			if len(v.Repositories) != 1 || v.Repositories[0] != (TeamUsageRepoView{Instance: "main", Project: "acme/payments",
-				Tokens: UsageTokensView{In: 105, Out: 11}, Reviews: 2}) {
+				Tokens: usageTokens(store.TokenSum{In: 105, Out: 11}), Reviews: 2}) {
 				t.Errorf("repositories = %+v; want acme/payments only", v.Repositories)
 			}
 			if len(v.Models) != 2 || v.Models[0].Name != "m2" || v.Models[1].Name != "m1" || v.Models[1].Tokens.In != 5 {

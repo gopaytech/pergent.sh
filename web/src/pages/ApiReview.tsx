@@ -128,17 +128,26 @@ function Facts({ view }: { view: APIReviewDetail }) {
 
 // apiTokens reads the Review API's usage as the tokens of a run. Its parts
 // are already counted as 0 when pergent did not report them, so none is unknown.
-const apiTokens = (u: NonNullable<APIReviewBody["usage"]>): UsageTokensView => ({
-  in: u.tokens_in,
-  out: u.tokens_out,
-  cacheRead: u.cache_read,
-  cacheWrite: u.cache_write,
-  reasoning: u.reasoning,
-  unknown: 0,
-  prompt: u.tokens_in + u.cache_read + u.cache_write,
-  output: u.tokens_out + u.reasoning,
-  total: u.tokens,
-});
+// A review that finished before all tokens were counted has only tokens_in and
+// tokens_out: the missing parts are 0 and the total is the sum of the parts.
+const apiTokens = (u: NonNullable<APIReviewBody["usage"]>): UsageTokensView => {
+  const cacheRead = u.cache_read ?? 0;
+  const cacheWrite = u.cache_write ?? 0;
+  const reasoning = u.reasoning ?? 0;
+  const prompt = u.tokens_in + cacheRead + cacheWrite;
+  const output = u.tokens_out + reasoning;
+  return {
+    in: u.tokens_in,
+    out: u.tokens_out,
+    cacheRead,
+    cacheWrite,
+    reasoning,
+    unknown: 0,
+    prompt,
+    output,
+    total: u.tokens ?? prompt + output,
+  };
+};
 
 function Fact({ k, children }: { k: string; children: ReactNode }) {
   return (

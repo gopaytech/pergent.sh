@@ -103,7 +103,7 @@ export default function SkillResults({ instance, project }: { instance: string; 
 }
 
 // SkillCost is the tokens each skill used on the changes the table counts,
-// with what a fixed finding cost: tokens in and out over the findings fixed,
+// with what a fixed finding cost: all tokens over the findings fixed,
 // summed over the skill's rows (blocking and suggestion). A skill with no
 // fixed finding has no such number.
 function SkillCost({ tokens, results }: { tokens: UseQueryResult<SkillTokensView[]>; results: SkillResultView[] }) {

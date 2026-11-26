@@ -373,8 +373,8 @@ func allTokensOf(alias string) string {
 		alias + ".tokens_out, 0) + COALESCE(" + alias + ".reasoning, 0)"
 }
 
-// TokenSum is input and output tokens, plus the counts reported apart and how
-// many rows didn't report them.
+// TokenSum is the tokens of some rows: input, output, the counts reported
+// apart, and how many rows did not report them. Total adds all five parts.
 type TokenSum struct {
 	In, Out                          int64
 	CacheRead, CacheWrite, Reasoning int64

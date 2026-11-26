@@ -1789,7 +1789,7 @@ paths:
       summary: What each skill used on the changes the Skill results tab counts
       description: |
         Admins only (404 for anyone else, as for an unknown repository). The
-        tokens, all tokens (input, cache read, cache write, output and reasoning), each skill used on the changes that
+        tokens (input, cache read, cache write, output and reasoning), each skill used on the changes that
         `GET /api/repositories/{instance}/{project}/skill-results` counts for
         the same window: the changes merged in it that a person opened, and
         the changes closed in it that hold a dismissal. A change merged with no
@@ -5641,19 +5641,19 @@ components:
         cache_read:
           type: integer
           format: int64
-          description: Cache read tokens; 0 when pergent did not report them.
+          description: Cache read tokens; 0 when pergent did not report them. Missing in a review that finished before this release, which carries only `tokens_in` and `tokens_out`.
         cache_write:
           type: integer
           format: int64
-          description: Cache write tokens; 0 when pergent did not report them.
+          description: Cache write tokens; 0 when pergent did not report them. Missing in a review that finished before this release, which carries only `tokens_in` and `tokens_out`.
         reasoning:
           type: integer
           format: int64
-          description: Reasoning tokens; 0 when pergent did not report them.
+          description: Reasoning tokens; 0 when pergent did not report them. Missing in a review that finished before this release, which carries only `tokens_in` and `tokens_out`.
         tokens:
           type: integer
           format: int64
-          description: All tokens, `tokens_in` + `tokens_out` + `cache_read` + `cache_write` + `reasoning`.
+          description: All tokens, `tokens_in` + `tokens_out` + `cache_read` + `cache_write` + `reasoning`. Missing in a review that finished before this release, which carries only `tokens_in` and `tokens_out`.
     # ------------------------------------------------------------- shared shapes
     ErrorBody:
       type: object

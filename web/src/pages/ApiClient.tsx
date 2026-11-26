@@ -104,7 +104,7 @@ const limitFields: [keyof APILimits, string, string][] = [
   ["maxFiles", "Max files", "1 to 1000. The files in one request."],
   ["maxInFlight", "Max in flight", "1 to 50. Reviews of this client running at once; more wait in the queue."],
   ["requestsPerHour", "Requests per hour", "1 to 100000. Per key."],
-  ["monthlyTokenBudget", "Monthly token budget", "Tokens in and out for a UTC month. A request over it is refused."],
+  ["monthlyTokenBudget", "Monthly token budget", "Tokens per calendar month (UTC): input, cache read, cache write, output and reasoning. A request over it is refused."],
 ];
 
 function Settings({ client, show }: { client: APIClientView; show: (s: Omit<Shown, "id">) => void }) {

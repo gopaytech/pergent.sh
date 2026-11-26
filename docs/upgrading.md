@@ -2,12 +2,14 @@
 
 ## Upgrading to the next release
 
-> **Tokens now count all tokens: input, cache read, cache write, output and reasoning.** Before, they counted input and output only. With pergent v0.11.0 and later, most prompt tokens are reported as cache read and cache write, so usage looked about 100 times lower than it was, and token limits did almost nothing. **This counts against every quota and limit.** Before you upgrade, open Usage, add Input + Output + cache read + cache write + reasoning for the last 30 days, and raise each limit to cover it.
+> **Tokens now count all tokens: input, cache read, cache write, output and reasoning.** Before, they counted input and output only. With pergent v0.11.0 and later, most prompt tokens are reported as cache read and cache write, so usage looked about 100 times lower than it was, and token limits did almost nothing. **This counts against every quota and limit.** Before you upgrade, on the old release, add the Input + Output of the last 30 days to the cache read, cache write and reasoning numbers that Usage shows apart, and raise each limit to cover it.
 
 **Raise your limits before you upgrade.** The new count is much larger, so a limit that was far away can be used up on the first day.
 
-1. Open [Usage](concepts/usage.md) and choose the last 30 days. **Tokens** now counts all 5 parts.
-2. Take the Tokens of each repository, team, model, API client and the instance that has a limit, quota or budget.
+Do these steps on the old release, before you upgrade. There, **Tokens** in [Usage](concepts/usage.md) is still input plus output.
+
+1. Open Usage and choose the last 30 days.
+2. For each repository, team, model, API client and the instance that has a limit, quota or budget, add Input + Output + the cache read, cache write and reasoning numbers shown apart. You can also sum the 5 columns of the CSV.
 3. Raise each limit you set to cover that number. A limit that is empty needs nothing.
 
 Worked example: a team used 285.4k tokens in 30 days under the old count, and about 36.8M under the new one. Its 1M limit would hold every review after the upgrade, so raise it, for example to 50M.

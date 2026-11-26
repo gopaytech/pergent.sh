@@ -418,13 +418,14 @@ func TestReviewCostsOrder(t *testing.T) {
 	if err := s.RecordJudgeUsage(ctx, retry, []SkillUsage{{Skill: "security", In: 6, Out: 2}}); err != nil {
 		t.Fatal(err)
 	}
+	// Each fixture row reports no cache or reasoning, so each adds to Unknown.
 	want := []ReviewCost{
-		{Part: "reviewer", Reviewer: 1, RunID: id, MemberID: ms[0].ID, Entry: "main-1", Provider: "p1", Model: "m1", Tokens: TokenSum{In: 11, Out: 2}},
-		{Part: "reviewer", Reviewer: 2, RunID: id, MemberID: ms[1].ID, Entry: "team-2", Provider: "p2", Model: "m2", Tokens: TokenSum{In: 21, Out: 1}},
-		{Part: "reviewer", Reviewer: 2, RunID: id, MemberID: second, Entry: "main-2b", Provider: "p2b", Model: "m2b", Tokens: TokenSum{In: 22, Out: 2}},
-		{Part: "reviewer", Reviewer: 3, RunID: id, MemberID: ms[2].ID, Entry: "main-3", Provider: "p3", Model: "m3", Tokens: TokenSum{In: 3, Out: 1}},
-		{Part: "judge", RunID: id, Entry: "judge-team", Provider: "anthropic", Model: "judge-m", Tokens: TokenSum{In: 7, Out: 1}},
-		{Part: "judge", RunID: retry, Entry: "judge-2", Provider: "openai", Model: "judge-2", Tokens: TokenSum{In: 6, Out: 2}},
+		{Part: "reviewer", Reviewer: 1, RunID: id, MemberID: ms[0].ID, Entry: "main-1", Provider: "p1", Model: "m1", Tokens: TokenSum{In: 11, Out: 2, Unknown: 2}},
+		{Part: "reviewer", Reviewer: 2, RunID: id, MemberID: ms[1].ID, Entry: "team-2", Provider: "p2", Model: "m2", Tokens: TokenSum{In: 21, Out: 1, Unknown: 1}},
+		{Part: "reviewer", Reviewer: 2, RunID: id, MemberID: second, Entry: "main-2b", Provider: "p2b", Model: "m2b", Tokens: TokenSum{In: 22, Out: 2, Unknown: 1}},
+		{Part: "reviewer", Reviewer: 3, RunID: id, MemberID: ms[2].ID, Entry: "main-3", Provider: "p3", Model: "m3", Tokens: TokenSum{In: 3, Out: 1, Unknown: 1}},
+		{Part: "judge", RunID: id, Entry: "judge-team", Provider: "anthropic", Model: "judge-m", Tokens: TokenSum{In: 7, Out: 1, Unknown: 2}},
+		{Part: "judge", RunID: retry, Entry: "judge-2", Provider: "openai", Model: "judge-2", Tokens: TokenSum{In: 6, Out: 2, Unknown: 1}},
 	}
 	for _, from := range []string{id, retry} {
 		got, err := s.ReviewCosts(ctx, from)

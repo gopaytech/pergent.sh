@@ -38,6 +38,13 @@ describe("API review", () => {
     expect(screen.getByRole("link", { name: "fastgateway" })).toHaveAttribute("href", "/api-clients/fastgateway");
   });
 
+  it("shows the tokens of a review that finished before all tokens were counted", async () => {
+    fakeApi(routes({ ...apiReviewDone, review: { ...apiReviewDone.review, usage: { tokens_in: 100, tokens_out: 20 } } }));
+    renderApp(page(done));
+    expect(await screen.findByText("Tokens: 120")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("NaN");
+  });
+
   it("shows each skill's findings: file:line, severity, title, explanation, fix and suggestion as text", async () => {
     const { container } = renderPage(apiReviewDone);
     const skill = await screen.findByRole("region", { name: "Skill code-review" });

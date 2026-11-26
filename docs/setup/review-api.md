@@ -211,7 +211,7 @@ Poll until the status is `completed`, `failed` or `superseded`; a review takes m
 | `failed` | yes | `failed` | left out | yes | only if the Job left a result that can be read |
 | `superseded` | left out | left out | left out | no | left out |
 
-`usage` has `tokens_in`, `tokens_out`, `cache_read`, `cache_write`, `reasoning` and `tokens`. `tokens` is the total of all 5 parts: input, cache read, cache write, output and reasoning. `tokens_in` and `tokens_out` keep their meaning. A `completed` body looks like this:
+`usage` has `tokens_in`, `tokens_out`, `cache_read`, `cache_write`, `reasoning` and `tokens`. `tokens` is the total of all 5 parts: input, cache read, cache write, output and reasoning. `tokens_in` and `tokens_out` keep their meaning. A review that finished before this release carries only `tokens_in` and `tokens_out`, so read the other 4 as 0 when they are missing. A `completed` body looks like this:
 
 ```json
 {
