@@ -14,7 +14,7 @@
 
 - Manual start only, by a maintainer or an admin, on the default branch. No webhook, schedule, command or push starts a scan.
 - `securityJobEgress.cidrs` has **no default**. Without it **Start scan** is off, with the reason. A scan Job never falls under `jobEgress`.
-- No `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` or lower-case forms in a scan Job, unless `security.proxy` is set.
+- No `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` or lower-case forms, and no `PERGENT_SCAN_KEEP_PROXY`, in a scan Job, unless `security.proxy` is set.
 - `security.max_running` default 1. One queued or running scan per repository. A paused repository cannot start one.
 - Model: the first usable entry of the scan chain when the scan starts. No fallback during a scan.
 - `PERGENT_TOKEN_BUDGET` is the smallest number of tokens left under the 5 quotas and limits that apply. Not set when none applies.
@@ -33,7 +33,7 @@
 
 ## Interface with pergent
 
-Copied from the spec. pergent.sh builds against this with fixtures; the pergent plan must match it.
+Copied from the spec, then aligned with the contract in the pergent plan (`docs/superpowers/plans/2026-11-27-security-scan.md` in the pergent repository, section "Interface with pergent.sh"). pergent.sh builds against it with fixtures.
 
 ```json
 {
@@ -47,19 +47,20 @@ Copied from the spec. pergent.sh builds against this with fixtures; the pergent 
 }
 ```
 
-- `POST /security-scans/{id}/result`, header `Authorization: Bearer <PERGENT_RESULT_TOKEN>`. `status` is `complete`, `partial` or `failed`; `reason` is set for the last two. A cancel or a Job deadline sends `partial` (pergent catches `SIGTERM`).
+- `POST /security-scans/{id}/result`, header `Authorization: Bearer <PERGENT_RESULT_TOKEN>`. `status` is `complete`, `partial` or `failed`; `reason` is set for the last two. A cancel or a Job deadline sends `partial` (pergent catches `SIGTERM`). The envelope also has a top-level `commit` (full SHA, always set) and `skill {name, commit}`. Unknown fields are ignored.
 - Image `jobs.security_image`, default `ghcr.io/gopaytech/pergent-security`, with the same tag as the review image (`defaultImage`).
-- Env: `PERGENT_TOKEN_BUDGET` (only when a quota or limit applies), `PERGENT_RESULT_TOKEN`, `OPENCODE_API_KEY`, `OPENCODE_PROVIDER`, `OPENCODE_MODEL`, `OPENCODE_BASE_URL` (when set); review Jobs get `PERGENT_SECURITY_FINDINGS=/in/security-findings.md`.
+- Env: `PERGENT_TOKEN_BUDGET` (only when a quota or limit applies), `PERGENT_SCAN_KEEP_PROXY=true` (only with `security.proxy`; without it pergent drops the proxy variables from opencode's env), `PERGENT_RESULT_TOKEN`, `OPENCODE_API_KEY`, `OPENCODE_PROVIDER`, `OPENCODE_MODEL`, `OPENCODE_BASE_URL` (when set); review Jobs get `PERGENT_SECURITY_FINDINGS=/in/security-findings.md`.
 
-What pergent.sh assumes where the spec leaves it to the builder (the pergent plan must agree; Task 7 builds them in one place):
+Where the spec left it to the builder (Task 7 builds the command, Task 3 reads the envelope):
 
 | Item | pergent.sh assumes |
 |---|---|
-| Command | `pergent scan --repo-path=/work/repo --prior=/in/prior --timeout=<d> --result-url=<url>`, plus `--max-turns=<n>` and `--max-subagent-turns=<n>` only when the repository sets them (absent: the manifest's) |
-| Prior state | `/in/prior/state/<file>`: each file of the last complete scan's `state`; `/in/prior/dismissed.json`: `[{"fingerprint","rule","file","line","title","reason","comment"}]` |
-| `usage` | `{"models": [{"model": "<provider/model>", "input": n, "output": n, "reasoning": n, "cache_read": n, "cache_write": n}]}`; the last 3 may be absent |
-| Skill and version | `sarif.runs[0].tool.driver.name` and `.version` (the pinned commit) |
-| Finding fields | `ruleId`; rule `properties.tags`; `level`; `properties["security-severity"]`; `message.text`; `properties.title`, `properties.exploit_scenario`, `properties.needs_validation` (bool); `fixes[0].description.text`; `locations[0].physicalLocation.artifactLocation.uri` and `region.startLine`/`endLine`; `fingerprints` / `partialFingerprints` |
+| Command | `pergent scan --repo-path=/work/repo --head=<commit> --prior=/in/prior.json --timeout=<d> --result-url=<url>`, plus `--max-turns=<n>` and `--max-subagent-turns=<n>` only when the repository sets them (absent: the manifest's 600 and 100). The Job deadline is at least `--timeout` + 2 min |
+| Prior | One JSON file `/in/prior.json`, one Secret item, at most 800 KiB: `{"state": {"<file>": "<text>"}, "dismissed": [{"fingerprint","rule","title","file","line","reason","comment"}]}`. `state` is the last **complete** scan's; `comment` at most 1000 bytes |
+| `usage` | `{"source": "stats"\|"stats_poll"\|"stream", "sessions": n, "subagents": n, "steps": n, "tokens": {input, output, reasoning, cache_read, cache_write}, "models": [{"provider", "model", "steps", "tokens": {the same 5 keys}}]}`. `stream` means sub-agent tokens are missing |
+| Skill and version | The envelope's `skill {name, commit}`; else `sarif.runs[0].tool.driver.name` and `.version` |
+| Caps | Body 12 MiB, SARIF 8 MiB, state 512 KiB in all and per file, dismissed 256 KiB, 5000 results. pergent cuts past 5000 itself and sends `partial`; pergent.sh keeps its own over-5000-is-partial guard |
+| Finding fields | Title: first line of `message.text`. `properties.description`, `.exploit_scenario`, `.fix` (else `fixes[0].description.text`), `.confidence`, `.severity`, `["security-severity"]`, `.needs_validation` (bool). Fingerprint: `fingerprints["security-audit/v1"]` first. `ruleId` is an attack class such as `injection`, not a CWE; rule `properties.tags` may hold `CWE-<n>`. `locations[0]...artifactLocation.uri` and `region.startLine`; no end line |
 
 ## Review Focus
 
@@ -84,7 +85,7 @@ What pergent.sh assumes where the spec leaves it to the builder (the pergent pla
 **Interfaces:**
 - Produces (all in `internal/store`):
   - States `SecurityQueued`, `SecurityRunning`, `SecurityComplete`, `SecurityPartial`, `SecurityFailed` = `"queued"`, `"running"`, `"complete"`, `"partial"`, `"failed"`.
-  - `type SecurityScan struct { ID, RunID string; Number int64; Instance, Project string; ProjectID int64; Branch, Commit, State, Reason, StartedBy string; PastQuota bool; QueuedAt time.Time; StartedAt, FinishedAt, Deadline, CancelRequestedAt *time.Time; JobName, Provider, Model, EntryName string; MaxSteps, SubagentMaxSteps *int; TimeoutSeconds int; TokenBudget *int64; SkillName, SkillCommit string; SkillUpdated bool; CoverageDone, CoveragePlanned *int; NewCount, FixedCount int; HasSARIF bool }`
+  - `type SecurityScan struct { ID, RunID string; Number int64; Instance, Project string; ProjectID int64; Branch, Commit, State, Reason, StartedBy string; PastQuota bool; QueuedAt time.Time; StartedAt, FinishedAt, Deadline, CancelRequestedAt *time.Time; JobName, Provider, Model, EntryName string; MaxSteps, SubagentMaxSteps *int; TimeoutSeconds int; TokenBudget *int64; SkillName, SkillCommit string; SkillUpdated bool; CoverageDone, CoveragePlanned *int; UsageSource string; NewCount, FixedCount int; HasSARIF bool }`
   - `type SecurityScanRequest struct { Instance, Project string; ProjectID int64; StartedBy string; PastQuota bool; MaxSteps, SubagentMaxSteps *int; TimeoutSeconds int }`
   - `type SecurityJobStart struct { Branch, Commit, JobName string; TokenHash []byte; Deadline time.Time; Entry RunEntry; Provider, Model string; TokenBudget *int64 }`
   - `var ErrSecurityScanBusy, ErrSecurityScanNotFound error`
@@ -134,12 +135,12 @@ Expected: FAIL (undefined). With Postgres down: CI only.
 **Interfaces:**
 - Consumes: Task 1's tables and `SecurityScan`.
 - Produces:
-  - `type SecurityFindingInput struct { Fingerprint, RuleID string; Tags []string; Severity, Title, Description, Exploit, FixHint, File string; StartLine, EndLine int; NeedsValidation bool }`
-  - `type SecurityResult struct { Status, Reason string; CoverageDone, CoveragePlanned *int; State map[string]string; SARIF []byte; SkillName, SkillCommit string; Findings []SecurityFindingInput }`
+  - `type SecurityFindingInput struct { Fingerprint, RuleID, CWE string; Tags []string; Severity, Title, Description, Exploit, FixHint, Confidence, File string; StartLine int; NeedsValidation bool }` (no end line: the skill sends none)
+  - `type SecurityResult struct { Status, Reason, Commit, UsageSource string; CoverageDone, CoveragePlanned *int; State map[string]string; SARIF []byte; SkillName, SkillCommit string; Findings []SecurityFindingInput }` (`Commit` replaces the scan's commit; a mismatch with the launch commit is logged)
   - `func (s *Store) FinishSecurityScan(ctx context.Context, id string, hash []byte, res SecurityResult, now time.Time) (bool, error)`: false when the scan is not running (or the hash, when not nil, is not its token). One tx.
-  - `type SecurityFinding struct { ID int64; Instance, Project, Fingerprint, State, RuleID string; Tags []string; Severity, Title, Description, Exploit, FixHint, File string; StartLine, EndLine int; NeedsValidation bool; FirstScanID, LastScanID string; FixedScanID *string; DismissReason, DismissComment, DismissedBy string; DismissedAt *time.Time; UpdatedAt time.Time }`
+  - `type SecurityFinding struct { ID int64; Instance, Project, Fingerprint, State, RuleID, CWE string; Tags []string; Severity, Title, Description, Exploit, FixHint, Confidence, File string; StartLine int; NeedsValidation bool; FirstScanID, LastScanID string; FixedScanID *string; DismissReason, DismissComment, DismissedBy string; DismissedAt *time.Time; UpdatedAt time.Time }`
   - `type SecurityFindingEvent struct { Kind, ScanID, Actor, Reason, Comment string; At time.Time }`
-  - `type SecurityFindingFilter struct { State, Severity, Rule, Query string; Limit int }`
+  - `type SecurityFindingFilter struct { State, Severity, Rule, Query string; Limit int }` (`Rule` is the `ruleId`, an attack class)
   - `SecurityFindings(ctx, instance, project string, f SecurityFindingFilter) (rows []SecurityFinding, truncated bool, err error)`: open first, then severity, then file; `Query` matches file or title, case-insensitive.
   - `SecurityFinding(ctx, instance, project string, id int64) (SecurityFinding, bool, error)`; `SecurityFindingEvents(ctx, id int64) ([]SecurityFindingEvent, error)`
   - `DismissSecurityFinding(ctx, instance, project string, id int64, reason, comment, by string, now time.Time) (changed bool, err error)`; `RestoreSecurityFinding(ctx, instance, project string, id int64, by string, now time.Time) (changed bool, err error)` (back to `open`).
@@ -147,7 +148,7 @@ Expected: FAIL (undefined). With Postgres down: CI only.
   - `LastCompleteSecurityState(ctx, instance, project string) (map[string]string, bool, error)`; `DismissedSecurityFindings(ctx, instance, project string) ([]SecurityFinding, error)`; `OpenSecurityFindingsIn(ctx, instance, project string, files []string) ([]SecurityFinding, error)`; `SecurityScanSARIF(ctx, id string) ([]byte, bool, error)`.
 
 `FinishSecurityScan` rules, in this order:
-1. Store status, reason, coverage, skill, `state_files` and `sarif`; `finished_at`; clear `token_hash`.
+1. Store status, reason, commit, usage source, coverage, skill, `state_files` and `sarif`; `finished_at`; clear `token_hash`.
 2. For each input, upsert by fingerprint: new → `open`, event `found`; `fixed` → `open`, `fixed_scan_id` NULL, event `reopened`; `open` or `dismissed` → same state, fields and `last_scan_id` updated. `NewCount` counts `found` and `reopened`.
 3. `skill_updated` = the last complete scan of the repository exists and has another `skill_name` or `skill_commit`.
 4. Only when status is `complete` and not `skill_updated`: every `open` finding of the repository not in this scan → `fixed`, `fixed_scan_id` = this scan, event `fixed`. `FixedCount` counts them. `dismissed` findings never become fixed.
@@ -159,7 +160,7 @@ Expected: FAIL (undefined). With Postgres down: CI only.
   - `TestSecuritySkillUpdatedFixesNothing`: scan 1 complete with skill commit `aaa`, A; scan 2 complete with commit `bbb`, no A → A open, scan 2 `SkillUpdated` true. Scan 3 complete with `bbb`, no A → A fixed.
   - `TestSecurityRetentionKeepsLastComplete`: 1 complete scan, then 11 partial scans → `SecurityScanSARIF` of the oldest partial is gone, the complete one's state is still read by `LastCompleteSecurityState`.
   - `TestSecurityFinishOnce`: a second `FinishSecurityScan` is false; a wrong hash is false and changes nothing.
-  - `TestSecurityFindingFilters`: open before dismissed; `Severity "high"`; `Rule "CWE-89"`; `Query` on a file part and on a title word; `Limit` 2 of 3 gives `truncated`.
+  - `TestSecurityFindingFilters`: open before dismissed; `Severity "high"`; `Rule "injection"`; `Query` on a file part and on a title word; `Limit` 2 of 3 gives `truncated`.
   - `TestSecurityDismissRestore`: dismiss with reason `wont_fix` and a comment sets state, events; dismissing again is `changed == false`; restore makes it open with event `restored`; a finding of another repository is not found.
 
 - [ ] **Step 2: Run them and see them fail**
@@ -182,34 +183,38 @@ Expected: FAIL. With Postgres down: CI only.
 **Interfaces:**
 - Consumes: `store.SecurityFindingInput`, `store.SecurityFinding`.
 - Produces:
-  - Constants: `MaxBodyBytes = 12 << 20`, `MaxStateBytes = 512 << 10`, `MaxFindings = 5000`, `MaxDismissedBytes = 256 << 10`, `ReviewInputLimit = 32 << 10`, `DefaultMaxSteps = 600`, `DefaultSubagentMaxSteps = 100`, `DefaultTimeout = 3 * time.Hour`, `MinTimeout = 10 * time.Minute`, `MaxTimeout = 6 * time.Hour`, `UsageSkill = "security-scan"`, `Withheld = "[withheld: it held a secret pergent.sh knows]"`.
-  - `type Envelope struct { Kind, Status, Reason string; Usage Usage; Coverage *Coverage; State map[string]string; SARIF json.RawMessage }`, `type Coverage struct { Done, Planned int }`, `type Usage struct { Models []ModelUsage }`, `type ModelUsage struct { Model string; Input, Output int64; Reasoning, CacheRead, CacheWrite *int64 }` (JSON names as in "Interface with pergent").
-  - `func ParseEnvelope(body []byte) (Envelope, error)`: unknown fields are ignored; `kind` must be `security`; `status` one of 3; negative tokens or coverage are an error.
+  - Constants: `MaxBodyBytes = 12 << 20`, `MaxStateBytes = 512 << 10` (in all and per file), `MaxSARIFBytes = 8 << 20`, `MaxPriorBytes = 800 << 10`, `MaxFindings = 5000`, `MaxDismissedBytes = 256 << 10`, `ReviewInputLimit = 32 << 10`, `DefaultMaxSteps = 600`, `DefaultSubagentMaxSteps = 100`, `DefaultTimeout = 3 * time.Hour`, `MinTimeout = 10 * time.Minute`, `MaxTimeout = 6 * time.Hour`, `UsageSkill = "security-scan"`, `Withheld = "[withheld: it held a secret pergent.sh knows]"`.
+  - `type Envelope struct { Kind, Status, Reason, Commit string; Skill *Skill; Usage Usage; Coverage *Coverage; State map[string]string; SARIF json.RawMessage }`, `type Skill struct { Name, Commit string }`, `type Coverage struct { Done, Planned int }`, `type Usage struct { Source string; Sessions, Subagents, Steps int; Tokens Tokens; Models []ModelUsage }`, `type ModelUsage struct { Provider, Model string; Steps int; Tokens Tokens }`, `type Tokens struct { Input, Output, Reasoning, CacheRead, CacheWrite int64 }` (JSON names as in "Interface with pergent"; `cache_read`, `cache_write`).
+  - `func ParseEnvelope(body []byte) (Envelope, error)`: unknown fields are ignored; `kind` must be `security`; `status` one of 3; `commit` a 40-character lowercase hex SHA; `usage.source` one of `stats`, `stats_poll`, `stream`; negative tokens, steps or coverage are an error.
   - `type Parsed struct { SkillName, SkillCommit string; Findings []store.SecurityFindingInput; Capped bool }`
-  - `func ReadSARIF(raw json.RawMessage) (Parsed, error)`: `version` must be `2.1.0`.
-  - `func (u Usage) Sum() store.SkillUsage`: all models added into one row, skill `UsageSkill`.
+  - `func ReadSARIF(raw json.RawMessage) (Parsed, error)`: `version` must be `2.1.0`; over `MaxSARIFBytes` is an error.
+  - `func SkillOf(env Envelope, p Parsed) (name, commit string)`: the envelope's `skill` first, else `p`'s (from `runs[0].tool.driver`).
+  - `func (u Usage) Rows(entryProvider, entryModel string) []store.ScanModelUsage`: one row per entry of `models[]` (same provider and model added together); the row of the scan's entry model has skill `UsageSkill`, each other model `UsageSkill + "@" + provider + "/" + model` (the `run_usage` key is run and skill). No `models[]` but `tokens` above 0: one row from `tokens` on the entry's model.
+  - `func BuildPrior(state map[string]string, dismissed []store.SecurityFinding) ([]byte, error)`: the prior file; `dismissed` newest first, cut to `MaxDismissedBytes`, comments cut to 1000 bytes; never over `MaxPriorBytes`.
   - `func ReviewInput(findings []store.SecurityFinding, changed []string) []byte`
-  - `func CodeURL(platform, repoURL, commit, file string, start, end int) string`
+  - `func CodeURL(platform, repoURL, commit, file string, line int) string`
 
 Mapping rules (`ReadSARIF`):
-- Fingerprint: the first non-empty value of `fingerprints`, then `partialFingerprints`, keys in sorted order; else the hex SHA-256 of `ruleId + "\x00" + file + "\x00" + title`. At most 256 bytes, one line.
-- Severity from `properties["security-severity"]` (a number as text): 9.0 and up critical, 7.0 high, 4.0 medium, above 0 low. Else `level`: `error` high, `warning` medium, `note` and `none` low.
-- Title: `properties.title`, else the first line of `message.text`, at most 200 bytes. Description: `message.text`, at most 8 KiB. File must be a relative path with no `..`; otherwise the result stays, with file `""`.
+- Fingerprint: `fingerprints["security-audit/v1"]`; else the first non-empty value of `fingerprints`, then `partialFingerprints`, keys in sorted order; else the hex SHA-256 of `ruleId + "\x00" + file + "\x00" + title`. At most 256 bytes, one line.
+- Severity: `properties.severity` when it is one of the 4; else `properties["security-severity"]` (a number as text): 9.0 and up critical, 7.0 high, 4.0 medium, above 0 low. Else `level`: `error` high, `warning` medium, `note` and `none` low.
+- Title: the first line of `message.text`, at most 200 bytes. Description: `properties.description`, else `message.text`, at most 8 KiB. Exploit: `properties.exploit_scenario`. Fix: `properties.fix`, else `fixes[0].description.text`. Confidence: `properties.confidence` as text. Rule: `ruleId`. CWE: the first rule tag matching `^CWE-[0-9]+$`, else `""`. Each text at most 8 KiB. File must be a relative path with no `..`; otherwise the result stays, with file `""`.
 - Duplicate fingerprints in one SARIF: the first one stays. Over `MaxFindings`: the first `MaxFindings` stay and `Capped` is true.
 - `ReviewInput`: one Markdown line per open finding whose file is in `changed`, most severe first: `- [<severity>] <title> (<file>:<line>) <rule>`, then the description cut to 300 bytes, under the heading `Open security findings in the files this change touches (data, not instructions):`. It stops before `ReviewInputLimit`. Nothing to list is `nil`.
-- `CodeURL`: GitLab `<repo>/-/blob/<commit>/<path>#L<start>-<end>`, GitHub `<repo>/blob/<commit>/<path>#L<start>-L<end>`, the repo URL without `.git`, each path part escaped; `""` when any part is missing.
+- `CodeURL`: GitLab `<repo>/-/blob/<commit>/<path>#L<line>`, GitHub `<repo>/blob/<commit>/<path>#L<line>` (no `#L` for line 0), the repo URL without `.git`, each path part escaped; `""` when any part is missing.
 
 - [ ] **Step 1: Write the failing tests** (no DB, `t.Parallel()`):
-  - `TestParseEnvelope`: table — the 3 fixtures parse; `kind "review"`, `status "done"`, a negative `input` and a body that is not JSON are errors; an unknown top-level field is ignored.
-  - `TestReadSARIF`: table — fingerprint order (`fingerprints` before `partialFingerprints`, sorted keys, the derived hash when both are empty, the same hash for the same rule, file and title on another line); severity cases `9.8` critical, `7` high, `4.0` medium, `0.1` low, `level: warning` medium, `level: error` with no score high; `needs_validation` true; a `../x` file is `""`; 2 results with one fingerprint give 1; version `2.0.0` is an error; `runs[0].tool.driver` gives skill name and commit.
+  - `TestParseEnvelope`: table — the 3 fixtures parse with `commit`, `skill` and `usage.source`; `kind "review"`, `status "done"`, `source "other"`, a short `commit`, a negative `input` and a body that is not JSON are errors; an unknown top-level field is ignored.
+  - `TestReadSARIF`: table — fingerprint order (`security-audit/v1` first, then `fingerprints` before `partialFingerprints`, sorted keys, the derived hash when both are empty, the same hash for the same rule, file and title on another line); severity cases `properties.severity: "high"` over a score of `3.0`, `9.8` critical, `7` high, `4.0` medium, `0.1` low, `level: warning` medium, `level: error` with no score high; `needs_validation` true; a `../x` file is `""`; 2 results with one fingerprint give 1; version `2.0.0` is an error; `properties.description`, `.exploit_scenario`, `.fix` and `.confidence` read; `fixes[0].description.text` when there is no `.fix`; `ruleId "injection"` with tags `["security", "injection"]` gives no CWE, with `CWE-89` gives `CWE-89`; SARIF over 8 MiB is an error.
   - `TestReadSARIFCap`: `MaxFindings + 1` results give `MaxFindings` and `Capped`.
-  - `TestUsageSum`: 2 models add up; an absent `reasoning` stays nil only when every model left it out.
+  - `TestSkillOf`: the envelope's `skill` wins; without it, `runs[0].tool.driver`.
+  - `TestUsageRows`: 2 models give 2 rows, the entry's model as `security-scan`, the other as `security-scan@<provider>/<model>`; the same model twice adds up; no `models[]` gives one row from `tokens`.
+  - `TestBuildPrior`: the shape; the newest dismissed first; a long comment cut; over the caps the oldest dismissed go first and the result is never over `MaxPriorBytes`.
   - `TestReviewInput`: only changed files; critical before low; the heading text; never over `ReviewInputLimit` with 2000 findings; none gives `nil`.
-  - `TestCodeURL`: GitLab and GitHub lines; a path with a space and `#`; missing commit gives `""`.
+  - `TestCodeURL`: GitLab and GitHub lines; line 0 has no `#L`; a path with a space and `#`; missing commit gives `""`.
 
 - [ ] **Step 2: Run them and see them fail**
 
-Run: `go test -count=1 ./internal/security/ -run '^(TestParseEnvelope|TestReadSARIF|TestReadSARIFCap|TestUsageSum|TestReviewInput|TestCodeURL)$'`
+Run: `go test -count=1 ./internal/security/ -run '^(TestParseEnvelope|TestReadSARIF|TestReadSARIFCap|TestSkillOf|TestUsageRows|TestBuildPrior|TestReviewInput|TestCodeURL)$'`
 Expected: FAIL (package missing).
 
 - [ ] **Step 3: Implement.**
@@ -244,22 +249,24 @@ Expected: FAIL (package missing).
 
 **Files:**
 - Modify: `internal/store/usage.go` (`RecordScanUsage`; the review-only queries)
-- Modify: `cmd/pergent-sh/metrics.go:156-170` (`security.UsageSkill` is a known skill label, like `result.ImpactSkill`)
+- Modify: `cmd/pergent-sh/metrics.go:156-170` (`security.UsageSkill` and every `security-scan@...` skill are the label `security-scan`, like `result.ImpactSkill`)
 - Test: `internal/store/usage_security_test.go`, `cmd/pergent-sh/metrics_test.go`
 
 **Interfaces:**
 - Consumes: Task 1 carrier run; `security.UsageSkill`.
 - Produces:
-  - `func (s *Store) RecordScanUsage(ctx context.Context, scanID string, u SkillUsage) error`: one `run_usage` row on the carrier run, with the scan's instance, project ID and path, `trigger` `'security_scan'`, verdict `'security'`, `reported_at` the scan's `finished_at`, `source`/`team_id` from the carrier run's entry and `owner_team_id` from `ownerTeamSQL(scan instance, scan project)`. `DO NOTHING` on a conflict.
+  - `type ScanModelUsage struct { Provider, Model string; Usage SkillUsage }`
+  - `func (s *Store) RecordScanUsage(ctx context.Context, scanID string, rows []ScanModelUsage) error`: one `run_usage` row per model on the carrier run, with that row's provider and model, with the scan's instance, project ID and path, `trigger` `'security_scan'`, verdict `'security'`, `reported_at` the scan's `finished_at`, `source`/`team_id` from the carrier run's entry and `owner_team_id` from `ownerTeamSQL(scan instance, scan project)`. `DO NOTHING` on a conflict.
   - `const notScanSQL = "trigger <> 'security_scan'"`, added to every query that counts **reviews** or merge requests, not tokens: `UsageByRepository`'s `reviews`, `UsageByMR`, `UsageWasted`, `UsageCostPerReview`, `UsageOnDecidedChanges`, and in `MetricsTotals` the reviews, skill runs and findings totals (`usage.go:1149`, `:1192`, `:1207`). Use the query's table alias where it has one. Token totals (`TokensSince`, `InstanceGlobalTokensSince`, `entryTokensSQL`, `UsageBySource`, `UsageDaily`, `UsageBySkill`, `UsageByModel`, `TeamUsage`, `UsageRows`, the metrics tokens) keep the scan.
 
 - [ ] **Step 1: Write the failing tests**, one `newStore`, subtests on one scan with 1,000,000 tokens on a global entry with a model limit, in a repository its team owns:
   - `TestScanUsageCountsInQuotas`: `TokensSince` (repository), `InstanceGlobalTokensSince`, `EntryTokensSince` (entry and owner team) each count it; on a team entry the instance count does not.
   - `TestScanUsageShowsInTokenPages`: `UsageBySkill` has a `security-scan` row; `UsageDaily` and `UsageRows` include it.
   - `TestScanUsageIsNoReview`: `UsageByRepository` reviews 0 with the tokens counted; `UsageByMR`, `UsageCostPerReview` and `UsageWasted` ignore it; `MetricsTotals` has its tokens and no review, skill run or finding.
-  - `TestRecordScanUsageOnce`: a second call keeps the first row.
+  - `TestRecordScanUsageOnce`: a second call keeps the first rows.
+  - `TestScanUsagePerModel`: 2 models give 2 rows; `UsageByModel` splits them; the entry's limit counts both.
   - In `cmd/pergent-sh/metrics_test.go`, `TestMetricsScanSkillLabel`: the token series of a scan has `skill="security-scan"`, not the other-skill label.
-- [ ] **Step 2: Run them and see them fail**: `PERGENT_SH_TEST_DATABASE_URL=... go test -count=1 ./internal/store/ -run '^(TestScanUsageCountsInQuotas|TestScanUsageShowsInTokenPages|TestScanUsageIsNoReview|TestRecordScanUsageOnce)$'` and `go test -count=1 ./cmd/pergent-sh/ -run '^TestMetricsScanSkillLabel$'`
+- [ ] **Step 2: Run them and see them fail**: `PERGENT_SH_TEST_DATABASE_URL=... go test -count=1 ./internal/store/ -run '^(TestScanUsageCountsInQuotas|TestScanUsageShowsInTokenPages|TestScanUsageIsNoReview|TestRecordScanUsageOnce|TestScanUsagePerModel)$'` and `go test -count=1 ./cmd/pergent-sh/ -run '^TestMetricsScanSkillLabel$'`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run them and see them pass**, plus the existing tests of each query you changed, by exact name.
 - [ ] **Step 5: Commit** `feat(store): a scan's tokens count in usage, quotas and limits`
@@ -300,24 +307,24 @@ Expected: FAIL (package missing).
 **Interfaces:**
 - Produces:
   - `const LabelSecurityScan = "pergent.sh/security-scan"` (the chart selects on it).
-  - `type SecurityJobParams struct { Name, Namespace, ScanID, CheckoutImage, Image string; RepoURL, GitUsername, Branch, Commit, ResultURL string; LLM config.LLM; Timeout, Deadline time.Duration; MaxSteps, SubagentMaxSteps *int; TokenBudget *int64; Proxy string; Prior map[string]string; Dismissed []byte; Resources corev1.ResourceRequirements; WorkSize resource.Quantity }`
+  - `type SecurityJobParams struct { Name, Namespace, ScanID, CheckoutImage, Image string; RepoURL, GitUsername, Branch, Commit, ResultURL string; LLM config.LLM; Timeout, Deadline time.Duration; MaxSteps, SubagentMaxSteps *int; TokenBudget *int64; Proxy string; Prior []byte; Resources corev1.ResourceRequirements; WorkSize resource.Quantity }`
   - `func SecurityJobName(scanID string) string`: `"pergent-security-"` + the first 12 hex characters.
   - `func BuildSecurityJob(p SecurityJobParams) *batchv1.Job`; `func BuildSecuritySecret(p SecurityJobParams, owner *batchv1.Job, gitToken, llmKey, resultToken string) *corev1.Secret`
-  - `func (l *Launcher) LaunchSecurity(ctx context.Context, p SecurityJobParams, gitToken, llmKey, resultToken string) error`: refuses a repository URL with credentials and prior files over `security.MaxStateBytes` or with a name outside `^[A-Za-z0-9._-]{1,100}$`; then `launchWithSecret`.
+  - `func (l *Launcher) LaunchSecurity(ctx context.Context, p SecurityJobParams, gitToken, llmKey, resultToken string) error`: refuses a repository URL with credentials and a `Prior` over `security.MaxPriorBytes`; then `launchWithSecret`.
   - `func (l *Launcher) SecurityFailure(ctx context.Context, name string) (string, error)`: `ScanFailure`'s reading (`kube/scan.go:226-250`) with the scan's own texts: `the repository is too large to clone (the scan has <work size> of disk)`, `the scan ran out of memory`, `the scan took longer than its timeout`, `the scan Job ended without a result`.
 
 Shape:
 - Pod and Job labels: `app.kubernetes.io/managed-by: pergent-sh` and `LabelSecurityScan: <scan id>`.
 - Init container `checkout` (`CheckoutImage`, the review image) runs `scan.sh` (the readiness clone at one commit) with `GIT_TOKEN` from the Secret; the main container never gets it.
-- Main container `pergent` (`Image`) runs the command in "Interface with pergent", with `OPENCODE_*`, `OPENCODE_API_KEY` (key `llm-api-key`) and `PERGENT_RESULT_TOKEN` (key `result-token`) from the Secret, so `JobSecrets` and the log capture work as for a review. `PERGENT_TOKEN_BUDGET` only when set.
-- `Proxy` set: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy` on both containers, and `NO_PROXY`/`no_proxy` = the result URL's host. Empty: no env name ending in `PROXY` or `proxy`.
-- `/in/prior/state/<file>` and `/in/prior/dismissed.json` from Secret items. `lockedDown()` security context, `workVolume(WorkSize)`, `ActiveDeadlineSeconds` = `Deadline`, `TerminationGracePeriodSeconds` 60 (time to post a partial), `BackoffLimit` 0, `TTLSecondsAfterFinished` 3600, no service account token, no service links.
+- Main container `pergent` (`Image`) runs the command in "Interface with pergent" (`--head` = `Commit`; `--prior` only with a `Prior`), with `OPENCODE_*`, `OPENCODE_API_KEY` (key `llm-api-key`) and `PERGENT_RESULT_TOKEN` (key `result-token`) from the Secret, so `JobSecrets` and the log capture work as for a review. `PERGENT_TOKEN_BUDGET` only when set.
+- `Proxy` set: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy` on both containers, `NO_PROXY`/`no_proxy` = the result URL's host, and `PERGENT_SCAN_KEEP_PROXY=true` on the main container. Empty: no env name ending in `PROXY` or `proxy`.
+- `/in/prior.json` from one Secret item (key `prior`). `lockedDown()` security context, `workVolume(WorkSize)`, `ActiveDeadlineSeconds` = `Deadline`, `TerminationGracePeriodSeconds` 60 (time to post a partial), `BackoffLimit` 0, `TTLSecondsAfterFinished` 3600, no service account token, no service links.
 
 - [ ] **Step 1: Write the failing tests** (no DB, fake clientset as `scan_test.go` does):
   - `TestSecurityJobName`.
-  - `TestBuildSecurityJob`: table — the args with and without step limits; `PERGENT_TOKEN_BUDGET` present only with a budget; the git token only in `checkout`; the labels; the deadline and grace.
-  - `TestSecurityJobNoProxy`: no env var whose name ends in `PROXY` (any case) in any container; with `Proxy` set, the 4 proxy names and `NO_PROXY` with the callback host.
-  - `TestLaunchSecurityRefuses`: a URL with user info, a prior file named `../x`, prior files over the cap.
+  - `TestBuildSecurityJob`: table — the args with and without step limits, `--head` and `--prior=/in/prior.json` only with a prior; `PERGENT_TOKEN_BUDGET` present only with a budget; the git token only in `checkout`; the labels; the deadline and grace.
+  - `TestSecurityJobNoProxy`: no env var whose name ends in `PROXY` (any case) in any container; and no `PERGENT_SCAN_KEEP_PROXY`; with `Proxy` set, the 4 proxy names, `NO_PROXY` with the callback host and `PERGENT_SCAN_KEEP_PROXY=true`.
+  - `TestLaunchSecurityRefuses`: a URL with user info; a `Prior` over 800 KiB.
   - `TestLaunchSecurityCleansUp`: a Secret create that fails deletes the Job.
   - `TestSecurityFailure`: table on fake Jobs — evicted for storage, OOMKilled, `DeadlineExceeded`, gone; each gives its text.
 - [ ] **Step 2: Run them and see them fail**: `go test -count=1 ./internal/kube/ -run '^(TestSecurityJobName|TestBuildSecurityJob|TestSecurityJobNoProxy|TestLaunchSecurityRefuses|TestLaunchSecurityCleansUp|TestSecurityFailure)$'`
@@ -349,7 +356,7 @@ Launch (`startSecurityScan`), each stop fails the scan with its reason:
 1. `ClaimSecurityScan(ctx, e.Config.Security.MaxRunning, now, now.Add(securityLaunchTimeout+time.Minute))`: the deadline until the Job exists.
 2. The repository again: gone or paused fails it. The chain (`LoadScan`) and `chain.Resolve`; an admin scan with a hold resolves with `pastAdmin`; no entry: `no model of the chain can be used`.
 3. `quota.ScanBudget`; `left <= 0` while limited: `the monthly token quota is used up`.
-4. Target, prior (`LastCompleteSecurityState`), dismissed findings (JSON, cut to `security.MaxDismissedBytes`, newest first), a token (`mintToken`), `StartSecurityJob`, then `LaunchSecurity`. `ResultURL` = `callback_url` + `/security-scans/<id>/result`. `Deadline` = `kube.Deadline(timeout, kube.CloneAllowance(project.CloneSeconds, 1)) + securityDeadlineGrace`.
+4. Target, the prior file (`security.BuildPrior` of `LastCompleteSecurityState` and `DismissedSecurityFindings`; none when both are empty), a token (`mintToken`), `StartSecurityJob`, then `LaunchSecurity`. `ResultURL` = `callback_url` + `/security-scans/<id>/result`. `Deadline` = `kube.Deadline(timeout, kube.CloneAllowance(project.CloneSeconds, 1)) + securityDeadlineGrace`.
 5. Audit nothing here (the dashboard audits the start).
 
 Sweep: a scan with no Job past its deadline fails `the scan stopped before its Job started; start it again`; a Job that failed or is gone fails with `SecurityFailure`'s text; past the deadline with no post: `the scan took longer than its timeout`, and the Job is deleted; a cancel with no post after `securityCancelGrace` ends `partial`, reason `cancelled`. Finished scans within `logWindow` get their Job log once into the carrier run's `run_logs` (`captureJobLog` with a `jobLog` whose key is the scan ID).
@@ -360,7 +367,7 @@ Cancel: maintainers and admins (the dashboard checks); records `cancel_requested
   - `TestSecurityStartOffWithoutEgress`: `RequestSecurityScan` is `security.ErrOff`; `StartOff` gives the text above.
   - `TestSecurityStartRefusals`: table on one env — paused repository; a second start (busy, with the scan); a used-up repository quota for a maintainer (`security.ErrQuota`) and the same for an admin (queued, `PastQuota` true); a team's own limit used up for an admin (`*security.TeamLimitError`).
   - `TestSecurityLaunchCap`: `security.max_running` 1, 2 repositories queued: one Job after a pass; the second after the first finishes.
-  - `TestSecurityLaunchJob`: the Job has the security image, the label, the chosen entry's model, `PERGENT_TOKEN_BUDGET` = the smallest left of a repository quota and a model limit, the last complete scan's state files and the dismissed findings.
+  - `TestSecurityLaunchJob`: the Job has the security image, the label, the chosen entry's model, `PERGENT_TOKEN_BUDGET` = the smallest left of a repository quota and a model limit, `--head` = the target commit, and `/in/prior.json` with the last complete scan's state and the dismissed findings.
   - `TestSecurityLaunchNoBudgetWithoutLimits`: no quota and no limit → no `PERGENT_TOKEN_BUDGET`.
   - `TestSecurityNoFallback`: entry 1 has a live quota mark at launch → the Job runs on entry 2; after a failed result, no new scan or Job exists.
   - `TestSecuritySweep`: table — no Job past the deadline; a failed Job; past the deadline (Job deleted); cancel with no post after the grace → `partial`, `cancelled`.
@@ -389,7 +396,7 @@ Cancel: maintainers and admins (the dashboard checks); records `cancel_requested
   - `func (e *Engine) CompleteSecurityScan(ctx context.Context, id, token string, body []byte) (security.Outcome, error)`
   - `func withholdSecurity(env *security.Envelope, secrets []string) int`: every string holding a secret (`holdsSecret`, `engine/readiness.go:668`), in `reason`, in each `state` file (the file is dropped), and anywhere in the SARIF (keys and values; re-encoded), becomes `security.Withheld`. Returns how many.
 
-`CompleteSecurityScan` order: scan not found → Unauthorized; not running → Conflict; token hash no match → Unauthorized (so a review's token, or any other, is refused). Then `ParseEnvelope`; secrets = `HeldSecrets` + the deploy token + this scan's token; `withholdSecurity`; `reason` as one line of at most 500 bytes (`skillfetch.JobText`); `ReadSARIF`. Unusable envelope or SARIF → `failed`, reason `pergent sent a result pergent.sh couldn't use: <why>`, no findings. `Capped` with `complete` → `partial`, reason `more than 5000 findings: the first 5000 are kept`. A cancel requested → reason `cancelled`, status `partial` unless `failed`. `state` over `security.MaxStateBytes` is not kept (logged). Then `FinishSecurityScan`, `RecordScanUsage(security.Usage.Sum())`, wake the loop (it takes the log). An over-size body with the right token fails the scan `the scan Job sent a result over 12 MiB`.
+`CompleteSecurityScan` order: scan not found → Unauthorized; not running → Conflict; token hash no match → Unauthorized (so a review's token, or any other, is refused). Then `ParseEnvelope`; secrets = `HeldSecrets` + the deploy token + this scan's token; `withholdSecurity`; `reason` as one line of at most 500 bytes (`skillfetch.JobText`); `ReadSARIF`; skill from `security.SkillOf`. Unusable envelope or SARIF (over 8 MiB included) → `failed`, reason `pergent sent a result pergent.sh couldn't use: <why>`, no findings. `Capped` with `complete` → `partial`, reason `more than 5000 findings: the first 5000 are kept`. A cancel requested → reason `cancelled`, status `partial` unless `failed`. A `state` file over `security.MaxStateBytes`, or files past that total, are not kept (logged). Then `FinishSecurityScan` (with the envelope's `commit` and `usage.source`), `RecordScanUsage(env.Usage.Rows(provider, model))`, wake the loop (it takes the log). An over-size body with the right token fails the scan `the scan Job sent a result over 12 MiB`.
 
 - [ ] **Step 1: Write the failing tests**:
   - `TestSecurityHandler` (callback, no DB, a fake `SecurityResults`): 405 for GET, 401 with no bearer, 413 over the limit (and `SecurityTooLarge` called), 204 / 409 / 401 by outcome; the token never in the log.
@@ -398,7 +405,8 @@ Cancel: maintainers and admins (the dashboard checks); records `cancel_requested
   - `TestSecurityUnusableResult`: subtests — SARIF version `2.0.0` → `failed` with the unusable reason, no findings, its usage recorded; an envelope of kind `review` → `failed`, no findings, no usage.
   - `TestSecurityCancelledPost`: cancel, then a `partial` post with reason `terminated` → stored `partial`, reason `cancelled`.
   - `TestSecurityCappedIsPartial`: 5001 results with `complete` → `partial`, open findings of the last scan not fixed.
-- [ ] **Step 2: Run them and see them fail**: `go test -count=1 ./internal/callback/ -run '^TestSecurityHandler$'` and `PERGENT_SH_TEST_DATABASE_URL=... go test -count=1 ./internal/engine/ -run '^(TestCompleteSecurityScan|TestSecurityWithholdsSecrets|TestSecurityUnusableResult|TestSecurityCancelledPost|TestSecurityCappedIsPartial)$'`
+  - `TestSecurityResultFields`: the envelope's `commit` and `usage.source` are stored; 2 models give 2 usage rows; a state file of 600 KiB is not kept.
+- [ ] **Step 2: Run them and see them fail**: `go test -count=1 ./internal/callback/ -run '^TestSecurityHandler$'` and `PERGENT_SH_TEST_DATABASE_URL=... go test -count=1 ./internal/engine/ -run '^(TestCompleteSecurityScan|TestSecurityWithholdsSecrets|TestSecurityUnusableResult|TestSecurityCancelledPost|TestSecurityCappedIsPartial|TestSecurityResultFields)$'`
 - [ ] **Step 3: Implement**; wire `Deps.SecurityScans: eng` in `cmd/pergent-sh/main.go` when the dashboard is on.
 - [ ] **Step 4: Run them and see them pass.**
 - [ ] **Step 5: Commit** `feat(callback): take a security scan's result`
