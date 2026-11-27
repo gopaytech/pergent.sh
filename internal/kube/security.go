@@ -135,6 +135,9 @@ func BuildSecurityJob(p SecurityJobParams) *batchv1.Job {
 		corev1.EnvVar{Name: "PERGENT_SCAN_SOURCE_URL", Value: p.SourceURL},
 		// The user has no home folder in the image: give it a place to write.
 		corev1.EnvVar{Name: "HOME", Value: "/work"},
+		// pergent's work folders go to the temporary folder: put it on a
+		// volume that has a size limit.
+		corev1.EnvVar{Name: "TMPDIR", Value: "/work"},
 	)
 	if p.TokenBudget != nil {
 		env = append(env, corev1.EnvVar{Name: "PERGENT_TOKEN_BUDGET", Value: strconv.FormatInt(*p.TokenBudget, 10)})
@@ -159,7 +162,7 @@ func BuildSecurityJob(p SecurityJobParams) *batchv1.Job {
 	}
 	volumes := []corev1.Volume{
 		{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: workVolume(p.WorkSize)}},
-		{Name: "repo", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "repo", VolumeSource: corev1.VolumeSource{EmptyDir: workVolume(p.WorkSize)}},
 	}
 	if len(p.Prior) > 0 {
 		mounts = append(mounts, corev1.VolumeMount{Name: "prior", MountPath: securityPriorMount, ReadOnly: true})
@@ -255,9 +258,10 @@ func (l *Launcher) SecurityFailure(ctx context.Context, name string) (string, er
 		return "", nil
 	case facts.storage:
 		msg := "the repository is too large for the scan's disk"
+		vol := l.evictedVolume(ctx, name)
 		if job, err := l.Client.BatchV1().Jobs(l.Namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
 			for _, v := range job.Spec.Template.Spec.Volumes {
-				if v.Name == "work" && v.EmptyDir != nil && v.EmptyDir.SizeLimit != nil {
+				if v.Name == vol && v.EmptyDir != nil && v.EmptyDir.SizeLimit != nil {
 					msg += fmt.Sprintf(" (%s)", v.EmptyDir.SizeLimit.String())
 				}
 			}
@@ -269,4 +273,20 @@ func (l *Launcher) SecurityFailure(ctx context.Context, name string) (string, er
 		return msgSecurityDeadline, nil
 	}
 	return msgSecurityNoResult, nil
+}
+
+var emptyDirVolume = regexp.MustCompile(`EmptyDir volume "([^"]+)"`)
+
+// evictedVolume is the volume a pod's eviction message names ("repo" or
+// "work"), or "work" when no message does.
+func (l *Launcher) evictedVolume(ctx context.Context, name string) string {
+	pods, err := l.Client.CoreV1().Pods(l.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "job-name=" + name})
+	if err == nil {
+		for _, p := range pods.Items {
+			if m := emptyDirVolume.FindStringSubmatch(p.Status.Message); m != nil {
+				return m[1]
+			}
+		}
+	}
+	return "work"
 }

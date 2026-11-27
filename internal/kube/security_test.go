@@ -178,6 +178,26 @@ func TestSecurityJobNonRoot(t *testing.T) {
 	}
 }
 
+// Both folders are limited, and the temporary folder is one of them.
+func TestSecurityJobDisk(t *testing.T) {
+	t.Parallel()
+	p := testSecurityParams()
+	spec := BuildSecurityJob(p).Spec.Template.Spec
+	limited := map[string]bool{}
+	for _, v := range spec.Volumes {
+		if v.EmptyDir != nil && v.EmptyDir.SizeLimit != nil && v.EmptyDir.SizeLimit.Cmp(p.WorkSize) == 0 {
+			limited[v.Name] = true
+		}
+	}
+	if !limited["work"] || !limited["repo"] {
+		t.Errorf("limited volumes = %v", limited)
+	}
+	env := envByName(spec.Containers[0])
+	if env["TMPDIR"].Value != "/work" || env["HOME"].Value != "/work" {
+		t.Errorf("TMPDIR = %q, HOME = %q", env["TMPDIR"].Value, env["HOME"].Value)
+	}
+}
+
 func TestSecurityJobNoProxy(t *testing.T) {
 	t.Parallel()
 	p := testSecurityParams()
@@ -286,7 +306,23 @@ func TestSecurityFailure(t *testing.T) {
 	evicted := podFor("j", start, nil, nil)
 	evicted.Status.Phase = corev1.PodFailed
 	evicted.Status.Reason = "Evicted"
-	evicted.Status.Message = "Pod ephemeral local storage usage exceeds the total limit of containers 4Gi. "
+	evicted.Status.Message = `Usage of EmptyDir volume "repo" exceeds the limit "4Gi". `
+
+	// The text uses the limit of the volume the message names.
+	twoLimits := func() *batchv1.Job {
+		j := failedJob("BackoffLimitExceeded")
+		for i := range j.Spec.Template.Spec.Volumes {
+			if v := &j.Spec.Template.Spec.Volumes[i]; v.Name == "repo" {
+				q := resource.MustParse("2Gi")
+				v.EmptyDir.SizeLimit = &q
+			}
+		}
+		return j
+	}
+	evictedWork := podFor("j", start, nil, nil)
+	evictedWork.Status.Phase = corev1.PodFailed
+	evictedWork.Status.Reason = "Evicted"
+	evictedWork.Status.Message = `Usage of EmptyDir volume "work" exceeds the limit "4Gi". `
 
 	cases := []struct {
 		name string
@@ -295,6 +331,8 @@ func TestSecurityFailure(t *testing.T) {
 		want string
 	}{
 		{"evicted for storage", failedJob("BackoffLimitExceeded"), []*corev1.Pod{evicted}, "the repository is too large for the scan's disk (4Gi)"},
+		{"repo volume limit", twoLimits(), []*corev1.Pod{evicted}, "the repository is too large for the scan's disk (2Gi)"},
+		{"work volume limit", twoLimits(), []*corev1.Pod{evictedWork}, "the repository is too large for the scan's disk (4Gi)"},
 		{"OOMKilled", failedJob("BackoffLimitExceeded"),
 			[]*corev1.Pod{podFor("j", start, nil, []corev1.ContainerStatus{terminated("pergent", 137, "OOMKilled", start, failedAt)})}, "the scan ran out of memory"},
 		{"deadline", failedJob("DeadlineExceeded"), nil, "the scan took longer than its timeout"},

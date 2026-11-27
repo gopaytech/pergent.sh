@@ -95,7 +95,8 @@ type jobFacts struct {
 // storageMessage reports whether a pod or Job message says the pod used more
 // ephemeral storage than its limit.
 func storageMessage(s string) bool {
-	return strings.Contains(s, "ephemeral-storage") || strings.Contains(s, "ephemeral local storage")
+	return strings.Contains(s, "ephemeral-storage") || strings.Contains(s, "ephemeral local storage") ||
+		strings.Contains(s, "EmptyDir volume")
 }
 
 // Inspect reads the Job and its pods. A missing Job is Exists=false, not an
