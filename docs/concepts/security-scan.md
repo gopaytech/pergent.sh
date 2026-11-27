@@ -124,6 +124,8 @@ A **Security scan** card on the repository's **Settings** tab. Only maintainers 
 | Scan timeout | 3 hours | 10 minutes to 6 hours |
 | Use security findings in reviews | Off | On or off |
 
+An admin's **Remove** of the repository drops these settings and its scan model chain, so a repository added again starts from the defaults. Its scans and findings stay.
+
 Instance level: `security.max_running` (default 1, up to 20) keeps scans from taking the Job slots reviews need. See the [config reference](../reference/configuration.md).
 
 ## Findings in reviews

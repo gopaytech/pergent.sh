@@ -429,13 +429,32 @@ func TestScanChainSave(t *testing.T) {
 			t.Error("the scan chain is still there after a reset")
 		}
 	})
-	t.Run("a removed repository drops it", func(t *testing.T) {
+	t.Run("a removed repository drops it and its scan settings", func(t *testing.T) {
 		save(t, "acme/api", G)
+		steps := 40
+		for _, r := range [][2]string{{"main", "ACME/api"}, {"main", "acme/web"}, {"other", "acme/api"}} {
+			if err := s.PutSecurityScanSettings(ctx, r[0], r[1], SecurityScanSettings{MaxSteps: &steps,
+				FindingsInReviews: true}, t0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		scan := queueSecurity(t, s, scanRequest("main", "acme/api"), t0)
 		if found, err := s.RemoveDashboardRepo(ctx, "main", "acme/api"); err != nil || !found {
 			t.Fatalf("RemoveDashboardRepo = %v, %v", found, err)
 		}
 		if _, found := scanChain(t, "acme/api"); found {
 			t.Error("the removed repository's scan chain is still there")
+		}
+		if v, err := s.SecurityScanSettingsOf(ctx, "main", "acme/api"); err != nil || v != (SecurityScanSettings{}) {
+			t.Errorf("removed repository's scan settings = %+v, %v; want none", v, err)
+		}
+		for _, r := range [][2]string{{"main", "acme/web"}, {"other", "acme/api"}} {
+			if v, err := s.SecurityScanSettingsOf(ctx, r[0], r[1]); err != nil || v.MaxSteps == nil || !v.FindingsInReviews {
+				t.Errorf("scan settings of %s %s = %+v, %v; want kept", r[0], r[1], v, err)
+			}
+		}
+		if _, err := s.SecurityScan(ctx, scan.ID); err != nil {
+			t.Errorf("the removed repository's scan = %v; want kept", err)
 		}
 	})
 }

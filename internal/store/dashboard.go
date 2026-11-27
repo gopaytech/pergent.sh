@@ -646,8 +646,9 @@ func (s *Store) SetDashboardRepoEnabled(ctx context.Context, instance, project s
 }
 
 // RemoveDashboardRepo deletes the dashboard repository project on instance
-// (matched ignoring case), paused or not, its own chain A and reviewer chains and
-// the team links to it, in one transaction. A team's link to the whole instance and links to the same path
+// (matched ignoring case), paused or not, its own chain A, reviewer and scan
+// chains, its scan settings and the team links to it, in one transaction. Its
+// scans and findings stay. A team's link to the whole instance and links to the same path
 // on another instance stay. found is false, and nothing is deleted, when
 // there is no such row.
 func (s *Store) RemoveDashboardRepo(ctx context.Context, instance, project string) (found bool, err error) {
@@ -675,6 +676,11 @@ func (s *Store) RemoveDashboardRepo(ctx context.Context, instance, project strin
 			instance, project); err != nil {
 			return false, err
 		}
+	}
+	// Its scan settings too, so one added again starts from the defaults.
+	if _, err := tx.Exec(ctx, `DELETE FROM security_scan_settings WHERE instance = $1 AND lower(project) = lower($2)`,
+		instance, project); err != nil {
+		return false, err
 	}
 	return true, tx.Commit(ctx)
 }
