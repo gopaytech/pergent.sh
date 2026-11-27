@@ -17,6 +17,9 @@ func fixture(t *testing.T, name string) []byte {
 
 const goodCommit = "0123456789abcdef0123456789abcdef01234567"
 
+// sha256Commit is a commit of a SHA-256 repository.
+const sha256Commit = goodCommit + "89abcdef0123456789abcdef"
+
 // body makes a small valid envelope; edit replaces text in it.
 func body(edit ...string) []byte {
 	s := `{"kind":"security","status":"complete","commit":"` + goodCommit + `","usage":{"source":"stats","tokens":{"input":1}},"sarif":{"version":"2.1.0","runs":[]}}`
@@ -34,6 +37,7 @@ func TestParseEnvelope(t *testing.T) {
 		status  string
 		source  string
 		skill   string
+		commit  string // goodCommit when empty
 		wantErr bool
 	}{
 		{name: "complete", body: fixture(t, "complete.json"), status: "complete", source: "stats", skill: "security-audit"},
@@ -46,6 +50,9 @@ func TestParseEnvelope(t *testing.T) {
 		{name: "source other", body: body(`"stats"`, `"other"`), wantErr: true},
 		{name: "short commit", body: body(goodCommit, "0123abc"), wantErr: true},
 		{name: "upper-case commit", body: body(goodCommit, strings.ToUpper(goodCommit)), wantErr: true},
+		{name: "SHA-256 commit", body: body(goodCommit, sha256Commit), status: "complete", source: "stats", commit: sha256Commit},
+		{name: "41-hex commit", body: body(goodCommit, goodCommit+"a"), wantErr: true},
+		{name: "65-hex commit", body: body(goodCommit, sha256Commit+"a"), wantErr: true},
 		{name: "negative input", body: body(`"input":1`, `"input":-1`), wantErr: true},
 		{name: "negative steps", body: body(`"source":"stats"`, `"source":"stats","steps":-2`), wantErr: true},
 		{name: "negative coverage", body: body(`"sarif"`, `"coverage":{"done":-1,"planned":2},"sarif"`), wantErr: true},
@@ -65,7 +72,11 @@ func TestParseEnvelope(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if env.Status != tc.status || env.Usage.Source != tc.source || env.Commit != goodCommit {
+			wantCommit := tc.commit
+			if wantCommit == "" {
+				wantCommit = goodCommit
+			}
+			if env.Status != tc.status || env.Usage.Source != tc.source || env.Commit != wantCommit {
 				t.Fatalf("got %+v", env)
 			}
 			got := ""

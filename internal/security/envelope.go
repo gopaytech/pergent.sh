@@ -94,7 +94,9 @@ type Tokens struct {
 	CacheWrite int64 `json:"cache_write"`
 }
 
-var commitRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+// commitRe is a full commit SHA: 40 hex characters, or 64 in a SHA-256
+// repository, as the scan Job takes it (kube's fullSHA).
+var commitRe = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // ParseEnvelope reads a scan result body. Unknown fields are ignored. Every
 // text has its NUL characters removed, because Postgres refuses them in text
@@ -113,7 +115,7 @@ func ParseEnvelope(body []byte) (Envelope, error) {
 	case env.Status != "complete" && env.Status != "partial" && env.Status != "failed":
 		return Envelope{}, errors.New("status must be complete, partial or failed")
 	case !commitRe.MatchString(env.Commit):
-		return Envelope{}, errors.New("commit must be a 40-character lowercase hex SHA")
+		return Envelope{}, errors.New("commit must be a 40- or 64-character lowercase hex SHA")
 	case env.Usage.Source != "stats" && env.Usage.Source != "stats_poll" && env.Usage.Source != "stream":
 		return Envelope{}, errors.New("usage.source must be stats, stats_poll or stream")
 	}
