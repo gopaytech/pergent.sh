@@ -23,9 +23,9 @@ import (
 // container and no init container: pergent downloads the source from
 // pergent.sh itself, with the one-time result token, so no Job holds a git
 // token. The LLM key and the result token come from the Job's Secret, as for a
-// review. The pod carries the managed-by label (the review-Job NetworkPolicy
-// applies to it) and LabelSecurityScan, which the chart's security policy
-// selects on.
+// review. The pod carries the managed-by label and LabelSecurityScan. The
+// chart's security policy selects on both, and its review-Job policy leaves
+// out every pod with LabelSecurityScan, so only the security policy applies.
 
 const (
 	// LabelSecurityScan names the scan a security Job is for. The chart's
