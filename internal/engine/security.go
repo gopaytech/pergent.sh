@@ -1,17 +1,24 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/chain"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/security"
 	"github.com/gopaytech/pergent.sh/internal/settings"
+	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -20,7 +27,8 @@ import (
 // commit. RunSecurityScans, in its own goroutine, claims queued scans while
 // fewer than security.max_running run, picks the entry of the scan chain and
 // the token budget, and starts a Job that downloads the source from
-// pergent.sh and posts its result (Task 9). A scan never falls back to
+// pergent.sh (OpenSecuritySource) and posts its result
+// (CompleteSecurityScan). A scan never falls back to
 // another entry: a failed scan is started again by a person. The sweep ends
 // the scans whose Job failed, went or ran too long, and the cancelled ones
 // that never posted. A scan that ends with no result records no tokens.
@@ -653,4 +661,319 @@ func (e *Engine) captureSecurityLogs(ctx context.Context, now time.Time) {
 			e.captureJobLog(ctx, e.securityJob(sc), obs, log, logTimeout)
 		}
 	}
+}
+
+// Why a scan ended, from its Job's calls back.
+const (
+	// msgSecurityUnusable starts the reason of a result pergent.sh can't use.
+	msgSecurityUnusable    = "pergent sent a result pergent.sh couldn't use: "
+	msgSecurityBadFinding  = "a status or a finding pergent.sh can't store"
+	msgSecurityBodyLarge   = "the scan Job sent a result over 12 MiB"
+	msgSecuritySourceLarge = "the source is over the size limit"
+	reasonSecurityCapped   = "more than 5000 findings: the first 5000 are kept"
+)
+
+// securityCaller is the running scan id whose token is token: a scan that
+// does not exist, or holds another token (a review's included), is
+// security.Unauthorized; one that is not running, security.Conflict.
+func (e *Engine) securityCaller(ctx context.Context, id, token string) (store.SecurityScan, security.Outcome, error) {
+	sc, err := e.Store.SecurityScan(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrSecurityScanNotFound):
+		return store.SecurityScan{}, security.Unauthorized, nil
+	case err != nil:
+		return store.SecurityScan{}, 0, err
+	case sc.State != store.SecurityRunning:
+		return sc, security.Conflict, nil
+	}
+	match, err := e.Store.SecurityTokenIs(ctx, id, hashToken(token))
+	switch {
+	case err != nil:
+		return store.SecurityScan{}, 0, err
+	case !match:
+		return store.SecurityScan{}, security.Unauthorized, nil
+	}
+	return sc, security.Stored, nil
+}
+
+// CompleteSecurityScan takes the envelope a scan Job posted, once
+// (securityCaller says who may). Every text that holds a secret pergent.sh
+// holds, the deploy token or the scan's own token is withheld first
+// (withholdSecurity), then securityResultOf reads what is kept. A result
+// pergent.sh can't use is still taken (security.Stored): the scan fails, so
+// pergent never posts it again and the scan does not wait for the sweep.
+// Then the usage is recorded and the scan loop is woken.
+func (e *Engine) CompleteSecurityScan(ctx context.Context, id, token string, body []byte) (security.Outcome, error) {
+	sc, outcome, err := e.securityCaller(ctx, id, token)
+	if err != nil || outcome != security.Stored {
+		return outcome, err
+	}
+	log := e.log().With("scan", sc.ID, "instance", sc.Instance, "project", sc.Project)
+	secrets, err := e.repoSecrets(ctx, sc.Instance, sc.Project)
+	if err != nil {
+		return 0, err
+	}
+	secrets = append(secrets, token)
+	res, usage, in := securityResultOf(sc, body, secrets)
+	if in.unusable != "" {
+		log.Warn("security scan: the Job sent a result pergent.sh can't use", "why", res.Reason)
+	}
+	if in.withheld > 0 {
+		log.Warn("security scan: texts that held a secret were withheld", "count", in.withheld)
+	}
+	if in.stateDropped > 0 {
+		log.Info("security scan: state files over 512 KiB were not kept", "files", in.stateDropped)
+	}
+
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	ok, err := e.Store.FinishSecurityScan(sctx, id, hashToken(token), res, e.now())
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		// Ended since it was read.
+		if again, err := e.Store.SecurityScan(sctx, id); err == nil && again.State != store.SecurityRunning {
+			return security.Conflict, nil
+		}
+		return security.Unauthorized, nil
+	}
+	if len(usage) > 0 {
+		if err := e.Store.RecordScanUsage(sctx, id, usage); err != nil {
+			log.Error("security scan: recording the usage failed", "error", e.redact(err.Error()))
+		}
+	}
+	log.Info("security scan: result taken", "status", res.Status, "findings", len(res.Findings),
+		"usage_rows", len(usage))
+	e.wakeSecurity()
+	return security.Stored, nil
+}
+
+// SecurityTooLarge fails the running scan whose Job posted a body over
+// security.MaxBodyBytes, when token is the scan's.
+func (e *Engine) SecurityTooLarge(ctx context.Context, id, token string) error {
+	return e.failSecurityCaller(ctx, id, token, msgSecurityBodyLarge, false)
+}
+
+// SecuritySourceTooLarge fails the running scan whose source is over
+// security.max_source_bytes, when token is the scan's, and deletes its Job
+// (its log is taken first).
+func (e *Engine) SecuritySourceTooLarge(ctx context.Context, id, token string) error {
+	return e.failSecurityCaller(ctx, id, token, msgSecuritySourceLarge, true)
+}
+
+func (e *Engine) failSecurityCaller(ctx context.Context, id, token, reason string, stopJob bool) error {
+	sc, outcome, err := e.securityCaller(ctx, id, token)
+	if err != nil || outcome != security.Stored {
+		return err
+	}
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	ok, err := e.Store.FinishSecurityScan(sctx, id, hashToken(token),
+		store.SecurityResult{Status: store.SecurityFailed, Reason: reason, Commit: sc.Commit}, e.now())
+	if err != nil || !ok {
+		return err
+	}
+	e.log().Info("security scan: ended", "scan", sc.ID, "state", store.SecurityFailed, "reason", reason)
+	e.wakeSecurity()
+	if stopJob {
+		// Its own time: the log is taken first, within logTimeout.
+		e.stopSecurityJob(context.WithoutCancel(ctx), sc)
+	}
+	return nil
+}
+
+// OpenSecuritySource opens the platform's archive of a running scan's
+// commit, for its Job (securityCaller says who may). A scan with a cancel
+// asked for is security.Conflict: its Job is being stopped. A platform that
+// does not give it is security.ErrNoSource, wrapping the platform's error
+// (forge.ErrSourceNotFound for one the review bot or App can't read). The
+// caller closes the archive.
+func (e *Engine) OpenSecuritySource(ctx context.Context, id, token string) (io.ReadCloser, security.Outcome, error) {
+	sc, outcome, err := e.securityCaller(ctx, id, token)
+	if err != nil || outcome != security.Stored {
+		return nil, outcome, err
+	}
+	if sc.CancelRequestedAt != nil {
+		return nil, security.Conflict, nil
+	}
+	log := e.log().With("scan", sc.ID, "instance", sc.Instance, "project", sc.Project)
+	var r forge.ArchiveReader
+	ok := false
+	if e.Archives != nil {
+		r, ok = e.Archives(sc.Instance)
+	}
+	if !ok {
+		log.Warn("security scan: no reader of the instance's repositories for the source")
+		return nil, 0, security.ErrNoSource
+	}
+	rc, err := r.Archive(ctx, sc.Project, sc.Commit)
+	if err != nil {
+		log.Warn("security scan: the platform did not give the source", "error", e.redact(err.Error()))
+		return nil, 0, fmt.Errorf("%w: %w", security.ErrNoSource, err)
+	}
+	log.Info("security scan: serving the source", "commit", sc.Commit)
+	return rc, security.Stored, nil
+}
+
+// securityIntake is what securityResultOf noted for the log: why the result
+// can't be used ("" when it can), how many texts it withheld and how many
+// state files were too big.
+type securityIntake struct {
+	unusable               string
+	withheld, stateDropped int
+}
+
+// securityResultOf reads the body a running scan's Job posted into what
+// FinishSecurityScan stores and the usage rows to record, with secrets
+// withheld (withholdSecurity). The reason is one line of at most 500 bytes.
+// An envelope that can't be read is failed, unusable, and records no usage;
+// a SARIF that can't be read (over 8 MiB included), or a result the store
+// would refuse, is failed, unusable, with no findings, SARIF or state, but
+// its usage. Otherwise more than 5000 findings make a complete scan
+// partial, and a cancel asked for makes the reason cancelled and the status
+// partial, unless it failed.
+func securityResultOf(sc store.SecurityScan, body []byte, secrets []string) (store.SecurityResult, []store.ScanModelUsage, securityIntake) {
+	var in securityIntake
+	unusable := func(why, commit, usageSource string) store.SecurityResult {
+		in.unusable = why
+		reason := skillfetch.JobText(msgSecurityUnusable + why)
+		if holdsSecret(reason, secrets) {
+			reason = msgSecurityUnusable + security.Withheld
+		}
+		return store.SecurityResult{Status: store.SecurityFailed, Reason: reason, Commit: commit, UsageSource: usageSource}
+	}
+	env, err := security.ParseEnvelope(body)
+	if err != nil {
+		return unusable(err.Error(), sc.Commit, ""), nil, in
+	}
+	in.stateDropped = env.StateDropped
+	in.withheld = withholdSecurity(&env, secrets)
+	usage := env.Usage.Rows(sc.Provider, sc.Model)
+
+	p, err := security.ReadSARIF(env.SARIF)
+	if err != nil {
+		return unusable(err.Error(), env.Commit, env.Usage.Source), usage, in
+	}
+	res := store.SecurityResult{
+		Status: env.Status, Reason: securityReason(env.Reason, secrets), Commit: env.Commit,
+		UsageSource: env.Usage.Source, State: env.State, Findings: p.Findings,
+	}
+	if c := env.Coverage; c != nil {
+		done, planned := c.Done, c.Planned
+		res.CoverageDone, res.CoveragePlanned = &done, &planned
+	}
+	if t := bytes.TrimSpace(env.SARIF); len(t) > 0 && string(t) != "null" {
+		res.SARIF = env.SARIF
+	}
+	res.SkillName, res.SkillCommit = security.SkillOf(env, p)
+	if p.Capped && res.Status == store.SecurityComplete {
+		res.Status, res.Reason = store.SecurityPartial, reasonSecurityCapped
+	}
+	if sc.CancelRequestedAt != nil {
+		res.Reason = reasonSecurityCancelled
+		if res.Status != store.SecurityFailed {
+			res.Status = store.SecurityPartial
+		}
+	}
+	if err := store.CheckSecurityResult(res); err != nil {
+		return unusable(msgSecurityBadFinding, env.Commit, env.Usage.Source), usage, in
+	}
+	return res, usage, in
+}
+
+// securityReason is s as one line of at most 500 bytes, or security.Withheld
+// when that holds a secret.
+func securityReason(s string, secrets []string) string {
+	t := skillfetch.JobText(s)
+	if holdsSecret(t, secrets) {
+		return security.Withheld
+	}
+	return t
+}
+
+// withholdSecurity replaces with security.Withheld every text of env that
+// holds a secret (holdsSecret): the reason, the skill, the usage's provider
+// and model names, and anywhere in the SARIF, keys and values, which is then
+// encoded again (a key that becomes one already there is dropped). A state
+// file whose name or text holds one is dropped. A SARIF over
+// security.MaxSARIFBytes is left: it is refused whole. It returns how many
+// texts and files it withheld; with none, env is as it was.
+func withholdSecurity(env *security.Envelope, secrets []string) int {
+	n := 0
+	text := func(s string) string {
+		if holdsSecret(s, secrets) {
+			n++
+			return security.Withheld
+		}
+		return s
+	}
+	env.Reason = text(env.Reason)
+	if env.Skill != nil {
+		env.Skill.Name, env.Skill.Commit = text(env.Skill.Name), text(env.Skill.Commit)
+	}
+	for i, m := range env.Usage.Models {
+		env.Usage.Models[i].Provider, env.Usage.Models[i].Model = text(m.Provider), text(m.Model)
+	}
+	for k, v := range env.State {
+		if holdsSecret(k, secrets) || holdsSecret(v, secrets) {
+			delete(env.State, k)
+			n++
+		}
+	}
+	if len(env.SARIF) == 0 || len(env.SARIF) > security.MaxSARIFBytes {
+		return n
+	}
+	var doc any
+	dec := json.NewDecoder(bytes.NewReader(env.SARIF))
+	dec.UseNumber()
+	if dec.Decode(&doc) != nil {
+		// Not JSON: ReadSARIF refuses it, and none of it is kept.
+		return n
+	}
+	before := n
+	doc = withholdJSON(doc, text)
+	if n == before {
+		return n
+	}
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(doc); err != nil {
+		// It was just decoded: this does not happen. Keep nothing of it.
+		env.SARIF = json.RawMessage(`{}`)
+		return n
+	}
+	env.SARIF = bytes.TrimRight(out.Bytes(), "\n")
+	return n
+}
+
+// withholdJSON applies text to every string of a decoded JSON value, the
+// keys of its objects too, in sorted key order.
+func withholdJSON(v any, text func(string) string) any {
+	switch x := v.(type) {
+	case string:
+		return text(x)
+	case []any:
+		for i := range x {
+			x[i] = withholdJSON(x[i], text)
+		}
+		return x
+	case map[string]any:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		out := make(map[string]any, len(x))
+		for _, k := range keys {
+			nk := text(k)
+			if _, dup := out[nk]; dup {
+				continue
+			}
+			out[nk] = withholdJSON(x[k], text)
+		}
+		return out
+	}
+	return v
 }

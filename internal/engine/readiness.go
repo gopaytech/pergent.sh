@@ -642,11 +642,17 @@ func (e *Engine) scanResult(ctx context.Context, sc store.ReadinessScan, body []
 // pergent.sh holds, and the repository's deploy token, which the Job's clone
 // holds. It fails closed.
 func (e *Engine) scanSecrets(ctx context.Context, sc store.ReadinessScan) ([]string, error) {
+	return e.repoSecrets(ctx, sc.Instance, sc.Project)
+}
+
+// repoSecrets is every secret pergent.sh holds and the deploy token of the
+// repository. It fails closed.
+func (e *Engine) repoSecrets(ctx context.Context, instance, project string) ([]string, error) {
 	secrets, err := e.registry().HeldSecrets(ctx)
 	if err != nil {
 		return nil, err
 	}
-	p, found, err := e.Store.ProjectByPath(ctx, sc.Instance, sc.Project)
+	p, found, err := e.Store.ProjectByPath(ctx, instance, project)
 	if err != nil {
 		return nil, err
 	}

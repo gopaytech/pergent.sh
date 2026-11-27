@@ -93,6 +93,10 @@ type Engine struct {
 	// SecurityImage is the image the security scan Jobs run
 	// (jobs.security_image).
 	SecurityImage string
+	// Archives gives the reader of an instance's repository archives (its
+	// review bot or App), which a security scan's source is served from. Nil,
+	// or an instance it has no reader for, serves no source.
+	Archives func(instance string) (forge.ArchiveReader, bool)
 	// CallbackClient sends the API reviews' callbacks; nil means one with a
 	// 10 s timeout. Whatever it is, a redirect is never followed.
 	CallbackClient *http.Client

@@ -56,6 +56,13 @@ type Deps struct {
 	// (the engine). Nil, when the dashboard is off: no scan runs, and the
 	// route is absent.
 	ReadinessScans callback.ScanResults
+	// SecurityScans takes a security scan Job's result, and SecuritySources
+	// serves the Job its source, at most SecuritySourceLimit bytes
+	// (security.max_source_bytes): the engine. Nil, when the dashboard is
+	// off: no scan runs, and the routes are absent.
+	SecurityScans       callback.SecurityResults
+	SecuritySources     callback.SecuritySources
+	SecuritySourceLimit int64
 	// Graphs takes a graph build Job's post and serves a review Job its
 	// code graph (the engine). Nil, when the install keeps no graphs: the
 	// routes are absent.
@@ -84,6 +91,10 @@ type Deps struct {
 //     SkillFetches is set;
 //   - POST /readiness-scans/{id}/result: what a readiness scan Job found,
 //     when ReadinessScans is set;
+//   - POST /security-scans/{id}/result: a security scan Job's result, when
+//     SecurityScans is set, and GET /security-scans/{id}/source: the source
+//     the Job scans, when SecuritySources is set (each answers another
+//     method 405);
 //   - POST /graphs/{id}/result: a graph build Job's graph, and GET
 //     /runs/{id}/graph: a review Job's code graph, when Graphs is set;
 //   - GET /runs/{id}/reviewers/{n}: reviewer n's result for the judge Job of a
@@ -124,6 +135,16 @@ func Routes(d Deps) *http.ServeMux {
 	}
 	if d.ReadinessScans != nil {
 		mux.Handle("POST /readiness-scans/{id}/result", &callback.ScanHandler{Scans: d.ReadinessScans, Log: d.Log})
+	}
+	// No method in the patterns: another method gets the handler's 405, not
+	// the dashboard's app behind "/".
+	if d.SecurityScans != nil {
+		mux.Handle("/security-scans/{id}/result", &callback.SecurityHandler{Scans: d.SecurityScans, Log: d.Log})
+	}
+	if d.SecuritySources != nil {
+		mux.Handle("/security-scans/{id}/source", &callback.SecuritySourceHandler{
+			Sources: d.SecuritySources, Limit: d.SecuritySourceLimit, Log: d.Log,
+		})
 	}
 	if d.Graphs != nil {
 		mux.Handle("POST /graphs/{id}/result", &callback.GraphHandler{Graphs: d.Graphs, Log: d.Log})

@@ -39,7 +39,8 @@ const (
 
 // Envelope is the body pergent sends when a scan ends. Skill is nil, or has
 // an empty name, when the scan ended before the skill was known. Coverage is
-// nil when the body has none.
+// nil when the body has none. StateDropped counts the state files
+// ParseEnvelope did not keep, over MaxStateBytes.
 type Envelope struct {
 	Kind     string            `json:"kind"`
 	Status   string            `json:"status"`
@@ -50,6 +51,8 @@ type Envelope struct {
 	Coverage *Coverage         `json:"coverage"`
 	State    map[string]string `json:"state"`
 	SARIF    json.RawMessage   `json:"sarif"`
+
+	StateDropped int `json:"-"`
 }
 
 // Skill names the skill that made the scan and its pinned commit.
@@ -143,6 +146,7 @@ func ParseEnvelope(body []byte) (Envelope, error) {
 		for _, k := range keys {
 			v := env.State[k]
 			if len(v) > MaxStateBytes || total+len(k)+len(v) > MaxStateBytes {
+				env.StateDropped++
 				continue
 			}
 			total += len(k) + len(v)

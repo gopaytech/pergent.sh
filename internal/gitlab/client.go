@@ -248,6 +248,13 @@ func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte
 // and closes it. A non-2xx reply is *APIError (a 401 or 403 matches
 // ErrForbidden, a 404 ErrNotFound). It is not retried.
 func (c *Client) stream(ctx context.Context, path string, query url.Values) (io.ReadCloser, error) {
+	return c.open(ctx, path, query, false)
+}
+
+// open is stream. With archive, only ctx bounds the request (an archive can
+// take longer than the client's timeout), and the body is asked for as it is
+// stored: Go's transport un-gzips a reply marked Content-Encoding: gzip.
+func (c *Client) open(ctx context.Context, path string, query url.Values, archive bool) (io.ReadCloser, error) {
 	u, err := url.Parse(c.baseURL + "/api/v4" + path)
 	if err != nil {
 		return nil, errors.New("gitlab: invalid base URL or path")
@@ -264,7 +271,14 @@ func (c *Client) stream(ctx context.Context, path string, query url.Values) (io.
 	} else {
 		req.Header.Set("PRIVATE-TOKEN", c.token)
 	}
-	res, err := c.hc.Do(req)
+	hc := c.hc
+	if archive {
+		req.Header.Set("Accept-Encoding", "identity")
+		untimed := *c.hc
+		untimed.Timeout = 0
+		hc = &untimed
+	}
+	res, err := hc.Do(req)
 	if errors.Is(err, errCrossHostRedirect) {
 		return nil, errCrossHostRedirect
 	}

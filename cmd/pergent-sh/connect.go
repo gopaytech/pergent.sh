@@ -130,6 +130,22 @@ func (c *connector) sourceReader(instance string) (forge.SourceReader, bool) {
 	return r, ok
 }
 
+// archiveReader is the reader of instance's repository archives that a
+// security scan's source is served from: the same reader as sourceReader,
+// its review bot or review App. An instance not connected, or without the
+// dashboard, has none.
+func (c *connector) archiveReader(instance string) (forge.ArchiveReader, bool) {
+	if c.sources == nil {
+		return nil, false
+	}
+	s, ok := c.sources.Get(instance)
+	if !ok {
+		return nil, false
+	}
+	r, ok := s.(forge.ArchiveReader)
+	return r, ok
+}
+
 // serveDashboard gives the dashboard the Forge of plat as the reader of the
 // instance's repositories and the lister of what can be switched on. A
 // platform whose Forge can't do either is named in a warning, with its

@@ -181,9 +181,12 @@ const pruneSecuritySQL = `WITH newest AS (
 		AND (sarif IS NOT NULL OR state_files IS NOT NULL)
 		AND id NOT IN (SELECT id FROM newest) AND id NOT IN (SELECT id FROM last_complete)`
 
-// checkSecurityResult refuses a result FinishSecurityScan cannot store: a
+// CheckSecurityResult refuses a result FinishSecurityScan cannot store: a
 // status that is not an end, or a finding with no fingerprint or an unknown
-// severity.
+// severity. The engine checks first, so a result it can't store fails the
+// scan rather than leaving it running.
+func CheckSecurityResult(res SecurityResult) error { return checkSecurityResult(res) }
+
 func checkSecurityResult(res SecurityResult) error {
 	if !slices.Contains([]string{SecurityComplete, SecurityPartial, SecurityFailed}, res.Status) {
 		return fmt.Errorf("store: security result status %q is not complete, partial or failed", res.Status)

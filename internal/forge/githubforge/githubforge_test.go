@@ -1511,3 +1511,33 @@ func TestUserByName(t *testing.T) {
 		t.Errorf("500: err = %v, want an error that isn't ErrNotFound", err)
 	}
 }
+
+// Archive reads owner/name with the review App's installation on it; a
+// repository the App is not installed on, or a commit GitHub doesn't have,
+// is forge.ErrSourceNotFound.
+func TestGitHubArchiveReader(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/skills/installation", 200, map[string]any{"id": installationID})
+	f.handle("GET", "/repos/acme/skills/tarball/"+sha('7'), func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "tar-gz-bytes")
+	})
+	g := f.forgeWithoutRepos(t)
+
+	rc, err := g.Archive(ctx, "acme/skills", sha('7'))
+	if err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	b, _ := io.ReadAll(rc)
+	rc.Close()
+	if string(b) != "tar-gz-bytes" {
+		t.Errorf("archive = %q", b)
+	}
+	if r := f.requests("GET", "/repos/acme/skills/tarball/"+sha('7')); len(r) != 1 || r[0].Auth != "Bearer "+installToken {
+		t.Errorf("tarball requests = %+v; want one with the installation token", r)
+	}
+	for _, c := range []struct{ project, commit string }{{"acme/private", sha('7')}, {"acme/skills", sha('8')}, {"acme", sha('7')}} {
+		if _, err := g.Archive(ctx, c.project, c.commit); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("Archive(%q, %q) = %v; want ErrSourceNotFound", c.project, c.commit, err)
+		}
+	}
+}

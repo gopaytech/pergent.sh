@@ -131,6 +131,9 @@ func TestParseEnvelopeDropsBigState(t *testing.T) {
 	if _, a := env.State["a"]; len(env.State) != 2 || env.State["b"] == "" || env.State["d"] != "ok" || a {
 		t.Fatalf("state keys = %d", len(env.State))
 	}
+	if env.StateDropped != 2 {
+		t.Errorf("StateDropped = %d; want 2 (a and c)", env.StateDropped)
+	}
 	if p, err := ReadSARIF(env.SARIF); err != nil || len(p.Findings) != 1 {
 		t.Fatalf("findings = %v %v", p.Findings, err)
 	}

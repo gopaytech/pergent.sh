@@ -190,6 +190,13 @@ func (c *Client) ActionsJobRunID(ctx context.Context, owner, repo string, jobID 
 // artifact with a 302 to a storage host, which must not get our token. A
 // non-2xx final reply is *APIError. The caller closes the body.
 func (c *Client) stream(ctx context.Context, path string) (io.ReadCloser, error) {
+	return c.open(ctx, path, false)
+}
+
+// open is stream. With archive, only ctx bounds the request (an archive can
+// take longer than the client's timeout), and the body is asked for as it is
+// stored: Go's transport un-gzips a reply marked Content-Encoding: gzip.
+func (c *Client) open(ctx context.Context, path string, archive bool) (io.ReadCloser, error) {
 	var tok string
 	if c.token != nil {
 		var err error
@@ -199,6 +206,9 @@ func (c *Client) stream(ctx context.Context, path string) (io.ReadCloser, error)
 	}
 	hc := *c.hc
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if archive {
+		hc.Timeout = 0
+	}
 	get := func(rawURL, auth string) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 		if err != nil {
@@ -207,6 +217,9 @@ func (c *Client) stream(ctx context.Context, path string) (io.ReadCloser, error)
 		req.Header.Set("Accept", acceptJSON)
 		req.Header.Set("X-GitHub-Api-Version", apiVersion)
 		req.Header.Set("User-Agent", userAgent)
+		if archive {
+			req.Header.Set("Accept-Encoding", "identity")
+		}
 		if auth != "" {
 			req.Header.Set("Authorization", "Bearer "+auth)
 		}
