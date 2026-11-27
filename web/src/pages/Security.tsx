@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -46,6 +46,17 @@ export default function Security({ instance, project, paused }: { instance: stri
     queryFn: () => api.get<SecurityView>(paths.apiRepoSecurity(instance, project)),
     refetchInterval: (q) => (q.state.data?.running ? securityPollMs : false),
   });
+  // When a scan that was queued or running has ended, the scans list, the
+  // findings and every open scan page are stale: ask for them again.
+  const client = useQueryClient();
+  const running = security.data?.running ?? null;
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !running) {
+      for (const k of ["security-scans", "security-findings", "security-scan"]) void client.invalidateQueries({ queryKey: [k, instance, project] });
+    }
+    wasRunning.current = !!running;
+  }, [running, client, instance, project]);
   // A finding's page takes the place of the tab's summary and list.
   if (search.has("finding") && Number.isInteger(finding) && finding > 0) {
     return <SecurityFinding instance={instance} project={project} id={finding} paused={paused} />;
@@ -63,7 +74,11 @@ export default function Security({ instance, project, paused }: { instance: stri
 function Summary({ v, instance, project, paused, queryKey }: { v: SecurityView; instance: string; project: string; paused: boolean; queryKey: unknown[] }) {
   const client = useQueryClient();
   const write = useWrite();
-  const refresh = () => client.invalidateQueries({ queryKey });
+  // A start or a cancel changes the scans list too.
+  const refresh = () => {
+    void client.invalidateQueries({ queryKey: ["security-scans", instance, project] });
+    return client.invalidateQueries({ queryKey });
+  };
   const [open, setOpen] = useState(false);
   // The start lives here, not in the box: a 409 usually means a scan is
   // active, the refresh then drops the box, and the error must stay readable.

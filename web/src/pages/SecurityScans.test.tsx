@@ -1,4 +1,5 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
@@ -8,6 +9,7 @@ import {
   reviewBlocking,
   securityScanComplete,
   securityScanFailed,
+  securityScanRunning,
   securityScanPartial,
   securityView,
   ssoAdmin,
@@ -15,6 +17,7 @@ import {
 import { renderApp } from "../test/render";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -62,5 +65,56 @@ describe("SecurityScans", () => {
     fakeApi(routes([]));
     renderApp("/repos/main/acme/payments?tab=security");
     expect(await screen.findByText("No scans yet.")).toBeInTheDocument();
+  });
+
+  it("shows a scan at once after Start scan", async () => {
+    const user = userEvent.setup();
+    let started = false;
+    const fake = fakeApi({
+      ...routes([]),
+      [`GET ${sec}/scans`]: () => ({ body: { scans: started ? [securityScanRunning] : [] } }),
+      [`GET ${sec}`]: () => ({ body: started ? { ...securityView, canStart: false, running: securityScanRunning } : securityView }),
+      [`POST ${sec}/scans`]: () => {
+        started = true;
+        return { status: 202, body: { scan: securityScanRunning } };
+      },
+    });
+    renderApp("/repos/main/acme/payments?tab=security");
+    await user.click(await screen.findByRole("button", { name: "Start scan" }));
+    const box = await screen.findByRole("dialog");
+    await user.click(within(box).getByRole("button", { name: "Start scan" }));
+    const card = screen.getByRole("region", { name: "Scans" });
+    expect(await within(card).findByText("Running")).toBeInTheDocument();
+    expect(fake.find("GET", `${sec}/scans`)).toHaveLength(2);
+  });
+
+  it("refreshes the scans, the findings and the counts when a running scan ends", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    let ended = false;
+    const settle = async () => {
+      for (let i = 0; i < 20; i++) {
+        await act(async () => {
+          await new Promise<void>((r) => setImmediate(r));
+          await vi.advanceTimersByTimeAsync(1);
+        });
+      }
+    };
+    const fake = fakeApi({
+      ...routes([]),
+      [`GET ${sec}`]: () => ({ body: ended ? securityView : { ...securityView, canStart: false, running: securityScanRunning } }),
+      [`GET ${sec}/scans`]: () => ({ body: { scans: [ended ? securityScanComplete : securityScanRunning] } }),
+    });
+    const { unmount } = renderApp("/repos/main/acme/payments?tab=security");
+    await settle();
+    const card = screen.getByRole("region", { name: "Scans" });
+    expect(within(card).getByText("Running")).toBeInTheDocument();
+    expect(fake.find("GET", `${sec}/findings?state=open`)).toHaveLength(1);
+    ended = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settle();
+    expect(within(card).getByText("Complete")).toBeInTheDocument();
+    expect(fake.find("GET", `${sec}/scans`)).toHaveLength(2);
+    expect(fake.find("GET", `${sec}/findings?state=open`)).toHaveLength(2);
+    unmount();
   });
 });
