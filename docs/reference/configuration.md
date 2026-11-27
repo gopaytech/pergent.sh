@@ -87,7 +87,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `jobs.resources` | requests 500m CPU, 1Gi memory; limits 2 CPU, 4Gi memory | Kubernetes `requests` and `limits` for both containers of a Job. If you set either `requests` or `limits`, the default is not used at all. |
 | `security.max_running` | `1` | Most security scan Jobs running at once, 1 to 20. They wait in the queue beyond this. |
 | `security.proxy` | none | The egress proxy URL the scan Jobs use: `http` or `https`, with a host and no user info (a secret does not belong in the config file). Empty means no proxy. |
-| `security.max_source_bytes` | `524288000` (500 MiB) | Most source a scan takes in, 1 MiB (`1048576`) to 10 GiB (`10737418240`). |
+| `security.max_source_bytes` | `524288000` (500 MiB) | Most source a scan takes in, 1 MiB (`1048576`) to 500 MiB (`524288000`). pergent refuses a bigger archive. |
 
 # Instances and the LLM in the config file
 

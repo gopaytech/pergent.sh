@@ -2053,10 +2053,12 @@ func TestSecurityConfigValidate(t *testing.T) {
 		{"max_running 21", "security:\n  max_running: 21\n", "security.max_running"},
 		{"max_source_bytes 0", "security:\n  max_source_bytes: 0\n", "security.max_source_bytes"},
 		{"max_source_bytes 11 GiB", "security:\n  max_source_bytes: 11811160064\n", "security.max_source_bytes"},
+		{"max_source_bytes 500 MiB and 1 byte", "security:\n  max_source_bytes: 524288001\n", "(500 MiB)"},
 		{"proxy ftp", "security:\n  proxy: ftp://p:3128\n", "security.proxy"},
 		{"proxy with user info", "security:\n  proxy: http://u:p@p:3128\n", "security.proxy"},
 		{"proxy no scheme", "security:\n  proxy: p:3128\n", "security.proxy"},
 		{"proxy ok", "security:\n  proxy: http://proxy.example.com:3128\n  max_running: 20\n  max_source_bytes: 1048576\n", ""},
+		{"max_source_bytes 500 MiB", "security:\n  proxy: http://proxy.example.com:3128\n  max_source_bytes: 524288000\n", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

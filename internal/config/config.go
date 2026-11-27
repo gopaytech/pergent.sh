@@ -40,7 +40,7 @@ const (
 	maxSecurityMaxRunning         = 20
 	defaultSecurityMaxSourceBytes = int64(500 << 20)
 	minSecurityMaxSourceBytes     = int64(1 << 20)
-	maxSecurityMaxSourceBytes     = int64(10 << 30)
+	maxSecurityMaxSourceBytes     = int64(500 << 20) // pergent refuses an archive over 500 MiB
 	defaultMaxRunning             = 5
 	defaultWorkSize               = "20Gi"
 	defaultTimeout                = 30 * time.Minute
@@ -367,7 +367,7 @@ type Security struct {
 	MaxRunning int
 	// Proxy is the egress proxy URL the scan Jobs use; empty means none.
 	Proxy string
-	// MaxSourceBytes is the most source a scan takes in, from 1 MiB to 10 GiB.
+	// MaxSourceBytes is the most source a scan takes in, from 1 MiB to 500 MiB.
 	MaxSourceBytes int64
 }
 
@@ -1533,7 +1533,7 @@ func (s Security) check() []error {
 		errs = append(errs, fmt.Errorf("security.max_running must be from 1 to %d, got %d", maxSecurityMaxRunning, s.MaxRunning))
 	}
 	if s.MaxSourceBytes < minSecurityMaxSourceBytes || s.MaxSourceBytes > maxSecurityMaxSourceBytes {
-		errs = append(errs, fmt.Errorf("security.max_source_bytes must be from %d (1 MiB) to %d (10 GiB), got %d",
+		errs = append(errs, fmt.Errorf("security.max_source_bytes must be from %d (1 MiB) to %d (500 MiB), got %d",
 			minSecurityMaxSourceBytes, maxSecurityMaxSourceBytes, s.MaxSourceBytes))
 	}
 	if s.Proxy != "" {

@@ -91,7 +91,7 @@ securityJobEgress:
 # image with the same tag as the review image (jobs.image), so leave it out unless you mirror
 # the image. security has max_running (default 1, up to 20), proxy (an egress proxy URL
 # for the scan Jobs, no user info; its address must be in securityJobEgress.cidrs and its
-# port in securityJobEgress.ports) and max_source_bytes (default 500 MiB). E.g.
+# port in securityJobEgress.ports) and max_source_bytes (default 500 MiB, 1 MiB to 500 MiB). E.g.
 #   jobs:
 #     security_image: registry.example.com/pergent-security:v0.12.0
 #   security:

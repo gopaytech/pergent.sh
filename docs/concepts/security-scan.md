@@ -38,7 +38,7 @@ The scan pod **never talks to the git host and never holds a git token**. A Netw
 
 **What is not in the archive:** Git LFS files (you get the pointer text) and submodules. A scan does not see them.
 
-**Size.** `security.max_source_bytes` (default 500 MiB, range 1 MiB to 10 GiB) is the most pergent.sh passes on. Above it the scan fails with `the source is over the size limit`. pergent itself refuses an archive over 500 MiB, so a value above 500 MiB has no effect today.
+**Size.** `security.max_source_bytes` (default 500 MiB, range 1 MiB to 500 MiB) is the most pergent.sh passes on. Above it the scan fails with `the source is over the size limit`. The range stops at 500 MiB because pergent itself refuses a bigger archive.
 
 ## The network rule
 
