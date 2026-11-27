@@ -64,6 +64,10 @@ A [multi review](multi-review.md) has one Job for each reviewer and one judge Jo
 - A review's page shows the whole cost: [Dashboard](dashboard.md).
 - Member fallbacks are not in `pergent_model_fallback_total`.
 
+## Security scans
+
+A [security scan](security-scan.md)'s tokens count in every total on these pages, per model, under the skill `security-scan`, with the repository's own name. A scan is **not a review**: it is left out of the review and merge request counts, the wasted tokens and the cost per review. In the CSV a scan's row has the trigger `security_scan`, the verdict `security` and merge request `0`.
+
 ## CSV export
 
 Both pages have a **Download CSV** link: `GET /api/admin/usage.csv?days=N`, with `instance` and `project` for one repository.

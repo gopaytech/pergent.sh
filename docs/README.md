@@ -31,6 +31,7 @@
 | [How approval works](concepts/approval.md) | When pergent.sh approves, and when it takes it back |
 | [Models](concepts/models.md) | Global and team models, model chains, and the backup model when a key is out of quota or credit |
 | [Multi review (experimental)](concepts/multi-review.md) | A review run by 1 to 5 reviewers at the same time and merged by a judge (off by default) |
+| [Security scan](concepts/security-scan.md) | A whole-repository security audit of the default branch, started by hand, with findings you can dismiss |
 | [Usage](concepts/usage.md) | Where the model tokens go |
 | [Metrics](concepts/metrics.md) | Prometheus metrics |
 | [Skill results](concepts/skill-results.md) | What became of each skill's findings |
