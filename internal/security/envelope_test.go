@@ -52,8 +52,6 @@ func TestParseEnvelope(t *testing.T) {
 		{name: "negative model tokens", body: body(`"source":"stats"`, `"source":"stats","models":[{"provider":"a","model":"b","steps":1,"tokens":{"output":-3}}]`), wantErr: true},
 		{name: "not json", body: []byte("nope"), wantErr: true},
 		{name: "too big", body: append(body(), make([]byte, MaxBodyBytes)...), wantErr: true},
-		{name: "state file too big", body: body(`"sarif"`, `"state":{"a":"`+strings.Repeat("x", MaxStateBytes+1)+`"},"sarif"`), wantErr: true},
-		{name: "state too big in all", body: body(`"sarif"`, `"state":{"a":"`+strings.Repeat("x", MaxStateBytes-1)+`","b":"xx"},"sarif"`), wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -115,5 +113,25 @@ func TestParseEnvelopeStripsNUL(t *testing.T) {
 	raw := string(env.SARIF)
 	if strings.Contains(raw, `"p\u0000q"`) || !strings.Contains(raw, `"pq"`) || !strings.Contains(raw, `"\\u0000z"`) {
 		t.Fatalf("sarif = %s", raw)
+	}
+}
+
+func TestParseEnvelopeDropsBigState(t *testing.T) {
+	t.Parallel()
+	// "a" is over the file cap. "b" and "c" fit alone but not together with
+	// "b" in front (sorted order), so "c" is dropped and "d" stays. The findings stay.
+	half := strings.Repeat("x", MaxStateBytes/2)
+	b := body(`"sarif"`, `"state":{"c":"`+half+`","a":"`+strings.Repeat("x", MaxStateBytes+1)+`","b":"`+half+`","d":"ok"},"sarif"`,
+		`"runs":[]`, `"runs":[{"tool":{"driver":{"name":"s"}},"results":[{"message":{"text":"t"}}]}]`)
+	env, err := ParseEnvelope(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sorted walk: a is over the file cap, b fits, c would pass the total, d fits.
+	if _, a := env.State["a"]; len(env.State) != 2 || env.State["b"] == "" || env.State["d"] != "ok" || a {
+		t.Fatalf("state keys = %d", len(env.State))
+	}
+	if p, err := ReadSARIF(env.SARIF); err != nil || len(p.Findings) != 1 {
+		t.Fatalf("findings = %v %v", p.Findings, err)
 	}
 }

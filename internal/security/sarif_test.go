@@ -130,6 +130,16 @@ func TestReadSARIF(t *testing.T) {
 			}
 		}
 	})
+	t.Run("line out of range", func(t *testing.T) {
+		t.Parallel()
+		for line, want := range map[string]int{"10000000": 10000000, "10000001": 0, "99999999999": 0, "-4": 0} {
+			r := strings.Replace(res(``), `"startLine":7`, `"startLine":`+line, 1)
+			p, err := ReadSARIF(sarifOf(r))
+			if err != nil || p.Findings[0].StartLine != want {
+				t.Errorf("%s: %v %+v", line, err, p.Findings)
+			}
+		}
+	})
 	t.Run("no location", func(t *testing.T) {
 		t.Parallel()
 		p, err := ReadSARIF(sarifOf(`{"ruleId":"r","message":{"text":"t"}}`))

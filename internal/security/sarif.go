@@ -19,6 +19,7 @@ const (
 	maxTextBytes        = 8 << 10
 	maxTitleBytes       = 200
 	maxFingerprintBytes = 256
+	maxLine             = 10_000_000
 	maxTags             = 20
 	maxTagBytes         = 100
 	primaryFingerprint  = "security-audit/v1"
@@ -152,7 +153,10 @@ func finding(r sarifResult, ruleTags []string) store.SecurityFindingInput {
 	if len(r.Locations) > 0 {
 		loc := r.Locations[0].PhysicalLocation
 		f.File = cleanFile(loc.ArtifactLocation.URI)
-		f.StartLine = max(loc.Region.StartLine, 0)
+		// start_line is a Postgres integer: a line no file has is 0.
+		if l := loc.Region.StartLine; l > 0 && l <= maxLine {
+			f.StartLine = l
+		}
 	}
 	for _, t := range ruleTags {
 		t = cut(noNUL(t), maxTagBytes)

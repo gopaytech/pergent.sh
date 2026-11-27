@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -129,13 +130,22 @@ func ParseEnvelope(body []byte) (Envelope, error) {
 		env.Usage.Models[i].Provider, env.Usage.Models[i].Model = noNUL(m.Provider), noNUL(m.Model)
 	}
 	if env.State != nil {
+		// State is only the prior of the next scan, the findings are the
+		// product: a file over a cap is dropped, never the whole result. The
+		// keys are read in sorted order so the same body keeps the same files.
+		keys := make([]string, 0, len(env.State))
+		for k := range env.State {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
 		state := make(map[string]string, len(env.State))
 		total := 0
-		for k, v := range env.State {
-			total += len(v)
-			if len(v) > MaxStateBytes || total > MaxStateBytes {
-				return Envelope{}, errors.New("the state is too big")
+		for _, k := range keys {
+			v := env.State[k]
+			if len(v) > MaxStateBytes || total+len(k)+len(v) > MaxStateBytes {
+				continue
 			}
+			total += len(k) + len(v)
 			state[noNUL(k)] = noNUL(v)
 		}
 		env.State = state
