@@ -16,7 +16,8 @@ import (
 	"time"
 )
 
-// The metric names. All are counters except FindingsDismissed, a gauge.
+// The metric names. All are counters except FindingsDismissed,
+// ModelEntryExhausted and SecurityFindingsOpen, which are gauges.
 const (
 	TokensTotal            = "pergent_tokens_total"
 	ReviewsTotal           = "pergent_reviews_total"
@@ -33,12 +34,15 @@ const (
 	// or anything of a key.
 	ModelFallbackTotal  = "pergent_model_fallback_total"
 	ModelEntryExhausted = "pergent_model_entry_exhausted"
+	// The security scan metrics: scans that ended, and open findings now.
+	SecurityScansTotal   = "pergent_security_scans_total"
+	SecurityFindingsOpen = "pergent_security_findings_open"
 )
 
 // names lists the metrics New declares, with their help text.
 var names = []string{TokensTotal, ReviewsTotal, ReviewsNoResultTotal, ReviewsSupersededTotal,
 	SkillRunsTotal, FindingsTotal, FindingsDismissed, APIReviewsTotal, APITokensTotal, APICallbacksTotal,
-	ModelFallbackTotal, ModelEntryExhausted}
+	ModelFallbackTotal, ModelEntryExhausted, SecurityScansTotal, SecurityFindingsOpen}
 
 var help = map[string]string{
 	TokensTotal:            "Tokens used by reviews, by kind: input, output, reasoning, cache_read or cache_write. The reasoning, cache_read and cache_write series are absent for a repository, skill and model when no review reported them, and count only the reviews that did when some did not.",
@@ -53,11 +57,13 @@ var help = map[string]string{
 	APICallbacksTotal:      "Callbacks to API clients, by client and outcome: delivered and gave_up count callbacks, failed_attempt counts tries that failed. A callback given up because its client has no callback URL is in neither gave_up nor failed_attempt.",
 	ModelFallbackTotal:     "Review attempts dropped for the next entry of their model chain, by the entry dropped (from_model), the entry the next attempt ran on (to_model, none when it ran on none), the class the provider gave (quota, billing or auth) and the dropped entry's source (global or team). Dropped attempts are in no review count, only in this and the tokens.",
 	ModelEntryExhausted:    "Model entries skipped now because the provider said they are out of quota or credit, or rejected their key: 1 per entry, by name, source and class. A gauge: the series goes when the mark ends or is cleared.",
+	SecurityScansTotal:     "Security scans that ended, by status: complete, partial or failed.",
+	SecurityFindingsOpen:   "Open security findings, by severity: critical, high, medium or low.",
 }
 
 // gauges lists the metrics that go down as well as up; every other metric is
 // a counter.
-var gauges = map[string]bool{FindingsDismissed: true, ModelEntryExhausted: true}
+var gauges = map[string]bool{FindingsDismissed: true, ModelEntryExhausted: true, SecurityFindingsOpen: true}
 
 // Label is one label of a series.
 type Label struct{ Name, Value string }

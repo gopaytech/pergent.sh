@@ -1067,6 +1067,24 @@ type MetricsTotals struct {
 	// Exhausted the entries with a live mark.
 	Fallbacks []FallbackTotal
 	Exhausted []ExhaustedEntry
+	// The security scans that ended, by status, and the open security
+	// findings, by severity, per repository.
+	SecurityScans []SecurityScanTotal
+	SecurityOpen  []SecurityOpenTotal
+}
+
+// SecurityScanTotal is the scans of one repository that ended in one status
+// (complete, partial or failed). A queued or running scan is not counted.
+type SecurityScanTotal struct {
+	Instance, Project, Status string
+	Count                     int64
+}
+
+// SecurityOpenTotal is the open security findings of one repository with one
+// severity.
+type SecurityOpenTotal struct {
+	Instance, Project, Severity string
+	Count                       int64
 }
 
 // FallbackTotal is the attempts dropped from entry From (by name, of Source)
@@ -1358,6 +1376,33 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	if t.Exhausted, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ExhaustedEntry, error) {
 		var u ExhaustedEntry
 		err := row.Scan(&u.ID, &u.Name, &u.Source, &u.Class)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	// A scan counts once it has ended; the scan's own row, not its hidden run,
+	// is the source. The project keeps the spelling it was queued with, so
+	// the same repository can come twice; the caller adds them.
+	if rows, err = s.pool.Query(ctx, `SELECT instance, project, state, count(*) FROM security_scans
+		WHERE state IN ('complete', 'partial', 'failed') GROUP BY instance, project, state`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.SecurityScans, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (SecurityScanTotal, error) {
+		var u SecurityScanTotal
+		err := row.Scan(&u.Instance, &u.Project, &u.Status, &u.Count)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	if rows, err = s.pool.Query(ctx, `SELECT instance, project, severity, count(*) FROM security_findings
+		WHERE state = 'open' GROUP BY instance, project, severity`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.SecurityOpen, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (SecurityOpenTotal, error) {
+		var u SecurityOpenTotal
+		err := row.Scan(&u.Instance, &u.Project, &u.Severity, &u.Count)
 		return u, err
 	}); err != nil {
 		return MetricsTotals{}, err

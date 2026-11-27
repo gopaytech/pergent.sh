@@ -550,3 +550,41 @@ func TestMetricsScanSkillLabel(t *testing.T) {
 		t.Errorf("a scan's tokens are labelled with another skill:\n%s", out)
 	}
 }
+
+// A scan is counted by the status it ended in, an open finding by its
+// severity, each under the repository's name; a repository that is switched
+// off is "(switched off)", and a status or severity this code does not know
+// is "(other)". Rows with the same labels are added.
+func TestSnapshotSecurity(t *testing.T) {
+	on := []settings.Effective{metricsEff("main", "acme/widgets", nil, nil)}
+	totals := store.MetricsTotals{
+		SecurityScans: []store.SecurityScanTotal{
+			{Instance: "main", Project: "acme/widgets", Status: "complete", Count: 2},
+			{Instance: "main", Project: "acme/widgets", Status: "failed", Count: 1},
+			{Instance: "main", Project: "acme/gone", Status: "partial", Count: 4},
+			{Instance: "main", Project: "acme/widgets", Status: "queued", Count: 5},
+		},
+		SecurityOpen: []store.SecurityOpenTotal{
+			{Instance: "main", Project: "acme/widgets", Severity: "high", Count: 3},
+			{Instance: "main", Project: "acme/gone", Severity: "low", Count: 1},
+			{Instance: "main", Project: "acme/widgets", Severity: "odd", Count: 2},
+		},
+	}
+	out := metricsText(t, snapshotOf(totals, on, nil))
+	for _, want := range []string{
+		`pergent_security_scans_total{platform_instance="main",repository="acme/widgets",status="complete"} 2`,
+		`pergent_security_scans_total{platform_instance="main",repository="acme/widgets",status="failed"} 1`,
+		`pergent_security_scans_total{platform_instance="main",repository="(switched off)",status="partial"} 4`,
+		`pergent_security_scans_total{platform_instance="main",repository="acme/widgets",status="(other)"} 5`,
+		`pergent_security_findings_open{platform_instance="main",repository="acme/widgets",severity="high"} 3`,
+		`pergent_security_findings_open{platform_instance="main",repository="(switched off)",severity="low"} 1`,
+		`pergent_security_findings_open{platform_instance="main",repository="acme/widgets",severity="(other)"} 2`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics lack %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "acme/gone") {
+		t.Errorf("a switched-off repository is named:\n%s", out)
+	}
+}

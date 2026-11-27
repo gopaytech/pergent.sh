@@ -305,3 +305,49 @@ func TestScanUsagePerModel(t *testing.T) {
 		}
 	})
 }
+
+// MetricsTotals counts the scans that ended by their status (a queued or
+// running scan is not counted) and the open findings by severity (a
+// dismissed or fixed one is not), per repository.
+func TestSecurityMetricsTotals(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	r := newSecRepo(s, "acme/p7")
+	r.run(t, secResult(SecurityComplete, "c1", "a", "b"))
+	r.run(t, secResult(SecurityComplete, "c1", "a", "b"))
+	r.run(t, SecurityResult{Status: SecurityFailed, Commit: secCommit, UsageSource: "stats", Reason: "boom"})
+	r.start(t) // running: not counted
+	// A third open finding, of another severity, and one dismissed.
+	if _, err := s.pool.Exec(ctx, `UPDATE security_findings SET severity = 'low' WHERE fingerprint = 'b'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO security_findings (instance, project, fingerprint, severity, first_scan_id, last_scan_id, state)
+		SELECT instance, project, 'c', 'high', first_scan_id, last_scan_id, 'open' FROM security_findings WHERE fingerprint = 'a'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO security_findings (instance, project, fingerprint, severity, first_scan_id, last_scan_id, state)
+		SELECT instance, project, 'd', 'high', first_scan_id, last_scan_id, 'fixed' FROM security_findings WHERE fingerprint = 'a'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.MetricsTotals(ctx)
+	if err != nil {
+		t.Fatalf("MetricsTotals: %v", err)
+	}
+	scans := map[string]int64{}
+	for _, u := range got.SecurityScans {
+		if u.Instance != "main" || u.Project != "acme/p7" {
+			t.Errorf("scan row of %s/%s, want main/acme/p7", u.Instance, u.Project)
+		}
+		scans[u.Status] += u.Count
+	}
+	if scans[SecurityComplete] != 2 || scans[SecurityFailed] != 1 || len(scans) != 2 {
+		t.Errorf("SecurityScans = %v, want complete 2 and failed 1", scans)
+	}
+	open := map[string]int64{}
+	for _, u := range got.SecurityOpen {
+		open[u.Severity] += u.Count
+	}
+	if open["high"] != 2 || open["low"] != 1 || len(open) != 2 {
+		t.Errorf("SecurityOpen = %v, want high 2 and low 1", open)
+	}
+}

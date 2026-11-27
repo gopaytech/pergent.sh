@@ -30,6 +30,8 @@ Point Prometheus at `http://<that Service>.<namespace>.svc:9090/metrics`, or set
 | `pergent_api_callbacks_total` | counter | `client`, `outcome` | Callbacks to API clients. `outcome` is `delivered`, `gave_up` or `failed_attempt`: the first two count callbacks, `failed_attempt` counts tries that failed. A callback given up because the client's callback URL was emptied is in neither `gave_up` nor `failed_attempt`. |
 | `pergent_model_fallback_total` | counter | `from_model`, `to_model`, `class`, `source` | Review attempts dropped for the next entry of their chain. `from_model` is the entry dropped and `to_model` the entry of the next attempt, or `none` when the next attempt used no entry. `class` is `quota`, `billing` or `auth`, and `source` is the dropped entry's, `global` or `team`. |
 | `pergent_model_entry_exhausted` | gauge | `model`, `source`, `class` | Entries that reviews skip right now because of a [mark](models.md#marks): 1 per entry. The series goes when the mark ends or is cleared. Graph it as it is, without `rate()`. |
+| `pergent_security_scans_total` | counter | `platform_instance`, `repository`, `status` | Security scans that ended. `status` is `complete`, `partial`, `failed` or `(other)`. A queued or running scan is not counted. A scan's tokens are in `pergent_tokens_total` with `skill="security-scan"`. |
+| `pergent_security_findings_open` | gauge | `platform_instance`, `repository`, `severity` | Open security findings. `severity` is `critical`, `high`, `medium`, `low` or `(other)`. A dismissed or fixed finding lowers it. Graph it as it is, without `rate()`. |
 
 Values are read from the database at each scrape, so they survive a restart and include earlier reviews.
 
@@ -65,7 +67,7 @@ rate(pergent_tokens_total{repository!="(switched off)"}[5m])
 
 ## Grafana dashboard
 
-[`docs/grafana/pergent-sh.json`](../grafana/pergent-sh.json) is an example dashboard in six rows: Overview, Reviews, Tokens, Skills and findings, **API clients** (API reviews by result, API tokens by client, API callbacks by outcome) and **Model chains** (fallbacks by class, entries skipped now). In Grafana, open **Dashboards**, then **New**, then **Import**, and pick your Prometheus data source at the top. The Instance, Repository, Skill and Model filters fill in from the metrics. They do not apply to the API clients row, whose metrics have a `client` label and none of those, or to the Model chains row.
+[`docs/grafana/pergent-sh.json`](../grafana/pergent-sh.json) is an example dashboard in seven rows: Overview, Reviews, Tokens, Skills and findings, **API clients** (API reviews by result, API tokens by client, API callbacks by outcome), **Model chains** (fallbacks by class, entries skipped now) and **Security scans** (scans by status, open findings by severity, scan tokens by kind). In Grafana, open **Dashboards**, then **New**, then **Import**, and pick your Prometheus data source at the top. The Instance, Repository, Skill and Model filters fill in from the metrics. They do not apply to the API clients row, whose metrics have a `client` label and none of those, or to the Model chains row.
 
 Its other panels leave out `(switched off)`. Reviews are rare next to a scrape, so its charts show bars of at least an hour.
 

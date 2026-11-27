@@ -142,6 +142,25 @@ jobs:
             echo "graphs.enabled was accepted without the dashboard" >&2
             exit 1
           fi
+          # Security scans have no egress by default: no PERGENT_SH_SECURITY_EGRESS and
+          # no ipBlock in the scan policy. With a CIDR both appear. The jobs policy
+          # always leaves the scan pods out, or its jobEgress would apply to them too.
+          if helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            | grep -q 'PERGENT_SH_SECURITY_EGRESS'; then
+            echo "security scan egress is on by default" >&2
+            exit 1
+          fi
+          if helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --show-only templates/networkpolicy.yaml | awk '/name: t-pergent-sh-security-jobs/{f=1} f' | grep -q 'ipBlock'; then
+            echo "the security scan policy has an ipBlock by default" >&2
+            exit 1
+          fi
+          scan=$(helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --set 'securityJobEgress.cidrs={192.0.2.0/24}')
+          echo "$scan" | grep -q 'name: PERGENT_SH_SECURITY_EGRESS$'
+          echo "$scan" | awk '/name: t-pergent-sh-security-jobs/{f=1} f' | grep -q 'cidr: "192.0.2.0/24"$'
+          helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --show-only templates/networkpolicy.yaml | grep -q 'operator: DoesNotExist$'
 
   # Publishes the newest main build as ghcr.io/gopaytech/pergent.sh:main and
   # :sha-<short sha>. Not on pull requests. `latest` stays the release tag

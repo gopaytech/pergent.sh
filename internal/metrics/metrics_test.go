@@ -219,3 +219,23 @@ func TestFallbackMetricsDeclared(t *testing.T) {
 		}
 	}
 }
+
+// The security scan metrics are declared with their types and help: the scan
+// counter is a counter, the open findings a gauge (a fixed or dismissed
+// finding lowers it).
+func TestSecurityMetricsDeclared(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, New()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# HELP pergent_security_scans_total Security scans that ended, by status: complete, partial or failed.\n",
+		"# TYPE pergent_security_scans_total counter\n",
+		"# HELP pergent_security_findings_open Open security findings, by severity: critical, high, medium or low.\n",
+		"# TYPE pergent_security_findings_open gauge\n",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, buf.String())
+		}
+	}
+}

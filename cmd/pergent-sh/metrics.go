@@ -265,7 +265,27 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 	for _, u := range t.APICallbacks {
 		snap.Add(metrics.APICallbacksTotal, u.Count, label("client", u.Client), label("outcome", callbackOutcome(u.Outcome)))
 	}
+	// A scan's status and a finding's severity are fixed words; a repository
+	// is named only while it is switched on, like the review metrics.
+	for _, u := range t.SecurityScans {
+		snap.Add(metrics.SecurityScansTotal, u.Count, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
+			label("status", oneOf(u.Status, store.SecurityComplete, store.SecurityPartial, store.SecurityFailed)))
+	}
+	for _, u := range t.SecurityOpen {
+		snap.Add(metrics.SecurityFindingsOpen, u.Count, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
+			label("severity", oneOf(u.Severity, "critical", "high", "medium", "low")))
+	}
 	return snap
+}
+
+// oneOf returns v when it is one of known, else labelOther.
+func oneOf(v string, known ...string) string {
+	for _, k := range known {
+		if v == k {
+			return v
+		}
+	}
+	return labelOther
 }
 
 // metricsHandler serves GET /metrics and nothing else: any other path is a

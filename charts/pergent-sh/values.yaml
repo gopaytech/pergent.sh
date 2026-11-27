@@ -44,6 +44,14 @@ jobEgress:
   # -- Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"), e.g. 169.254.169.254/32. Kubernetes rejects an entry that lies outside its cidr, so use this with broad cidrs such as the default 0.0.0.0/0.
   except: []
 
+# Where security scan Jobs may connect over TCP 443 and 80. A scan Job has its own
+# NetworkPolicy and is left out of the jobs one above, so jobEgress does not apply to it.
+securityJobEgress:
+  # -- CIDRs the security scan Jobs may reach on TCP 443 and 80. No default: the LLM provider only. Never add the GitLab or GitHub host: the scan gets the code from pergent.sh, not from the platform. An EMPTY list allows no external egress: scan Jobs then only use DNS and the pergent.sh callback (on 8080), and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS).
+  cidrs: []
+  # -- Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"). Kubernetes rejects an entry that lies outside its cidr.
+  except: []
+
 # Instances and the LLM can be entered in the dashboard instead of here, with
 # their secrets. Only a GitOps install keeps them in the config. E.g. for
 # GitLab (add llm: the same way when the LLM is not set in the dashboard):
@@ -67,6 +75,18 @@ jobEgress:
 #       private_key_env: GITHUB_REVIEW_APP_KEY
 #     approve_with_review_app: true   # or approve_app: {app_id, private_key_env}, or approve_token_env
 #     webhook_secret_env: GITHUB_WEBHOOK_SECRET
+
+# Security scans have 2 more keys in config, both
+# optional. jobs.security_image is the scan Job image: it defaults to the pergent-security
+# image with the same tag as the review image (jobs.image), so leave it out unless you mirror
+# the image. security has max_running (default 1, up to 20), proxy (an egress proxy URL
+# for the scan Jobs, no user info) and max_source_bytes (default 500 MiB). E.g.
+#   jobs:
+#     security_image: registry.example.com/pergent-security:v0.12.0
+#   security:
+#     max_running: 2
+#     proxy: http://proxy.example.com:3128
+# Scans also need securityJobEgress.cidrs above: without it no scan can start.
 
 # To turn the dashboard on, set config.dashboard.url and route its host to
 # the Service (see "Exposing pergent.sh" in docs/setup/install.md). The "Dashboard" page in docs/concepts explains each

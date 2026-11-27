@@ -48,6 +48,8 @@ helm install pergent-sh pergent-sh/pergent-sh -n pergent-sh -f values.yaml
 | podAnnotations | object | `{}` | Annotations of the pod. |
 | podLabels | object | `{}` | Extra labels of the pod. |
 | resources | object | `{"limits":{"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Resources of the pergent.sh pod. |
+| securityJobEgress.cidrs | list | `[]` | CIDRs the security scan Jobs may reach on TCP 443 and 80. No default: the LLM provider only. Never add the GitLab or GitHub host: the scan gets the code from pergent.sh, not from the platform. An EMPTY list allows no external egress: scan Jobs then only use DNS and the pergent.sh callback (on 8080), and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS). |
+| securityJobEgress.except | list | `[]` | Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"). Kubernetes rejects an entry that lies outside its cidr. |
 | service.port | int | `8080` | Service port. |
 | service.type | string | `"ClusterIP"` | Service type. |
 | serviceAccount.annotations | object | `{}` | Annotations of the ServiceAccount. |
