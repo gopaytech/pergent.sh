@@ -78,8 +78,20 @@ spec:
   # Nothing connects to a scan Job.
   ingress: []
   egress:
-    # DNS.
-    - ports:
+    # DNS: the cluster DNS only, or securityJobEgress.dns. A rule with no "to"
+    # would allow port 53 on every address.
+    - to:
+        {{- if .Values.securityJobEgress.dns }}
+        {{- toYaml .Values.securityJobEgress.dns | nindent 8 }}
+        {{- else }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        {{- end }}
+      ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
@@ -97,10 +109,10 @@ spec:
             {{- end }}
         {{- end }}
       ports:
+        {{- range .Values.securityJobEgress.ports }}
         - protocol: TCP
-          port: 443
-        - protocol: TCP
-          port: 80
+          port: {{ . }}
+        {{- end }}
     {{- end }}
     # The source and result calls to pergent-sh.
     - to:

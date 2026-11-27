@@ -48,8 +48,10 @@ helm install pergent-sh pergent-sh/pergent-sh -n pergent-sh -f values.yaml
 | podAnnotations | object | `{}` | Annotations of the pod. |
 | podLabels | object | `{}` | Extra labels of the pod. |
 | resources | object | `{"limits":{"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Resources of the pergent.sh pod. |
-| securityJobEgress.cidrs | list | `[]` | CIDRs the security scan Jobs may reach on TCP 443 and 80. No default: the LLM provider only. Never add the GitLab or GitHub host: the scan gets the code from pergent.sh, not from the platform. An EMPTY list allows no external egress: scan Jobs then only use DNS and the pergent.sh callback (on 8080), and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS). |
+| securityJobEgress.cidrs | list | `[]` | CIDRs the security scan Jobs may reach on the ports below. No default: the LLM provider only (or the egress proxy, see config.security.proxy). Never add the GitLab or GitHub host: the scan gets the code from pergent.sh, not from the platform. An EMPTY list allows no external egress: scan Jobs then reach only the DNS servers below and the pergent.sh pods on 8080, and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS). Remaining risk: DNS queries through a recursive resolver can still carry data out. |
+| securityJobEgress.dns | list | `[]` | DNS servers the scan Jobs may query on port 53 (TCP and UDP): a list of NetworkPolicy peers (the entries of "to"). Empty means the cluster DNS: pods labelled k8s-app=kube-dns in the kube-system namespace. Set it for NodeLocal DNSCache or another DNS label. Remaining risk: a resolver that recurses can still carry data out in the names it is asked. |
 | securityJobEgress.except | list | `[]` | Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"). Kubernetes rejects an entry that lies outside its cidr. |
+| securityJobEgress.ports | list | `[443,80]` | TCP ports the cidrs are open on. A proxy must be in cidrs, and its port (for example 3128) in this list. |
 | service.port | int | `8080` | Service port. |
 | service.type | string | `"ClusterIP"` | Service type. |
 | serviceAccount.annotations | object | `{}` | Annotations of the ServiceAccount. |

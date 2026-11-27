@@ -44,13 +44,23 @@ jobEgress:
   # -- Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"), e.g. 169.254.169.254/32. Kubernetes rejects an entry that lies outside its cidr, so use this with broad cidrs such as the default 0.0.0.0/0.
   except: []
 
-# Where security scan Jobs may connect over TCP 443 and 80. A scan Job has its own
-# NetworkPolicy and is left out of the jobs one above, so jobEgress does not apply to it.
+# Where security scan Jobs may connect. A scan Job has its own NetworkPolicy and is left
+# out of the jobs one above, so jobEgress does not apply to it.
+# A scan gets its source from pergent.sh and posts its result there, both through
+# config.callback_url. The scan policy allows only the pergent.sh pods in this cluster on
+# 8080, so callback_url must be the chart's own in-cluster Service address (the default
+# when you leave it out). A public callback_url makes every scan fail at the source download.
 securityJobEgress:
-  # -- CIDRs the security scan Jobs may reach on TCP 443 and 80. No default: the LLM provider only. Never add the GitLab or GitHub host: the scan gets the code from pergent.sh, not from the platform. An EMPTY list allows no external egress: scan Jobs then only use DNS and the pergent.sh callback (on 8080), and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS).
+  # -- CIDRs the security scan Jobs may reach on the ports below. No default: the LLM provider only (or the egress proxy, see config.security.proxy). Never add the GitLab or GitHub host: the scan gets the code from pergent.sh, not from the platform. An EMPTY list allows no external egress: scan Jobs then reach only the DNS servers below and the pergent.sh pods on 8080, and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS). Remaining risk: DNS queries through a recursive resolver can still carry data out.
   cidrs: []
   # -- Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"). Kubernetes rejects an entry that lies outside its cidr.
   except: []
+  # -- TCP ports the cidrs are open on. A proxy must be in cidrs, and its port (for example 3128) in this list.
+  ports:
+    - 443
+    - 80
+  # -- DNS servers the scan Jobs may query on port 53 (TCP and UDP): a list of NetworkPolicy peers (the entries of "to"). Empty means the cluster DNS: pods labelled k8s-app=kube-dns in the kube-system namespace. Set it for NodeLocal DNSCache or another DNS label. Remaining risk: a resolver that recurses can still carry data out in the names it is asked.
+  dns: []
 
 # Instances and the LLM can be entered in the dashboard instead of here, with
 # their secrets. Only a GitOps install keeps them in the config. E.g. for
@@ -80,12 +90,13 @@ securityJobEgress:
 # optional. jobs.security_image is the scan Job image: it defaults to the pergent-security
 # image with the same tag as the review image (jobs.image), so leave it out unless you mirror
 # the image. security has max_running (default 1, up to 20), proxy (an egress proxy URL
-# for the scan Jobs, no user info) and max_source_bytes (default 500 MiB). E.g.
+# for the scan Jobs, no user info; its address must be in securityJobEgress.cidrs and its
+# port in securityJobEgress.ports) and max_source_bytes (default 500 MiB). E.g.
 #   jobs:
 #     security_image: registry.example.com/pergent-security:v0.12.0
 #   security:
 #     max_running: 2
-#     proxy: http://proxy.example.com:3128
+#     proxy: http://192.0.2.10:3128   # with securityJobEgress cidrs 192.0.2.10/32 and ports [3128]
 # Scans also need securityJobEgress.cidrs above: without it no scan can start.
 
 # To turn the dashboard on, set config.dashboard.url and route its host to
