@@ -49,6 +49,7 @@ export default function SecurityFinding({ instance, project, id, paused = false 
   // Back keeps the filters of the list the finding was opened from.
   const list = new URLSearchParams(params);
   list.delete("finding");
+  list.delete("scan");
   list.set("tab", "security");
   const finding = useQuery({ queryKey: key, queryFn: () => api.get<SecurityFindingView>(paths.apiRepoSecurityFinding(instance, project, id)) });
   const back = (

@@ -43,6 +43,7 @@ const routes = (view: SecurityView, role: "admin" | "viewer" = "admin") => ({
   "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, role) },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
   [`GET ${sec}`]: { body: view },
+  [`GET ${sec}/scans`]: { body: { scans: [] } },
   [`GET ${sec}/findings?state=open`]: { body: { findings: [], truncated: false } },
 });
 

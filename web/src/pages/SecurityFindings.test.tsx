@@ -35,6 +35,7 @@ const routes = (extra: Record<string, unknown> = {}, view: SecurityView = securi
   "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "admin") },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
   [`GET ${sec}`]: { body: view },
+  [`GET ${sec}/scans`]: { body: { scans: [] } },
   ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, { body: v }])),
 });
 

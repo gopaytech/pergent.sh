@@ -30,6 +30,7 @@ const routes = (f: SecurityFindingView, role: "admin" | "viewer" = "admin") => (
   "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, role) },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
   [`GET ${sec}`]: { body: securityView },
+  [`GET ${sec}/scans`]: { body: { scans: [] } },
   [`GET ${one(f.finding.id)}`]: { body: f },
 });
 

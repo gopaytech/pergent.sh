@@ -11,6 +11,8 @@ import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Pill, count, duration, type Tone } from "../ui";
 import SecurityFinding from "./SecurityFinding";
 import SecurityFindings from "./SecurityFindings";
+import SecurityScan from "./SecurityScan";
+import SecurityScans from "./SecurityScans";
 
 // How often the tab asks again while a scan is queued or running.
 export const securityPollMs = 10_000;
@@ -35,8 +37,6 @@ const stateTone: Record<SecurityScanView["state"], [Tone, string]> = {
 // pages are this tab with ?finding= or ?scan= in the address.
 export default function Security({ instance, project, paused }: { instance: string; project: string; paused: boolean }) {
   const [search] = useSearchParams();
-  // Task 5 shows the scan page in place of the summary.
-  void search.get("scan");
   const finding = Number(search.get("finding"));
   const key = ["security", instance, project];
   // The tab asks again every 10 seconds while a scan is queued or running, and
@@ -50,6 +50,10 @@ export default function Security({ instance, project, paused }: { instance: stri
   if (search.has("finding") && Number.isInteger(finding) && finding > 0) {
     return <SecurityFinding instance={instance} project={project} id={finding} paused={paused} />;
   }
+  // One page at a time: a finding wins over a scan, and the scan in the
+  // address is then ignored. Every link drops the other one.
+  const scanId = search.get("scan") ?? "";
+  if (scanId !== "") return <SecurityScan instance={instance} project={project} id={scanId} />;
   if (security.isPending) return <Loading />;
   if (security.isError) return <ErrorBox error={security.error} onRetry={() => void security.refetch()} />;
   const v = security.data;
@@ -130,6 +134,7 @@ function Summary({ v, instance, project, paused, queryKey }: { v: SecurityView; 
         )}
       </Card>
       <SecurityFindings instance={instance} project={project} />
+      <SecurityScans instance={instance} project={project} />
     </>
   );
 }
