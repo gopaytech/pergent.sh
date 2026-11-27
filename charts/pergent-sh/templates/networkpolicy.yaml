@@ -109,7 +109,8 @@ spec:
             {{- end }}
         {{- end }}
       ports:
-        {{- range .Values.securityJobEgress.ports }}
+        {{- /* An empty list would render no ports, which means ALL ports. */}}
+        {{- range (.Values.securityJobEgress.ports | default (list 443 80)) }}
         - protocol: TCP
           port: {{ . }}
         {{- end }}

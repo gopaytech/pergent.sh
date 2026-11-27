@@ -51,11 +51,11 @@ jobEgress:
 # 8080, so callback_url must be the chart's own in-cluster Service address (the default
 # when you leave it out). A public callback_url makes every scan fail at the source download.
 securityJobEgress:
-  # -- CIDRs the security scan Jobs may reach on the ports below. No default: the LLM provider only (or the egress proxy, see config.security.proxy). Never add the GitLab or GitHub host: the scan gets the code from pergent.sh, not from the platform. An EMPTY list allows no external egress: scan Jobs then reach only the DNS servers below and the pergent.sh pods on 8080, and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS). Remaining risk: DNS queries through a recursive resolver can still carry data out.
+  # -- CIDRs the security scan Jobs may reach on the ports below. Scans need config.callback_url to be the chart's in-cluster Service address (the default): the scan policy allows only the pergent.sh pods on 8080. No default: the LLM provider only (or the egress proxy, see config.security.proxy). Never add the GitLab or GitHub host: the scan gets the code from pergent.sh, not from the platform. An EMPTY list allows no external egress: scan Jobs then reach only the DNS servers below and the pergent.sh pods on 8080, and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS). Remaining risk: DNS queries through a recursive resolver can still carry data out.
   cidrs: []
   # -- Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"). Kubernetes rejects an entry that lies outside its cidr.
   except: []
-  # -- TCP ports the cidrs are open on. A proxy must be in cidrs, and its port (for example 3128) in this list.
+  # -- TCP ports the cidrs are open on (an empty list means 443 and 80, never all ports). A proxy must be in cidrs, and its port (for example 3128) in this list.
   ports:
     - 443
     - 80
@@ -121,7 +121,7 @@ securityJobEgress:
 #       allowed_domains: [example.com]
 #       allowed_emails: []
 
-# -- Rendered to /etc/pergent-sh/config.yaml. callback_url defaults to this chart's Service, so Jobs post their results inside the cluster; set it to send them elsewhere. See the repository README for every field and for examples of config.gitlab, config.github, config.llm and config.dashboard ("Config reference", "Instances and the LLM in the config file"). No instance and no LLM are set by default: without config.dashboard.url, pergent.sh needs at least one instance and an LLM here. listen is fixed by the chart: leave it as it is. skills_dir was removed: the skill library lives in the dashboard.
+# -- Rendered to /etc/pergent-sh/config.yaml. callback_url defaults to this chart's Service, so Jobs post their results inside the cluster; set it to send them elsewhere, but security scans need the in-cluster Service address: a scan gets its source from pergent.sh and posts its result there through callback_url, and the scan NetworkPolicy allows only the pergent.sh pods on 8080, so with a public callback_url every scan fails at the source download. See the repository README for every field and for examples of config.gitlab, config.github, config.llm and config.dashboard ("Config reference", "Instances and the LLM in the config file"). No instance and no LLM are set by default: without config.dashboard.url, pergent.sh needs at least one instance and an LLM here. listen is fixed by the chart: leave it as it is. skills_dir was removed: the skill library lives in the dashboard.
 config:
   listen: ":8080"
   public_url: https://pergent.example.com
