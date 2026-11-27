@@ -49,10 +49,13 @@ describe("security paths", () => {
     );
   });
 
-  it("builds the Security page path with a finding or a scan", () => {
-    expect(paths.repoSecurity("main", "group/su#b/app")).toBe("/repos/main/group/su%23b/app/security");
-    expect(paths.repoSecurity("main", "group/sub/app", { finding: 7 })).toBe("/repos/main/group/sub/app/security?finding=7");
-    expect(paths.repoSecurity("main", "group/sub/app", { scan: "s1" })).toBe("/repos/main/group/sub/app/security?scan=s1");
+  it("builds the Security page path in ?tab=, with a finding or a scan", () => {
+    expect(paths.repoSecurity("main", "group/su#b/app")).toBe("/repos/main/group/su%23b/app?tab=security");
+    expect(paths.repoSecurity("main", "group/sub/app", {})).toBe("/repos/main/group/sub/app?tab=security");
+    expect(paths.repoSecurity("main", "group/sub/app", { finding: 7 })).toBe("/repos/main/group/sub/app?tab=security&finding=7");
+    expect(paths.repoSecurity("main", "group/sub/app", { scan: "0b9f2c1e-1111-4222-8333-444455556666" })).toBe(
+      "/repos/main/group/sub/app?tab=security&scan=0b9f2c1e-1111-4222-8333-444455556666",
+    );
   });
 });
 

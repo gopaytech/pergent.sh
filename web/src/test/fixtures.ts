@@ -1252,7 +1252,7 @@ export const teamChoicesPay2: RepositoryChoicesView = {
 // --- security scans ---
 
 const scanBase: SecurityScanView = {
-  id: "scan-1",
+  id: "0b9f2c1e-1111-4222-8333-444455556661",
   number: 1,
   state: "complete",
   reason: "",
@@ -1278,7 +1278,7 @@ const scanBase: SecurityScanView = {
 export const securityScanComplete: SecurityScanView = scanBase;
 export const securityScanPartial: SecurityScanView = {
   ...scanBase,
-  id: "scan-2",
+  id: "0b9f2c1e-1111-4222-8333-444455556662",
   number: 2,
   state: "partial",
   reason: "timeout",
@@ -1289,7 +1289,7 @@ export const securityScanPartial: SecurityScanView = {
 };
 export const securityScanFailed: SecurityScanView = {
   ...scanBase,
-  id: "scan-3",
+  id: "0b9f2c1e-1111-4222-8333-444455556663",
   number: 3,
   state: "failed",
   reason: "the Job could not start",
@@ -1307,7 +1307,7 @@ export const securityScanFailed: SecurityScanView = {
 };
 export const securityScanRunning: SecurityScanView = {
   ...scanBase,
-  id: "scan-4",
+  id: "0b9f2c1e-1111-4222-8333-444455556664",
   number: 4,
   state: "running",
   finishedAt: null,

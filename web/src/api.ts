@@ -1870,9 +1870,9 @@ export function query(params: [string, string | number | undefined][]): string {
 export const paths = {
   review: (instance: string, project: string, number: number) => `/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}`,
   repo: (instance: string, project: string) => `/repos/${seg(instance)}/${proj(project)}`,
-  // The Security tab opens on a finding (?finding=<id>) or a scan (?scan=<id>).
+  // The Security tab, opened on a finding (&finding=<id>) or a scan (&scan=<id>).
   repoSecurity: (instance: string, project: string, open: { finding?: number; scan?: string } = {}) =>
-    `/repos/${seg(instance)}/${proj(project)}/security${query([["finding", open.finding], ["scan", open.scan]])}`,
+    `/repos/${seg(instance)}/${proj(project)}${query([["tab", "security"], ["finding", open.finding], ["scan", open.scan]])}`,
 
   apiReview: (instance: string, project: string, number: number) =>
     `/api/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}`,
