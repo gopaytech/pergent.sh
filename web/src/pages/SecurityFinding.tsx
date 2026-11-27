@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -45,9 +45,14 @@ function eventParts(e: SecurityEventView): string[] {
 export default function SecurityFinding({ instance, project, id, paused = false }: { instance: string; project: string; id: number; paused?: boolean }) {
   const key = ["security-finding", instance, project, id];
   const client = useQueryClient();
+  const [params] = useSearchParams();
+  // Back keeps the filters of the list the finding was opened from.
+  const list = new URLSearchParams(params);
+  list.delete("finding");
+  list.set("tab", "security");
   const finding = useQuery({ queryKey: key, queryFn: () => api.get<SecurityFindingView>(paths.apiRepoSecurityFinding(instance, project, id)) });
   const back = (
-    <Link className="text-muted-foreground mb-3 inline-block text-sm hover:underline" to={paths.repoSecurity(instance, project)}>
+    <Link className="text-muted-foreground mb-3 inline-block text-sm hover:underline" to={`${paths.repo(instance, project)}?${list.toString()}`}>
       Back to findings
     </Link>
   );

@@ -65,6 +65,14 @@ export default function SecurityFindings({ instance, project }: { instance: stri
       return next.length === old.length ? old : next;
     });
   }, [answer]);
+  // A row opens its finding with the filters kept in the address, so Back
+  // returns to the same list.
+  const openFinding = (id: number) => {
+    const next = new URLSearchParams(params);
+    next.set("tab", "security");
+    next.set("finding", String(id));
+    return `${paths.repo(instance, project)}?${next.toString()}`;
+  };
   const options = rule !== "" && !rules.includes(rule) ? [...rules, rule].sort() : rules;
   return (
     <Card role="region" aria-label="Findings" className="mb-4 gap-0 overflow-hidden py-0">
@@ -111,13 +119,13 @@ export default function SecurityFindings({ instance, project }: { instance: stri
           <ErrorBox error={findings.error} onRetry={() => void findings.refetch()} />
         </div>
       ) : (
-        <Rows rows={findings.data.findings} truncated={findings.data.truncated} instance={instance} project={project} />
+        <Rows rows={findings.data.findings} truncated={findings.data.truncated} openFinding={openFinding} />
       )}
     </Card>
   );
 }
 
-function Rows({ rows, truncated, instance, project }: { rows: SecurityFindingRowView[]; truncated: boolean; instance: string; project: string }) {
+function Rows({ rows, truncated, openFinding }: { rows: SecurityFindingRowView[]; truncated: boolean; openFinding: (id: number) => string }) {
   if (rows.length === 0) return <div className="text-muted-foreground px-4 py-6 text-sm">No findings match.</div>;
   return (
     <>
@@ -138,7 +146,7 @@ function Rows({ rows, truncated, instance, project }: { rows: SecurityFindingRow
                 <SeverityPill severity={f.severity} />
               </TableCell>
               <TableCell className="whitespace-normal">
-                <Link className="text-foreground hover:underline" to={paths.repoSecurity(instance, project, { finding: f.id })}>
+                <Link className="text-foreground hover:underline" to={openFinding(f.id)}>
                   {f.title}
                 </Link>
                 {f.needsValidation && (

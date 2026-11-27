@@ -200,4 +200,13 @@ describe("SecurityFinding", () => {
     renderApp(page(7));
     expect(await screen.findByRole("link", { name: "Back to findings" })).toHaveAttribute("href", "/repos/main/acme/payments?tab=security");
   });
+
+  it("the back link keeps the filters of the list", async () => {
+    fakeApi(routes(securityFindingOpen));
+    renderApp("/repos/main/acme/payments?tab=security&severity=high&rule=injection&q=search&finding=7");
+    expect(await screen.findByRole("link", { name: "Back to findings" })).toHaveAttribute(
+      "href",
+      "/repos/main/acme/payments?tab=security&severity=high&rule=injection&q=search",
+    );
+  });
 });

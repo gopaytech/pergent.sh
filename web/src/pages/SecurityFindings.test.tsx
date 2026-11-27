@@ -138,4 +138,17 @@ describe("SecurityFindings", () => {
     expect(await screen.findByText("No findings match.")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+
+  it("a row link keeps the filters of the list", async () => {
+    fakeApi(
+      routes({
+        [`GET ${sec}/findings?state=dismissed&severity=high&rule=injection&q=search`]: list([injection]),
+      }),
+    );
+    renderApp(`${open}&state=dismissed&severity=high&rule=injection&q=search`);
+    expect(await screen.findByRole("link", { name: /SQL built from/ })).toHaveAttribute(
+      "href",
+      "/repos/main/acme/payments?tab=security&state=dismissed&severity=high&rule=injection&q=search&finding=7",
+    );
+  });
 });
