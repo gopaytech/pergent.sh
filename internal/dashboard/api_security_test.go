@@ -515,7 +515,7 @@ func TestSecurityStartAnswers(t *testing.T) {
 	}
 
 	tab := getJSON[SecurityView](e, c, securityURL("acme/gadgets", ""))
-	if !tab.CanStart || tab.StartOff != "" || tab.Start.Model != model || !tab.Start.StepsFromSkill ||
+	if !tab.CanStart || tab.StartOff != "" || tab.Start.Model != model || !tab.Start.StepsFromSkill || !tab.Start.MaxStepsFromSkill || !tab.Start.SubagentMaxStepsFromSkill ||
 		tab.Start.MaxSteps != 600 || tab.Start.SubagentMaxSteps != 100 || tab.Start.TimeoutSeconds != 10800 {
 		t.Errorf("tab before a scan = %+v", tab)
 	}

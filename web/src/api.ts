@@ -553,6 +553,9 @@ export type SecurityStartView = {
   maxSteps: number;
   subagentMaxSteps: number;
   stepsFromSkill: boolean;
+  // Each limit alone: its own setting is unset, so its number is the skill's.
+  maxStepsFromSkill: boolean;
+  subagentMaxStepsFromSkill: boolean;
   timeoutSeconds: number;
   lastTokens: number | null;
   lastSeconds: number | null;

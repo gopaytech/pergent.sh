@@ -343,9 +343,10 @@ func (d *Dashboard) securityTab(w http.ResponseWriter, r *http.Request, se Sessi
 		Counts: SecurityCountsView{Critical: counts.Critical, High: counts.High, Medium: counts.Medium, Low: counts.Low,
 			NeedsValidation: counts.NeedsValidation},
 		Start: SecurityStartView{Model: model, MaxSteps: orDefault(set.MaxSteps, security.DefaultMaxSteps),
-			SubagentMaxSteps: orDefault(set.SubagentMaxSteps, security.DefaultSubagentMaxSteps),
-			StepsFromSkill:   set.MaxSteps == nil && set.SubagentMaxSteps == nil,
-			TimeoutSeconds:   orDefault(set.TimeoutSeconds, int(security.DefaultTimeout/time.Second))},
+			SubagentMaxSteps:  orDefault(set.SubagentMaxSteps, security.DefaultSubagentMaxSteps),
+			StepsFromSkill:    set.MaxSteps == nil && set.SubagentMaxSteps == nil,
+			MaxStepsFromSkill: set.MaxSteps == nil, SubagentMaxStepsFromSkill: set.SubagentMaxSteps == nil,
+			TimeoutSeconds: orDefault(set.TimeoutSeconds, int(security.DefaultTimeout/time.Second))},
 	}
 	if running != nil {
 		v := securityScanView(*running, usage)

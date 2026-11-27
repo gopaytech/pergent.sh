@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 
@@ -54,6 +54,14 @@ function Summary({ v, instance, project, paused, queryKey }: { v: SecurityView; 
   const client = useQueryClient();
   const write = useWrite();
   const refresh = () => client.invalidateQueries({ queryKey });
+  const [open, setOpen] = useState(false);
+  // The start lives here, not in the box: a 409 usually means a scan is
+  // active, the refresh then drops the box, and the error must stay readable.
+  const start = useMutation({
+    mutationFn: () => write("POST", paths.apiRepoSecurityScans(instance, project), {}),
+    onSuccess: () => setOpen(false),
+    onSettled: refresh,
+  });
   const cancel = useMutation({
     mutationFn: (id: string) => write("POST", paths.apiRepoSecurityScanCancel(instance, project, id), {}),
     // A 409 means the scan ended meanwhile: the tab shows its end next.
@@ -81,7 +89,7 @@ function Summary({ v, instance, project, paused, queryKey }: { v: SecurityView; 
                   Running
                 </Button>
               ) : (
-                <StartScan v={v} instance={instance} project={project} queryKey={queryKey} />
+                <StartScan v={v} start={start} open={open} setOpen={setOpen} />
               )}
               {running && (
                 <Button type="button" variant="outline" size="sm" disabled={cancel.isPending || running.cancelRequested} onClick={() => ask(running)}>
@@ -99,6 +107,16 @@ function Summary({ v, instance, project, paused, queryKey }: { v: SecurityView; 
           {!running && v.canManage && v.startOff !== "" && <span className="text-muted-foreground">{v.startOff}</span>}
           {!running && v.canManage && v.startOff === "" && paused && <span className="text-muted-foreground">Scans are off while the repository is paused.</span>}
         </div>
+        {running && start.isError && (
+          <div className="flex flex-wrap items-start gap-3 px-4 pb-3" role="note" aria-label="Start scan refused">
+            <div className="min-w-0 grow">
+              <ErrorBox error={start.error} />
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={() => start.reset()}>
+              Dismiss
+            </Button>
+          </div>
+        )}
         {cancel.isError && (
           <div className="px-4 pb-3">
             <ErrorBox error={cancel.error} />
@@ -134,24 +152,22 @@ function LastScan({ scan }: { scan: SecurityScanView }) {
 }
 
 // stepsText is a step limit, or the skill's own.
-const stepsText = (set: boolean, n: number) => (set ? `from the skill (${n})` : String(n));
+const stepsText = (fromSkill: boolean, n: number) => (fromSkill ? `from the skill (${n})` : String(n));
 
 // StartScan is the Start scan button and its confirm box. The trigger is
 // Radix's own button: Button, a plain function component on React 18, does
 // not pass the ref the focus return needs.
-function StartScan({ v, instance, project, queryKey }: { v: SecurityView; instance: string; project: string; queryKey: unknown[] }) {
-  const client = useQueryClient();
-  const write = useWrite();
-  const [open, setOpen] = useState(false);
-  const start = useMutation({
-    mutationFn: () => write("POST", paths.apiRepoSecurityScans(instance, project), {}),
-    onSuccess: () => {
-      setOpen(false);
-      client.invalidateQueries({ queryKey });
-    },
-    // 409: a scan is already active, or Start is refused; the box shows why.
-    onError: () => client.invalidateQueries({ queryKey }),
-  });
+function StartScan({
+  v,
+  start,
+  open,
+  setOpen,
+}: {
+  v: SecurityView;
+  start: UseMutationResult<unknown, Error, void>;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
   return (
     <Dialog
       open={open}
@@ -186,8 +202,8 @@ function StartFacts({ s }: { s: SecurityStartView }) {
   return (
     <ul className="text-sm">
       <li>Model: {s.model !== "" ? s.model : "none available"}</li>
-      <li>Steps, main agent: {stepsText(s.stepsFromSkill, s.maxSteps)}</li>
-      <li>Steps, sub-agents: {stepsText(s.stepsFromSkill, s.subagentMaxSteps)}</li>
+      <li>Steps, main agent: {stepsText(s.maxStepsFromSkill, s.maxSteps)}</li>
+      <li>Steps, sub-agents: {stepsText(s.subagentMaxStepsFromSkill, s.subagentMaxSteps)}</li>
       <li>Timeout: {duration(s.timeoutSeconds)}</li>
       <li>
         {s.lastTokens !== null && s.lastSeconds !== null

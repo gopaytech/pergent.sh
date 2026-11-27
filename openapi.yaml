@@ -8896,7 +8896,8 @@ components:
     SecurityStartView:
       description: What Start scan's confirm box shows.
       type: object
-      required: [model, maxSteps, subagentMaxSteps, stepsFromSkill, timeoutSeconds, lastTokens, lastSeconds]
+      required: [model, maxSteps, subagentMaxSteps, stepsFromSkill, maxStepsFromSkill, subagentMaxStepsFromSkill,
+        timeoutSeconds, lastTokens, lastSeconds]
       properties:
         model:
           type: string
@@ -8906,6 +8907,12 @@ components:
         stepsFromSkill:
           type: boolean
           description: No step limit is set, so both are the skill's own.
+        maxStepsFromSkill:
+          type: boolean
+          description: The main agent's limit is not set, so maxSteps is the skill's default.
+        subagentMaxStepsFromSkill:
+          type: boolean
+          description: The sub-agents' limit is not set, so subagentMaxSteps is the skill's default.
         timeoutSeconds: {type: integer}
         lastTokens:
           type: [integer, 'null']

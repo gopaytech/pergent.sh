@@ -2203,14 +2203,19 @@ type SecurityCountsView struct {
 // limits and the timeout it would run with, and the tokens and seconds of the
 // newest complete scan as an estimate (null with none, or no usage).
 // StepsFromSkill: no step limit is set, so both are the skill's own.
+// MaxStepsFromSkill and SubagentMaxStepsFromSkill say the same for each limit
+// alone: its own setting is unset, so the number is the skill's default.
 type SecurityStartView struct {
 	Model            string `json:"model"`
 	MaxSteps         int    `json:"maxSteps"`
 	SubagentMaxSteps int    `json:"subagentMaxSteps"`
 	StepsFromSkill   bool   `json:"stepsFromSkill"`
-	TimeoutSeconds   int    `json:"timeoutSeconds"`
-	LastTokens       *int64 `json:"lastTokens"`
-	LastSeconds      *int64 `json:"lastSeconds"`
+
+	MaxStepsFromSkill         bool   `json:"maxStepsFromSkill"`
+	SubagentMaxStepsFromSkill bool   `json:"subagentMaxStepsFromSkill"`
+	TimeoutSeconds            int    `json:"timeoutSeconds"`
+	LastTokens                *int64 `json:"lastTokens"`
+	LastSeconds               *int64 `json:"lastSeconds"`
 }
 
 // SecurityScanView is one security scan. State is queued, running, complete,

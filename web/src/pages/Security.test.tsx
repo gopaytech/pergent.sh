@@ -155,7 +155,7 @@ describe("Security", () => {
 
   it("the confirm box words steps from the skill and no earlier scan", async () => {
     const user = userEvent.setup();
-    const start = { ...securityView.start, stepsFromSkill: true, maxSteps: 600, subagentMaxSteps: 300, lastTokens: null, lastSeconds: null };
+    const start = { ...securityView.start, stepsFromSkill: true, maxStepsFromSkill: true, subagentMaxStepsFromSkill: true, maxSteps: 600, subagentMaxSteps: 300, lastTokens: null, lastSeconds: null };
     fakeApi(routes({ ...securityView, start }));
     renderApp(open);
     await user.click(await screen.findByRole("button", { name: "Start scan" }));
@@ -176,6 +176,38 @@ describe("Security", () => {
     await user.click(within(box).getByRole("button", { name: "Start scan" }));
     expect(await within(box).findByText("a security scan is already running")).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("each step limit says from the skill when its own setting is unset", async () => {
+    const user = userEvent.setup();
+    const start = { ...securityView.start, stepsFromSkill: false, maxStepsFromSkill: false, subagentMaxStepsFromSkill: true, maxSteps: 200, subagentMaxSteps: 100 };
+    fakeApi(routes({ ...securityView, start }));
+    renderApp(open);
+    await user.click(await screen.findByRole("button", { name: "Start scan" }));
+    const box = await screen.findByRole("dialog");
+    expect(within(box).getByText("Steps, main agent: 200")).toBeInTheDocument();
+    expect(within(box).getByText("Steps, sub-agents: from the skill (100)")).toBeInTheDocument();
+  });
+
+  it("a 409 stays on screen when the refresh shows the running scan", async () => {
+    const user = userEvent.setup();
+    let posted = false;
+    fakeApi({
+      ...routes(securityView),
+      [`GET ${sec}`]: () => ({ body: posted ? { ...securityView, canStart: false, running: securityScanRunning } : securityView }),
+      [`POST ${sec}/scans`]: () => {
+        posted = true;
+        return { status: 409, body: { error: "a security scan is already running", scan: securityScanRunning } };
+      },
+    });
+    renderApp(open);
+    await user.click(await screen.findByRole("button", { name: "Start scan" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Start scan" }));
+    expect(await screen.findByRole("button", { name: "Running" })).toBeDisabled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("a security scan is already running")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("a security scan is already running")).not.toBeInTheDocument();
   });
 
   it("polls while running and stops after", async () => {

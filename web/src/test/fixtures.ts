@@ -1332,6 +1332,8 @@ export const securityView: SecurityView = {
     maxSteps: 120,
     subagentMaxSteps: 60,
     stepsFromSkill: false,
+    maxStepsFromSkill: false,
+    subagentMaxStepsFromSkill: false,
     timeoutSeconds: 3600,
     lastTokens: 5_000,
     lastSeconds: 1200,
