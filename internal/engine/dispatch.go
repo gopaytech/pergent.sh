@@ -688,7 +688,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 	// The open security findings are added before Fit too, which drops them
 	// before the CI results. Any problem leaves them out.
-	d.addSecurityFindings(ctx, plat, repo, mr, last, in)
+	d.addSecurityFindings(ctx, plat, repo, mr, in)
 	hadSecurity := len(in.SecurityFindings) > 0
 	hadCI := len(in.CIResults) > 0
 	hadCarried := len(in.Carried) > 0
