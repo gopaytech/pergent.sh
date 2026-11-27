@@ -268,6 +268,32 @@ func TestSecuritySkillUpdatedFixesNothing(t *testing.T) {
 			t.Errorf("complete scan = skill updated %v, fixed %d; want false, 1", sc.SkillUpdated, sc.FixedCount)
 		}
 	})
+
+	// An unknown skill version cannot show its fingerprints match: a
+	// complete scan with no skill fixes nothing, and the next scan still
+	// compares with the last one that named a skill.
+	t.Run("a complete scan with no skill", func(t *testing.T) {
+		r := newSecRepo(s, "acme/noskill")
+		r.run(t, secResult(SecurityComplete, "aaa", "A"))
+		unknown := secResult(SecurityComplete, "")
+		unknown.SkillName = ""
+		sc := r.run(t, unknown)
+		if sc.FixedCount != 0 || sc.SkillName != "" || sc.SkillCommit != "" {
+			t.Errorf("scan with no skill = fixed %d, skill %q@%q; want 0 fixed, no skill", sc.FixedCount, sc.SkillName,
+				sc.SkillCommit)
+		}
+		a := r.findings(t)["A"]
+		if a.State != "open" || a.FixedScanID != nil {
+			t.Errorf("A = %+v; want still open", a)
+		}
+		if kinds := r.events(t, a.ID); !slices.Equal(kinds, []string{"found"}) {
+			t.Errorf("A events = %v; want [found], no fixed", kinds)
+		}
+		sc = r.run(t, secResult(SecurityComplete, "aaa"))
+		if sc.SkillUpdated || sc.FixedCount != 1 {
+			t.Errorf("next scan with skill aaa = skill updated %v, fixed %d; want false, 1", sc.SkillUpdated, sc.FixedCount)
+		}
+	})
 }
 
 // After 1 complete scan and 11 partial ones, the oldest partial scan lost

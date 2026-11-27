@@ -227,9 +227,12 @@ func jsonParam(v map[string]string) (*string, error) {
 //     new and the reopened ones.
 //  3. A complete scan is SkillUpdated when the repository's last complete
 //     scan with a skill named another skill name or commit. A scan with no
-//     skill is no change.
-//  4. Only a complete scan that is not SkillUpdated fixes the open findings
-//     it did not find; FixedCount counts them. A dismissed finding is never
+//     skill (name and commit both empty) is no change, and later scans do
+//     not compare with it.
+//  4. Only a complete scan that names its skill and is not SkillUpdated
+//     fixes the open findings it did not find; FixedCount counts them. A
+//     scan with no skill fixes nothing: an unknown skill version cannot show
+//     its fingerprints match the old ones. A dismissed finding is never
 //     fixed.
 //  5. The repository's finished scans past the newest 10 lose their SARIF
 //     and state, except the last complete one.
@@ -284,8 +287,9 @@ func (s *Store) FinishSecurityScan(ctx context.Context, id string, hash []byte, 
 		return false, err
 	}
 
+	hasSkill := skillName != "" || skillCommit != ""
 	skillUpdated := false
-	if res.Status == SecurityComplete && (skillName != "" || skillCommit != "") {
+	if res.Status == SecurityComplete && hasSkill {
 		var lastName, lastCommit string
 		err := tx.QueryRow(ctx, `SELECT skill_name, skill_commit FROM security_scans
 			WHERE `+findingRepo+` AND state = 'complete' AND id <> $3::uuid AND (skill_name <> '' OR skill_commit <> '')
@@ -300,7 +304,7 @@ func (s *Store) FinishSecurityScan(ctx context.Context, id string, hash []byte, 
 	}
 
 	fixedCount := 0
-	if res.Status == SecurityComplete && !skillUpdated {
+	if res.Status == SecurityComplete && hasSkill && !skillUpdated {
 		tag, err := tx.Exec(ctx, fixFindingsSQL, instance, project, id, now)
 		if err != nil {
 			return false, err
