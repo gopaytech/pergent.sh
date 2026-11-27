@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -924,7 +924,7 @@ describe("RepositoryDetail", () => {
   describe("Skill results", () => {
     const listPath = "/api/repositories/main/acme/payments/skill-results";
 
-    it("is a tab for a viewer too, after Reviews", async () => {
+    it("is a tab for a viewer too, after Reviews and Security", async () => {
       renderAt("/repos/main/acme/payments", {
         ...base,
         "GET /api/me": { body: viewer },
@@ -934,7 +934,7 @@ describe("RepositoryDetail", () => {
       const names = within(tabs)
         .getAllByRole("tab")
         .map((t) => t.textContent);
-      expect(names.slice(0, 2)).toEqual(["Reviews", "Skill results"]);
+      expect(names.slice(0, 3)).toEqual(["Reviews", "Security", "Skill results"]);
     });
 
     it("lists a row for each skill and severity, in the order it came", async () => {
@@ -1585,5 +1585,19 @@ describe("RepositoryDetail: owner-team buttons follow the actions flags", () => 
       "GET /api/repositories/main/acme/tools": { body: { ...paused, actions: { ...paused.actions, resume: false } } },
     });
     expect(within(await screen.findByRole("note", { name: "Paused" })).queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+  });
+});
+
+describe("RepositoryDetail: the Security tab", () => {
+  const names = () => within(screen.getByRole("tablist")).getAllByRole("tab").map((t) => t.textContent);
+
+  it("the Security tab comes right after Reviews", async () => {
+    renderAt("/repos/main/acme/payments", { ...base, "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "viewer") } });
+    await screen.findByRole("heading", { name: "acme/payments" });
+    expect(names()).toEqual(["Reviews", "Security", "Skill results", "Skills & instructions", "Readiness", "Setup checks (1)"]);
+    cleanup();
+    renderAt("/repos/main/acme/payments", { ...base, "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "maintainer") } });
+    await screen.findByRole("heading", { name: "acme/payments" });
+    expect(names().slice(0, 3)).toEqual(["Reviews", "Security", "Skill results"]);
   });
 });

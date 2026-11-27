@@ -18,6 +18,7 @@ import PastDismissals from "./PastDismissals";
 import Readiness from "./Readiness";
 import RepoModelChain from "./RepoModelChain";
 import ReviewList from "./ReviewList";
+import Security from "./Security";
 import SettingsTab from "./RepositorySettings";
 import SkillResults from "./SkillResults";
 import Markdown from "../MarkdownLazy";
@@ -30,7 +31,7 @@ const headClass = "border-b py-3 [.border-b]:pb-3";
 const rowClass = "flex items-center gap-3 border-b px-4 py-3 text-sm last:border-b-0";
 const muted = "text-muted-foreground border-b px-4 py-3 text-sm last:border-b-0";
 
-type Tab = "reviews" | "skill-results" | "settings" | "past-dismissals" | "inputs" | "readiness" | "setup";
+type Tab = "reviews" | "security" | "skill-results" | "settings" | "past-dismissals" | "inputs" | "readiness" | "setup";
 
 // RepositoryDetail is one repository: its reviews, skill results, settings and past dismissals
 // (maintainers and admins), resolved skills and instructions, readiness scan, and setup checks. The tab is in the
@@ -54,6 +55,7 @@ export default function RepositoryDetail() {
   const { repo } = view;
   const tabs: [Tab, string][] = [
     ["reviews", "Reviews"],
+    ["security", "Security"],
     ["skill-results", "Skill results"],
   ];
   if (view.role === "admin" || view.role === "maintainer") tabs.push(["settings", "Settings"], ["past-dismissals", "Past dismissals"]);
@@ -124,9 +126,19 @@ export default function RepositoryDetail() {
           queryKey={queryKey}
         />
       )}
-      <Tabs<Tab> tabs={tabs} value={tab} onChange={(t) => setSearch(t === "reviews" ? {} : { tab: t })} />
+      <Tabs<Tab>
+        tabs={tabs}
+        value={tab}
+        onChange={(t) => {
+          // The finding and scan pages are the Security tab with ?finding= or
+          // ?scan=: choosing the tab again keeps them.
+          if (t === "security" && tab === "security") return;
+          setSearch(t === "reviews" ? {} : { tab: t });
+        }}
+      />
       <div role="tabpanel">
         {tab === "reviews" && <ReviewList filter={{ project: repo.project, days: 90 }} label="Reviews of this repository" inRepo />}
+        {tab === "security" && <Security instance={repo.instance} project={repo.project} paused={repo.paused} />}
         {tab === "skill-results" && <SkillResults instance={repo.instance} project={repo.project} />}
         {tab === "settings" && <SettingsTab view={view} queryKey={queryKey} />}
         {tab === "past-dismissals" && (
