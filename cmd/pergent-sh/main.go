@@ -332,6 +332,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		// them), and the same image to send their result back.
 		eng.Scans = true
 		eng.ScanImage = os.Getenv("PERGENT_SH_IMAGE")
+		// true means the chart set securityJobEgress.cidrs: scan Jobs may
+		// reach the network, so security scans can be turned on.
+		eng.SecurityEgress = os.Getenv("PERGENT_SH_SECURITY_EGRESS") == "true"
 		scanResults = eng
 		// Code graphs need the graphs volume and the graph image (the chart's
 		// graphs.enabled sets both); a repository turns them on in the

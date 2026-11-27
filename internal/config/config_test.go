@@ -2025,3 +2025,66 @@ func TestPanelImage(t *testing.T) {
 		}
 	}
 }
+
+func TestSecurityConfigDefaults(t *testing.T) {
+	t.Parallel()
+	cfg := loadValid(t)
+	if cfg.Jobs.SecurityImage != defaultSecurityImage {
+		t.Errorf("Jobs.SecurityImage = %q, want %q", cfg.Jobs.SecurityImage, defaultSecurityImage)
+	}
+	want := Security{MaxRunning: 1, Proxy: "", MaxSourceBytes: 524288000}
+	if cfg.Security != want {
+		t.Errorf("Security = %+v, want %+v", cfg.Security, want)
+	}
+}
+
+func TestSecurityConfigValidate(t *testing.T) {
+	t.Parallel()
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		block   string
+		wantErr string
+	}{
+		{"max_running 0", "security:\n  max_running: 0\n", "security.max_running"},
+		{"max_running 21", "security:\n  max_running: 21\n", "security.max_running"},
+		{"max_source_bytes 0", "security:\n  max_source_bytes: 0\n", "security.max_source_bytes"},
+		{"max_source_bytes 11 GiB", "security:\n  max_source_bytes: 11811160064\n", "security.max_source_bytes"},
+		{"proxy ftp", "security:\n  proxy: ftp://p:3128\n", "security.proxy"},
+		{"proxy with user info", "security:\n  proxy: http://u:p@p:3128\n", "security.proxy"},
+		{"proxy no scheme", "security:\n  proxy: p:3128\n", "security.proxy"},
+		{"proxy ok", "security:\n  proxy: http://proxy.example.com:3128\n  max_running: 20\n  max_source_bytes: 1048576\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load(writeConfig(t, string(base)+tt.block))
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Load() = %v, want nil", err)
+				}
+				if cfg.Security.Proxy != "http://proxy.example.com:3128" {
+					t.Errorf("Proxy = %q", cfg.Security.Proxy)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSecurityImageTagMatchesReviewImage(t *testing.T) {
+	t.Parallel()
+	tag := func(image string) string { return image[strings.LastIndex(image, ":")+1:] }
+	if tag(defaultSecurityImage) != tag(defaultImage) {
+		t.Errorf("security image tag %q != review image tag %q", tag(defaultSecurityImage), tag(defaultImage))
+	}
+	if !strings.HasPrefix(defaultSecurityImage, "ghcr.io/gopaytech/pergent-security:") {
+		t.Errorf("defaultSecurityImage = %q", defaultSecurityImage)
+	}
+}

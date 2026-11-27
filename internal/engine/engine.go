@@ -86,6 +86,9 @@ type Engine struct {
 	// the graph build image (PERGENT_SH_GRAPH_IMAGE), both set by the chart
 	// with graphs.enabled. Either empty turns code graphs off (GraphsOn).
 	GraphDir, GraphImage string
+	// SecurityEgress is PERGENT_SH_SECURITY_EGRESS: the chart set
+	// securityJobEgress.cidrs, so scan Jobs can reach the network.
+	SecurityEgress bool
 	// CallbackClient sends the API reviews' callbacks; nil means one with a
 	// 10 s timeout. Whatever it is, a redirect is never followed.
 	CallbackClient *http.Client
