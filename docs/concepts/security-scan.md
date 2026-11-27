@@ -123,7 +123,7 @@ The scan page shows the reason.
 | failed | `the scan Job sent a result over 12 MiB`. |
 | failed | `pergent sent a result pergent.sh couldn't use: <why>`. |
 
-A partial scan keeps its findings and its tokens, and fixes nothing. A failed scan keeps its tokens only.
+A partial scan keeps its findings and its tokens, and fixes nothing. A failed scan keeps the tokens its Job reported, if the Job sent a result pergent.sh could read, and no findings. A scan that failed before its Job ran, or whose Job sent a result pergent.sh could not read, has no tokens.
 
 ## Routes and metrics
 
