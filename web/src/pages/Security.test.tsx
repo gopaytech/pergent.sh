@@ -1,4 +1,4 @@
-import { act, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -24,6 +24,12 @@ afterEach(() => {
 });
 
 const fakeClock = { toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] as const };
+
+// click clicks under fake timers, then lets the work it starts finish.
+async function click(el: HTMLElement) {
+  fireEvent.click(el);
+  await settle();
+}
 
 // settle lets the pending fetches and renders finish under fake timers.
 async function settle() {
@@ -212,6 +218,70 @@ describe("Security", () => {
     expect(screen.getByText("a security scan is already running")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText("a security scan is already running")).not.toBeInTheDocument();
+  });
+
+  it("after a 409 the box stays closed when the running scan ends", async () => {
+    vi.useFakeTimers({ toFake: [...fakeClock.toFake] });
+    try {
+      let posted = false;
+      let reads = 0;
+      fakeApi({
+        ...routes(securityView),
+        // After the post: one answer with the running scan, then it has ended.
+        [`GET ${sec}`]: () => {
+          if (posted) reads++;
+          return { body: posted && reads < 2 ? { ...securityView, canStart: false, running: securityScanRunning } : securityView };
+        },
+        [`POST ${sec}/scans`]: () => {
+          posted = true;
+          return { status: 409, body: { error: "a security scan is already running", scan: securityScanRunning } };
+        },
+      });
+      const { unmount } = renderApp(open);
+      await settle();
+      await click(screen.getByRole("button", { name: "Start scan" }));
+      await click(within(screen.getByRole("dialog")).getByRole("button", { name: "Start scan" }));
+      await settle();
+      expect(screen.getByRole("button", { name: "Running" })).toBeDisabled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await settle();
+      expect(screen.getByRole("button", { name: "Start scan" })).toBeEnabled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Dismiss after a 409 keeps the box closed when the running scan ends", async () => {
+    vi.useFakeTimers({ toFake: [...fakeClock.toFake] });
+    try {
+      let posted = false;
+      let ended = false;
+      fakeApi({
+        ...routes(securityView),
+        [`GET ${sec}`]: () => ({ body: posted && !ended ? { ...securityView, canStart: false, running: securityScanRunning } : securityView }),
+        [`POST ${sec}/scans`]: () => {
+          posted = true;
+          return { status: 409, body: { error: "a security scan is already running", scan: securityScanRunning } };
+        },
+      });
+      const { unmount } = renderApp(open);
+      await settle();
+      await click(screen.getByRole("button", { name: "Start scan" }));
+      await click(within(screen.getByRole("dialog")).getByRole("button", { name: "Start scan" }));
+      await settle();
+      await click(screen.getByRole("button", { name: "Dismiss" }));
+      ended = true;
+      await vi.advanceTimersByTimeAsync(10_000);
+      await settle();
+      expect(screen.getByRole("button", { name: "Start scan" })).toBeEnabled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("polls while running and stops after", async () => {

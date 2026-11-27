@@ -82,10 +82,14 @@ function Summary({ v, instance, project, paused, queryKey }: { v: SecurityView; 
   const [open, setOpen] = useState(false);
   // The start lives here, not in the box: a 409 usually means a scan is
   // active, the refresh then drops the box, and the error must stay readable.
+  // The box is closed then too, or it opens by itself when that scan ends.
   const start = useMutation({
     mutationFn: () => write("POST", paths.apiRepoSecurityScans(instance, project), {}),
     onSuccess: () => setOpen(false),
-    onSettled: refresh,
+    onSettled: async (_data, error) => {
+      await refresh();
+      if (error && client.getQueryData<SecurityView>(queryKey)?.running) setOpen(false);
+    },
   });
   const cancel = useMutation({
     mutationFn: (id: string) => write("POST", paths.apiRepoSecurityScanCancel(instance, project, id), {}),
@@ -137,7 +141,15 @@ function Summary({ v, instance, project, paused, queryKey }: { v: SecurityView; 
             <div className="min-w-0 grow">
               <ErrorBox error={start.error} />
             </div>
-            <Button type="button" variant="outline" size="sm" onClick={() => start.reset()}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                start.reset();
+                setOpen(false);
+              }}
+            >
               Dismiss
             </Button>
           </div>
