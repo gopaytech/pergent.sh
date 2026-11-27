@@ -157,7 +157,7 @@ func TestScanUsageShowsInTokenPages(t *testing.T) {
 			}
 			return nil
 		})
-		if err != nil || scan == nil || scan.In+scan.Out != 1000000 || scan.Trigger != "security_scan" || scan.Project != "acme/p7" {
+		if err != nil || scan == nil || scan.In+scan.Out != 1000000 || scan.MR != 0 || scan.Trigger != "security_scan" || scan.Project != "acme/p7" {
 			t.Errorf("UsageRows scan row = %+v, %v", scan, err)
 		}
 	})
@@ -205,6 +205,13 @@ func TestScanUsageIsNoReview(t *testing.T) {
 		got, err := e.s.UsageWasted(ctx, mr1.Instance, 7, usageSince)
 		if err != nil || got.Failed.Total() != 0 || got.Reruns.Total() != 0 || got.RerunCount != 0 {
 			t.Errorf("UsageWasted = %+v, %v; want none", got, err)
+		}
+	})
+	t.Run("team usage", func(t *testing.T) {
+		got, err := e.s.TeamUsage(ctx, e.team, usageSince)
+		if err != nil || got.Reviews != 1 || got.Tokens.Total() != 1000150 || len(got.Repos) != 1 ||
+			got.Repos[0].Reviews != 1 || got.Repos[0].Tokens.Total() != 1000150 {
+			t.Errorf("TeamUsage = %+v, %v; want 1 review (team and repository) and 1000150 tokens", got, err)
 		}
 	})
 	t.Run("metrics", func(t *testing.T) {

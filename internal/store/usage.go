@@ -37,7 +37,7 @@ const notScanSQL = "trigger <> 'security_scan'"
 // RecordScanUsage stores what each model of security scan scanID used: one
 // run_usage row per model on the scan's carrier run, with the scan's own
 // repository (the carrier run has none), trigger 'security_scan' and verdict
-// 'security', at the time the scan finished. The source and team come from
+// 'security' and no merge request (0), at the time the scan finished. The source and team come from
 // the carrier run's entry; the owner team is the repository's now. A row
 // already there is kept, so a second call changes nothing.
 func (s *Store) RecordScanUsage(ctx context.Context, scanID string, rows []ScanModelUsage) error {
@@ -51,7 +51,7 @@ func (s *Store) RecordScanUsage(ctx context.Context, scanID string, rows []ScanM
 		if _, err := tx.Exec(ctx, `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid,
 				trigger, incremental, provider, model, verdict, reported_at, tokens_in, tokens_out, cache_read, cache_write,
 				reasoning, findings, blocking, source, team_id, owner_team_id)
-			SELECT r.id, $2::text, sc.instance, sc.project_id, sc.project, r.mr_iid, 'security_scan', false,
+			SELECT r.id, $2::text, sc.instance, sc.project_id, sc.project, 0, 'security_scan', false,
 				$3::text, $4::text, 'security', COALESCE(sc.finished_at, sc.started_at, sc.queued_at), $5::bigint, $6::bigint,
 				$7::bigint, $8::bigint, $9::bigint, 0, 0,
 				CASE WHEN r.model_source = 'team' THEN 'team' ELSE 'global' END,
@@ -134,11 +134,11 @@ var usageInsertSQL = `INSERT INTO run_usage (run_id, skill, instance, project_id
 // owner team of its own: it takes the one of the run_usage row it was added
 // to (the same run and skill, at most one: the key), as entryTokensSQL does.
 const splitUsageSQL = `(SELECT u.run_id, u.instance, u.project_id, u.project_path, u.skill, u.provider, u.model,
-		u.source, u.reported_at, u.tokens_in, u.tokens_out, u.cache_read, u.cache_write, u.reasoning, u.owner_team_id
+		u.source, u.reported_at, u.tokens_in, u.tokens_out, u.cache_read, u.cache_write, u.reasoning, u.owner_team_id, u.trigger
 	FROM run_usage u WHERE NOT EXISTS (SELECT 1 FROM run_usage_by_model b WHERE b.run_id = u.run_id)
 	UNION ALL
 	SELECT b.run_id, r.instance, r.project_id, r.project_path, b.skill, b.provider, b.model,
-		b.source, b.reported_at, b.tokens_in, b.tokens_out, b.cache_read, b.cache_write, b.reasoning, o.owner_team_id
+		b.source, b.reported_at, b.tokens_in, b.tokens_out, b.cache_read, b.cache_write, b.reasoning, o.owner_team_id, r.trigger
 	FROM run_usage_by_model b JOIN runs r ON r.id = b.run_id
 		LEFT JOIN run_usage o ON o.run_id = b.run_id AND o.skill = b.skill) split_usage`
 
@@ -743,7 +743,7 @@ func (s *Store) TeamUsage(ctx context.Context, team int64, since time.Time) (Tea
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // read-only
 	var out TeamUsage
-	if err := tx.QueryRow(ctx, `SELECT `+tokenSumColumns+`, count(DISTINCT run_id) FROM `+teamUsageRows, team, since).
+	if err := tx.QueryRow(ctx, `SELECT `+tokenSumColumns+`, count(DISTINCT run_id) FILTER (WHERE `+notScanSQL+`) FROM `+teamUsageRows, team, since).
 		Scan(append(out.Tokens.dests(), &out.Reviews)...); err != nil {
 		return TeamUsage{}, err
 	}
@@ -761,7 +761,7 @@ func (s *Store) TeamUsage(ctx context.Context, team int64, since time.Time) (Tea
 		return TeamUsage{}, err
 	}
 	rows, err = tx.Query(ctx, `SELECT instance, project_id, (array_agg(project_path ORDER BY reported_at DESC))[1], `+tokenSumColumns+`,
-			count(DISTINCT run_id)
+			count(DISTINCT run_id) FILTER (WHERE `+notScanSQL+`)
 		FROM `+teamUsageRows+` GROUP BY instance, project_id
 		ORDER BY COALESCE(sum(`+allTokensSQL+`), 0) DESC, instance, project_id`, team, since)
 	if err != nil {
