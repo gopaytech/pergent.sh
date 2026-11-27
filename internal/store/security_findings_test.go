@@ -629,3 +629,73 @@ func TestSecurityDismissRestore(t *testing.T) {
 		}
 	})
 }
+
+// What the dashboard reads of the scans: a finding's first scan number and
+// when it ended, each event's scan number, the findings a scan found new or
+// fixed, and the usage of many scans in one query.
+func TestSecurityScanReads(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	r := newSecRepo(s, "acme/api")
+	first := r.run(t, secResult(SecurityComplete, "aaa", "A", "B"))
+	second := r.run(t, secResult(SecurityComplete, "aaa", "A", "C"))
+	other := newSecRepo(s, "acme/web").run(t, secResult(SecurityComplete, "aaa", "D"))
+
+	t.Run("first scan of a finding", func(t *testing.T) {
+		f := r.findings(t)
+		if a := f["A"]; a.FirstScanNumber != 1 || first.FinishedAt == nil || !a.FirstSeenAt.Equal(*first.FinishedAt) {
+			t.Errorf("A first scan = %d at %v; want 1 at %v", a.FirstScanNumber, a.FirstSeenAt, first.FinishedAt)
+		}
+		if c := f["C"]; c.FirstScanNumber != 2 || !c.FirstSeenAt.Equal(*second.FinishedAt) {
+			t.Errorf("C first scan = %d at %v; want 2", c.FirstScanNumber, c.FirstSeenAt)
+		}
+	})
+	t.Run("event scan numbers", func(t *testing.T) {
+		b := r.findings(t)["B"]
+		evs, err := s.SecurityFindingEvents(ctx, b.ID)
+		if err != nil || len(evs) != 2 || evs[0].ScanNumber != 1 || evs[1].Kind != FindingEventFixed || evs[1].ScanNumber != 2 {
+			t.Errorf("B events = %+v, %v; want found by 1, fixed by 2", evs, err)
+		}
+		r.dismiss(t, r.findings(t)["A"].ID)
+		evs, _ = s.SecurityFindingEvents(ctx, r.findings(t)["A"].ID)
+		if last := evs[len(evs)-1]; last.Kind != FindingEventDismissed || last.ScanNumber != 0 || last.ScanID != "" {
+			t.Errorf("dismiss event = %+v; want no scan", last)
+		}
+	})
+	t.Run("a scan's new and fixed findings", func(t *testing.T) {
+		found, fixed, err := s.SecurityScanFindings(ctx, "main", "ACME/api", second.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(found) != 1 || found[0].Fingerprint != "C" || len(fixed) != 1 || fixed[0].Fingerprint != "B" {
+			t.Errorf("scan 2 found %+v, fixed %+v; want C new, B fixed", found, fixed)
+		}
+		found, fixed, err = s.SecurityScanFindings(ctx, "main", "acme/api", first.ID)
+		if err != nil || len(found) != 2 || len(fixed) != 0 {
+			t.Errorf("scan 1 found %d, fixed %d, %v; want 2, 0", len(found), len(fixed), err)
+		}
+		// Another repository's scan, and an ID that is not one.
+		for _, id := range []string{other.ID, "not-an-id"} {
+			if found, fixed, err := s.SecurityScanFindings(ctx, "main", "acme/api", id); err != nil || len(found)+len(fixed) != 0 {
+				t.Errorf("SecurityScanFindings(%s) = %d, %d, %v; want none", id, len(found), len(fixed), err)
+			}
+		}
+	})
+	t.Run("usage of many runs", func(t *testing.T) {
+		in, cr := int64(100), int64(5)
+		if err := s.RecordScanUsage(ctx, first.ID, []ScanModelUsage{{Provider: "acme", Model: "big",
+			Usage: SkillUsage{Skill: "security-scan", In: in, Out: 20, CacheRead: &cr, CacheWrite: &cr, Reasoning: &cr}}}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.RunUsages(ctx, []string{first.RunID, second.RunID, "not-an-id"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[first.RunID].In != 100 || got[first.RunID].Total() != 135 {
+			t.Errorf("RunUsages = %+v; want scan 1's 135 tokens alone", got)
+		}
+		if got, err := s.RunUsages(ctx, nil); err != nil || len(got) != 0 {
+			t.Errorf("RunUsages(nil) = %v, %v", got, err)
+		}
+	})
+}

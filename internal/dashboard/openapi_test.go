@@ -35,6 +35,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/readiness"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/reviewapi"
+	"github.com/gopaytech/pergent.sh/internal/security"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -584,6 +585,12 @@ func TestOpenAPIRoutesMatchCode(t *testing.T) {
 	for _, s := range spec {
 		inSpec[s.Key] = true
 		r, ok := codeByPattern[s.Key]
+		// A method-less pattern (its handler answers another method 405) is
+		// documented by each operation on its path.
+		if ml, found := codeByPattern[s.Op.Path]; !ok && found && ml.method() == "" {
+			r, ok = ml, true
+			inSpec[s.Op.Path] = true
+		}
 		if !ok {
 			t.Errorf("openapi.yaml documents %s, which the code does not register", s.Key)
 			continue
@@ -605,8 +612,8 @@ func TestOpenAPIRoutesMatchCode(t *testing.T) {
 		if _, skip := undocumentedPlaceholders[p]; skip {
 			continue
 		}
-		if r.method() == "" {
-			t.Errorf("%s (%s) is a method-less route: document it or add it to undocumentedCatchAlls", p, r.Where)
+		if r.method() == "" && !inSpec[p] {
+			t.Errorf("%s (%s) is a method-less route: document an operation on its path or add it to undocumentedCatchAlls", p, r.Where)
 			continue
 		}
 		if !inSpec[p] {
@@ -890,6 +897,21 @@ var openAPISchemas = map[string]schemaType{
 	"DetectedSkillView":       outputSchema(DetectedSkillView{}),
 	"ReadinessView":           outputSchema(ReadinessView{}),
 	"ScanView":                outputSchema(ScanView{}),
+	"SecurityView":            outputSchema(SecurityView{}),
+	"SecurityCountsView":      outputSchema(SecurityCountsView{}),
+	"SecurityStartView":       outputSchema(SecurityStartView{}),
+	"SecurityScanView":        outputSchema(SecurityScanView{}),
+	"SecurityCoverageView":    outputSchema(SecurityCoverageView{}),
+	"SecurityScansView":       outputSchema(SecurityScansView{}),
+	"SecurityScanDetailView":  outputSchema(SecurityScanDetailView{}),
+	"SecurityFindingRowView":  outputSchema(SecurityFindingRowView{}),
+	"SecurityFindingsView":    outputSchema(SecurityFindingsView{}),
+	"SecurityFindingView":     outputSchema(SecurityFindingView{}),
+	"SecurityDismissalView":   outputSchema(SecurityDismissalView{}),
+	"SecurityEventView":       outputSchema(SecurityEventView{}),
+	"SecuritySettingsView":    outputSchema(SecuritySettingsView{}),
+	"SecurityDefaultsView":    outputSchema(SecurityDefaultsView{}),
+	"SecurityConflictBody":    outputSchema(securityConflict{}),
 	"PastDismissalView":       outputSchema(PastDismissalView{}),
 	"SkillResultView":         outputSchema(SkillResultView{}),
 	"SkillTokensView":         outputSchema(SkillTokensView{}),
@@ -1023,6 +1045,12 @@ var openAPISchemas = map[string]schemaType{
 	"readiness.Language":      inputSchema(readiness.Language{}),
 	"readiness.BuiltInFit":    outputSchema(readiness.BuiltInFit{}),
 	"skillfetch.JobResult":    inputSchema(skillfetch.JobResult{}),
+	"security.Envelope":       inputSchema(security.Envelope{}),
+	"security.Skill":          inputSchema(security.Skill{}),
+	"security.Coverage":       inputSchema(security.Coverage{}),
+	"security.Usage":          inputSchema(security.Usage{}),
+	"security.ModelUsage":     inputSchema(security.ModelUsage{}),
+	"security.Tokens":         inputSchema(security.Tokens{}),
 	"store.FetchedFile":       inputSchema(store.FetchedFile{}),
 	"result.Result":           inputSchema(result.Result{}),
 	"result.Incremental":      inputSchema(result.Incremental{}),
@@ -1086,6 +1114,9 @@ var openAPIUntypedSchemas = map[string]string{
 	"ScanStartedBody":             "struct in Dashboard.scanNow",
 	"ScanBusyBody":                "struct in Dashboard.scanNow",
 	"ScanTooSoonBody":             "struct in Dashboard.scanNow",
+	"SecurityScanBody":            "struct in Dashboard.securityStart and Dashboard.securityCancel",
+	"SecurityDismissRequest":      "struct in Dashboard.securityFindingAction",
+	"SecuritySettingsRequest":     "struct in Dashboard.putSecuritySettings",
 	"CreateAccountRequest":        "struct in Dashboard.createPasswordAccount",
 	"AddUserRequest":              "struct in Dashboard.addUser",
 	"PutRepositoryTeamsRequest":   "struct in Dashboard.putRepositoryTeams",
@@ -1462,10 +1493,23 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		string(store.MemberSkipped)}
 	apiCodes := []string{reviewapi.CodeUnauthorized, reviewapi.CodeNotFound, reviewapi.CodeInvalid, reviewapi.CodeTooLarge, reviewapi.CodeRateLimited,
 		reviewapi.CodeBudgetUsedUp, reviewapi.CodeCannotReview, reviewapi.CodeNotFinished, reviewapi.CodeIdempotencyKeyReused, reviewapi.CodeInternal}
+	securityStates := []string{store.SecurityQueued, store.SecurityRunning, store.SecurityComplete, store.SecurityPartial,
+		store.SecurityFailed}
+	severities := []string{store.SeverityCritical, store.SeverityHigh, store.SeverityMedium, store.SeverityLow}
+	findingStates := []string{store.FindingOpen, store.FindingDismissed, store.FindingFixed}
+	findingEvents := []string{store.FindingEventFound, store.FindingEventReopened, store.FindingEventFixed,
+		store.FindingEventDismissed, store.FindingEventRestored}
 	cases := []struct {
 		schema, prop string
 		want         []string
 	}{
+		{"SecurityScanView", "state", securityStates},
+		{"SecurityFindingRowView", "severity", severities},
+		{"SecurityFindingRowView", "state", findingStates},
+		{"SecurityEventView", "kind", findingEvents},
+		{"SecurityDismissalView", "reason", store.SecurityDismissReasons},
+		{"SecurityDismissRequest", "reason", store.SecurityDismissReasons},
+		{"ChainView", "source", []string{"repository", store.ScopeTeam, store.ScopeGlobal, sourceRepositoryChain}},
 		{"ReviewSummary", "outcome", outcomes},
 		{"RunSummary", "outcome", outcomes},
 		{"TeamMemberView", "role", teamRoles},
@@ -1525,6 +1569,10 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		{"internal/store/*.go", "SignIn", "", [][]string{signIns}},
 		{"internal/store/*.go", "Scan", "", [][]string{scanStates}},
 		{"internal/store/*.go", "Fetch", "", [][]string{fetchStatuses, fetchPurposes}},
+		{"internal/store/*.go", "", "SecurityQueued", [][]string{securityStates}},
+		{"internal/store/*.go", "Severity", "", [][]string{severities}},
+		{"internal/store/*.go", "Finding", "", [][]string{findingStates, findingEvents}},
+		{"internal/store/*.go", "Dismiss", "", [][]string{store.SecurityDismissReasons}},
 		{"internal/dashboard/*.go", "health", "", [][]string{healths}},
 		{"internal/dashboard/*.go", "approverKind", "", [][]string{approvers}},
 		{"internal/config/*.go", "Platform", "", [][]string{platforms}},

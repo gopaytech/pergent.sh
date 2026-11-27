@@ -30,6 +30,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/security"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -85,6 +86,9 @@ type Options struct {
 	// scans after a skill setting is saved; the engine is one. Nil answers
 	// Scan now 404, as with scans off, and saves recheck nothing.
 	Readiness Readiness
+	// SecurityScans starts and cancels security scans (Start scan, Cancel);
+	// the engine is one. Nil answers every security route 404.
+	SecurityScans SecurityScans
 	// Graphs is the engine's side of the Code graph switch. Nil, or one that
 	// is not GraphsOn, refuses turning the switch on (409).
 	Graphs Graphs
@@ -108,6 +112,18 @@ type Readiness interface {
 	RequestScan(ctx context.Context, instance, project, actor string) (store.ReadinessScan, error)
 	RecheckReadiness(instance, project string)
 	RecheckAllReadiness()
+}
+
+// SecurityScans is the engine's side of the Security tab. RequestSecurityScan
+// refuses with security.ErrOff, ErrPaused, ErrNotOn, ErrBusy (with the active
+// scan), ErrQuota, a *security.TeamLimitError or a *security.RefusedError;
+// CancelSecurityScan with security.ErrEnded (with the scan) or
+// store.ErrSecurityScanNotFound. StartOff is why Start scan is off for every
+// repository, "" when it is on.
+type SecurityScans interface {
+	RequestSecurityScan(ctx context.Context, s security.Start) (store.SecurityScan, error)
+	CancelSecurityScan(ctx context.Context, instance, project, id string) (store.SecurityScan, error)
+	StartOff() string
 }
 
 // Graphs is the engine's side of the Code graph switch: whether the install
@@ -197,6 +213,7 @@ type Dashboard struct {
 	wake          func()
 	fetcher       *skillfetch.Fetcher
 	readiness     Readiness
+	securityScans SecurityScans
 	graphs        Graphs
 	deleteJob     func(ctx context.Context, name string) error
 	sendCallback  func(ctx context.Context, url string, body []byte, delivery string, secrets ...string) store.CallbackAttempt
@@ -262,7 +279,7 @@ func New(o Options) (*Dashboard, error) {
 	}
 	d := &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
-		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness, graphs: o.Graphs, deleteJob: o.DeleteJob, sendCallback: o.SendCallback,
+		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness, securityScans: o.SecurityScans, graphs: o.Graphs, deleteJob: o.DeleteJob, sendCallback: o.SendCallback,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		idp: idpClient(o.HTTPClient), oidc: &oidcCache{},

@@ -699,10 +699,15 @@ func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
 
 // --- POST /api/repositories/{instance}/{project...}/... ---
 
-// repositoryPost serves the POSTs to one repository: .../claim (claimRepo),
-// .../release (releaseRepo), .../readiness/scan (scanNow), .../past-dismissals/stop (stopUsing) and .../settings/reset; any
-// other is 404.
+// repositoryPost serves the POSTs to one repository: the security routes
+// first (securityRoute: only when the part before /security is a repository
+// the session sees), then .../claim (claimRepo), .../release (releaseRepo),
+// .../readiness/scan (scanNow), .../past-dismissals/stop (stopUsing) and
+// .../settings/reset; any other is 404.
 func (d *Dashboard) repositoryPost(w http.ResponseWriter, r *http.Request) {
+	if d.securityRoute(w, r) {
+		return
+	}
 	if strings.HasSuffix(r.PathValue("rest"), "/claim") {
 		d.claimRepo(w, r)
 		return
@@ -728,9 +733,13 @@ func (d *Dashboard) repositoryPost(w http.ResponseWriter, r *http.Request) {
 
 // --- PUT .../settings, PUT .../teams and POST .../settings/reset ---
 
-// repositoryPut serves the PUTs to one repository: .../teams (putRepositoryTeams,
+// repositoryPut serves the PUTs to one repository: the security routes first
+// (securityRoute, as for the POSTs), then .../teams (putRepositoryTeams,
 // admins only) and .../settings (putSettings, which answers any other path 404).
 func (d *Dashboard) repositoryPut(w http.ResponseWriter, r *http.Request) {
+	if d.securityRoute(w, r) {
+		return
+	}
 	if strings.HasSuffix(r.PathValue("rest"), "/teams") {
 		d.putRepositoryTeams(w, r)
 		return

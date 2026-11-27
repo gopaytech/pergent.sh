@@ -2161,3 +2161,199 @@ type BuiltInRuleView struct {
 	Paths []string `json:"paths"`
 	Rule  string   `json:"rule"`
 }
+
+// --- security scans ---
+//
+// The routes are under /api/repositories/{instance}/{project...}/security, for
+// anyone who sees the repository; the writes are for its maintainers and
+// admins, config repositories too. A finding or a scan of another repository
+// is 404. With no security scans (no engine), every route is 404. The texts
+// a scan or a finding holds are the model's: text only, never markup.
+
+// SecurityView is GET .../security: the Security tab. CanStart: the session
+// is a maintainer or an admin of the repository, it is not paused, no scan is
+// queued or running and StartOff is "". StartOff is why Start scan is off:
+// the engine's text when scans have no way out, "the repository is paused"
+// for a paused one, else "". CanManage: the session may cancel, dismiss,
+// restore and change the settings. Running is the queued or running scan,
+// Last the newest that ended; each null when there is none. Counts are the
+// open findings.
+type SecurityView struct {
+	CanStart  bool               `json:"canStart"`
+	StartOff  string             `json:"startOff"`
+	CanManage bool               `json:"canManage"`
+	Running   *SecurityScanView  `json:"running"`
+	Last      *SecurityScanView  `json:"last"`
+	Counts    SecurityCountsView `json:"counts"`
+	Start     SecurityStartView  `json:"start"`
+}
+
+// SecurityCountsView counts the open findings by severity, and the open ones
+// that need a person to check them.
+type SecurityCountsView struct {
+	Critical        int `json:"critical"`
+	High            int `json:"high"`
+	Medium          int `json:"medium"`
+	Low             int `json:"low"`
+	NeedsValidation int `json:"needsValidation"`
+}
+
+// SecurityStartView is what Start scan's confirm box shows: the name of the
+// chain entry a scan would use now ("" when none can be used), the step
+// limits and the timeout it would run with, and the tokens and seconds of the
+// newest complete scan as an estimate (null with none, or no usage).
+// StepsFromSkill: no step limit is set, so both are the skill's own.
+type SecurityStartView struct {
+	Model            string `json:"model"`
+	MaxSteps         int    `json:"maxSteps"`
+	SubagentMaxSteps int    `json:"subagentMaxSteps"`
+	StepsFromSkill   bool   `json:"stepsFromSkill"`
+	TimeoutSeconds   int    `json:"timeoutSeconds"`
+	LastTokens       *int64 `json:"lastTokens"`
+	LastSeconds      *int64 `json:"lastSeconds"`
+}
+
+// SecurityScanView is one security scan. State is queued, running, complete,
+// partial or failed; Reason says why a scan is partial or failed (cancelled
+// for a cancelled one). StartedBy is who pressed Start scan. A time not
+// reached yet is null; DurationSeconds is from start to end. Model is the
+// chain entry it ran on ("" before it started). The skill fields are what the
+// scan's image reported; SkillUpdated: the skill changed since the last
+// complete scan, so this one fixed nothing. Coverage is null when the scan
+// did not report it. Tokens is null until usage is recorded; UsageSource is
+// "stats", or "stream" when the sub-agents' tokens are missing. HasSARIF:
+// the scan still keeps its SARIF (the last 10 do). CancelRequested: a person
+// cancelled the scan and it has not ended yet, or it ended so.
+type SecurityScanView struct {
+	ID              string                `json:"id"`
+	Number          int64                 `json:"number"`
+	State           string                `json:"state"`
+	Reason          string                `json:"reason"`
+	StartedBy       string                `json:"startedBy"`
+	QueuedAt        time.Time             `json:"queuedAt"`
+	StartedAt       *time.Time            `json:"startedAt"`
+	FinishedAt      *time.Time            `json:"finishedAt"`
+	DurationSeconds *int64                `json:"durationSeconds"`
+	Branch          string                `json:"branch"`
+	Commit          string                `json:"commit"`
+	Model           string                `json:"model"`
+	SkillName       string                `json:"skillName"`
+	SkillCommit     string                `json:"skillCommit"`
+	SkillUpdated    bool                  `json:"skillUpdated"`
+	Coverage        *SecurityCoverageView `json:"coverage"`
+	Tokens          *UsageTokensView      `json:"tokens"`
+	UsageSource     string                `json:"usageSource"`
+	NewCount        int                   `json:"newCount"`
+	FixedCount      int                   `json:"fixedCount"`
+	HasSARIF        bool                  `json:"hasSarif"`
+	CancelRequested bool                  `json:"cancelRequested"`
+}
+
+// SecurityCoverageView is how many of the planned parts the scan covered.
+type SecurityCoverageView struct {
+	Done    int `json:"done"`
+	Planned int `json:"planned"`
+}
+
+// SecurityScansView is GET .../security/scans: the newest 100 scans, newest
+// first.
+type SecurityScansView struct {
+	Scans []SecurityScanView `json:"scans"`
+}
+
+// SecurityScanDetailView is GET .../security/scans/{id}: the scan, the
+// redacted tail of its Job's log ("" when none was kept), and the findings it
+// found new (or again, after a fix) and those it fixed, at most 1000 each.
+type SecurityScanDetailView struct {
+	Scan  SecurityScanView         `json:"scan"`
+	Log   string                   `json:"log"`
+	New   []SecurityFindingRowView `json:"new"`
+	Fixed []SecurityFindingRowView `json:"fixed"`
+}
+
+// SecurityFindingRowView is one finding in a list. State is open, dismissed
+// or fixed; Severity critical, high, medium or low. RuleID is the skill's
+// attack class (such as injection), not a CWE; CWE is set only when a rule
+// tag holds CWE-<n>. FirstScan is the number of the scan that found it first,
+// FirstSeenAt when that scan ended.
+type SecurityFindingRowView struct {
+	ID              int64     `json:"id"`
+	State           string    `json:"state"`
+	Severity        string    `json:"severity"`
+	RuleID          string    `json:"ruleId"`
+	CWE             string    `json:"cwe"`
+	Title           string    `json:"title"`
+	File            string    `json:"file"`
+	StartLine       int       `json:"startLine"`
+	NeedsValidation bool      `json:"needsValidation"`
+	FirstSeenAt     time.Time `json:"firstSeenAt"`
+	FirstScan       int64     `json:"firstScan"`
+}
+
+// SecurityFindingsView is GET .../security/findings?state=&severity=&rule=&q=:
+// the findings that match, open first, then by severity and file, at most
+// 1000; Truncated is true when more matched.
+type SecurityFindingsView struct {
+	Findings  []SecurityFindingRowView `json:"findings"`
+	Truncated bool                     `json:"truncated"`
+}
+
+// SecurityFindingView is GET .../security/findings/{id}: the finding, its
+// texts, its tags, and CodeURL, the http or https link to its line at the
+// commit of the last scan that found it ("" when there is none). Dismissal is
+// null unless it is dismissed. History is what happened to it, oldest first.
+// CanManage: the session may dismiss or restore it.
+type SecurityFindingView struct {
+	Finding     SecurityFindingRowView `json:"finding"`
+	Description string                 `json:"description"`
+	Exploit     string                 `json:"exploit"`
+	FixHint     string                 `json:"fixHint"`
+	Confidence  string                 `json:"confidence"`
+	Tags        []string               `json:"tags"`
+	CodeURL     string                 `json:"codeUrl"`
+	Dismissal   *SecurityDismissalView `json:"dismissal"`
+	History     []SecurityEventView    `json:"history"`
+	CanManage   bool                   `json:"canManage"`
+}
+
+// SecurityDismissalView is why and by whom a finding is dismissed. Reason is
+// false_positive, wont_fix, used_in_tests, mitigated or acceptable_risk.
+type SecurityDismissalView struct {
+	Reason  string    `json:"reason"`
+	Comment string    `json:"comment"`
+	By      string    `json:"by"`
+	At      time.Time `json:"at"`
+}
+
+// SecurityEventView is one thing that happened to a finding: found, reopened
+// or fixed by scan number Scan, or dismissed or restored by Actor (Scan 0).
+// Reason and Comment are a dismissal's.
+type SecurityEventView struct {
+	Kind    string    `json:"kind"`
+	Scan    int64     `json:"scan"`
+	Actor   string    `json:"actor"`
+	Reason  string    `json:"reason"`
+	Comment string    `json:"comment"`
+	At      time.Time `json:"at"`
+}
+
+// SecuritySettingsView is GET and PUT .../security/settings: the
+// repository's scan settings, null for the default (Defaults: the skill's
+// step limits and the default timeout). FindingsInReviews: its reviews get
+// the open findings of the files a change touches. CanEdit: the session may
+// change them.
+type SecuritySettingsView struct {
+	MaxSteps          *int                 `json:"maxSteps"`
+	SubagentMaxSteps  *int                 `json:"subagentMaxSteps"`
+	TimeoutSeconds    *int                 `json:"timeoutSeconds"`
+	FindingsInReviews bool                 `json:"findingsInReviews"`
+	Defaults          SecurityDefaultsView `json:"defaults"`
+	CanEdit           bool                 `json:"canEdit"`
+}
+
+// SecurityDefaultsView is what a null scan setting means.
+type SecurityDefaultsView struct {
+	MaxSteps         int `json:"maxSteps"`
+	SubagentMaxSteps int `json:"subagentMaxSteps"`
+	TimeoutSeconds   int `json:"timeoutSeconds"`
+}

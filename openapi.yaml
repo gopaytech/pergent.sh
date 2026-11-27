@@ -22,7 +22,7 @@ info:
     | Group | Caller | Authentication |
     | --- | --- | --- |
     | `/webhooks/...` | GitLab, GitHub | `X-Gitlab-Token` header, `X-Hub-Signature-256` signature |
-    | `/runs/{id}/result`, `/runs/{id}/graph`, `/skill-fetches/{id}/result`, `/readiness-scans/{id}/result`, `/graphs/{id}/result` | Jobs pergent.sh started | one-time bearer token per Job |
+    | `/runs/{id}/result`, `/runs/{id}/graph`, `/skill-fetches/{id}/result`, `/readiness-scans/{id}/result`, `/security-scans/{id}/result`, `/security-scans/{id}/source`, `/graphs/{id}/result` | Jobs pergent.sh started | one-time bearer token per Job |
     | `/v1/...` | systems that ask for reviews (the review API) | `Authorization: Bearer <key>`, a client key an admin made |
     | `/auth/...` | the dashboard in a browser | none, or the sign-in cookies |
     | `/api/...` | the dashboard in a browser | session cookie, plus `X-CSRF-Token` on writes |
@@ -30,8 +30,9 @@ info:
     | `/metrics` | Prometheus, on the `metrics_listen` port only | none: the port is not exposed through `public_url` |
 
     **Conditional routes.** `/auth/`, `/api/` and `/v1/` exist only when
-    `dashboard.url` is set. `/skill-fetches/{id}/result` and
-    `/readiness-scans/{id}/result` exist only then too. `/graphs/{id}/result`
+    `dashboard.url` is set. `/skill-fetches/{id}/result`,
+    `/readiness-scans/{id}/result` and the two `/security-scans/` routes
+    exist only then too. `/graphs/{id}/result`
     and `/runs/{id}/graph` exist only when the install also keeps code graphs
     (`graphs.enabled` in the chart). Without them the path is 404.
 
@@ -497,6 +498,87 @@ paths:
             text/plain:
               schema: {type: string}
         '500': {$ref: '#/components/responses/PlainTextError'}
+  /security-scans/{id}/result:
+    post:
+      operationId: postSecurityScanResult
+      tags: [Job callbacks]
+      summary: Deliver a security scan's result
+      description: |
+        Posted once by a security scan Job when the scan ends, with the scan's
+        one-time bearer token. Only registered when the dashboard is on; else
+        404. Another method is 405. A body over 12 MiB makes the scan fail at
+        once (with the right token only) and is answered 413. A result
+        pergent.sh can't use is 204 too, and fails the scan; every text of it
+        that holds a secret pergent.sh knows is withheld before it is stored.
+      x-pergent-access: none
+      security:
+        - securityScanToken: []
+      parameters:
+        - $ref: '#/components/parameters/SecurityScanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/security.Envelope'}
+      responses:
+        '204':
+          description: Taken.
+        '400': {$ref: '#/components/responses/PlainTextError'}
+        '401':
+          description: The bearer token is missing or is not this scan's.
+          content:
+            text/plain:
+              schema: {type: string}
+        '409':
+          description: The scan is not running.
+          content:
+            text/plain:
+              schema: {type: string}
+        '413':
+          description: The body is over 12 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  /security-scans/{id}/source:
+    get:
+      operationId: getSecurityScanSource
+      tags: [Job callbacks]
+      summary: Download the source a security scan Job scans
+      description: |
+        The platform's `.tar.gz` archive of the scan's commit, passed on as a
+        stream and stored nowhere, with the scan's result token (not spent).
+        The route answers only while the scan runs. Only registered when the
+        dashboard is on; else 404. Another method is 405. At most
+        `security.max_source_bytes`: at one byte more the response is cut off
+        and the scan fails. A response the platform cuts short is cut off too.
+      x-pergent-access: none
+      security:
+        - securityScanToken: []
+      parameters:
+        - $ref: '#/components/parameters/SecurityScanId'
+      responses:
+        '200':
+          description: The archive.
+          content:
+            application/gzip:
+              schema: {type: string, contentMediaType: application/gzip}
+        '401':
+          description: The bearer token is missing or is not this scan's.
+          content:
+            text/plain:
+              schema: {type: string}
+        '409':
+          description: The scan is not running.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+        '502':
+          description: The platform did not give the archive.
+          content:
+            text/plain:
+              schema: {type: string}
   /graphs/{id}/result:
     post:
       operationId: postGraphResult
@@ -2289,6 +2371,474 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ScanTooSoonBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security:
+    get:
+      operationId: getSecurityTab
+      tags: [Repositories]
+      summary: The Security tab
+      description: |
+        For anyone who can see the repository. The queued or running scan, the
+        last scan that ended, the open findings' counts, and what Start scan
+        would run with. `startOff` says why Start scan is off. Every
+        `/security` route is 404 when the install has no security scans. A
+        repository whose own path ends in `/security` keeps its own routes.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The tab.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/findings:
+    get:
+      operationId: listSecurityFindings
+      tags: [Repositories]
+      summary: The repository's security findings
+      description: |
+        For anyone who can see the repository. Open first, then by severity,
+        file and line, at most 1000 (`truncated` when more matched). A
+        filter left out matches every finding.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - name: state
+          in: query
+          description: Only findings in this state. Another value is 400.
+          schema: {type: string, enum: [open, dismissed, fixed]}
+        - name: severity
+          in: query
+          description: Only findings of this severity. Another value is 400.
+          schema: {type: string, enum: [critical, high, medium, low]}
+        - name: rule
+          in: query
+          description: Only findings of this rule, the skill's attack class (such as `injection`). At most 200 characters.
+          schema: {type: string, maxLength: 200}
+        - name: q
+          in: query
+          description: Text in the file or the title, ignoring case. At most 200 characters.
+          schema: {type: string, maxLength: 200}
+      responses:
+        '200':
+          description: The findings.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityFindingsView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/findings/{id}:
+    get:
+      operationId: getSecurityFinding
+      tags: [Repositories]
+      summary: A security finding
+      description: |
+        For anyone who can see the repository. A finding of another
+        repository is 404, as one that does not exist.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/SecurityFindingId'
+      responses:
+        '200':
+          description: The finding, its history and its link to the code.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityFindingView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/findings/{id}/dismiss:
+    post:
+      operationId: dismissSecurityFinding
+      tags: [Repositories]
+      summary: Dismiss a security finding
+      description: |
+        For maintainers and admins of the repository (403 otherwise), config
+        repositories included. Only an open finding is dismissed; one that is
+        dismissed already changes nothing (200, no audit entry), and a fixed
+        one is 409. A later scan keeps it dismissed. Audited as
+        `security_finding_dismissed` (`fingerprint=<first 12> reason=<reason>`).
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/SecurityFindingId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SecurityDismissRequest'}
+      responses:
+        '200':
+          description: The finding now.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityFindingView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/findings/{id}/restore:
+    post:
+      operationId: restoreSecurityFinding
+      tags: [Repositories]
+      summary: Restore a dismissed security finding
+      description: |
+        For maintainers and admins of the repository (403 otherwise). The
+        finding is open again and its dismissal is cleared. One that is open
+        already changes nothing (200, no audit entry); a fixed one is 409. The
+        body is not read. Audited as `security_finding_restored`
+        (`fingerprint=<first 12>`).
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/SecurityFindingId'
+      responses:
+        '200':
+          description: The finding now.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityFindingView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/scans:
+    get:
+      operationId: listSecurityScans
+      tags: [Repositories]
+      summary: The repository's security scans
+      description: For anyone who can see the repository. The newest 100, newest first.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The scans.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityScansView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: startSecurityScan
+      tags: [Repositories]
+      summary: Start a security scan
+      description: |
+        Start scan, for maintainers and admins of the repository (403
+        otherwise), config repositories included. A paused repository is 409
+        (`the repository is paused`) and nothing is asked of the engine. The
+        scan is queued on the default branch's newest commit, read from the
+        platform now. An admin's scan goes past the quotas and the admin
+        limits, as an admin's Start review does, but not a team's own limit.
+        409 when scans are off (the Helm values give the scan Jobs no way
+        out), the repository is not switched on, a scan is queued or running
+        (`scan` is that scan), a quota or a limit stops every model of the
+        chain, a team's own limit stops an admin, or the platform did not give
+        the branch or its commit. The body is not read. Only an accepted start
+        is audited: `security_scan_started` (`scan=<n> model=<entry name>`,
+        the entry its chain gives now, `(none)` when none can be used).
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '202':
+          description: The scan is queued.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityScanBody'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The scan can't start; `error` says why, and `scan` is the active scan when one is queued or running.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityConflictBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/scans/{id}:
+    get:
+      operationId: getSecurityScan
+      tags: [Repositories]
+      summary: A security scan
+      description: |
+        For anyone who can see the repository. The scan, its Job's log, and
+        the findings it found new and those it fixed. A scan of another
+        repository is 404.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/SecurityScanId'
+      responses:
+        '200':
+          description: The scan.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityScanDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/scans/{id}/sarif:
+    get:
+      operationId: downloadSecurityScanSarif
+      tags: [Repositories]
+      summary: Download a security scan's SARIF
+      description: |
+        For anyone who can see the repository. The SARIF 2.1.0 log the scan
+        sent, as a file to save (`Content-Disposition: attachment;
+        filename="<last path part>-scan-<n>.sarif"`). Only the last 10 scans
+        of a repository, and its last complete scan, keep it: 404 for the
+        others (`hasSarif` is false), and for a scan of another repository.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/SecurityScanId'
+      responses:
+        '200':
+          description: The SARIF.
+          headers:
+            Content-Disposition:
+              description: '`attachment; filename="<last path part>-scan-<n>.sarif"`.'
+              schema: {type: string}
+          content:
+            application/sarif+json:
+              schema: {type: object}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/scans/{id}/cancel:
+    post:
+      operationId: cancelSecurityScan
+      tags: [Repositories]
+      summary: Cancel a security scan
+      description: |
+        For maintainers and admins of the repository (403 otherwise). A queued
+        scan ends now, partial, reason `cancelled`. A running scan's Job gets
+        a stop signal and sends what it has, so it ends partial, `cancelled`.
+        409, with the scan, when it has ended. The body is not read. Audited
+        as `security_scan_cancelled` (`scan=<n>`).
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/SecurityScanId'
+      responses:
+        '200':
+          description: The scan now.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityScanBody'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The scan has ended; `scan` is it.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecurityConflictBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/settings:
+    get:
+      operationId: getSecurityScanSettings
+      tags: [Repositories]
+      summary: The repository's security scan settings
+      description: For anyone who can see the repository. Null is the default.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The settings.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecuritySettingsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putSecurityScanSettings
+      tags: [Repositories]
+      summary: Change the repository's security scan settings
+      description: |
+        For maintainers and admins of the repository (403 otherwise), config
+        repositories included. It replaces all 4 settings: null, or a field
+        left out, is the default. A value out of its range is 400 and saves
+        nothing. The changed settings are one `settings_updated` audit entry
+        (`security.<field>=<value>`, `default` for null); no change writes
+        nothing.
+      x-pergent-access: session
+      x-pergent-pattern: PUT /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SecuritySettingsRequest'}
+      responses:
+        '200':
+          description: The settings saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SecuritySettingsView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/chain:
+    get:
+      operationId: getSecurityScanChain
+      tags: [Repositories]
+      summary: The repository's security scan chain
+      description: |
+        Anyone who sees the repository. The chain a scan picks its model from:
+        the repository's own scan chain (`source` `repository`), else the
+        repository's model chain in effect (`source` `chain`, with that
+        chain's `team`). Read-only unless the session is an admin or a
+        maintainer of the owner team.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The chain.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putSecurityScanChain
+      tags: [Repositories]
+      summary: Give the repository its own security scan chain
+      description: |
+        Who may change the repository's model chain, with the same entries and
+        the same 400s (no entry is 400 too). Its scans use it in place of the
+        model chain. Audited as `chain_changed` (`security scan: <names>`).
+      x-pergent-access: session
+      x-pergent-pattern: PUT /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChainRequest'}
+      responses:
+        '200':
+          description: The chain saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/security/chain/reset:
+    post:
+      operationId: resetSecurityScanChain
+      tags: [Repositories]
+      summary: Drop the repository's own security scan chain
+      description: |
+        Who may save it. Its scans use the repository's model chain again.
+        Audited as `chain_changed` (`security scan: inherit`).
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The chain in effect now.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChainView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/past-dismissals/stop:
     post:
@@ -5214,6 +5764,10 @@ components:
       type: http
       scheme: bearer
       description: The readiness scan Job's one-time token. It opens this scan's result route only.
+    securityScanToken:
+      type: http
+      scheme: bearer
+      description: The security scan Job's one-time token. It opens this scan's source and result routes only, while the scan runs.
     graphBuildToken:
       type: http
       scheme: bearer
@@ -5310,6 +5864,18 @@ components:
         stands for the part of the path between the instance and the end that
         names the operation.
       schema: {type: string}
+    SecurityFindingId:
+      name: id
+      in: path
+      required: true
+      description: The finding's ID.
+      schema: {type: integer, format: int64, minimum: 1}
+    SecurityScanId:
+      name: id
+      in: path
+      required: true
+      description: The scan's ID (a UUID).
+      schema: {type: string, format: uuid}
     Number:
       name: number
       in: path
@@ -6430,6 +6996,46 @@ components:
       properties:
         error: {type: string}
         waitSeconds: {type: integer}
+    SecurityScanBody:
+      type: object
+      required: [scan]
+      properties:
+        scan: {$ref: '#/components/schemas/SecurityScanView'}
+    SecurityDismissRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          enum: [false_positive, wont_fix, used_in_tests, mitigated, acceptable_risk]
+        comment:
+          type: string
+          maxLength: 1000
+          description: At most 1000 characters; optional.
+    SecuritySettingsRequest:
+      type: object
+      additionalProperties: false
+      description: Every field null, or left out, is the default.
+      properties:
+        maxSteps:
+          type: [integer, 'null']
+          minimum: 5
+          maximum: 1000
+          description: The main agent's step limit; null is the skill's own (600).
+        subagentMaxSteps:
+          type: [integer, 'null']
+          minimum: 5
+          maximum: 300
+          description: Each sub-agent's step limit; null is the skill's own (100).
+        timeoutSeconds:
+          type: [integer, 'null']
+          minimum: 600
+          maximum: 21600
+          description: The scan timeout, 10 minutes to 6 hours; null is 3 hours.
+        findingsInReviews:
+          type: [boolean, 'null']
+          description: Reviews get the open findings of the files a change touches; null is off.
     # ---------------------------------------------- schemas named after Go types
     # The dashboard's view types are in internal/dashboard (view.go,
     # dashboard.go); `readiness.`, `result.`, `skillfetch.` and `store.` are
@@ -7079,8 +7685,12 @@ components:
           description: The chain asked for.
         source:
           type: string
-          enum: [repository, team, global]
-          description: Where the entries come from. A repository that inherits shows its owner team's chain, or the global one.
+          enum: [repository, team, global, chain]
+          description: >-
+            Where the entries come from. A repository that inherits shows its
+            owner team's chain, or the global one. A security scan chain is
+            `repository` when the repository has its own, else `chain`: the
+            repository's model chain in effect.
         team:
           type: string
           description: The team of a team chain, or the owner team a repository's entries come from; empty otherwise.
@@ -8247,6 +8857,353 @@ components:
           type: [string, 'null']
           format: date-time
           description: Null until it ends.
+    SecurityView:
+      description: The Security tab.
+      type: object
+      required: [canStart, startOff, canManage, running, last, counts, start]
+      properties:
+        canStart:
+          type: boolean
+          description: The session is a maintainer or an admin, the repository is not paused, no scan is queued or running, and `startOff` is empty.
+        startOff:
+          type: string
+          description: Why Start scan is off ("" when it is on). Scans with no way out give the engine's text; a paused repository gives `the repository is paused`.
+        canManage:
+          type: boolean
+          description: The session may start, cancel, dismiss, restore and change the settings.
+        running:
+          oneOf:
+          - $ref: '#/components/schemas/SecurityScanView'
+          - type: 'null'
+          description: The queued or running scan; null when there is none.
+        last:
+          oneOf:
+          - $ref: '#/components/schemas/SecurityScanView'
+          - type: 'null'
+          description: The newest scan that ended; null when there is none.
+        counts: {$ref: '#/components/schemas/SecurityCountsView'}
+        start: {$ref: '#/components/schemas/SecurityStartView'}
+    SecurityCountsView:
+      description: The open findings by severity, and the open ones a person must check.
+      type: object
+      required: [critical, high, medium, low, needsValidation]
+      properties:
+        critical: {type: integer}
+        high: {type: integer}
+        medium: {type: integer}
+        low: {type: integer}
+        needsValidation: {type: integer}
+    SecurityStartView:
+      description: What Start scan's confirm box shows.
+      type: object
+      required: [model, maxSteps, subagentMaxSteps, stepsFromSkill, timeoutSeconds, lastTokens, lastSeconds]
+      properties:
+        model:
+          type: string
+          description: The name of the chain entry a scan would run on now; "" when none can be used.
+        maxSteps: {type: integer}
+        subagentMaxSteps: {type: integer}
+        stepsFromSkill:
+          type: boolean
+          description: No step limit is set, so both are the skill's own.
+        timeoutSeconds: {type: integer}
+        lastTokens:
+          type: [integer, 'null']
+          format: int64
+          description: The total tokens of the newest complete scan, as an estimate; null with none.
+        lastSeconds:
+          type: [integer, 'null']
+          format: int64
+          description: How long the newest complete scan ran; null with none.
+    SecurityScanView:
+      description: One security scan. Its texts are the model's or the platform's, text only.
+      type: object
+      required: [id, number, state, reason, startedBy, queuedAt, startedAt, finishedAt, durationSeconds, branch, commit,
+        model, skillName, skillCommit, skillUpdated, coverage, tokens, usageSource, newCount, fixedCount, hasSarif,
+        cancelRequested]
+      properties:
+        id: {type: string, format: uuid}
+        number:
+          type: integer
+          format: int64
+          description: The repository's scans count from 1.
+        state:
+          type: string
+          enum: [queued, running, complete, partial, failed]
+        reason:
+          type: string
+          description: Why a scan is partial or failed; `cancelled` for a cancelled one.
+        startedBy:
+          type: string
+          description: Who pressed Start scan.
+        queuedAt: {type: string, format: date-time}
+        startedAt: {type: [string, 'null'], format: date-time}
+        finishedAt: {type: [string, 'null'], format: date-time}
+        durationSeconds:
+          type: [integer, 'null']
+          format: int64
+          description: From start to end; null until it ends.
+        branch: {type: string}
+        commit: {type: string}
+        model:
+          type: string
+          description: The chain entry it ran on; "" before it started.
+        skillName: {type: string}
+        skillCommit: {type: string}
+        skillUpdated:
+          type: boolean
+          description: The skill changed since the last complete scan, so this scan fixed nothing.
+        coverage:
+          oneOf:
+          - $ref: '#/components/schemas/SecurityCoverageView'
+          - type: 'null'
+          description: Null when the scan did not report it.
+        tokens:
+          oneOf:
+          - $ref: '#/components/schemas/UsageTokensView'
+          - type: 'null'
+          description: Null until its usage is recorded.
+        usageSource:
+          type: string
+          description: '`stats`, or `stream` when the sub-agents'' tokens are missing; "" with no usage.'
+        newCount: {type: integer}
+        fixedCount: {type: integer}
+        hasSarif:
+          type: boolean
+          description: The scan still keeps its SARIF (the last 10 of a repository and its last complete one do).
+        cancelRequested:
+          type: boolean
+          description: A person cancelled the scan.
+    SecurityCoverageView:
+      description: How many of the planned parts the scan covered.
+      type: object
+      required: [done, planned]
+      properties:
+        done: {type: integer}
+        planned: {type: integer}
+    SecurityScansView:
+      description: The newest 100 scans, newest first.
+      type: object
+      required: [scans]
+      properties:
+        scans:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/SecurityScanView'}
+    SecurityScanDetailView:
+      description: A scan's page.
+      type: object
+      required: [scan, log, new, fixed]
+      properties:
+        scan: {$ref: '#/components/schemas/SecurityScanView'}
+        log:
+          type: string
+          description: The redacted tail of the scan Job's log; "" when none was kept.
+        new:
+          type: array
+          maxItems: 1000
+          description: The findings the scan found new, or found again after a fix.
+          items: {$ref: '#/components/schemas/SecurityFindingRowView'}
+        fixed:
+          type: array
+          maxItems: 1000
+          description: The findings the scan fixed.
+          items: {$ref: '#/components/schemas/SecurityFindingRowView'}
+    SecurityFindingRowView:
+      description: One finding in a list. Its texts are the model's, text only.
+      type: object
+      required: [id, state, severity, ruleId, cwe, title, file, startLine, needsValidation, firstSeenAt, firstScan]
+      properties:
+        id: {type: integer, format: int64}
+        state:
+          type: string
+          enum: [open, dismissed, fixed]
+        severity:
+          type: string
+          enum: [critical, high, medium, low]
+        ruleId:
+          type: string
+          description: The skill's attack class (such as `injection`), not a CWE.
+        cwe:
+          type: string
+          description: '`CWE-<n>` when a rule tag holds one; "" otherwise.'
+        title: {type: string}
+        file: {type: string}
+        startLine: {type: integer}
+        needsValidation:
+          type: boolean
+          description: The skill asks a person to check it (the Needs validation label).
+        firstSeenAt:
+          type: string
+          format: date-time
+          description: When the scan that found it first ended.
+        firstScan:
+          type: integer
+          format: int64
+          description: The number of the scan that found it first.
+    SecurityFindingsView:
+      description: The findings that match, at most 1000.
+      type: object
+      required: [findings, truncated]
+      properties:
+        findings:
+          type: array
+          maxItems: 1000
+          items: {$ref: '#/components/schemas/SecurityFindingRowView'}
+        truncated:
+          type: boolean
+          description: More findings matched than are listed.
+    SecurityFindingView:
+      description: A finding's page. Its texts are the model's, text only.
+      type: object
+      required: [finding, description, exploit, fixHint, confidence, tags, codeUrl, dismissal, history, canManage]
+      properties:
+        finding: {$ref: '#/components/schemas/SecurityFindingRowView'}
+        description: {type: string}
+        exploit: {type: string}
+        fixHint: {type: string}
+        confidence: {type: string}
+        tags:
+          type: array
+          items: {type: string}
+        codeUrl:
+          type: string
+          description: The http or https link to its line at the commit of the last scan that found it; "" when there is none.
+        dismissal:
+          oneOf:
+          - $ref: '#/components/schemas/SecurityDismissalView'
+          - type: 'null'
+          description: Null unless it is dismissed.
+        history:
+          type: array
+          description: What happened to it, oldest first.
+          items: {$ref: '#/components/schemas/SecurityEventView'}
+        canManage:
+          type: boolean
+          description: The session may dismiss or restore it.
+    SecurityDismissalView:
+      description: Why and by whom a finding is dismissed.
+      type: object
+      required: [reason, comment, by, at]
+      properties:
+        reason:
+          type: string
+          enum: [false_positive, wont_fix, used_in_tests, mitigated, acceptable_risk]
+        comment: {type: string}
+        by: {type: string}
+        at: {type: string, format: date-time}
+    SecurityEventView:
+      description: One thing that happened to a finding.
+      type: object
+      required: [kind, scan, actor, reason, comment, at]
+      properties:
+        kind:
+          type: string
+          enum: [found, reopened, fixed, dismissed, restored]
+        scan:
+          type: integer
+          format: int64
+          description: The number of the scan that found, found again or fixed it; 0 for a person's dismiss or restore.
+        actor:
+          type: string
+          description: Who dismissed or restored it; "" for a scan.
+        reason: {type: string, description: A dismissal's reason.}
+        comment: {type: string, description: A dismissal's comment.}
+        at: {type: string, format: date-time}
+    SecuritySettingsView:
+      description: A repository's scan settings; null is the default.
+      type: object
+      required: [maxSteps, subagentMaxSteps, timeoutSeconds, findingsInReviews, defaults, canEdit]
+      properties:
+        maxSteps: {type: [integer, 'null']}
+        subagentMaxSteps: {type: [integer, 'null']}
+        timeoutSeconds: {type: [integer, 'null']}
+        findingsInReviews:
+          type: boolean
+          description: Its reviews get the open findings of the files a change touches.
+        defaults: {$ref: '#/components/schemas/SecurityDefaultsView'}
+        canEdit:
+          type: boolean
+          description: The session may change them.
+    SecurityDefaultsView:
+      description: What a null scan setting means.
+      type: object
+      required: [maxSteps, subagentMaxSteps, timeoutSeconds]
+      properties:
+        maxSteps: {type: integer}
+        subagentMaxSteps: {type: integer}
+        timeoutSeconds: {type: integer}
+    SecurityConflictBody:
+      description: Why Start scan or Cancel was refused.
+      type: object
+      required: [error]
+      properties:
+        error: {type: string}
+        scan:
+          oneOf:
+          - $ref: '#/components/schemas/SecurityScanView'
+          - type: 'null'
+          description: The active scan when one is queued or running, or the scan that has ended; left out otherwise.
+    security.Envelope:
+      description: The body a security scan Job posts when the scan ends. Unknown fields are ignored.
+      type: object
+      properties:
+        kind: {type: string, description: '`security`.'}
+        status: {type: string, enum: [complete, partial, failed]}
+        reason: {type: string, description: Why a scan is partial or failed.}
+        commit: {type: string, description: The commit scanned (40 hex characters); it must be the scan's own.}
+        skill:
+          oneOf:
+          - $ref: '#/components/schemas/security.Skill'
+          - type: 'null'
+        usage: {$ref: '#/components/schemas/security.Usage'}
+        coverage:
+          oneOf:
+          - $ref: '#/components/schemas/security.Coverage'
+          - type: 'null'
+        state:
+          type: [object, 'null']
+          description: The skill's state files, by name, for the next scan.
+          additionalProperties: {type: string}
+        sarif:
+          type: object
+          description: A SARIF 2.1.0 log, at most 8 MiB.
+    security.Skill:
+      type: object
+      properties:
+        name: {type: string}
+        commit: {type: string}
+    security.Coverage:
+      type: object
+      properties:
+        done: {type: integer}
+        planned: {type: integer}
+    security.Usage:
+      type: object
+      properties:
+        source: {type: string, enum: [stats, stats_poll, stream]}
+        sessions: {type: integer}
+        subagents: {type: integer}
+        steps: {type: integer}
+        tokens: {$ref: '#/components/schemas/security.Tokens'}
+        models:
+          type: array
+          items: {$ref: '#/components/schemas/security.ModelUsage'}
+    security.ModelUsage:
+      type: object
+      properties:
+        provider: {type: string}
+        model: {type: string}
+        steps: {type: integer}
+        tokens: {$ref: '#/components/schemas/security.Tokens'}
+    security.Tokens:
+      type: object
+      properties:
+        input: {type: integer, format: int64}
+        output: {type: integer, format: int64}
+        reasoning: {type: integer, format: int64}
+        cache_read: {type: integer, format: int64}
+        cache_write: {type: integer, format: int64}
     SecretView:
       description: Whether a secret is set and when it last changed. The value is never sent.
       type: object

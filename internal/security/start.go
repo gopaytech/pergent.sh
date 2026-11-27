@@ -33,13 +33,16 @@ var (
 	ErrEnded = errors.New("the scan has already ended")
 )
 
+// TeamLimitFormat is the text of an admin's start that a team's own limit
+// refuses, with the team's name for %s. A review's Start review says the
+// same (the dashboard's msgTeamLimitUsedUp is this constant).
+const TeamLimitFormat = "every model of the chain is at the team's own limit: a maintainer of %s can raise it on the team page"
+
 // TeamLimitError refuses an admin's start: every model of the chain left is
 // at the limit Team set on it, which an admin does not go past.
 type TeamLimitError struct{ Team string }
 
-func (e *TeamLimitError) Error() string {
-	return fmt.Sprintf("every model of the chain is at the team's own limit: a maintainer of %s can raise it on the team page", e.Team)
-}
+func (e *TeamLimitError) Error() string { return fmt.Sprintf(TeamLimitFormat, e.Team) }
 
 // RefusedError refuses a start for Reason, such as a default branch the
 // platform did not give.

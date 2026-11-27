@@ -369,6 +369,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		// The engine queues the readiness scans (eng.Scans is on whenever
 		// the dashboard is) and rechecks them after a skill setting is saved.
 		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng, Graphs: eng,
+		// Start scan and Cancel on the Security tab.
+		SecurityScans: eng,
 		// Removing an API client ends its live reviews: their Jobs go.
 		DeleteJob: launcher.Delete,
 		// Send test callback goes the way a real callback does: the engine's

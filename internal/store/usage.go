@@ -355,6 +355,37 @@ func (s *Store) RunUsage(ctx context.Context, id string) (t TokenSum, found bool
 	return t, recorded != nil && *recorded, err
 }
 
+// RunUsages returns what each of the runs ids used, summed over its
+// recorded skills, by run ID. A run with no usage recorded, or a malformed
+// ID, is not in the map.
+func (s *Store) RunUsages(ctx context.Context, ids []string) (map[string]TokenSum, error) {
+	valid := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if validUUID(id) {
+			valid = append(valid, id)
+		}
+	}
+	out := map[string]TokenSum{}
+	if len(valid) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT run_id::text, `+tokenSumColumns+`
+		FROM run_usage WHERE run_id = ANY($1::uuid[]) GROUP BY run_id`, valid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var t TokenSum
+		if err := rows.Scan(append([]any{&id}, t.dests()...)...); err != nil {
+			return nil, err
+		}
+		out[id] = t
+	}
+	return out, rows.Err()
+}
+
 // ReviewCost is what one model used in a multi review: the sum of its
 // run_usage_by_model rows of one part ("reviewer" or "judge"), reviewer
 // number (0 for the judge), entry, and the run (RunID) or reviewer attempt

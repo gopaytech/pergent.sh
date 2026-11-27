@@ -92,6 +92,9 @@ func newDashboardE2E(t *testing.T, edit ...func(o *dashboard.Options)) *dashE2E 
 		// The readiness scans are the engine's; they run only when a test
 		// turns env.Engine.Scans on, as main does with the dashboard.
 		Readiness: env.Engine,
+		// Start scan and Cancel; scans start only when a test turns
+		// env.Engine.SecurityEgress on (secOn).
+		SecurityScans: env.Engine,
 	}
 	for _, f := range edit {
 		f(&opts)
@@ -103,6 +106,7 @@ func newDashboardE2E(t *testing.T, edit ...func(o *dashboard.Options)) *dashE2E 
 	mux := server.Routes(server.Deps{
 		Config: cfg, Instances: env.Engine.Instances, WebhookSecrets: env.Engine.WebhookSecrets, Store: env.Store,
 		Wake: env.Engine.Wake, Now: env.Now, Dashboard: d.Handler(), ReadinessScans: env.Engine,
+		SecurityScans: env.Engine, SecuritySources: env.Engine, SecuritySourceLimit: 1 << 20,
 		Background: &env.background, Log: env.Engine.Log,
 	})
 	srv := httptest.NewServer(mux)

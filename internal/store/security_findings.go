@@ -12,11 +12,46 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The severities a security finding may have, most severe first.
-var securitySeverities = []string{"critical", "high", "medium", "low"}
+// The severities a security finding may have (SecurityFinding.Severity).
+const (
+	SeverityCritical = "critical"
+	SeverityHigh     = "high"
+	SeverityMedium   = "medium"
+	SeverityLow      = "low"
+)
+
+// The severities, most severe first.
+var securitySeverities = []string{SeverityCritical, SeverityHigh, SeverityMedium, SeverityLow}
+
+// Where a security finding stands (SecurityFinding.State).
+const (
+	FindingOpen      = "open"
+	FindingDismissed = "dismissed"
+	FindingFixed     = "fixed"
+)
+
+// What happened to a security finding (SecurityFindingEvent.Kind).
+const (
+	FindingEventFound     = "found"
+	FindingEventReopened  = "reopened"
+	FindingEventFixed     = "fixed"
+	FindingEventDismissed = "dismissed"
+	FindingEventRestored  = "restored"
+)
 
 // The reasons a person may give to dismiss a security finding.
-var securityDismissReasons = []string{"false_positive", "wont_fix", "used_in_tests", "mitigated", "acceptable_risk"}
+const (
+	DismissFalsePositive  = "false_positive"
+	DismissWontFix        = "wont_fix"
+	DismissUsedInTests    = "used_in_tests"
+	DismissMitigated      = "mitigated"
+	DismissAcceptableRisk = "acceptable_risk"
+)
+
+// SecurityDismissReasons are the dismiss reasons, in the order a person
+// picks from.
+var SecurityDismissReasons = []string{DismissFalsePositive, DismissWontFix, DismissUsedInTests, DismissMitigated,
+	DismissAcceptableRisk}
 
 // securityOtherCommit is the reason of a scan whose result is for another
 // commit than the one it was started on: a result it cannot use.
@@ -57,8 +92,9 @@ type SecurityResult struct {
 
 // SecurityFinding is one finding of a repository, open, dismissed or fixed.
 // FirstScanID found it first, LastScanID found it last, and FixedScanID is
-// the complete scan that no longer found it (nil unless fixed). The dismiss
-// fields are set while it is dismissed.
+// the complete scan that no longer found it (nil unless fixed).
+// FirstScanNumber is the number of FirstScanID and FirstSeenAt the time it
+// ended. The dismiss fields are set while it is dismissed.
 type SecurityFinding struct {
 	ID                                                               int64
 	Instance, Project, Fingerprint, State, RuleID, CWE               string
@@ -68,17 +104,21 @@ type SecurityFinding struct {
 	NeedsValidation                                                  bool
 	FirstScanID, LastScanID                                          string
 	FixedScanID                                                      *string
+	FirstScanNumber                                                  int64
+	FirstSeenAt                                                      time.Time
 	DismissReason, DismissComment, DismissedBy                       string
 	DismissedAt                                                      *time.Time
 	UpdatedAt                                                        time.Time
 }
 
 // SecurityFindingEvent is one thing that happened to a finding: found,
-// reopened or fixed by the scan ScanID, or dismissed or restored by Actor
-// (ScanID empty). Reason and Comment are a dismissal's.
+// reopened or fixed by the scan ScanID (number ScanNumber), or dismissed or
+// restored by Actor (ScanID empty, ScanNumber 0). Reason and Comment are a
+// dismissal's.
 type SecurityFindingEvent struct {
 	Kind, ScanID, Actor, Reason, Comment string
 	At                                   time.Time
+	ScanNumber                           int64
 }
 
 // SecurityFindingFilter narrows SecurityFindings. An empty field matches
@@ -96,9 +136,14 @@ type SecurityCounts struct {
 	Critical, High, Medium, Low, NeedsValidation int
 }
 
+// findingColumns are a finding's columns, read FROM security_findings. The
+// first scan is read by its key, so a list costs one lookup per row.
 const findingColumns = `id, instance, project, fingerprint, state, rule_id, cwe, tags, severity, title, description,
 	exploit, fix_hint, confidence, file, start_line, needs_validation, first_scan_id::text, last_scan_id::text,
-	fixed_scan_id::text, COALESCE(dismiss_reason, ''), dismiss_comment, dismissed_by, dismissed_at, updated_at`
+	fixed_scan_id::text,
+	(SELECT fs.number FROM security_scans fs WHERE fs.id = security_findings.first_scan_id),
+	(SELECT COALESCE(fs.finished_at, fs.queued_at) FROM security_scans fs WHERE fs.id = security_findings.first_scan_id),
+	COALESCE(dismiss_reason, ''), dismiss_comment, dismissed_by, dismissed_at, updated_at`
 
 // findingRepo matches a repository's findings, the project ignoring case.
 const findingRepo = `instance = $1 AND lower(project) = lower($2)`
@@ -112,7 +157,8 @@ func scanFinding(row pgx.Row) (SecurityFinding, error) {
 	var f SecurityFinding
 	err := row.Scan(&f.ID, &f.Instance, &f.Project, &f.Fingerprint, &f.State, &f.RuleID, &f.CWE, &f.Tags, &f.Severity,
 		&f.Title, &f.Description, &f.Exploit, &f.FixHint, &f.Confidence, &f.File, &f.StartLine, &f.NeedsValidation,
-		&f.FirstScanID, &f.LastScanID, &f.FixedScanID, &f.DismissReason, &f.DismissComment, &f.DismissedBy,
+		&f.FirstScanID, &f.LastScanID, &f.FixedScanID, &f.FirstScanNumber, &f.FirstSeenAt, &f.DismissReason,
+		&f.DismissComment, &f.DismissedBy,
 		&f.DismissedAt, &f.UpdatedAt)
 	return f, err
 }
@@ -387,6 +433,29 @@ func (s *Store) SecurityFindings(ctx context.Context, instance, project string, 
 	return rows, false, nil
 }
 
+// SecurityScanFindings returns the findings of a repository that the scan
+// scanID found new (found or reopened) and those it fixed, each at most the
+// SecurityFindings maximum, in its order. A scan of another repository has
+// none. The project is matched ignoring case.
+func (s *Store) SecurityScanFindings(ctx context.Context, instance, project, scanID string) (found, fixed []SecurityFinding, err error) {
+	if !fetchID.MatchString(scanID) {
+		return nil, nil, nil
+	}
+	of := func(kinds ...string) ([]SecurityFinding, error) {
+		return s.queryFindings(ctx, `SELECT `+findingColumns+` FROM security_findings
+			WHERE `+findingRepo+` AND EXISTS (SELECT 1 FROM security_finding_events e
+				WHERE e.finding_id = security_findings.id AND e.scan_id = $3::uuid AND e.kind = ANY($4::text[]))
+			`+findingOrder+` LIMIT $5`, instance, project, scanID, kinds, securityFindingsMax)
+	}
+	if found, err = of(FindingEventFound, FindingEventReopened); err != nil {
+		return nil, nil, err
+	}
+	if fixed, err = of(FindingEventFixed); err != nil {
+		return nil, nil, err
+	}
+	return found, fixed, nil
+}
+
 // SecurityFinding returns a finding of a repository; found is false when the
 // repository has no finding id. The project is matched ignoring case.
 func (s *Store) SecurityFinding(ctx context.Context, instance, project string, id int64) (SecurityFinding, bool, error) {
@@ -404,8 +473,10 @@ func (s *Store) SecurityFinding(ctx context.Context, instance, project string, i
 // SecurityFindingEvents returns what happened to a finding, oldest first.
 // The caller has checked the finding is of a repository it may see.
 func (s *Store) SecurityFindingEvents(ctx context.Context, id int64) ([]SecurityFindingEvent, error) {
-	rows, err := s.pool.Query(ctx, `SELECT kind, COALESCE(scan_id::text, ''), actor, reason, comment, at
-		FROM security_finding_events WHERE finding_id = $1 ORDER BY at, id`, id)
+	rows, err := s.pool.Query(ctx, `SELECT e.kind, COALESCE(e.scan_id::text, ''), e.actor, e.reason, e.comment, e.at,
+			COALESCE(sc.number, 0)
+		FROM security_finding_events e LEFT JOIN security_scans sc ON sc.id = e.scan_id
+		WHERE e.finding_id = $1 ORDER BY e.at, e.id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +488,7 @@ func (s *Store) SecurityFindingEvents(ctx context.Context, id int64) ([]Security
 // dismissed event. changed is false when the repository has no open finding
 // id. An unknown reason is an error. The project is matched ignoring case.
 func (s *Store) DismissSecurityFinding(ctx context.Context, instance, project string, id int64, reason, comment, by string, now time.Time) (bool, error) {
-	if !slices.Contains(securityDismissReasons, reason) {
+	if !slices.Contains(SecurityDismissReasons, reason) {
 		return false, fmt.Errorf("store: %q is not a reason to dismiss a security finding", reason)
 	}
 	comment, by = cutText(comment), cutText(by)

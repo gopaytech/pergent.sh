@@ -300,7 +300,12 @@ func entryNames(refs []store.EntryRef, known map[store.EntryRef]instances.Model)
 // answered. It is every chain save's last step, after the rights and the
 // entries are checked.
 func (d *Dashboard) saveChain(ctx context.Context, w http.ResponseWriter, c store.Chain) bool {
-	err := d.Store.SaveChainOf(ctx, store.ChainA, c, d.now())
+	return d.saveChainOf(ctx, w, store.ChainA, c)
+}
+
+// saveChainOf is saveChain for the chains of set.
+func (d *Dashboard) saveChainOf(ctx context.Context, w http.ResponseWriter, set store.ChainSet, c store.Chain) bool {
+	err := d.Store.SaveChainOf(ctx, set, c, d.now())
 	switch {
 	case errors.Is(err, store.ErrChainTooLong):
 		writeError(w, http.StatusBadRequest, msgChainTooLong)
