@@ -4,7 +4,7 @@
 
 **Goal:** A person starts a whole-repository security scan in the console. pergent.sh runs it as a `pergent-security` Job behind its own egress rule, takes the SARIF result, keeps findings with a life cycle, counts the tokens in every usage page, quota and limit, and serves it all through the dashboard API.
 
-**Architecture:** A scan is a row of `security_scans` with its own small state machine, run by its own engine loop beside the readiness scans (never the review loop). Each scan also owns one hidden `runs` row of kind `scan` (no repository, never queued), only so its `run_usage` rows and the entry it used reach the existing usage, quota and limit SQL. Pure code (the envelope, SARIF, fingerprints, the review input) lives in a new package `internal/security`.
+**Architecture:** The scan pod never talks to the git host and holds no git token: it downloads the code of one commit from pergent.sh (`GET /security-scans/{id}/source`), which streams the platform's archive. A scan is a row of `security_scans` with its own small state machine, run by its own engine loop beside the readiness scans (never the review loop). Each scan also owns one hidden `runs` row of kind `scan` (no repository, never queued), only so its `run_usage` rows and the entry it used reach the existing usage, quota and limit SQL. Pure code (the envelope, SARIF, fingerprints, the review input) lives in a new package `internal/security`.
 
 **Tech Stack:** Go + pgx + Postgres 13, Kubernetes client-go (fake clientset in tests), Helm, `openapi.yaml` (checked by `internal/dashboard/openapi_test.go`).
 
@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - Manual start only, by a maintainer or an admin, on the default branch. No webhook, schedule, command or push starts a scan.
-- `securityJobEgress.cidrs` has **no default**. Without it **Start scan** is off, with the reason. A scan Job never falls under `jobEgress`.
+- `securityJobEgress.cidrs` has **no default** and is the LLM provider only: the docs and the Helm values say never to add the git host. Without it **Start scan** is off, with the reason. A scan Job never falls under `jobEgress`.
+- The scan pod has no clone container and no `GIT_TOKEN` anywhere. At Start, pergent.sh reads the default branch's newest commit through the platform API and stores it; the Job always gets `--head=<sha>` and downloads that commit's archive from pergent.sh, at most `security.max_source_bytes` (default 500 MiB). Git LFS files and submodules are not in the archive.
 - No `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` or lower-case forms, and no `PERGENT_SCAN_KEEP_PROXY`, in a scan Job, unless `security.proxy` is set.
 - `security.max_running` default 1. One queued or running scan per repository. A paused repository cannot start one.
 - Model: the first usable entry of the scan chain when the scan starts. No fallback during a scan.
@@ -25,7 +26,7 @@
 - Settings ranges: max steps (main) 5 to 1000, default from the skill (600); each sub-agent 5 to 300, default 100; timeout 10 min to 6 h, default 3 h; findings in reviews off by default.
 - Every string in a scan result that holds a secret pergent.sh knows is withheld before it is stored or shown.
 - Migration `0055_security_scan.sql`. It only adds; the previous release must still run on the migrated database.
-- New config keys (`jobs.security_image`, `security.max_running`, `security.proxy`) break a rollback: say so in `docs/upgrading.md` under `## Unreleased`. No release, no version bump, no tag.
+- New config keys (`jobs.security_image`, `security.max_running`, `security.proxy`, `security.max_source_bytes`) break a rollback: say so in `docs/upgrading.md` under `## Unreleased`. No release, no version bump, no tag.
 - Tests: locally only the tests you changed, by exact name: `go test ./internal/<pkg>/ -run '^(TestA|TestB)$'`, plus `go vet ./internal/<pkg>/`. Never `go test ./...`, a whole package, `make test` or a background run. The full run is CI only.
 - DB tests (store, engine, dashboard, callback) need `PERGENT_SH_TEST_DATABASE_URL` against an already-running Postgres on port 55432. **Never start Postgres, docker, orbctl or any container.** If it is down, the DB steps are proved on CI only: say so. No step runs a paid LLM call or a real Job.
 - Fast tests: table subtests on one `newStore`/`newTestEnv`, `t.Parallel()` unless a package variable is set, no `time.Sleep`, an injected clock.
@@ -55,7 +56,8 @@ Where the spec left it to the builder (Task 7 builds the command, Task 3 reads t
 
 | Item | pergent.sh assumes |
 |---|---|
-| Command | `pergent scan --repo-path=/work/repo --head=<commit> --prior=/in/prior.json --timeout=<d> --result-url=<url>`, plus `--max-turns=<n>` and `--max-subagent-turns=<n>` only when the repository sets them (absent: the manifest's 600 and 100). The Job deadline is at least `--timeout` + 2 min |
+| Command | `pergent scan --repo-path=/work/repo --head=<commit> --source-url=<callback_url>/security-scans/<id>/source --prior=/in/prior.json --timeout=<d> --result-url=<url>`, plus `--max-turns=<n>` and `--max-subagent-turns=<n>` only when the repository sets them (absent: the manifest's 600 and 100). `--repo-path` is an empty folder; env `PERGENT_SCAN_SOURCE_URL` holds the source URL too. The Job deadline is at least `--timeout` + 2 min |
+| Source | `GET /security-scans/{id}/source`, bearer = the result token, on the callback port. 200 streams the platform archive (`.tar.gz`) of the scan's commit; 401 for a missing or wrong token; 409 when the scan is not running; the stream stops at `security.max_source_bytes` and the scan fails with `the source is over the size limit` |
 | Prior | One JSON file `/in/prior.json`, one Secret item, at most 800 KiB: `{"state": {"<file>": "<text>"}, "dismissed": [{"fingerprint","rule","title","file","line","reason","comment"}]}`. `state` is the last **complete** scan's; `comment` at most 1000 bytes |
 | `usage` | `{"source": "stats"\|"stats_poll"\|"stream", "sessions": n, "subagents": n, "steps": n, "tokens": {input, output, reasoning, cache_read, cache_write}, "models": [{"provider", "model", "steps", "tokens": {the same 5 keys}}]}`. `stream` means sub-agent tokens are missing |
 | Skill and version | The envelope's `skill {name, commit}`; else `sarif.runs[0].tool.driver.name` and `.version` |
@@ -65,7 +67,7 @@ Where the spec left it to the builder (Task 7 builds the command, Task 3 reads t
 ## Review Focus
 
 1. **The last complete scan is older than the last 10 scans.** Its `state` must stay, or the next scan loses its prior. (Task 2, `TestSecurityRetentionKeepsLastComplete`.)
-2. **A result with more than 5000 findings, or 2 results with one fingerprint.** A capped complete scan must count as partial (nothing fixed), and a duplicate counts once. (Task 3 `TestReadSARIF`, `TestReadSARIFCap`; Task 9 `TestSecurityCappedIsPartial`.)
+2. **A large archive on a slow link.** The server's 60 s `WriteTimeout` would cut the source stream; the route must set its own write deadline, stop exactly at `security.max_source_bytes`, and fail the scan with `the source is over the size limit`. (Task 9 `TestSecuritySourceHandler`, `TestSecuritySourceLimit`.)
 3. **A cancel, then the Job's own partial post.** The post must still be taken, with reason `cancelled`; with no post, the sweep ends it partial `cancelled` after the grace. (Task 8 `TestSecuritySweep`; Task 9 `TestSecurityCancelledPost`.)
 4. **A scan's usage in review counts.** The carrier run and its `run_usage` rows must never show as a review, a merge request, a review metric or a cost-per-review sample, and the old release must not dispatch it. (Task 1 `TestSecurityCarrierInvisible`, `TestSecurityScanMigrationPreviousRelease`; Task 5 `TestScanUsageIsNoReview`.)
 5. **The NetworkPolicy union.** A scan pod must match only the security policy, never the jobs policy, or `jobEgress`'s `0.0.0.0/0` applies to it. (Task 11, the `ci.yml` chart check.)
@@ -86,8 +88,8 @@ Where the spec left it to the builder (Task 7 builds the command, Task 3 reads t
 - Produces (all in `internal/store`):
   - States `SecurityQueued`, `SecurityRunning`, `SecurityComplete`, `SecurityPartial`, `SecurityFailed` = `"queued"`, `"running"`, `"complete"`, `"partial"`, `"failed"`.
   - `type SecurityScan struct { ID, RunID string; Number int64; Instance, Project string; ProjectID int64; Branch, Commit, State, Reason, StartedBy string; PastQuota bool; QueuedAt time.Time; StartedAt, FinishedAt, Deadline, CancelRequestedAt *time.Time; JobName, Provider, Model, EntryName string; MaxSteps, SubagentMaxSteps *int; TimeoutSeconds int; TokenBudget *int64; SkillName, SkillCommit string; SkillUpdated bool; CoverageDone, CoveragePlanned *int; UsageSource string; NewCount, FixedCount int; HasSARIF bool }`
-  - `type SecurityScanRequest struct { Instance, Project string; ProjectID int64; StartedBy string; PastQuota bool; MaxSteps, SubagentMaxSteps *int; TimeoutSeconds int }`
-  - `type SecurityJobStart struct { Branch, Commit, JobName string; TokenHash []byte; Deadline time.Time; Entry RunEntry; Provider, Model string; TokenBudget *int64 }`
+  - `type SecurityScanRequest struct { Instance, Project string; ProjectID int64; Branch, Commit, StartedBy string; PastQuota bool; MaxSteps, SubagentMaxSteps *int; TimeoutSeconds int }`
+  - `type SecurityJobStart struct { JobName string; TokenHash []byte; Deadline time.Time; Entry RunEntry; Provider, Model string; TokenBudget *int64 }`
   - `var ErrSecurityScanBusy, ErrSecurityScanNotFound error`
   - `func (s *Store) QueueSecurityScan(ctx context.Context, q SecurityScanRequest, now time.Time) (SecurityScan, error)`: one tx inserts the carrier run (kind `scan`, instance `''`, project_id 0, `mr_iid` = `nextval('security_scan_numbers')`, head_sha `''`, state `superseded`, `usage_recorded` true) and the scan (`Number` = the repository's last + 1). Busy: `ErrSecurityScanBusy` with the active scan.
   - `func (s *Store) ClaimSecurityScan(ctx context.Context, limit int, now, deadline time.Time) (SecurityScan, bool, error)`: the oldest queued scan, only while fewer than `limit` run.
@@ -136,7 +138,7 @@ Expected: FAIL (undefined). With Postgres down: CI only.
 - Consumes: Task 1's tables and `SecurityScan`.
 - Produces:
   - `type SecurityFindingInput struct { Fingerprint, RuleID, CWE string; Tags []string; Severity, Title, Description, Exploit, FixHint, Confidence, File string; StartLine int; NeedsValidation bool }` (no end line: the skill sends none)
-  - `type SecurityResult struct { Status, Reason, Commit, UsageSource string; CoverageDone, CoveragePlanned *int; State map[string]string; SARIF []byte; SkillName, SkillCommit string; Findings []SecurityFindingInput }` (`Commit` replaces the scan's commit; a mismatch with the launch commit is logged)
+  - `type SecurityResult struct { Status, Reason, Commit, UsageSource string; CoverageDone, CoveragePlanned *int; State map[string]string; SARIF []byte; SkillName, SkillCommit string; Findings []SecurityFindingInput }` (`Commit` must equal the scan's stored commit; another one is an unusable result)
   - `func (s *Store) FinishSecurityScan(ctx context.Context, id string, hash []byte, res SecurityResult, now time.Time) (bool, error)`: false when the scan is not running (or the hash, when not nil, is not its token). One tx.
   - `type SecurityFinding struct { ID int64; Instance, Project, Fingerprint, State, RuleID, CWE string; Tags []string; Severity, Title, Description, Exploit, FixHint, Confidence, File string; StartLine int; NeedsValidation bool; FirstScanID, LastScanID string; FixedScanID *string; DismissReason, DismissComment, DismissedBy string; DismissedAt *time.Time; UpdatedAt time.Time }`
   - `type SecurityFindingEvent struct { Kind, ScanID, Actor, Reason, Comment string; At time.Time }`
@@ -234,12 +236,12 @@ Expected: FAIL (package missing).
 **Interfaces:**
 - Produces:
   - `const defaultSecurityImage = "ghcr.io/gopaytech/pergent-security:<the tag of defaultImage>"`; `config_test.go` pins that both tags are equal.
-  - `type Security struct { MaxRunning int; Proxy string }`, `Config.Security`; default `MaxRunning` 1; `Validate`: `security.max_running` 1 to 20; `security.proxy` empty or an `http`/`https` URL with a host and no user info.
+  - `type Security struct { MaxRunning int; Proxy string; MaxSourceBytes int64 }`, `Config.Security`; default `MaxRunning` 1, `MaxSourceBytes` 500 MiB (`524288000`); `Validate`: `security.max_running` 1 to 20; `security.max_source_bytes` 1 MiB to 10 GiB; `security.proxy` empty or an `http`/`https` URL with a host and no user info.
   - The env var `PERGENT_SH_SECURITY_EGRESS`: `true` means the chart set `securityJobEgress.cidrs`. `Engine.SecurityEgress bool` (Task 8 reads it; the dashboard asks the engine's `StartOff`).
 
-- [ ] **Step 1: Write the failing tests**: `TestSecurityConfigDefaults` (no key: image `defaultSecurityImage`, `MaxRunning` 1, `Proxy ""`), `TestSecurityConfigValidate` (table: `max_running: 0` and `21` refused; proxy `ftp://p:3128`, `http://u:p@p:3128` and `p:3128` refused; `http://proxy.example.com:3128` taken), `TestSecurityImageTagMatchesReviewImage`.
+- [ ] **Step 1: Write the failing tests**: `TestSecurityConfigDefaults` (no key: image `defaultSecurityImage`, `MaxRunning` 1, `Proxy ""`, `MaxSourceBytes` 524288000), `TestSecurityConfigValidate` (table: `max_running: 0` and `21` refused; `max_source_bytes: 0` and 11 GiB refused; proxy `ftp://p:3128`, `http://u:p@p:3128` and `p:3128` refused; `http://proxy.example.com:3128` taken), `TestSecurityImageTagMatchesReviewImage`.
 - [ ] **Step 2: Run them and see them fail**: `go test -count=1 ./internal/config/ -run '^(TestSecurityConfigDefaults|TestSecurityConfigValidate|TestSecurityImageTagMatchesReviewImage)$'`
-- [ ] **Step 3: Implement**, and add the 3 keys and the env var to `docs/reference/configuration.md`.
+- [ ] **Step 3: Implement**, and add the 4 keys and the env var to `docs/reference/configuration.md`.
 - [ ] **Step 4: Run the tests and see them pass**; `go vet ./internal/config/ ./cmd/pergent-sh/`.
 - [ ] **Step 5: Commit** `feat(config): security image, max running and proxy`
 
@@ -307,24 +309,24 @@ Expected: FAIL (package missing).
 **Interfaces:**
 - Produces:
   - `const LabelSecurityScan = "pergent.sh/security-scan"` (the chart selects on it).
-  - `type SecurityJobParams struct { Name, Namespace, ScanID, CheckoutImage, Image string; RepoURL, GitUsername, Branch, Commit, ResultURL string; LLM config.LLM; Timeout, Deadline time.Duration; MaxSteps, SubagentMaxSteps *int; TokenBudget *int64; Proxy string; Prior []byte; Resources corev1.ResourceRequirements; WorkSize resource.Quantity }`
+  - `type SecurityJobParams struct { Name, Namespace, ScanID, Image string; Commit, SourceURL, ResultURL string; LLM config.LLM; Timeout, Deadline time.Duration; MaxSteps, SubagentMaxSteps *int; TokenBudget *int64; Proxy string; Prior []byte; Resources corev1.ResourceRequirements; WorkSize resource.Quantity }`
   - `func SecurityJobName(scanID string) string`: `"pergent-security-"` + the first 12 hex characters.
-  - `func BuildSecurityJob(p SecurityJobParams) *batchv1.Job`; `func BuildSecuritySecret(p SecurityJobParams, owner *batchv1.Job, gitToken, llmKey, resultToken string) *corev1.Secret`
-  - `func (l *Launcher) LaunchSecurity(ctx context.Context, p SecurityJobParams, gitToken, llmKey, resultToken string) error`: refuses a repository URL with credentials and a `Prior` over `security.MaxPriorBytes`; then `launchWithSecret`.
-  - `func (l *Launcher) SecurityFailure(ctx context.Context, name string) (string, error)`: `ScanFailure`'s reading (`kube/scan.go:226-250`) with the scan's own texts: `the repository is too large to clone (the scan has <work size> of disk)`, `the scan ran out of memory`, `the scan took longer than its timeout`, `the scan Job ended without a result`.
+  - `func BuildSecurityJob(p SecurityJobParams) *batchv1.Job`; `func BuildSecuritySecret(p SecurityJobParams, owner *batchv1.Job, llmKey, resultToken string) *corev1.Secret` (keys `llm-api-key`, `result-token`, `prior`; never `git-token`)
+  - `func (l *Launcher) LaunchSecurity(ctx context.Context, p SecurityJobParams, llmKey, resultToken string) error`: refuses a `Commit` that is not a full SHA and a `Prior` over `security.MaxPriorBytes`; then `launchWithSecret`.
+  - `func (l *Launcher) SecurityFailure(ctx context.Context, name string) (string, error)`: `ScanFailure`'s reading (`kube/scan.go:226-250`) with the scan's own texts: `the repository is too large for the scan's disk (<work size>)`, `the scan ran out of memory`, `the scan took longer than its timeout`, `the scan Job ended without a result`.
 
 Shape:
 - Pod and Job labels: `app.kubernetes.io/managed-by: pergent-sh` and `LabelSecurityScan: <scan id>`.
-- Init container `checkout` (`CheckoutImage`, the review image) runs `scan.sh` (the readiness clone at one commit) with `GIT_TOKEN` from the Secret; the main container never gets it.
-- Main container `pergent` (`Image`) runs the command in "Interface with pergent" (`--head` = `Commit`; `--prior` only with a `Prior`), with `OPENCODE_*`, `OPENCODE_API_KEY` (key `llm-api-key`) and `PERGENT_RESULT_TOKEN` (key `result-token`) from the Secret, so `JobSecrets` and the log capture work as for a review. `PERGENT_TOKEN_BUDGET` only when set.
-- `Proxy` set: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy` on both containers, `NO_PROXY`/`no_proxy` = the result URL's host, and `PERGENT_SCAN_KEEP_PROXY=true` on the main container. Empty: no env name ending in `PROXY` or `proxy`.
+- No init container and no clone: no container gets `GIT_TOKEN`, and the Secret has no git token. `--repo-path=/work/repo` is its own empty `emptyDir`; the work volume is at `/work`.
+- One container `pergent` (`Image`) runs the command in "Interface with pergent" (`--head` = `Commit`, `--source-url` and `PERGENT_SCAN_SOURCE_URL` = `SourceURL`; `--prior` only with a `Prior`), with `OPENCODE_*`, `OPENCODE_API_KEY` (key `llm-api-key`) and `PERGENT_RESULT_TOKEN` (key `result-token`) from the Secret, so `JobSecrets` and the log capture work as for a review. `PERGENT_TOKEN_BUDGET` only when set.
+- `Proxy` set: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy` `NO_PROXY`/`no_proxy` = the callback host (the source and the result go to pergent.sh, never through the proxy), and `PERGENT_SCAN_KEEP_PROXY=true`. Empty: no env name ending in `PROXY` or `proxy`.
 - `/in/prior.json` from one Secret item (key `prior`). `lockedDown()` security context, `workVolume(WorkSize)`, `ActiveDeadlineSeconds` = `Deadline`, `TerminationGracePeriodSeconds` 60 (time to post a partial), `BackoffLimit` 0, `TTLSecondsAfterFinished` 3600, no service account token, no service links.
 
 - [ ] **Step 1: Write the failing tests** (no DB, fake clientset as `scan_test.go` does):
   - `TestSecurityJobName`.
-  - `TestBuildSecurityJob`: table — the args with and without step limits, `--head` and `--prior=/in/prior.json` only with a prior; `PERGENT_TOKEN_BUDGET` present only with a budget; the git token only in `checkout`; the labels; the deadline and grace.
+  - `TestBuildSecurityJob`: table — the args with and without step limits, `--head` and `--prior=/in/prior.json` only with a prior; `PERGENT_TOKEN_BUDGET` present only with a budget; `--source-url` and its env; one container only, no env or Secret key holding a git token; the labels; the deadline and grace.
   - `TestSecurityJobNoProxy`: no env var whose name ends in `PROXY` (any case) in any container; and no `PERGENT_SCAN_KEEP_PROXY`; with `Proxy` set, the 4 proxy names, `NO_PROXY` with the callback host and `PERGENT_SCAN_KEEP_PROXY=true`.
-  - `TestLaunchSecurityRefuses`: a URL with user info; a `Prior` over 800 KiB.
+  - `TestLaunchSecurityRefuses`: a short `Commit`; a `Prior` over 800 KiB.
   - `TestLaunchSecurityCleansUp`: a Secret create that fails deletes the Job.
   - `TestSecurityFailure`: table on fake Jobs — evicted for storage, OOMKilled, `DeadlineExceeded`, gone; each gives its text.
 - [ ] **Step 2: Run them and see them fail**: `go test -count=1 ./internal/kube/ -run '^(TestSecurityJobName|TestBuildSecurityJob|TestSecurityJobNoProxy|TestLaunchSecurityRefuses|TestLaunchSecurityCleansUp|TestSecurityFailure)$'`
@@ -342,11 +344,11 @@ Shape:
 - Test: `internal/engine/security_test.go`
 
 **Interfaces:**
-- Consumes: Tasks 1, 2, 4, 6, 7; `e.graphTarget(ctx, instance, project, true)` for branch, commit, URL and token; `chain.Resolve`, `pastAdmin` (`engine/chain.go:69`).
+- Consumes: Tasks 1, 2, 4, 6, 7; `e.graphTarget(ctx, instance, project, false)` (`engine/graphs.go:182`; no token) for the branch and its newest commit at Start; `chain.Resolve`, `pastAdmin` (`engine/chain.go:69`).
 - Produces:
   - Fields: `Engine.SecurityEgress bool`, `Engine.SecurityImage string` (from `cfg.Jobs.SecurityImage`).
   - In `internal/security` (the dashboard must not import the engine: the engine's tests import the dashboard), `start.go`: errors `ErrOff` (`Start scan is off: an admin must set securityJobEgress.cidrs in the Helm values first`), `ErrPaused` (`the repository is paused`), `ErrBusy`, `ErrQuota` (`the monthly token quota is used up`), `type TeamLimitError struct{ Team string }` (its `Error()` is the review start's team-limit 409 text); `type Start struct { Instance, Project, Actor string; Admin bool }`. Plan 2's Task 1 maps them to answers.
-  - `func (e *Engine) RequestSecurityScan(ctx context.Context, s security.Start) (store.SecurityScan, error)`: `ErrBusy` comes with the active scan; egress, then `settings().GetAny` (paused, not on), then the quota rules of `actions.refusal` / `adminRefusal` (`actions/actions.go:185-243`) on `chain.LoadScan`'s input: a used-up repository quota refuses a non-admin; `chain.Resolve` with the instance quota set; a hold (or a used-up instance quota and no entry) refuses a non-admin; an admin resolves past `PastAdminLimits`, and a hold left after it is the team-limit error. Then `QueueSecurityScan` with the repository's settings, then wake.
+  - `func (e *Engine) RequestSecurityScan(ctx context.Context, s security.Start) (store.SecurityScan, error)`: `ErrBusy` comes with the active scan; egress, then `settings().GetAny` (paused, not on), then the quota rules of `actions.refusal` / `adminRefusal` (`actions/actions.go:185-243`) on `chain.LoadScan`'s input: a used-up repository quota refuses a non-admin; `chain.Resolve` with the instance quota set; a hold (or a used-up instance quota and no entry) refuses a non-admin; an admin resolves past `PastAdminLimits`, and a hold left after it is the team-limit error. Then the default branch and its newest commit (`graphTarget`, with no token; a failure refuses the start with its reason), then `QueueSecurityScan` with them and the repository's settings, then wake.
   - `func (e *Engine) StartOff() string`: the reason Start scan is off, or `""`.
   - `func (e *Engine) CancelSecurityScan(ctx context.Context, instance, project, id string) (store.SecurityScan, error)`
   - `func (e *Engine) RunSecurityScans(ctx context.Context)`: the readiness loop shape (`engine/readiness.go:132-175`): launch on a wake and every `securityPassInterval` (10 s), sweep every `securitySweepInterval` (1 min). Both are package variables.
@@ -356,7 +358,7 @@ Launch (`startSecurityScan`), each stop fails the scan with its reason:
 1. `ClaimSecurityScan(ctx, e.Config.Security.MaxRunning, now, now.Add(securityLaunchTimeout+time.Minute))`: the deadline until the Job exists.
 2. The repository again: gone or paused fails it. The chain (`LoadScan`) and `chain.Resolve`; an admin scan with a hold resolves with `pastAdmin`; no entry: `no model of the chain can be used`.
 3. `quota.ScanBudget`; `left <= 0` while limited: `the monthly token quota is used up`.
-4. Target, the prior file (`security.BuildPrior` of `LastCompleteSecurityState` and `DismissedSecurityFindings`; none when both are empty), a token (`mintToken`), `StartSecurityJob`, then `LaunchSecurity`. `ResultURL` = `callback_url` + `/security-scans/<id>/result`. `Deadline` = `kube.Deadline(timeout, kube.CloneAllowance(project.CloneSeconds, 1)) + securityDeadlineGrace`.
+4. The prior file (`security.BuildPrior` of `LastCompleteSecurityState` and `DismissedSecurityFindings`; none when both are empty), a token (`mintToken`), `StartSecurityJob`, then `LaunchSecurity`. `ResultURL` = `callback_url` + `/security-scans/<id>/result`, `SourceURL` = `callback_url` + `/security-scans/<id>/source`. `Deadline` = `timeout + securityDeadlineGrace` (no clone time: the download is part of pergent's run).
 5. Audit nothing here (the dashboard audits the start).
 
 Sweep: a scan with no Job past its deadline fails `the scan stopped before its Job started; start it again`; a Job that failed or is gone fails with `SecurityFailure`'s text; past the deadline with no post: `the scan took longer than its timeout`, and the Job is deleted; a cancel with no post after `securityCancelGrace` ends `partial`, reason `cancelled`. Finished scans within `logWindow` get their Job log once into the carrier run's `run_logs` (`captureJobLog` with a `jobLog` whose key is the scan ID).
@@ -365,28 +367,30 @@ Cancel: maintainers and admins (the dashboard checks); records `cancel_requested
 
 - [ ] **Step 1: Write the failing tests** on one `newTestEnv` per test, fake clock, the kube fake clientset, no real Job:
   - `TestSecurityStartOffWithoutEgress`: `RequestSecurityScan` is `security.ErrOff`; `StartOff` gives the text above.
-  - `TestSecurityStartRefusals`: table on one env — paused repository; a second start (busy, with the scan); a used-up repository quota for a maintainer (`security.ErrQuota`) and the same for an admin (queued, `PastQuota` true); a team's own limit used up for an admin (`*security.TeamLimitError`).
+  - `TestSecurityStartReadsCommit`: Start stores the fake platform's default branch and head commit; no platform call happens at launch.
+  - `TestSecurityStartRefusals`: table on one env — paused repository; a default branch the platform can't read; a second start (busy, with the scan); a used-up repository quota for a maintainer (`security.ErrQuota`) and the same for an admin (queued, `PastQuota` true); a team's own limit used up for an admin (`*security.TeamLimitError`).
   - `TestSecurityLaunchCap`: `security.max_running` 1, 2 repositories queued: one Job after a pass; the second after the first finishes.
-  - `TestSecurityLaunchJob`: the Job has the security image, the label, the chosen entry's model, `PERGENT_TOKEN_BUDGET` = the smallest left of a repository quota and a model limit, `--head` = the target commit, and `/in/prior.json` with the last complete scan's state and the dismissed findings.
+  - `TestSecurityLaunchJob`: the Job has the security image, the label, the chosen entry's model, `PERGENT_TOKEN_BUDGET` = the smallest left of a repository quota and a model limit, `--head` = the target commit, and `/in/prior.json` with the last complete scan's state and the dismissed findings, and `--head` = the commit stored at Start.
   - `TestSecurityLaunchNoBudgetWithoutLimits`: no quota and no limit → no `PERGENT_TOKEN_BUDGET`.
   - `TestSecurityNoFallback`: entry 1 has a live quota mark at launch → the Job runs on entry 2; after a failed result, no new scan or Job exists.
   - `TestSecuritySweep`: table — no Job past the deadline; a failed Job; past the deadline (Job deleted); cancel with no post after the grace → `partial`, `cancelled`.
   - `TestSecurityCancel`: a running scan's Job is deleted and `CancelRequestedAt` set; a queued one ends `partial` at once; a finished one is a conflict.
   - `TestSecurityRemoveCancels`: `removeProject` cancels the repository's running scan and keeps its rows.
-- [ ] **Step 2: Run them and see them fail**: `PERGENT_SH_TEST_DATABASE_URL=... go test -count=1 ./internal/engine/ -run '^(TestSecurityStartOffWithoutEgress|TestSecurityStartRefusals|TestSecurityLaunchCap|TestSecurityLaunchJob|TestSecurityLaunchNoBudgetWithoutLimits|TestSecurityNoFallback|TestSecuritySweep|TestSecurityCancel|TestSecurityRemoveCancels)$'`
+- [ ] **Step 2: Run them and see them fail**: `PERGENT_SH_TEST_DATABASE_URL=... go test -count=1 ./internal/engine/ -run '^(TestSecurityStartOffWithoutEgress|TestSecurityStartReadsCommit|TestSecurityStartRefusals|TestSecurityLaunchCap|TestSecurityLaunchJob|TestSecurityLaunchNoBudgetWithoutLimits|TestSecurityNoFallback|TestSecuritySweep|TestSecurityCancel|TestSecurityRemoveCancels)$'`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run them and see them pass**; `go vet ./internal/engine/ ./cmd/pergent-sh/`.
 - [ ] **Step 5: Commit** `feat(engine): start, run and cancel security scans`
 
 ---
 
-### Task 9: The result route
+### Task 9: The result and source routes
 
 **Files:**
-- Create: `internal/callback/security.go`
-- Modify: `internal/server/server.go:42-60` (`Deps.SecurityScans`), `:107-130` (the route and its doc line)
-- Modify: `internal/engine/security.go` (`CompleteSecurityScan`, `SecurityTooLarge`, `withholdSecurity`)
-- Test: `internal/callback/security_test.go`, `internal/engine/security_result_test.go`
+- Create: `internal/callback/security.go`, `internal/callback/security_source.go`
+- Modify: `internal/server/server.go:42-60` (`Deps.SecurityScans`, `Deps.SecuritySources`, `Deps.SecuritySourceLimit`), `:107-130` (both routes and their doc lines)
+- Modify: `internal/engine/security.go` (`CompleteSecurityScan`, `SecurityTooLarge`, `withholdSecurity`, `OpenSecuritySource`, `SecuritySourceTooLarge`)
+- Modify: `internal/gitlab/` (`Archive`), `internal/github/` (`Tarball`), `internal/forge/forge.go:205-225` (`ArchiveReader`), `internal/forge/gitlabforge/gitlabforge.go`, `internal/forge/githubforge/githubforge.go`, `cmd/pergent-sh/connect.go:121` (an `archiveReader` beside `sourceReader`)
+- Test: `internal/callback/security_test.go`, `internal/callback/security_source_test.go`, `internal/engine/security_result_test.go`, `internal/gitlab/archive_test.go`, `internal/github/archive_test.go`
 
 **Interfaces:**
 - Produces:
@@ -394,6 +398,8 @@ Cancel: maintainers and admins (the dashboard checks); records `cancel_requested
   - `type SecurityResults interface { CompleteSecurityScan(ctx context.Context, id, token string, body []byte) (security.Outcome, error); SecurityTooLarge(ctx context.Context, id, token string) error }`
   - `type SecurityHandler struct { Scans SecurityResults; Log *slog.Logger }` serving `POST /security-scans/{id}/result` through `oneShot` with `limit: security.MaxBodyBytes`.
   - `func (e *Engine) CompleteSecurityScan(ctx context.Context, id, token string, body []byte) (security.Outcome, error)`
+  - Source, reusing the skill install's platform reader (`forge.SourceReader`, `skillfetch.Fetcher.Readers`, `cmd/pergent-sh/connect.go:121`): `func (c *gitlab.Client) Archive(ctx context.Context, projectID int64, sha string) (io.ReadCloser, error)` (`GET /projects/:id/repository/archive.tar.gz?sha=`, through `stream`, `gitlab/client.go:250`); `func (c *github.Client) Tarball(ctx context.Context, owner, repo, sha string) (io.ReadCloser, error)` (`GET /repos/{owner}/{repo}/tarball/{sha}`, through `stream`, `github/ci.go:192`, which drops the token on the redirect to the download host); `type ArchiveReader interface { Archive(ctx context.Context, project, commit string) (io.ReadCloser, error) }` in `forge`, on both `Forge`s (404 or 403 is `ErrSourceNotFound`); `Engine.Archives func(instance string) (forge.ArchiveReader, bool)`.
+  - `type SecuritySources interface { OpenSecuritySource(ctx context.Context, id, token string) (io.ReadCloser, security.Outcome, error); SecuritySourceTooLarge(ctx context.Context, id, token string) error }`; `type SecuritySourceHandler struct { Sources SecuritySources; Limit int64; Log *slog.Logger }` serving `GET /security-scans/{id}/source`: 405 for another method, 401 for a missing or wrong bearer (checked against the scan row), 409 when the scan is not running, 502 when the platform can't give the archive; else 200 `application/gzip`, copied with `io.Copy` through `io.LimitReader(Limit+1)`. It first sets a write deadline of 30 minutes (`http.NewResponseController`), so the server's 60 s `WriteTimeout` does not cut it. At `Limit` it stops the stream, ends the response and calls `SecuritySourceTooLarge`, which fails the scan with `the source is over the size limit` (Job deleted). Nothing is stored; neither the token nor any byte of the archive is logged.
   - `func withholdSecurity(env *security.Envelope, secrets []string) int`: every string holding a secret (`holdsSecret`, `engine/readiness.go:668`), in `reason`, in each `state` file (the file is dropped), and anywhere in the SARIF (keys and values; re-encoded), becomes `security.Withheld`. Returns how many.
 
 `CompleteSecurityScan` order: scan not found → Unauthorized; not running → Conflict; token hash no match → Unauthorized (so a review's token, or any other, is refused). Then `ParseEnvelope`; secrets = `HeldSecrets` + the deploy token + this scan's token; `withholdSecurity`; `reason` as one line of at most 500 bytes (`skillfetch.JobText`); `ReadSARIF`; skill from `security.SkillOf`. Unusable envelope or SARIF (over 8 MiB included) → `failed`, reason `pergent sent a result pergent.sh couldn't use: <why>`, no findings. `Capped` with `complete` → `partial`, reason `more than 5000 findings: the first 5000 are kept`. A cancel requested → reason `cancelled`, status `partial` unless `failed`. A `state` file over `security.MaxStateBytes`, or files past that total, are not kept (logged). Then `FinishSecurityScan` (with the envelope's `commit` and `usage.source`), `RecordScanUsage(env.Usage.Rows(provider, model))`, wake the loop (it takes the log). An over-size body with the right token fails the scan `the scan Job sent a result over 12 MiB`.
@@ -404,12 +410,16 @@ Cancel: maintainers and admins (the dashboard checks); records `cancel_requested
   - `TestSecurityWithholdsSecrets`: a held LLM key in the reason, inside a SARIF `message.text`, inside a SARIF property key and in a state file → none stored; the reason and message read `security.Withheld`; the state file is gone.
   - `TestSecurityUnusableResult`: subtests — SARIF version `2.0.0` → `failed` with the unusable reason, no findings, its usage recorded; an envelope of kind `review` → `failed`, no findings, no usage.
   - `TestSecurityCancelledPost`: cancel, then a `partial` post with reason `terminated` → stored `partial`, reason `cancelled`.
+  - `TestSecuritySourceHandler` (callback, no DB, a fake `SecuritySources`): 405, 401 without and with a wrong bearer, 409 for a finished scan, 502 for `ErrSourceNotFound`, 200 with the body and `application/gzip`.
+  - `TestSecuritySourceLimit` (callback, no DB): a body of `Limit+1` bytes sends at most `Limit` bytes and calls `SecuritySourceTooLarge` once; `Limit` bytes exactly is a full answer.
+  - `TestOpenSecuritySource` (engine, one env, fake GitLab and fake GitHub): the stored commit is the one asked for; a review run's token is 401; the scan's token after it finished is 409.
+  - `TestGitLabArchive`, `TestGitHubTarball` (no DB, `httptest`): the path and query; on GitHub the redirect gets no `Authorization` header.
   - `TestSecurityCappedIsPartial`: 5001 results with `complete` → `partial`, open findings of the last scan not fixed.
   - `TestSecurityResultFields`: the envelope's `commit` and `usage.source` are stored; 2 models give 2 usage rows; a state file of 600 KiB is not kept.
-- [ ] **Step 2: Run them and see them fail**: `go test -count=1 ./internal/callback/ -run '^TestSecurityHandler$'` and `PERGENT_SH_TEST_DATABASE_URL=... go test -count=1 ./internal/engine/ -run '^(TestCompleteSecurityScan|TestSecurityWithholdsSecrets|TestSecurityUnusableResult|TestSecurityCancelledPost|TestSecurityCappedIsPartial|TestSecurityResultFields)$'`
-- [ ] **Step 3: Implement**; wire `Deps.SecurityScans: eng` in `cmd/pergent-sh/main.go` when the dashboard is on.
+- [ ] **Step 2: Run them and see them fail**: `go test -count=1 ./internal/callback/ -run '^(TestSecurityHandler|TestSecuritySourceHandler|TestSecuritySourceLimit)$'`, `go test -count=1 ./internal/gitlab/ -run '^TestGitLabArchive$'`, `go test -count=1 ./internal/github/ -run '^TestGitHubTarball$'` and `PERGENT_SH_TEST_DATABASE_URL=... go test -count=1 ./internal/engine/ -run '^(TestCompleteSecurityScan|TestSecurityWithholdsSecrets|TestSecurityUnusableResult|TestSecurityCancelledPost|TestSecurityCappedIsPartial|TestSecurityResultFields|TestOpenSecuritySource)$'`
+- [ ] **Step 3: Implement**; wire `Deps.SecurityScans: eng`, `Deps.SecuritySources: eng`, `Deps.SecuritySourceLimit: cfg.Security.MaxSourceBytes` and `eng.Archives` in `cmd/pergent-sh/main.go` when the dashboard is on.
 - [ ] **Step 4: Run them and see them pass.**
-- [ ] **Step 5: Commit** `feat(callback): take a security scan's result`
+- [ ] **Step 5: Commit** `feat(callback): serve a scan its source and take its result`
 
 ---
 
@@ -449,7 +459,7 @@ Cancel: maintainers and admins (the dashboard checks); records `cancel_requested
   - `pergent_security_scans_total` (counter, labels `platform_instance`, `repository`, `status`), help: `Security scans that ended, by status: complete, partial or failed.`
   - `pergent_security_findings_open` (gauge, labels `platform_instance`, `repository`, `severity`), help: `Open security findings, by severity: critical, high, medium or low.`
   - Scan tokens are already in `pergent_tokens_total` with `skill="security-scan"` (Task 5).
-  - Chart: `securityJobEgress: {cidrs: [], except: []}` with a `# --` comment (no default; must list the LLM provider and the GitLab or GitHub host the clone reads). A second NetworkPolicy `<fullname>-security-jobs` selecting `pergent.sh/security-scan` (Exists): DNS, the callback on 8080, and `cidrs` on 443 and 80 only when the list is not empty. The jobs policy gets `matchExpressions: [{key: pergent.sh/security-scan, operator: DoesNotExist}]`. The Deployment gets `PERGENT_SH_SECURITY_EGRESS=true` only with a non-empty list.
+  - Chart: `securityJobEgress: {cidrs: [], except: []}` with a `# --` comment (no default; the LLM provider only; never add the GitLab or GitHub host: the scan gets the code from pergent.sh). A second NetworkPolicy `<fullname>-security-jobs` selecting `pergent.sh/security-scan` (Exists): DNS, the callback on 8080, and `cidrs` on 443 and 80 only when the list is not empty. The jobs policy gets `matchExpressions: [{key: pergent.sh/security-scan, operator: DoesNotExist}]`. The Deployment gets `PERGENT_SH_SECURITY_EGRESS=true` only with a non-empty list.
 
 - [ ] **Step 1: Write the failing tests**: `TestSecurityMetricsTotals` (store, DB: 2 complete, 1 failed scan and 3 open findings → the counts), `TestSnapshotSecurity` (cmd: labels and a switched-off repository's label), and the metrics help test the package already has, by exact name.
 - [ ] **Step 2: Run them and see them fail**, by exact name as above.
@@ -465,6 +475,6 @@ Cancel: maintainers and admins (the dashboard checks); records `cancel_requested
 - Create: `docs/concepts/security-scan.md`
 - Modify: `docs/README.md`, `docs/reference/limits.md`, `docs/reference/http-routes.md` (the result route), `docs/concepts/metrics.md`, `docs/concepts/job-isolation.md`, `docs/concepts/usage.md` and `docs/concepts/token-quota.md` (a scan counts), `docs/reference/configuration.md` (done in Task 4), `docs/upgrading.md` (`## Unreleased`), `README.md` only where it points at the docs
 
-- [ ] **Step 1: Write the docs.** `security-scan.md`: what a scan is and is not (the spec's Goals and Non-goals), who may do what, the settings and their ranges, the model chain rule, the budget, the 3 states and the skill-update line, retention, findings in reviews, the egress rule and the proxy rule, and the risks a reader must know (a prompt injection can post its own result; the git host in `securityJobEgress.cidrs` is reachable by the model). `limits.md`: one bullet. `upgrading.md` `## Unreleased`: migration `0055` (back up Postgres), the new image, `securityJobEgress.cidrs` must be set before the first scan, `/security-scans/` must be reachable by Jobs like `/runs/`, the 3 new config keys break a rollback (remove them first), and the old release ignores the new tables but counts a scan's usage rows in its review counts. Plan 2 adds the dashboard pages and the API routes to the docs.
+- [ ] **Step 1: Write the docs.** `security-scan.md`: what a scan is and is not (the spec's Goals and Non-goals), who may do what, the settings and their ranges, the model chain rule, the budget, the 3 states and the skill-update line, retention, findings in reviews, the egress rule and the proxy rule, how the code reaches the scan pod (the archive of one commit from pergent.sh, no git token in the pod, never add the git host to `securityJobEgress.cidrs`, no Git LFS files and no submodules, `security.max_source_bytes`), and the risks a reader must know (a prompt injection can post its own result). `limits.md`: one bullet. `upgrading.md` `## Unreleased`: migration `0055` (back up Postgres), the new image, `securityJobEgress.cidrs` must be set before the first scan, `/security-scans/` (the source and the result routes) must be reachable by Jobs like `/runs/`, the 4 new config keys break a rollback (remove them first), and the old release ignores the new tables but counts a scan's usage rows in its review counts. Plan 2 adds the dashboard pages and the API routes to the docs.
 - [ ] **Step 2: Gate the prose**: no `→` in UI paths; the private-name scan on the changed files.
 - [ ] **Step 3: Commit** `docs: the security scan`
