@@ -21,6 +21,13 @@ type SkillUsage struct {
 	Findings, Blocking               int
 }
 
+// ScanModelUsage is what one model used in a security scan: one run_usage row
+// on the scan's carrier run. Usage.Skill is the row's skill.
+type ScanModelUsage struct {
+	Provider, Model string
+	Usage           SkillUsage
+}
+
 // RecordUsage stores what each skill of run id used, with the run's
 // repository, merge request, trigger, provider, model and time, and whose key
 // paid (the run's entry: global, or a team and its ID), and the owner team of

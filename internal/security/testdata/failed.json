@@ -1,0 +1,5 @@
+{"kind":"security","status":"failed","reason":"the scan could not start: setup","commit":"0123456789abcdef0123456789abcdef01234567",
+ "skill":{"name":"","commit":""},
+ "usage":{"source":"stream","sessions":0,"subagents":0,"steps":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache_read":0,"cache_write":0},"models":[]},
+ "coverage":{"done":0,"planned":0},"state":{},
+ "sarif":{"version":"2.1.0","runs":[{"tool":{"driver":{"name":""}},"results":[]}]}}

@@ -1,0 +1,8 @@
+{"kind":"security","status":"complete","reason":"","commit":"0123456789abcdef0123456789abcdef01234567",
+ "skill":{"name":"security-audit","commit":"abc123"},
+ "usage":{"source":"stats","sessions":1,"subagents":2,"steps":40,"tokens":{"input":1000,"output":200,"reasoning":10,"cache_read":500,"cache_write":50},
+  "models":[{"provider":"acme","model":"big","steps":40,"tokens":{"input":1000,"output":200,"reasoning":10,"cache_read":500,"cache_write":50}}]},
+ "coverage":{"done":3,"planned":3},
+ "state":{"findings.json":"[]"},
+ "future_field":true,
+ "sarif":{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"security-audit","version":"abc123","rules":[{"id":"injection","properties":{"tags":["security","CWE-89"]}}]}},"results":[{"ruleId":"injection","message":{"text":"SQL built from input"},"fingerprints":{"security-audit/v1":"fp1"},"properties":{"severity":"high","confidence":0.9},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"db/q.go"},"region":{"startLine":12}}}]}]}]}}
