@@ -61,7 +61,7 @@ func TestDispatchSecurityFindings(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	const warning = "reviewing without the open security findings"
+	const warning = "reviewing without the open security findings: "
 	serveChangedSince(env, "b.go", "d.go")
 
 	// Findings are only read at dispatch, and nothing later (the stored
@@ -131,28 +131,32 @@ func TestDispatchSecurityFindings(t *testing.T) {
 		}
 	})
 	// Each problem leaves the file out with a warning and the review runs.
-	problem := func(t *testing.T, iid int64, c byte) {
+	// The log is cumulative, so only what this review logged is read, and it
+	// must hold this path's own warning.
+	problem := func(t *testing.T, iid int64, c byte, why string) {
 		t.Helper()
+		mark := len(env.Logs())
 		got, file, logs := review(t, iid, c)
+		logs = logs[mark:]
 		if got != "" || file != "" {
 			t.Errorf("env = %q, file = %q; want none after a read error", got, file)
 		}
-		if !strings.Contains(logs, warning) {
-			t.Errorf("no warning in the log:\n%s", logs)
+		if !strings.Contains(logs, warning+why) {
+			t.Errorf("no %q warning in the log:\n%s", warning+why, logs)
 		}
 	}
 	t.Run("a changed-files error does not stop the review", func(t *testing.T) {
 		env.GitLab.Reply(http.MethodGet, mergeBaseRoute(), http.StatusInternalServerError, `{"message":"down"}`)
 		defer serveChangedSince(env, "b.go", "d.go")
-		problem(t, 6, '6')
+		problem(t, 6, '6', "the changed files can't be read")
 	})
 	t.Run("a settings error does not stop the review", func(t *testing.T) {
 		execSQL(t, env, `ALTER TABLE security_scan_settings RENAME TO security_scan_settings_gone`)
 		defer execSQL(t, env, `ALTER TABLE security_scan_settings_gone RENAME TO security_scan_settings`)
-		problem(t, 7, '7')
+		problem(t, 7, '7', "the settings can't be read")
 	})
 	t.Run("a store error does not stop the review", func(t *testing.T) {
 		execSQL(t, env, `ALTER TABLE security_findings RENAME TO security_findings_gone`)
-		problem(t, 8, '8')
+		problem(t, 8, '8', "they can't be read")
 	})
 }
