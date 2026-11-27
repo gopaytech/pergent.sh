@@ -77,9 +77,20 @@ state: [findings.json, coverage-ledger.json]
 - `format: sarif` needs no converter. Any other format names a converter in pergent; v1 has `cloudflare-findings`.
 - `state` lists the files kept for the next scan.
 
+### How the code reaches the scan pod
+
+A NetworkPolicy applies to the whole pod, so a clone container in the scan pod would need GitLab or GitHub in the egress rule. Then injected code could send data to an attacker's own repository on the same host. So **the scan pod never talks to the git host and never holds a git token**:
+
+1. At **Start scan**, pergent.sh reads the default branch's newest commit through the platform API, with the review bot or App it already has, and stores it on the scan.
+2. The scan Job has no clone container. `pergent scan` downloads the code from pergent.sh: `GET /security-scans/{id}/source`, on the callback port, with the scan's result token. The route answers only while that scan is running.
+3. pergent.sh streams the platform's archive of that commit (GitLab `repository/archive.tar.gz?sha=`, GitHub `tarball/{sha}`) without storing it. Above `security.max_source_bytes` (default 500 MiB) it stops, and the scan fails with `the source is over the size limit`.
+4. pergent unpacks it into `--repo-path` safely: it strips the top folder, and refuses absolute paths, `..`, links that point outside the folder, device files, and more files or bytes than its limits. There is no `.git` folder, so pergent.sh always passes `--head`, and the task line gives the skill `Source commit: {commit}`.
+
+The archive has no Git LFS files and no submodules. The scan page says so.
+
 ### `pergent scan`
 
-1. Reads the manifest and builds the opencode config for the scan.
+1. Downloads and unpacks the source, then reads the manifest and builds the opencode config for the scan.
 2. Runs one opencode session with the skill. The main agent may start sub-agents with `task`.
 3. Reads the skill's output, converts it to SARIF 2.1.0 and checks it against the SARIF schema. For Cloudflare it also checks `findings.json` against the skill's `report-schema.json`.
 4. Posts the envelope (below) to pergent.sh.
@@ -106,8 +117,8 @@ When a step limit, the token budget, the timeout or a cancel stops the run, perg
 | task (sub-agents) | no | yes |
 
 - **Every sub-agent gets the same permission block as the main agent.** opencode's defaults for its built-in agents allow shell and edits, so pergent sets the block on every agent it may start.
-- pergent starts opencode with an allow-list of environment variables (`pergent/internal/runner/runner.go`), and keeps `PERGENT_RESULT_TOKEN` out of it. But bash runs as the same user as pergent, so it can read pergent's own environment through `/proc/<pid>/environ`. So bash can reach `OPENCODE_API_KEY`, the result token, any cloud credentials pergent keeps for a provider (`AWS_`, `GOOGLE_`, `VERTEX_`, `AZURE_`, `CLOUDFLARE_`) and the proxy variables. `GIT_TOKEN` stays in the checkout container only. Removing curl is not enough, because bash and node can open a network connection themselves. The real guard is the network:
-  - **A scan Job has its own Kubernetes NetworkPolicy, `securityJobEgress.cidrs`, with no default.** Until an admin sets it (the LLM provider only), **Start scan** is off and the tab says why. It never falls back to `jobEgress.cidrs`, whose default is `0.0.0.0/0`.
+- pergent starts opencode with an allow-list of environment variables (`pergent/internal/runner/runner.go`), and keeps `PERGENT_RESULT_TOKEN` out of it. But bash runs as the same user as pergent, so it can read pergent's own environment through `/proc/<pid>/environ`. So bash can reach `OPENCODE_API_KEY`, the result token, any cloud credentials pergent keeps for a provider (`AWS_`, `GOOGLE_`, `VERTEX_`, `AZURE_`, `CLOUDFLARE_`) and the proxy variables. A scan pod has no `GIT_TOKEN` at all (see How the code reaches the scan pod). Removing curl is not enough, because bash and node can open a network connection themselves. The real guard is the network:
+  - **A scan Job has its own Kubernetes NetworkPolicy, `securityJobEgress.cidrs`, with no default.** Until an admin sets it (the LLM provider only, never the git host), **Start scan** is off and the tab says why. It never falls back to `jobEgress.cidrs`, whose default is `0.0.0.0/0`, and the review Jobs' policy leaves scan pods out.
   - The pergent.sh callback stays reachable on its own port, as for reviews.
   - **No proxy variables in a scan Job** (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and their lower-case forms), unless an admin sets `security.proxy` on purpose. A proxy is an allowed address that can reach any other, so it would undo the egress rule.
 - pergent.sh withholds any text that holds a secret it knows. This check covers every string in a scan result: finding messages, `reason`, `state` and the SARIF.
@@ -243,7 +254,8 @@ Each task runs its own tests. The full run is on CI only.
 
 | Risk | Handling |
 |---|---|
-| A prompt injection in the scanned code makes the model send the API key out | No default egress. `securityJobEgress.cidrs` must be set to the LLM provider before a scan can start. No curl. Secrets are withheld from every result string |
+| A prompt injection in the scanned code makes the model send the API key out | No default egress. `securityJobEgress.cidrs` must be set to the LLM provider before a scan can start, and the git host is never in it, because the code comes from pergent.sh. No curl, no git token in the pod. Secrets are withheld from every result string |
+| A crafted archive writes outside the repository folder, or fills the disk | pergent unpacks with no absolute paths, no `..`, no links outside, no device files, and file and byte limits. pergent.sh stops the stream at `security.max_source_bytes` |
 | A prompt injection makes the model post its own result for the scan, such as "no findings", with the result token read from `/proc` | Accepted. The token is tied to that one scan, pergent.sh accepts one result per scan, and the next scan finds the problems again |
 | A sub-agent gets opencode's default rights | pergent sets the same permission block on every agent. A test checks it |
 | A scan costs far more than expected | Manual start only, a confirm box with the last scan's cost, step limits, a timeout, a token budget from the quotas, Cancel, and `security.max_running` |
