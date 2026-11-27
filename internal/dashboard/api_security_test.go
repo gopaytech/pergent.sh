@@ -117,7 +117,13 @@ func securityResult(fps ...string) store.SecurityResult {
 // and ended with res, and returns it as stored. No other scan may be queued.
 func (e *env) securityScanDone(project string, res store.SecurityResult) store.SecurityScan {
 	e.t.Helper()
-	sc, err := e.st.QueueSecurityScan(ctx, store.SecurityScanRequest{Instance: "main", Project: project,
+	return e.securityScanDoneOn("main", project, res)
+}
+
+// securityScanDoneOn is securityScanDone on instance.
+func (e *env) securityScanDoneOn(instance, project string, res store.SecurityResult) store.SecurityScan {
+	e.t.Helper()
+	sc, err := e.st.QueueSecurityScan(ctx, store.SecurityScanRequest{Instance: instance, Project: project,
 		ProjectID: testID(project), Branch: "main", Commit: securityCommit, StartedBy: "carol", TimeoutSeconds: 3600},
 		e.clock.now())
 	if err != nil {
@@ -143,7 +149,13 @@ func (e *env) securityScanDone(project string, res store.SecurityResult) store.S
 // findingID is the ID of project's finding fp, as a path part.
 func (e *env) findingID(project, fp string) string {
 	e.t.Helper()
-	rows, _, err := e.st.SecurityFindings(ctx, "main", project, store.SecurityFindingFilter{})
+	return e.findingIDOn("main", project, fp)
+}
+
+// findingIDOn is findingID on instance.
+func (e *env) findingIDOn(instance, project, fp string) string {
+	e.t.Helper()
+	rows, _, err := e.st.SecurityFindings(ctx, instance, project, store.SecurityFindingFilter{})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -154,6 +166,16 @@ func (e *env) findingID(project, fp string) string {
 	}
 	e.t.Fatalf("no finding %s in %s", fp, project)
 	return ""
+}
+
+// mustID is a finding ID path part as a number.
+func mustID(t *testing.T, id string) int64 {
+	t.Helper()
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // findingState is the state of project's finding id.
@@ -321,6 +343,9 @@ func TestSecurityRoutesRoles(t *testing.T) {
 	}
 	sc := e.securityScanDone("acme/gadgets", securityResult("fp-gadgets-1"))
 	other := e.securityScanDone("acme/tools", securityResult("fp-tools-1"))
+	// gh/acme/widgets is a repository no team of these sessions covers.
+	hidden := e.securityScanDoneOn("gh", "acme/widgets", securityResult("fp-hidden-1"))
+	hid := e.findingIDOn("gh", "acme/widgets", "fp-hidden-1")
 	fid, oid := e.findingID("acme/gadgets", "fp-gadgets-1"), e.findingID("acme/tools", "fp-tools-1")
 	viewer := e.signInOn(store.RoleViewer)
 	maintainer := e.maintainerOn("bob@example.com")
@@ -391,6 +416,46 @@ func TestSecurityRoutesRoles(t *testing.T) {
 		}
 		if s := e.findingState("acme/tools", oid); s != store.FindingOpen {
 			t.Errorf("acme/tools' finding = %s; want open", s)
+		}
+	})
+	t.Run("a repository the session can't see", func(t *testing.T) {
+		hiddenURL := func(rest string) string { return "/api/repositories/gh/acme/widgets/security" + rest }
+		want404 := func(rec *httptest.ResponseRecorder, what string) {
+			t.Helper()
+			if rec.Code != http.StatusNotFound || errorOf(t, rec) != msgNotFound {
+				t.Errorf("%s = %d %s; want 404 %q, as for an unknown path", what, rec.Code, rec.Body, msgNotFound)
+			}
+		}
+		for _, rest := range []string{"", "/findings", "/findings/" + hid, "/scans", "/scans/" + hidden.ID,
+			"/scans/" + hidden.ID + "/sarif", "/settings", "/chain"} {
+			want404(e.get(viewer, hiddenURL(rest)), "viewer GET "+rest)
+			want404(e.get(maintainer, hiddenURL(rest)), "maintainer GET "+rest)
+		}
+		for _, w := range []struct{ method, rest, body string }{
+			{"POST", "/findings/" + hid + "/dismiss", writes[0].body},
+			{"POST", "/findings/" + hid + "/restore", `{}`},
+			{"POST", "/scans", `{}`},
+			{"POST", "/scans/" + hidden.ID + "/cancel", `{}`},
+			{"PUT", "/settings", `{"maxSteps": 200}`},
+			{"PUT", "/chain", `{"entries": []}`},
+			{"POST", "/chain/reset", `{}`},
+		} {
+			want404(e.send(maintainer, w.method, hiddenURL(w.rest), w.body), "maintainer "+w.method+" "+w.rest)
+		}
+		if f, found, err := e.st.SecurityFinding(ctx, "gh", "acme/widgets", mustID(t, hid)); err != nil || !found ||
+			f.State != store.FindingOpen {
+			t.Errorf("the hidden finding = %+v, %v, %v; want still open", f, found, err)
+		}
+		if active, err := e.st.ActiveSecurityScan(ctx, "gh", "acme/widgets"); err != nil || active != nil {
+			t.Errorf("active scan on the hidden repository = %+v, %v; want none", active, err)
+		}
+		if set, err := e.st.SecurityScanSettingsOf(ctx, "gh", "acme/widgets"); err != nil || set.MaxSteps != nil {
+			t.Errorf("hidden settings = %+v, %v; want none", set, err)
+		}
+		for _, a := range e.auditEntries() {
+			if a.Instance == "gh" {
+				t.Errorf("audit entry on the hidden repository: %+v", a)
+			}
 		}
 	})
 	t.Run("no engine", func(t *testing.T) {
