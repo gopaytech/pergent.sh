@@ -13,6 +13,7 @@ import {
   entryOpus,
   entryTeamQwen,
   librarySkills,
+  securitySettings,
   maintainer,
   reviewersNone,
   myTeams,
@@ -738,5 +739,19 @@ describe("RepositorySettings: Remove follows the actions flag", () => {
     renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
     await userEvent.click(within(await card()).getByRole("button", { name: "Remove repository" }));
     expect(confirm).toHaveBeenCalledWith(expect.not.stringContaining("also lose it"));
+  });
+});
+
+describe("RepositorySettings: Security scan", () => {
+  it("the Security scan card is on the Settings tab", async () => {
+    const payments = "/api/repositories/main/acme/payments";
+    fakeApi({
+      ...base,
+      [`GET ${payments}/security/settings`]: { body: securitySettings },
+      [`GET ${payments}/security/chain`]: { body: { ...chainRepoInherit, source: "chain", team: "" } },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings", { unfolded: true });
+    const box = await screen.findByRole("region", { name: "Security scan" });
+    expect(await within(box).findByRole("switch", { name: "Use security findings in reviews" })).toBeInTheDocument();
   });
 });

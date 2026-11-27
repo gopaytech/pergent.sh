@@ -44,6 +44,7 @@ import { blockingHelp, blockingLabel, failureHelp, failureLabel, notUsedNote } f
 import { ErrorBox, Loading, Switch, bytesText } from "../ui";
 import { useUnsavedGuard } from "../unsaved";
 import RepoModelChain from "./RepoModelChain";
+import SecurityScanSettings from "./SecurityScanSettings";
 
 // SettingsTab edits a repository's settings (maintainers and admins only;
 // the page hides the tab from others). A config-managed repository's are
@@ -198,6 +199,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
       {/* The model chain is not a setting: it has its own routes, and the
           config does not set it, so it is there for every repository. */}
       <RepoModelChain instance={repo.instance} project={repo.project} defaultOpen={false} />
+      <SecurityScanSettings instance={repo.instance} project={repo.project} paused={repo.paused} />
       {/* Which teams cover a repository is an admin's to say, also for a
           repository the config sets up: it is not one of its settings. */}
       {view.role === "admin" && <RepoTeams instance={repo.instance} project={repo.project} />}
