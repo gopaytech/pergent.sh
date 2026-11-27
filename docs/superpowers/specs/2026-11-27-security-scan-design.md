@@ -22,6 +22,7 @@ A review looks at one merge request: the diff and the files around it. Nothing l
 - A scan of a branch other than the default branch.
 - Blocking a merge request because of a finding.
 - Uploading SARIF to GitHub code scanning.
+- A notification when a scan ends. The Security tab shows the result.
 
 ## Approaches considered
 
@@ -64,7 +65,8 @@ steps:
   subagent: 100
 task: >-
   Full audit mode. Target: {target}. Output directory: {output}.
-  Prior run: {prior}. Do not ask questions.
+  Prior run: {prior}. Do not ask questions. No OS sandbox is
+  available: do not build, test or run the target's code.
 output:
   path: findings.json
   format: cloudflare-findings   # or: sarif
@@ -82,7 +84,17 @@ state: [findings.json, coverage-ledger.json]
 3. Reads the skill's output, converts it to SARIF 2.1.0 and checks it against the SARIF schema. For Cloudflare it also checks `findings.json` against the skill's `report-schema.json`.
 4. Posts the envelope (below) to pergent.sh.
 
-When a step limit or the timeout stops the run, pergent still sends what the skill wrote so far, with `status: partial`.
+When a step limit, the token budget, the timeout or a cancel stops the run, pergent still sends what the skill wrote so far, with its usage and `status: partial`. pergent catches `SIGTERM`, so a cancel or a Job deadline also ends this way.
+
+### Usage and the token budget
+
+- **Sub-agent tokens are not in opencode's JSON output.** `opencode run --format json` prints only the events of the main session: it skips every event whose `sessionID` is not the main one (opencode v2.3.2, `packages/cli/src/run/noninteractive.ts:172`). So a sub-agent's `step_finish` tokens never reach pergent's parser.
+- opencode stores every session, sub-agents included, in its SQLite database in the data directory (`packages/cli/src/database-path.ts`). pergent already gives each run a fresh data directory.
+- `pergent scan` reads the usage with `opencode stats --all --models --json` on that data directory. It reports tokens per model (input, output, reasoning, cache read, cache write) over all sessions. pergent uses it:
+  - **while the run goes**, every 30 seconds, for the budget;
+  - **at the end**, for the `usage` in the envelope.
+- **The budget comes from the quotas.** When the scan starts, pergent.sh works out the tokens left under each of the 5 quotas and limits that apply, and passes the smallest one as `PERGENT_TOKEN_BUDGET`. When the total reaches it, pergent stops opencode and sends a partial result, reason `token budget reached`. A scan can go past the budget by at most one 30-second poll.
+- Not confirmed yet: that `opencode stats` reads the database while the main opencode process is still writing it. The first real scan checks it. If it fails, pergent counts the main session from the JSON stream during the run and reads the full total from the database only at the end.
 
 ### Tools in a scan
 
@@ -94,8 +106,8 @@ When a step limit or the timeout stops the run, pergent still sends what the ski
 | task (sub-agents) | no | yes |
 
 - **Every sub-agent gets the same permission block as the main agent.** opencode's defaults for its built-in agents allow shell and edits, so pergent sets the block on every agent it may start.
-- With bash, the model can read the main container's environment: `OPENCODE_API_KEY` and `PERGENT_RESULT_TOKEN`. `GIT_TOKEN` stays in the checkout container only. Removing curl is not enough, because bash and node can open a network connection themselves. The real guard is the network:
-  - **A scan Job has its own NetworkPolicy, `securityJobEgress.cidrs`, with no default.** Until an admin sets it (the LLM provider only), **Start scan** is off and the tab says why. It never falls back to `jobEgress.cidrs`, whose default is `0.0.0.0/0`.
+- pergent starts opencode with an allow-list of environment variables (`pergent/internal/runner/runner.go`), and keeps `PERGENT_RESULT_TOKEN` out of it. But bash runs as the same user as pergent, so it can read pergent's own environment through `/proc/<pid>/environ`. So bash can reach `OPENCODE_API_KEY`, the result token, any cloud credentials pergent keeps for a provider (`AWS_`, `GOOGLE_`, `VERTEX_`, `AZURE_`, `CLOUDFLARE_`) and the proxy variables. `GIT_TOKEN` stays in the checkout container only. Removing curl is not enough, because bash and node can open a network connection themselves. The real guard is the network:
+  - **A scan Job has its own Kubernetes NetworkPolicy, `securityJobEgress.cidrs`, with no default.** Until an admin sets it (the LLM provider only), **Start scan** is off and the tab says why. It never falls back to `jobEgress.cidrs`, whose default is `0.0.0.0/0`.
   - The pergent.sh callback stays reachable on its own port, as for reviews.
 - pergent.sh withholds any text that holds a secret it knows. This check covers every string in a scan result: finding messages, `reason`, `state` and the SARIF.
 
@@ -118,8 +130,9 @@ When a step limit or the timeout stops the run, pergent still sends what the ski
 - `status`: `complete`, `partial` or `failed`. `reason` is set for the last two.
 - A dedicated route, like every other Job kind in `internal/server/server.go`, with its own body limit. The token is checked against the scan row, so a review Job cannot post to a scan.
 - `usage` is saved with the same usage code reviews use, so the usage pages and all 5 quotas and limits count the scan.
-- `state` is capped in size and stored with the scan. The next scan gets the `state` of the last **complete** scan as `{prior}`.
+- `state` is capped in size and stored with the scan. The next scan gets the `state` of the last **complete** scan as `{prior}`, plus the repository's dismissed findings as rejected records with the person's reason, so the skill does not report them again.
 - pergent.sh keeps the SARIF it received, for **Download SARIF**.
+- **Retention:** scan rows and findings, with their history, are kept for good. The raw SARIF and `state` are kept for the last 10 scans of each repository.
 
 ### Findings
 
@@ -143,6 +156,7 @@ One row per repository and fingerprint, in a SARIF shape:
 | Dismissed | A maintainer or admin, with a reason: false positive, won't fix, used in tests, mitigated, acceptable risk, plus an optional comment. A later scan keeps it dismissed |
 | Fixed | A **complete** scan does not find it. A partial or failed scan never sets it |
 
+- **A new skill version:** each scan stores the skill's name and pinned commit. The first complete scan after a version change marks nothing fixed and shows `Skill updated: some findings may show as new`, because a new version may build fingerprints in a new way.
 - `needs_validation` findings are open, with a **Needs validation** label.
 - The skill's rejected records are kept in `state`. They are not shown as findings.
 - No Confirmed state in v1.
@@ -170,7 +184,10 @@ A **Security scan** card on the Settings tab:
 | Scan timeout | 3 h | 10 min to 6 h |
 | Use security findings in reviews | Off | On or off |
 
-No token budget per scan in v1. The quotas already limit tokens.
+There is no token budget setting. The budget comes from the quotas (see Usage and the token budget).
+
+- **Model chain:** the scan uses the first usable entry of its chain when it starts. A model that fails during the scan does not start it again on the next entry. The scan ends partial or failed, and a person starts it again.
+- **Paused and removed repositories:** a paused repository cannot start a scan. A removed repository's scans and findings follow the same rule as its reviews.
 
 Instance level: `security.max_running` (default 1), so scans cannot take the Job slots reviews need. One scan per repository at a time. Helm: `jobs.security_image`, default `ghcr.io/gopaytech/pergent-security` at the chart's app version.
 
@@ -178,7 +195,7 @@ Instance level: `security.max_running` (default 1), so scans cannot take the Job
 
 Placed right after **Reviews**.
 
-- **Last scan:** status, duration, tokens, branch and commit, the built-in skill's name, and counts by severity plus Needs validation. **Start scan** (maintainers and admins) opens a confirm box with the model, the step limits, the timeout, and the last scan's tokens and time as an estimate. While a scan runs, the button shows Running.
+- **Last scan:** status, duration, tokens, branch and commit, the built-in skill's name, and counts by severity plus Needs validation. **Start scan** (maintainers and admins) opens a confirm box with the model, the step limits, the timeout, and the last scan's tokens and time as an estimate. While a scan runs, the button shows Running, and maintainers and admins get **Cancel**, which ends the scan partial, reason `cancelled`.
 - **Findings:** filters by state (Open first), severity and CWE, a search by file or title, and the columns severity, finding, file and line, first seen.
 - **Scans:** number, status, date, duration, new and fixed counts, and the reason for a partial or failed scan.
 - **A finding's page:** description, exploit scenario, fix hint, the code location with a link to the platform, its history, and Dismiss or Restore.
@@ -212,7 +229,8 @@ Each task runs its own tests. The full run is on CI only.
 - **API:** the result route refuses a review's token and a body over its limit; secrets in any string are withheld; role checks for start, dismiss, restore and settings; `openapi.yaml` and `openapi_test.go`.
 - **Engine:** Start scan is off with no `securityJobEgress.cidrs`; one scan per repository; `security.max_running`; quotas and the admin override.
 - **Web (Vitest):** the tab order, the counts, the filters, Start scan only for maintainers and admins, the partial and failed rows.
-- **A first real scan** on a small public repository, only with the owner's OK and a dollar limit, to measure tokens, time, and how opencode counts sub-agent steps.
+- **pergent usage:** a fixture opencode database with a main session and a sub-agent session gives the summed tokens per model; the budget stop sends a partial result; `SIGTERM` sends a partial result.
+- **A first real scan** on a small public repository, only with the owner's OK and a dollar limit, to measure tokens and time, how opencode counts sub-agent steps, and whether `opencode stats` works while the run writes the database.
 
 ## Risks
 
@@ -220,7 +238,8 @@ Each task runs its own tests. The full run is on CI only.
 |---|---|
 | A prompt injection in the scanned code makes the model send the API key out | No default egress. `securityJobEgress.cidrs` must be set to the LLM provider before a scan can start. No curl. Secrets are withheld from every result string |
 | A sub-agent gets opencode's default rights | pergent sets the same permission block on every agent. A test checks it |
-| A scan costs far more than expected | Manual start only, a confirm box with the last scan's cost, step limits, a timeout, the quotas, and `security.max_running` |
+| A scan costs far more than expected | Manual start only, a confirm box with the last scan's cost, step limits, a timeout, a token budget from the quotas, Cancel, and `security.max_running` |
+| Sub-agent tokens go uncounted | Usage is read from opencode's database with `opencode stats`, not from the JSON stream. A test checks that a run with a sub-agent reports its tokens |
 | A partial scan marks real problems as fixed | Only a complete scan sets Fixed |
 | The upstream skill changes its output format | The skill is pinned in the image. A new version is a new release, with the converter tests |
 | Sub-agent steps are counted in a way the limits do not expect | Measured in the first real scan before the release |
