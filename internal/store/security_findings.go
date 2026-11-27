@@ -79,8 +79,9 @@ type SecurityFindingInput struct {
 // SecurityResult is what FinishSecurityScan stores of a scan Job's result.
 // Status is complete, partial or failed; Reason says why for the last two.
 // Commit must be the scan's own commit: a result for another one is
-// unusable, and the scan fails keeping none of it. A nil State or SARIF is
-// none. SkillName and SkillCommit are empty when the result does not say.
+// unusable, and the scan fails keeping none of it but its usage. A nil State
+// or SARIF is none. SkillName and SkillCommit are empty when the result does
+// not say. Usage is what each model used, stored in the same transaction.
 type SecurityResult struct {
 	Status, Reason, Commit, UsageSource string
 	CoverageDone, CoveragePlanned       *int
@@ -88,6 +89,7 @@ type SecurityResult struct {
 	SARIF                               []byte
 	SkillName, SkillCommit              string
 	Findings                            []SecurityFindingInput
+	Usage                               []ScanModelUsage
 }
 
 // SecurityFinding is one finding of a repository, open, dismissed or fixed.
@@ -264,13 +266,16 @@ func jsonParam(v map[string]string) (*string, error) {
 // FinishSecurityScan stores the result of a running scan, in one
 // transaction. ok is false, and nothing changes, when the scan is not
 // running or, with a hash, the hash is not its token. A result with a bad
-// status or finding is an error and changes nothing either.
+// status or finding is an error and changes nothing either, and so is any
+// error on the way: the scan still runs and its token still works, so the
+// Job can post again.
 //
 // A result for another commit than the scan's is unusable: the scan fails
-// with a reason that says so and keeps none of it but its usage source.
-// Otherwise, in this order:
+// with a reason that says so and keeps none of it but its usage source and
+// usage. Otherwise, in this order:
 //  1. The scan ends with the status, reason, usage source, coverage, skill,
-//     state and SARIF; its token is spent.
+//     state and SARIF; its token is spent. Its usage rows are stored
+//     (insertScanUsage).
 //  2. Each finding is recorded by its fingerprint (see upsertFindingSQL); a
 //     fingerprint sent twice counts once, as first sent. NewCount counts the
 //     new and the reopened ones.
@@ -309,7 +314,8 @@ func (s *Store) FinishSecurityScan(ctx context.Context, id string, hash []byte, 
 		return false, err
 	}
 	if res.Commit != commit {
-		res = SecurityResult{Status: SecurityFailed, Reason: securityOtherCommit, UsageSource: res.UsageSource}
+		res = SecurityResult{Status: SecurityFailed, Reason: securityOtherCommit, UsageSource: res.UsageSource,
+			Usage: res.Usage}
 	}
 
 	state, err := jsonParam(res.State)
@@ -328,6 +334,9 @@ func (s *Store) FinishSecurityScan(ctx context.Context, id string, hash []byte, 
 		WHERE id = $1::uuid`,
 		id, res.Status, cutText(res.Reason), cutText(res.UsageSource), res.CoverageDone, res.CoveragePlanned,
 		skillName, skillCommit, state, sarif, now); err != nil {
+		return false, err
+	}
+	if err := insertScanUsage(ctx, tx, id, res.Usage); err != nil {
 		return false, err
 	}
 

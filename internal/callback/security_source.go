@@ -29,8 +29,9 @@ type SecuritySources interface {
 // SecuritySourceHandler serves GET /security-scans/{id}/source: the
 // platform's .tar.gz of the scan's commit, which the scan Job downloads with
 // its result token (not spent). Another method is 405, a missing or wrong
-// token 401, a scan that is not running 409, and a platform that gives no
-// archive 502. Else the archive is copied as it is (200, application/gzip),
+// token 401, a scan that is not running 409, a download while another one of
+// the scan runs or past its tries 409 (the engine's limit), and a platform
+// that gives no archive 502. Else the archive is copied as it is (200, application/gzip),
 // at most Limit bytes: at one byte more the response is cut off and the scan
 // fails, its Job deleted. A response the platform cuts short is cut off too,
 // so the Job never takes part of an archive for all of it. Nothing is
@@ -77,6 +78,9 @@ func (h *SecuritySourceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	case outcome == security.Conflict:
 		http.Error(w, "the scan is not running", http.StatusConflict)
+		return
+	case outcome == security.Busy:
+		http.Error(w, "the source is being downloaded, or was downloaded too many times", http.StatusConflict)
 		return
 	case outcome != security.Stored:
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

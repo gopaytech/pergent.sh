@@ -165,6 +165,8 @@ type Engine struct {
 
 	securityWakeOnce sync.Once
 	securityWake     chan struct{}
+	// securitySources holds the running scans' source downloads.
+	securitySources sourceGate
 
 	// rechecks holds the repositories RecheckReadiness asked for that the
 	// scan loop hasn't rechecked yet, recheckDefaults the instances whose

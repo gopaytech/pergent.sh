@@ -34,18 +34,14 @@ type ScanModelUsage struct {
 // A query with a table alias writes it in front: u.` + "`" + `+notScanSQL.
 const notScanSQL = "trigger <> 'security_scan'"
 
-// RecordScanUsage stores what each model of security scan scanID used: one
-// run_usage row per model on the scan's carrier run, with the scan's own
-// repository (the carrier run has none), trigger 'security_scan' and verdict
-// 'security' and no merge request (0), at the time the scan finished. The source and team come from
-// the carrier run's entry; the owner team is the repository's now. A row
-// already there is kept, so a second call changes nothing.
-func (s *Store) RecordScanUsage(ctx context.Context, scanID string, rows []ScanModelUsage) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+// insertScanUsage stores, in tx, what each model of security scan scanID
+// used: one run_usage row per model on the scan's carrier run, with the
+// scan's own repository (the carrier run has none), trigger 'security_scan'
+// and verdict 'security' and no merge request (0), at the time the scan
+// finished. The source and team come from the carrier run's entry; the owner
+// team is the repository's now. A row already there is kept.
+// FinishSecurityScan calls it, so a failed insert undoes the finish.
+func insertScanUsage(ctx context.Context, tx pgx.Tx, scanID string, rows []ScanModelUsage) error {
 	for _, m := range rows {
 		u := m.Usage
 		if _, err := tx.Exec(ctx, `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid,
@@ -62,7 +58,7 @@ func (s *Store) RecordScanUsage(ctx context.Context, scanID string, rows []ScanM
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 // RecordUsage stores what each skill of run id used, with the run's

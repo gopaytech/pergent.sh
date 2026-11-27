@@ -15,6 +15,9 @@ const (
 	Conflict
 	// Unauthorized: no such scan, or the token is not the scan's.
 	Unauthorized
+	// Busy: a download of the scan's source is running, or the scan used
+	// all its downloads.
+	Busy
 )
 
 // ErrNoSource is the error of a source download the platform did not give:

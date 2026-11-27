@@ -479,6 +479,100 @@ func TestSecurityFinishOnce(t *testing.T) {
 	})
 }
 
+// The finish records the usage in its own transaction: a good finish stores
+// the rows at the finish time, also for a result for another commit (the
+// tokens were used), and a second finish adds none. A usage row that can't
+// be stored rolls the whole finish back: the scan still runs and its token
+// still works, so pergent can post again.
+func TestSecurityFinishRecordsUsage(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	usageOf := func(t *testing.T, sc SecurityScan) (n, in int64) {
+		t.Helper()
+		if err := s.pool.QueryRow(ctx, `SELECT count(*), COALESCE(sum(tokens_in), 0) FROM run_usage WHERE run_id = $1::uuid`,
+			sc.RunID).Scan(&n, &in); err != nil {
+			t.Fatal(err)
+		}
+		return n, in
+	}
+	row := func(skill string, in int64) ScanModelUsage {
+		return ScanModelUsage{Provider: "p", Model: "m", Usage: SkillUsage{Skill: skill, In: in, Out: 1}}
+	}
+
+	t.Run("a good finish records the rows, once", func(t *testing.T) {
+		r := newSecRepo(s, "acme/usage")
+		sc := r.start(t)
+		res := secResult(SecurityComplete, "aaa", "A")
+		res.Usage = []ScanModelUsage{row("security-scan", 100), row("security-scan@q/sub", 20)}
+		at := r.now().Add(time.Minute)
+		if ok, err := s.FinishSecurityScan(ctx, sc.ID, r.token(), res, at); err != nil || !ok {
+			t.Fatalf("finish = %v, %v; want true", ok, err)
+		}
+		if n, in := usageOf(t, sc); n != 2 || in != 120 {
+			t.Errorf("usage rows = %d, tokens_in %d; want 2, 120", n, in)
+		}
+		var reported time.Time
+		if err := s.pool.QueryRow(ctx, `SELECT min(reported_at) FROM run_usage WHERE run_id = $1::uuid`,
+			sc.RunID).Scan(&reported); err != nil || !reported.Equal(at) {
+			t.Errorf("reported_at = %v, %v; want the finish time %v", reported, err, at)
+		}
+		again := secResult(SecurityComplete, "aaa", "A")
+		again.Usage = []ScanModelUsage{row("security-scan", 5), row("other", 5)}
+		if ok, err := s.FinishSecurityScan(ctx, sc.ID, nil, again, at); err != nil || ok {
+			t.Errorf("second finish = %v, %v; want false", ok, err)
+		}
+		if n, in := usageOf(t, sc); n != 2 || in != 120 {
+			t.Errorf("usage after a second finish = %d, %d; want 2, 120", n, in)
+		}
+	})
+
+	t.Run("another commit keeps the usage", func(t *testing.T) {
+		r := newSecRepo(s, "acme/usage-commit")
+		sc := r.start(t)
+		res := secResult(SecurityComplete, "aaa", "A")
+		res.Commit = "ffffffffffffffffffffffffffffffffffffffff"
+		res.Usage = []ScanModelUsage{row("security-scan", 7)}
+		if ok, err := s.FinishSecurityScan(ctx, sc.ID, r.token(), res, r.now()); err != nil || !ok {
+			t.Fatalf("finish = %v, %v; want true", ok, err)
+		}
+		if n, in := usageOf(t, sc); n != 1 || in != 7 {
+			t.Errorf("usage rows = %d, tokens_in %d; want 1, 7", n, in)
+		}
+	})
+
+	t.Run("a usage insert that fails rolls the finish back", func(t *testing.T) {
+		r := newSecRepo(s, "acme/usage-fail")
+		sc := r.start(t)
+		res := secResult(SecurityComplete, "aaa", "A")
+		// Postgres refuses a NUL byte in a text: the second insert fails.
+		res.Usage = []ScanModelUsage{row("security-scan", 9), row("bad\x00skill", 9)}
+		if ok, err := s.FinishSecurityScan(ctx, sc.ID, r.token(), res, r.now()); err == nil || ok {
+			t.Fatalf("finish with a bad usage row = %v, %v; want an error", ok, err)
+		}
+		got, err := s.SecurityScan(ctx, sc.ID)
+		if err != nil || got.State != SecurityRunning || got.FinishedAt != nil || got.NewCount != 0 {
+			t.Errorf("scan = %+v, %v; want still running, nothing kept", got, err)
+		}
+		if ok, err := s.SecurityTokenIs(ctx, sc.ID, r.token()); err != nil || !ok {
+			t.Errorf("token after the failed finish = %v, %v; want still valid", ok, err)
+		}
+		if n, _ := usageOf(t, sc); n != 0 {
+			t.Errorf("usage rows = %d; want 0", n)
+		}
+		if n := len(r.findings(t)); n != 0 {
+			t.Errorf("findings = %d; want 0", n)
+		}
+		// pergent posts again, and the finish takes it.
+		res.Usage = res.Usage[:1]
+		if ok, err := s.FinishSecurityScan(ctx, sc.ID, r.token(), res, r.now()); err != nil || !ok {
+			t.Fatalf("finish again = %v, %v; want true", ok, err)
+		}
+		if n, in := usageOf(t, sc); n != 1 || in != 9 {
+			t.Errorf("usage rows = %d, tokens_in %d; want 1, 9", n, in)
+		}
+	})
+}
+
 // The list puts open findings first, then by severity and file, filters by
 // state, severity, rule and a text in the file or title, and says when the
 // limit cut it. The counts are of open findings only.
@@ -683,10 +777,8 @@ func TestSecurityScanReads(t *testing.T) {
 	})
 	t.Run("usage of many runs", func(t *testing.T) {
 		in, cr := int64(100), int64(5)
-		if err := s.RecordScanUsage(ctx, first.ID, []ScanModelUsage{{Provider: "acme", Model: "big",
-			Usage: SkillUsage{Skill: "security-scan", In: in, Out: 20, CacheRead: &cr, CacheWrite: &cr, Reasoning: &cr}}}); err != nil {
-			t.Fatal(err)
-		}
+		recordScanUsage(t, s, first.ID, ScanModelUsage{Provider: "acme", Model: "big",
+			Usage: SkillUsage{Skill: "security-scan", In: in, Out: 20, CacheRead: &cr, CacheWrite: &cr, Reasoning: &cr}})
 		got, err := s.RunUsages(ctx, []string{first.RunID, second.RunID, "not-an-id"})
 		if err != nil {
 			t.Fatal(err)

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -585,4 +586,133 @@ func TestOpenSecuritySource(t *testing.T) {
 			t.Errorf("archive = %q", got)
 		}
 	})
+}
+
+// One source download of a scan runs at a time, and a scan gets at most
+// securitySourceTries of them, done or failed: pergent tries at most 3
+// times, one after another. done counts once. Each scan has its own count,
+// and a scan that ended is forgotten.
+func TestSecuritySourceGate(t *testing.T) {
+	t.Parallel()
+	var g sourceGate
+	done, ok := g.take("s1")
+	if !ok {
+		t.Fatal("first take refused")
+	}
+	if _, ok := g.take("s1"); ok {
+		t.Error("a second take while one runs was allowed")
+	}
+	other, ok := g.take("s2")
+	if !ok {
+		t.Error("another scan's take was refused")
+	}
+	other()
+	done()
+	done() // a second done frees nothing more
+	second, ok := g.take("s1")
+	if !ok {
+		t.Fatal("take after the first ended refused")
+	}
+	if _, ok := g.take("s1"); ok {
+		t.Error("a take while the second runs was allowed")
+	}
+	second()
+	third, ok := g.take("s1")
+	if !ok {
+		t.Fatal("third take refused")
+	}
+	third()
+	if _, ok := g.take("s1"); ok {
+		t.Errorf("a take after %d downloads was allowed", securitySourceTries)
+	}
+	g.forget("s1")
+	if again, ok := g.take("s1"); !ok {
+		t.Error("take after forget refused")
+	} else {
+		again()
+	}
+	third() // a done after forget changes nothing
+	if g.scans["s2"] == nil || g.scans["s2"].running || g.scans["s2"].started != 1 {
+		t.Errorf("s2 = %+v; want one download, none running", g.scans["s2"])
+	}
+
+	// The archive's Close ends the download.
+	var h sourceGate
+	end, _ := h.take("s3")
+	rc := gatedSource{ReadCloser: io.NopCloser(strings.NewReader("x")), done: end}
+	if _, ok := h.take("s3"); ok {
+		t.Error("a take while the archive is open was allowed")
+	}
+	if err := rc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if end, ok := h.take("s3"); !ok {
+		t.Error("take after Close refused")
+	} else {
+		end()
+	}
+}
+
+// The engine keeps one download of a scan's source at a time, and 3 in all,
+// a failed one counted too: a second download while one is open, or a 4th,
+// is security.Busy, and the platform is not asked.
+func TestOpenSecuritySourceOnceAtATime(t *testing.T) {
+	t.Parallel()
+	env := newSecurityEnv(t)
+	asked := 0
+	fail := true
+	env.Engine.Archives = func(string) (forge.ArchiveReader, bool) {
+		return archiveFunc(func(context.Context, string, string) (io.ReadCloser, error) {
+			asked++
+			if fail {
+				return nil, errors.New("platform down")
+			}
+			return io.NopCloser(strings.NewReader("archive")), nil
+		}), true
+	}
+	sc, token := secRunning(t, env)
+	if _, _, err := env.Engine.OpenSecuritySource(env.ctx, sc.ID, token); !errors.Is(err, security.ErrNoSource) {
+		t.Fatalf("first try = %v; want ErrNoSource", err)
+	}
+	fail = false
+	rc, out, err := env.Engine.OpenSecuritySource(env.ctx, sc.ID, token)
+	if err != nil || out != security.Stored {
+		t.Fatalf("second try = %v, %v; want Stored", out, err)
+	}
+	if _, out, err := env.Engine.OpenSecuritySource(env.ctx, sc.ID, token); err != nil || out != security.Busy {
+		t.Errorf("a try while one is open = %v, %v; want Busy", out, err)
+	}
+	if err := rc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rc, out, err = env.Engine.OpenSecuritySource(env.ctx, sc.ID, token)
+	if err != nil || out != security.Stored {
+		t.Fatalf("third try = %v, %v; want Stored", out, err)
+	}
+	_ = rc.Close()
+	if _, out, err := env.Engine.OpenSecuritySource(env.ctx, sc.ID, token); err != nil || out != security.Busy {
+		t.Errorf("a 4th try = %v, %v; want Busy", out, err)
+	}
+	if asked != 3 {
+		t.Errorf("the platform was asked %d times; want 3", asked)
+	}
+	// A wrong token takes no try.
+	other, otherToken := secRunning(t, env)
+	for range securitySourceTries + 1 {
+		if _, out, _ := env.Engine.OpenSecuritySource(env.ctx, other.ID, "wrong"); out != security.Unauthorized {
+			t.Fatalf("wrong token = %v; want Unauthorized", out)
+		}
+	}
+	if rc, out, err := env.Engine.OpenSecuritySource(env.ctx, other.ID, otherToken); err != nil || out != security.Stored {
+		t.Errorf("after wrong tokens = %v, %v; want Stored", out, err)
+	} else {
+		_ = rc.Close()
+	}
+}
+
+// archiveFunc is a forge.ArchiveReader from a function.
+type archiveFunc func(ctx context.Context, project, commit string) (io.ReadCloser, error)
+
+func (f archiveFunc) Archive(ctx context.Context, project, commit string) (io.ReadCloser, error) {
+	return f(ctx, project, commit)
 }

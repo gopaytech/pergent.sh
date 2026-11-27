@@ -548,8 +548,9 @@ paths:
       description: |
         The platform's `.tar.gz` archive of the scan's commit, passed on as a
         stream and stored nowhere, with the scan's result token (not spent).
-        The route answers only while the scan runs. Only registered when the
-        dashboard is on; else 404. Another method is 405. At most
+        The route answers only while the scan runs, one download at a time
+        and 3 downloads per scan in all, done or failed. Only registered when
+        the dashboard is on; else 404. Another method is 405. At most
         `security.max_source_bytes`: at one byte more the response is cut off
         and the scan fails. A response the platform cuts short is cut off too.
       x-pergent-access: none
@@ -569,7 +570,7 @@ paths:
             text/plain:
               schema: {type: string}
         '409':
-          description: The scan is not running.
+          description: The scan is not running, a download of its source runs, or it had 3 downloads.
           content:
             text/plain:
               schema: {type: string}

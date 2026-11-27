@@ -22,6 +22,7 @@ import (
 type fakeSources struct {
 	token    string
 	finished bool
+	busy     bool
 	body     io.Reader
 	closed   bool
 	tooLarge []string
@@ -31,6 +32,8 @@ func (f *fakeSources) OpenSecuritySource(_ context.Context, _, token string) (io
 	switch {
 	case f.finished:
 		return nil, security.Conflict, nil
+	case f.busy:
+		return nil, security.Busy, nil
 	case token != f.token:
 		return nil, security.Unauthorized, nil
 	case f.body == nil:
@@ -86,7 +89,8 @@ func getSource(t *testing.T, h http.Handler, method, token string) (rec *deadlin
 }
 
 // The source route: another method is 405, no or a wrong token 401, a scan
-// that is not running 409, a platform that gives no archive 502, and else
+// that is not running 409, a download while one runs or past the scan's
+// tries 409, a platform that gives no archive 502, and else
 // the archive as it is, application/gzip, past the server's 60 s timeouts.
 // The log holds neither the token nor a byte of the archive.
 func TestSecuritySourceHandler(t *testing.T) {
@@ -106,6 +110,8 @@ func TestSecuritySourceHandler(t *testing.T) {
 		{"wrong bearer", http.MethodGet, "wrong", &fakeSources{token: token, body: strings.NewReader(archive)},
 			http.StatusUnauthorized},
 		{"finished scan", http.MethodGet, token, &fakeSources{token: token, finished: true}, http.StatusConflict},
+		{"busy", http.MethodGet, token, &fakeSources{token: token, busy: true, body: strings.NewReader(archive)},
+			http.StatusConflict},
 		{"no archive", http.MethodGet, token, &fakeSources{token: token}, http.StatusBadGateway},
 	}
 	for _, c := range cases {

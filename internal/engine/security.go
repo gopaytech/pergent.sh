@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/chain"
@@ -543,6 +544,7 @@ func (e *Engine) endSecurityScan(ctx context.Context, sc store.SecurityScan, sta
 		return
 	}
 	if ok {
+		e.securitySources.forget(sc.ID)
 		e.log().Info("security scan: ended", "scan", sc.ID, "state", status, "reason", reason)
 		e.wakeSecurity()
 	}
@@ -702,7 +704,7 @@ func (e *Engine) securityCaller(ctx context.Context, id, token string) (store.Se
 // (withholdSecurity), then securityResultOf reads what is kept. A result
 // pergent.sh can't use is still taken (security.Stored): the scan fails, so
 // pergent never posts it again and the scan does not wait for the sweep.
-// Then the usage is recorded and the scan loop is woken.
+// The usage is stored with it, and then the scan loop is woken.
 func (e *Engine) CompleteSecurityScan(ctx context.Context, id, token string, body []byte) (security.Outcome, error) {
 	sc, outcome, err := e.securityCaller(ctx, id, token)
 	if err != nil || outcome != security.Stored {
@@ -725,6 +727,9 @@ func (e *Engine) CompleteSecurityScan(ctx context.Context, id, token string, bod
 		log.Info("security scan: state files over 512 KiB were not kept", "files", in.stateDropped)
 	}
 
+	// The usage is stored with the result, in one transaction: an error
+	// keeps the scan running, so pergent posts again on the 5xx.
+	res.Usage = usage
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
 	ok, err := e.Store.FinishSecurityScan(sctx, id, hashToken(token), res, e.now())
@@ -738,11 +743,7 @@ func (e *Engine) CompleteSecurityScan(ctx context.Context, id, token string, bod
 		}
 		return security.Unauthorized, nil
 	}
-	if len(usage) > 0 {
-		if err := e.Store.RecordScanUsage(sctx, id, usage); err != nil {
-			log.Error("security scan: recording the usage failed", "error", e.redact(err.Error()))
-		}
-	}
+	e.securitySources.forget(sc.ID)
 	log.Info("security scan: result taken", "status", res.Status, "findings", len(res.Findings),
 		"usage_rows", len(usage))
 	e.wakeSecurity()
@@ -774,6 +775,7 @@ func (e *Engine) failSecurityCaller(ctx context.Context, id, token, reason strin
 	if err != nil || !ok {
 		return err
 	}
+	e.securitySources.forget(sc.ID)
 	e.log().Info("security scan: ended", "scan", sc.ID, "state", store.SecurityFailed, "reason", reason)
 	e.wakeSecurity()
 	if stopJob {
@@ -785,10 +787,12 @@ func (e *Engine) failSecurityCaller(ctx context.Context, id, token, reason strin
 
 // OpenSecuritySource opens the platform's archive of a running scan's
 // commit, for its Job (securityCaller says who may). A scan with a cancel
-// asked for is security.Conflict: its Job is being stopped. A platform that
-// does not give it is security.ErrNoSource, wrapping the platform's error
-// (forge.ErrSourceNotFound for one the review bot or App can't read). The
-// caller closes the archive.
+// asked for is security.Conflict: its Job is being stopped. One download of
+// a scan runs at a time, and a scan gets securitySourceTries of them, done or
+// failed (sourceGate): another one is security.Busy, and the platform is not
+// asked. A platform that does not give it is security.ErrNoSource, wrapping
+// the platform's error (forge.ErrSourceNotFound for one the review bot or App
+// can't read). The caller closes the archive, which ends the download.
 func (e *Engine) OpenSecuritySource(ctx context.Context, id, token string) (io.ReadCloser, security.Outcome, error) {
 	sc, outcome, err := e.securityCaller(ctx, id, token)
 	if err != nil || outcome != security.Stored {
@@ -807,13 +811,87 @@ func (e *Engine) OpenSecuritySource(ctx context.Context, id, token string) (io.R
 		log.Warn("security scan: no reader of the instance's repositories for the source")
 		return nil, 0, security.ErrNoSource
 	}
+	done, ok := e.securitySources.take(sc.ID)
+	if !ok {
+		log.Warn("security scan: a source download refused: one runs, or the scan used all its tries",
+			"tries", securitySourceTries)
+		return nil, security.Busy, nil
+	}
 	rc, err := r.Archive(ctx, sc.Project, sc.Commit)
 	if err != nil {
+		done()
 		log.Warn("security scan: the platform did not give the source", "error", e.redact(err.Error()))
 		return nil, 0, fmt.Errorf("%w: %w", security.ErrNoSource, err)
 	}
 	log.Info("security scan: serving the source", "commit", sc.Commit)
-	return rc, security.Stored, nil
+	return gatedSource{ReadCloser: rc, done: done}, security.Stored, nil
+}
+
+// securitySourceTries is how many source downloads one scan gets: pergent
+// tries at most 3 times, one after another.
+const securitySourceTries = 3
+
+// sourceGate lets one source download of a scan run at a time, and a scan
+// start at most securitySourceTries of them. Each one is a big, long platform
+// request with the review bot or App, so a Job can't start many. The zero
+// value is ready. A scan is forgotten when it ends; a restart forgets all
+// (one replica).
+type sourceGate struct {
+	mu    sync.Mutex
+	scans map[string]*sourceTries
+}
+
+// sourceTries is one scan's downloads: whether one runs, and how many started.
+type sourceTries struct {
+	running bool
+	started int
+}
+
+// take starts a download of scan id; ok is false while one runs or after
+// securitySourceTries. done ends it; a second call does nothing.
+func (g *sourceGate) take(id string) (done func(), ok bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.scans == nil {
+		g.scans = map[string]*sourceTries{}
+	}
+	st := g.scans[id]
+	if st == nil {
+		st = &sourceTries{}
+		g.scans[id] = st
+	}
+	if st.running || st.started >= securitySourceTries {
+		return nil, false
+	}
+	st.running = true
+	st.started++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			g.mu.Lock()
+			st.running = false
+			g.mu.Unlock()
+		})
+	}, true
+}
+
+// forget drops scan id, which ended.
+func (g *sourceGate) forget(id string) {
+	g.mu.Lock()
+	delete(g.scans, id)
+	g.mu.Unlock()
+}
+
+// gatedSource is a source archive whose Close ends its download in the gate.
+type gatedSource struct {
+	io.ReadCloser
+	done func()
+}
+
+func (s gatedSource) Close() error {
+	err := s.ReadCloser.Close()
+	s.done()
+	return err
 }
 
 // securityIntake is what securityResultOf noted for the log: why the result

@@ -32,7 +32,7 @@ The scan Job runs `jobs.security_image` (`ghcr.io/gopaytech/pergent-security`), 
 The scan pod **never talks to the git host and never holds a git token**. A NetworkPolicy covers the whole pod, so a clone step would need the git host in the egress rule, and injected code could then send data to the attacker's own repository on that host.
 
 1. When a person presses **Start scan**, pergent.sh asks the platform for the default branch's newest commit, with the review bot or App it already has, and stores the commit on the scan.
-2. The scan Job has no clone container. `pergent scan` downloads the code from pergent.sh: `GET /security-scans/{id}/source`, with the scan's own token. The route answers only while that scan runs.
+2. The scan Job has no clone container. `pergent scan` downloads the code from pergent.sh: `GET /security-scans/{id}/source`, with the scan's own token. The route answers only while that scan runs, one download at a time, and 3 downloads per scan in all (done or failed), since pergent tries at most 3 times. Another download gets 409.
 3. pergent.sh passes the platform's archive of that commit on as a stream. It stores nothing.
 4. pergent unpacks it into the work folder and refuses absolute paths, `..`, links that point outside, device files, and too many files or bytes. There is no `.git` folder.
 
@@ -154,7 +154,7 @@ The scan page shows the reason.
 | failed | `the scan Job sent a result over 12 MiB`. |
 | failed | `pergent sent a result pergent.sh couldn't use: <why>`. |
 
-A partial scan whose Job sent a result keeps its findings and its tokens, and fixes nothing. A scan that failed before its Job ran, or that ended with no result (a timeout, a launch failure, a source over the size limit, a body over 12 MiB), has no tokens. So has a scan whose Job sent a body that is not a valid envelope. When the envelope can be read but its SARIF or a finding cannot be used, the scan fails, keeps the tokens its Job reported, and keeps no findings.
+A partial scan whose Job sent a result keeps its findings and its tokens, and fixes nothing. A scan that failed before its Job ran, or that ended with no result (a timeout, a launch failure, a source over the size limit, a body over 12 MiB), has no tokens. So has a scan whose Job sent a body that is not a valid envelope. When the envelope can be read but its SARIF or a finding cannot be used, the scan fails, keeps the tokens its Job reported, and keeps no findings. pergent.sh stores a result and its tokens in one step. When that step fails, the scan keeps running and the Job gets a 5xx, so pergent sends the result again.
 
 ## Routes and metrics
 

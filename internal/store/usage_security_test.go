@@ -55,8 +55,23 @@ func millionRow() ScanModelUsage {
 
 func (e scanUsageEnv) record(t *testing.T, sc SecurityScan, rows ...ScanModelUsage) {
 	t.Helper()
-	if err := e.s.RecordScanUsage(ctx, sc.ID, rows); err != nil {
-		t.Fatalf("RecordScanUsage: %v", err)
+	recordScanUsage(t, e.s, sc.ID, rows...)
+}
+
+// recordScanUsage stores usage rows of a scan that already ended, as
+// FinishSecurityScan does in its transaction.
+func recordScanUsage(t *testing.T, s *Store, scanID string, rows ...ScanModelUsage) {
+	t.Helper()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := insertScanUsage(ctx, tx, scanID, rows); err != nil {
+		t.Fatalf("insertScanUsage: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -246,8 +261,8 @@ func TestScanUsageIsNoReview(t *testing.T) {
 	})
 }
 
-// A second call keeps the first rows: the Job's callback can arrive twice.
-func TestRecordScanUsageOnce(t *testing.T) {
+// A second insert keeps the first rows.
+func TestScanUsageKeepsFirstRow(t *testing.T) {
 	t.Parallel()
 	e := newScanUsageEnv(t)
 	e.record(t, e.scan, millionRow())
