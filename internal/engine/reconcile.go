@@ -326,8 +326,10 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo settings.Effective, now
 // dashboard) can't be reached:
 // its row is dropped with a warning, and its deploy token expires on its own
 // within 30 days. A GitHub repository has no webhook or stored token of its
-// own: only its row is deleted.
+// own: only its row is deleted. Its security scan is cancelled first (its Job
+// deleted); its scans and findings stay.
 func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
+	e.cancelSecurityScanOf(ctx, p.Instance, p.Path)
 	platform, configured := e.registry().Platform(p.Instance)
 	if platform == config.PlatformGitHub || (!configured && p.InstallationID != 0) {
 		if err := e.Store.DeleteProject(ctx, p.Instance, p.ProjectID); err != nil {

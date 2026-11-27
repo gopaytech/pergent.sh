@@ -470,3 +470,53 @@ func TestSecurityCancel(t *testing.T) {
 		}
 	})
 }
+
+// SecurityScansToLog lists the scans that ended since a time with a Job and
+// no stored log on their hidden run: not a running scan, not one with a log,
+// not one that ended before, and not one cancelled before its Job.
+func TestSecurityScansToLog(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	since := t0.Add(time.Hour)
+	// ended runs a scan of project with a Job and ends it at end.
+	ended := func(project string, end time.Time) SecurityScan {
+		t.Helper()
+		r := newSecRepo(s, project)
+		sc := r.start(t)
+		if _, err := s.pool.Exec(ctx, `UPDATE security_scans SET job_name = $2 WHERE id = $1::uuid`,
+			sc.ID, "pergent-security-"+project[len("acme/"):]); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := s.FinishSecurityScan(ctx, sc.ID, r.token(), secResult(SecurityComplete, "v1"), end); err != nil || !ok {
+			t.Fatalf("FinishSecurityScan = %v, %v", ok, err)
+		}
+		got, err := s.SecurityScan(ctx, sc.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	want := ended("acme/want", since.Add(time.Minute))
+	logged := ended("acme/logged", since.Add(time.Minute))
+	if err := s.PutRunLog(ctx, logged.RunID, "a log"); err != nil {
+		t.Fatal(err)
+	}
+	ended("acme/old", since.Add(-time.Minute))
+	running := newSecRepo(s, "acme/running").start(t)
+	if _, err := s.pool.Exec(ctx, `UPDATE security_scans SET job_name = 'pergent-security-running' WHERE id = $1::uuid`,
+		running.ID); err != nil {
+		t.Fatal(err)
+	}
+	noJob := queueSecurity(t, s, scanRequest("main", "acme/nojob"), t0)
+	if _, ok, err := s.RequestSecurityCancel(ctx, noJob.ID, since.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("cancel = %v, %v", ok, err)
+	}
+
+	got, err := s.SecurityScansToLog(ctx, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != want.ID || got[0].RunID != want.RunID {
+		t.Fatalf("SecurityScansToLog = %+v; want only %s", got, want.ID)
+	}
+}

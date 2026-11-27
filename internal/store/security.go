@@ -308,6 +308,16 @@ func (s *Store) RunningSecurityScans(ctx context.Context) ([]SecurityScan, error
 		WHERE state = 'running' ORDER BY queued_at, id`)
 }
 
+// SecurityScansToLog returns the scans that ended since the given time and
+// had a Job, but whose hidden run has no stored log, oldest first. A scan
+// cancelled before its Job had none, so it is left out.
+func (s *Store) SecurityScansToLog(ctx context.Context, since time.Time) ([]SecurityScan, error) {
+	return s.querySecurityScans(ctx, `SELECT `+securityColumns+` FROM security_scans
+		WHERE state IN ('complete', 'partial', 'failed') AND job_name <> '' AND finished_at >= $1
+		  AND NOT EXISTS (SELECT 1 FROM run_logs WHERE run_logs.run_id = security_scans.run_id)
+		ORDER BY finished_at, id`, since)
+}
+
 // ActiveSecurityScan returns a repository's queued or running scan, nil when
 // there is none. The project is matched ignoring case.
 func (s *Store) ActiveSecurityScan(ctx context.Context, instance, project string) (*SecurityScan, error) {

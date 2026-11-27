@@ -335,6 +335,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		// true means the chart set securityJobEgress.cidrs: scan Jobs may
 		// reach the network, so security scans can be turned on.
 		eng.SecurityEgress = os.Getenv("PERGENT_SH_SECURITY_EGRESS") == "true"
+		eng.SecurityImage = cfg.Jobs.SecurityImage
 		scanResults = eng
 		// Code graphs need the graphs volume and the graph image (the chart's
 		// graphs.enabled sets both); a repository turns them on in the
@@ -438,6 +439,10 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	})
 	if eng.Scans {
 		loops = append(loops, eng.RunScans)
+		// The security scans have a loop of their own. It runs whenever the
+		// dashboard is on, so scans queued or running still end after Start
+		// scan is turned off.
+		loops = append(loops, eng.RunSecurityScans)
 	}
 	if eng.GraphsOn() {
 		log.Info("code graphs on", "dir", eng.GraphDir, "image", eng.GraphImage)
