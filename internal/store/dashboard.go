@@ -670,7 +670,7 @@ func (s *Store) RemoveDashboardRepo(ctx context.Context, instance, project strin
 	}
 	// Its own chain goes with its settings: the resolver reads a chain row
 	// whatever the repository's row says, so one added again would run on it.
-	for _, set := range []ChainSet{ChainA, ChainReviewers} {
+	for _, set := range []ChainSet{ChainA, ChainReviewers, ChainScan} {
 		if _, err := tx.Exec(ctx, `DELETE FROM `+set.chains+` WHERE scope = 'repo' AND instance = $1 AND lower(project) = lower($2)`,
 			instance, project); err != nil {
 			return false, err

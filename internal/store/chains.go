@@ -42,13 +42,19 @@ type Chain struct {
 }
 
 // ChainSet is which chain a chain row belongs to: ChainA, the review's model
-// chain (reviewer 1), or ChainReviewers, a repository's reviewers 2 to 5 and its judge. Its table
+// chain (reviewer 1), ChainReviewers, a repository's reviewers 2 to 5 and its
+// judge, or ChainScan, a repository's security scan chain. Its table
 // and column names are fixed here and never come from input; the chain SQL
 // is built from them. slot is the SQL that reads a row's slot, an empty
-// text literal for a set with none.
+// text literal for a set with none; mode is the dashboard_repos column a
+// repository save makes custom, "" for a set with none.
 type ChainSet struct{ chains, entries, mode, slot string }
 
 var ChainA = ChainSet{chains: "model_chains", entries: "model_chain_entries", mode: "chain_mode", slot: "''"}
+
+// ChainScan is a repository's security scan chain. It has no mode: a
+// repository with no row has no scan chain of its own.
+var ChainScan = ChainSet{chains: "security_scan_chains", entries: "security_scan_chain_entries", slot: "''"}
 
 type rowsQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -251,7 +257,7 @@ func (s *Store) SaveChain(ctx context.Context, c Chain, at time.Time) error {
 // ErrChainTooLong; a team entry that is not there is ErrModelNotFound (it is
 // locked, so it can't be removed meanwhile). Nothing else is checked here:
 // who may name which entry is the caller's. A repository save makes the
-// set's mode of the repository custom.
+// set's mode of the repository custom, for a set with a mode.
 //
 // The previous release reads the default and model_id, so for ChainA they
 // follow the chain. Global: a stored entry at position 1 becomes the default
@@ -294,9 +300,11 @@ func (s *Store) SaveChainOf(ctx context.Context, set ChainSet, c Chain, at time.
 			}
 		}
 	case ScopeRepo:
-		if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET `+set.mode+` = 'custom'
-			WHERE instance = $1 AND lower(project) = lower($2)`, c.Instance, c.Project); err != nil {
-			return err
+		if set.mode != "" {
+			if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET `+set.mode+` = 'custom'
+				WHERE instance = $1 AND lower(project) = lower($2)`, c.Instance, c.Project); err != nil {
+				return err
+			}
 		}
 		if set == ChainA {
 			if err := syncRepoModelID(ctx, tx, c); err != nil {
