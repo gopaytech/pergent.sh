@@ -160,6 +160,20 @@ func TestSecurityStartSetsCarrierEntry(t *testing.T) {
 	if err := s.StartSecurityJob(ctx, queued.ID, start); err != nil {
 		t.Fatalf("StartSecurityJob: %v", err)
 	}
+	// A running scan someone asked to cancel never gets a Job.
+	cancelled := queueSecurity(t, s, scanRequest("main", "acme/web"), t0.Add(time.Minute))
+	if _, ok, err := s.ClaimSecurityScan(ctx, 2, t0, t0.Add(time.Hour)); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	if _, ok, err := s.RequestSecurityCancel(ctx, cancelled.ID, t0.Add(2*time.Minute)); err != nil || !ok {
+		t.Fatalf("cancel = %v, %v", ok, err)
+	}
+	if err := s.StartSecurityJob(ctx, cancelled.ID, start); !errors.Is(err, ErrSecurityScanNotFound) {
+		t.Errorf("StartSecurityJob on a cancelled scan = %v; want ErrSecurityScanNotFound", err)
+	}
+	if got, err := s.SecurityScan(ctx, cancelled.ID); err != nil || got.JobName != "" {
+		t.Errorf("cancelled scan = %+v, %v; want no Job", got, err)
+	}
 	sc, err := s.SecurityScan(ctx, queued.ID)
 	if err != nil || sc.JobName != "pergent-security-1" || sc.Provider != "openai" || sc.Model != "gpt-5" ||
 		sc.EntryName != "Team key" || sc.TokenBudget == nil || *sc.TokenBudget != 5000 ||

@@ -6,12 +6,15 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/security"
@@ -443,6 +446,7 @@ func TestSecurityNoFallback(t *testing.T) {
 func TestSecuritySweep(t *testing.T) {
 	t.Parallel()
 	env := newSecurityEnv(t)
+	serveLog(env, "scanning\n")
 	// launched queues a scan and starts its Job.
 	launched := func(t *testing.T) store.SecurityScan {
 		t.Helper()
@@ -472,6 +476,24 @@ func TestSecuritySweep(t *testing.T) {
 		secSweep(env)
 		wantEnded(t, sc.ID, store.SecurityFailed, "the scan stopped before its Job started; start it again")
 	})
+	t.Run("Job not created yet", func(t *testing.T) {
+		sc := secQueue(t, env, testProjectPath, testProjectID, 0)
+		claimed, ok, err := env.Store.ClaimSecurityScan(env.ctx, 1, env.Now(), env.Now().Add(time.Minute))
+		if err != nil || !ok || claimed.ID != sc.ID {
+			t.Fatalf("claim = %v, %v", ok, err)
+		}
+		// Its name is stored, and the launch has not created the Job yet.
+		if err := env.Store.StartSecurityJob(env.ctx, sc.ID, store.SecurityJobStart{JobName: kube.SecurityJobName(sc.ID),
+			TokenHash: hashToken("t"), Deadline: env.Now().Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		env.SetNow(claimed.StartedAt.Add(securityLaunchTimeout + time.Minute))
+		secSweep(env)
+		wantEnded(t, sc.ID, store.SecurityRunning, "")
+		env.SetNow(env.Now().Add(time.Second))
+		secSweep(env)
+		wantEnded(t, sc.ID, store.SecurityFailed, "the scan Job ended without a result")
+	})
 	t.Run("failed Job", func(t *testing.T) {
 		sc := launched(t)
 		j := secJob(t, env, sc.ID)
@@ -494,6 +516,11 @@ func TestSecuritySweep(t *testing.T) {
 	})
 	t.Run("past the deadline", func(t *testing.T) {
 		sc := launched(t)
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: sc.JobName + "-abcde", Namespace: testNamespace,
+			Labels: map[string]string{"job-name": sc.JobName}}}
+		if _, err := env.Kube.CoreV1().Pods(testNamespace).Create(env.ctx, pod, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
 		env.SetNow(sc.Deadline.Add(-time.Second))
 		secSweep(env)
 		wantEnded(t, sc.ID, store.SecurityRunning, "")
@@ -502,6 +529,10 @@ func TestSecuritySweep(t *testing.T) {
 		wantEnded(t, sc.ID, store.SecurityFailed, "the scan took longer than its timeout")
 		if secJob(t, env, sc.ID) != nil {
 			t.Errorf("the Job past its deadline was not deleted")
+		}
+		// Its log was taken before the Job went.
+		if text, found, err := env.Store.RunLog(env.ctx, sc.RunID); err != nil || !found || text != "scanning\n" {
+			t.Errorf("log of the timed-out scan = %q, %v, %v; want it stored", text, found, err)
 		}
 	})
 	t.Run("cancel with no post", func(t *testing.T) {
@@ -609,5 +640,72 @@ func TestSecurityRemoveCancels(t *testing.T) {
 	}
 	if scans, err := env.Store.SecurityScans(env.ctx, "gone", "acme/old", 10); err != nil || len(scans) != 1 {
 		t.Errorf("scans = %d, %v; want the row kept", len(scans), err)
+	}
+}
+
+// A cancel during the launch stops the scan: before the Job is recorded it
+// gets no Job and ends partial, cancelled; while the Job is being created the
+// cancel finds no Job to delete, so the launch deletes it once it exists.
+func TestSecurityCancelDuringLaunch(t *testing.T) {
+	t.Parallel()
+	env := newSecurityEnv(t)
+
+	t.Run("before the Job is recorded", func(t *testing.T) {
+		secQueue(t, env, testProjectPath, testProjectID, 0)
+		claimed, ok, err := env.Store.ClaimSecurityScan(env.ctx, 1, env.Now(), env.Now().Add(time.Minute))
+		if err != nil || !ok {
+			t.Fatalf("claim = %v, %v", ok, err)
+		}
+		if _, err := env.Engine.CancelSecurityScan(env.ctx, testInstance, testProjectPath, claimed.ID); err != nil {
+			t.Fatalf("CancelSecurityScan: %v", err)
+		}
+		env.Engine.startSecurityScan(env.ctx, claimed)
+		if sc := secScan(t, env, claimed.ID); sc.State != store.SecurityPartial || sc.Reason != "cancelled" || sc.JobName != "" {
+			t.Errorf("scan = %s %q, Job %q; want partial, cancelled, no Job", sc.State, sc.Reason, sc.JobName)
+		}
+		if secJob(t, env, claimed.ID) != nil {
+			t.Errorf("a cancelled scan got a Job")
+		}
+	})
+	t.Run("while the Job is created", func(t *testing.T) {
+		sc := secQueue(t, env, testProjectPath, testProjectID, 0)
+		var once sync.Once
+		env.Kube.PrependReactor("create", "jobs", func(a k8stesting.Action) (bool, runtime.Object, error) {
+			if a.(k8stesting.CreateAction).GetObject().(*batchv1.Job).Name == kube.SecurityJobName(sc.ID) {
+				once.Do(func() {
+					// The dashboard's cancel: the scan has a Job name, but
+					// no Job to delete yet.
+					if _, ok, err := env.Store.RequestSecurityCancel(env.ctx, sc.ID, env.Now()); err != nil || !ok {
+						t.Errorf("cancel = %v, %v", ok, err)
+					}
+				})
+			}
+			return false, nil, nil
+		})
+		secLaunch(env)
+		got := secScan(t, env, sc.ID)
+		if got.State != store.SecurityRunning || got.CancelRequestedAt == nil || got.JobName == "" {
+			t.Fatalf("scan = %+v; want running with the cancel asked\n%s", got, env.Logs())
+		}
+		if secJob(t, env, sc.ID) != nil {
+			t.Errorf("the Job of a scan cancelled during its launch was not deleted")
+		}
+	})
+}
+
+// An admin's start goes past the quota whether or not it had room then: a
+// scan that waits while the quota fills still runs.
+func TestSecurityAdminStartLaunchesPastQuota(t *testing.T) {
+	t.Parallel()
+	env := quotaPushEnv(t, 1000, 0)
+	secOn(env)
+	sc, err := env.Engine.RequestSecurityScan(env.ctx, secAdmin(testProjectPath))
+	if err != nil || !sc.PastQuota {
+		t.Fatalf("RequestSecurityScan = %+v, %v; want queued past the quota", sc, err)
+	}
+	seedQuotaUsage(t, env, 1000)
+	secLaunch(env)
+	if got := secScan(t, env, sc.ID); got.State != store.SecurityRunning || secJob(t, env, sc.ID) == nil {
+		t.Fatalf("scan = %s %q; want running with a Job\n%s", got.State, got.Reason, env.Logs())
 	}
 }

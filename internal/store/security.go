@@ -66,8 +66,9 @@ type SecurityScan struct {
 
 // SecurityScanRequest is what a person's Start asks for: the repository, the
 // default branch and the commit read from the platform at Start, who asked,
-// whether they started it past a used-up quota, and the settings it runs
-// with (nil step limits: the skill's own).
+// whether an admin started it (PastQuota: it goes past a used-up quota and
+// the admin limits, as an admin's review start does), and the settings it
+// runs with (nil step limits: the skill's own).
 type SecurityScanRequest struct {
 	Instance, Project          string
 	ProjectID                  int64
@@ -238,8 +239,9 @@ func (s *Store) ClaimSecurityScan(ctx context.Context, limit int, now, deadline 
 // scan (its name, the hash of its result token, the new deadline, the
 // entry's name, provider and model, and the token budget) and, in the same
 // transaction, the entry on the scan's hidden run, as SetRunEntry and
-// SetRunModel write them on a review's run. Any other scan is
-// ErrSecurityScanNotFound.
+// SetRunModel write them on a review's run. Any other scan, and a running
+// scan someone asked to cancel, is ErrSecurityScanNotFound: a cancelled scan
+// never gets a Job.
 func (s *Store) StartSecurityJob(ctx context.Context, id string, j SecurityJobStart) error {
 	if !fetchID.MatchString(id) {
 		return ErrSecurityScanNotFound
@@ -254,7 +256,7 @@ func (s *Store) StartSecurityJob(ctx context.Context, id string, j SecurityJobSt
 	var runID string
 	err = tx.QueryRow(ctx, `UPDATE security_scans SET job_name = $2, token_hash = $3, deadline = $4, provider = $5,
 			model = $6, entry_name = $7, token_budget = $8
-		WHERE id = $1::uuid AND state = 'running' RETURNING run_id::text`,
+		WHERE id = $1::uuid AND state = 'running' AND cancel_requested_at IS NULL RETURNING run_id::text`,
 		id, j.JobName, j.TokenHash, j.Deadline, provider, model, cutText(j.Entry.Name), j.TokenBudget).Scan(&runID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrSecurityScanNotFound

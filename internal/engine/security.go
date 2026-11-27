@@ -142,8 +142,10 @@ func (e *Engine) RequestSecurityScan(ctx context.Context, s security.Start) (sto
 // person who is not an admin is refused with security.ErrQuota when the
 // repository's quota is used up, when only quotas and limits stop every
 // entry, or when the instance's quota is used up and no entry is left. An
-// admin goes past them (pastQuota true) and the admin limits, but not a
-// team's own limit: a hold left after that is a *security.TeamLimitError.
+// admin goes past them and the admin limits, but not a team's own limit: a
+// hold left after that is a *security.TeamLimitError. pastQuota is admin, as
+// a review's StartRequest.PastQuota is: an admin's scan that waits in the
+// queue while the quota fills still runs.
 func (e *Engine) securityQuota(ctx context.Context, now time.Time, repo settings.Effective, projectID int64, admin bool) (pastQuota bool, err error) {
 	repoUsed, instanceUsed, err := quota.Check(ctx, e.Store, now, repo.Instance, projectID, repo)
 	if err != nil {
@@ -156,7 +158,7 @@ func (e *Engine) securityQuota(ctx context.Context, now time.Time, repo settings
 	in.InstanceQuotaUsedUp = instanceUsed
 	dec := chain.Resolve(in)
 	if !repoUsed && !dec.Hold && !(instanceUsed && !dec.Runs()) {
-		return false, nil
+		return admin, nil
 	}
 	if !admin {
 		return false, security.ErrQuota
@@ -413,6 +415,13 @@ func (e *Engine) startSecurityScan(ctx context.Context, sc store.SecurityScan) {
 	})
 	switch {
 	case errors.Is(err, store.ErrSecurityScanNotFound):
+		// Ended, or cancelled since the claim: a cancelled scan gets no Job.
+		if again, err := e.Store.SecurityScan(ctx, sc.ID); err == nil && again.State == store.SecurityRunning &&
+			again.CancelRequestedAt != nil {
+			log.Info("security scan: cancelled before its Job started")
+			e.endSecurityScan(ctx, again, store.SecurityPartial, reasonSecurityCancelled)
+			return
+		}
 		log.Info("security scan: the scan ended before its Job started")
 		return
 	case err != nil:
@@ -439,6 +448,17 @@ func (e *Engine) startSecurityScan(ctx context.Context, sc store.SecurityScan) {
 	}
 	log.Info("security scan: Job started", "job", name, "commit", sc.Commit, "entry", dec.Entry.Name,
 		"budget", sc.TokenBudget != nil)
+	// A cancel asked for while the Job was being created found no Job to
+	// delete: stop it now, so pergent gets SIGTERM and posts partial.
+	again, err := e.Store.SecurityScan(ctx, sc.ID)
+	if err != nil {
+		log.Info("security scan: couldn't read the scan again after its Job started", "error", e.redact(err.Error()))
+		return
+	}
+	if again.State == store.SecurityRunning && again.CancelRequestedAt != nil {
+		log.Info("security scan: cancelled while its Job was being created")
+		e.stopSecurityJob(ctx, again)
+	}
 }
 
 // securityEntry picks the entry a claimed scan runs on, with the owner team
@@ -544,10 +564,11 @@ func (e *Engine) sweepSecurityScans(ctx context.Context) {
 // posted within securityCancelGrace ends partial, cancelled. A scan with no
 // Job past its deadline (pergent.sh stopped before the Job) fails. A Job that
 // failed or is gone fails the scan with kube.SecurityFailure's reason, once
-// the Job has had securityCancelGrace to post after its SIGTERM; a scan past
+// the Job has had securityCancelGrace to post after its SIGTERM (a missing
+// Job counts as gone only once the launch had time to create it); a scan past
 // its deadline with no post fails as too slow. The Job of a scan ended past
-// its deadline, or after a cancel, is deleted. Lost scans are not started
-// again: a person starts a new one.
+// its deadline, or after a cancel, is deleted after its log is taken. Lost
+// scans are not started again: a person starts a new one.
 func (e *Engine) sweepSecurityScan(ctx context.Context, sc store.SecurityScan, now time.Time) {
 	log := e.log().With("scan", sc.ID, "job", sc.JobName)
 	if sc.CancelRequestedAt != nil {
@@ -555,7 +576,7 @@ func (e *Engine) sweepSecurityScan(ctx context.Context, sc store.SecurityScan, n
 			return
 		}
 		e.endSecurityScan(ctx, sc, store.SecurityPartial, reasonSecurityCancelled)
-		e.deleteSecurityJob(ctx, sc, log)
+		e.stopSecurityJob(ctx, sc)
 		return
 	}
 	late := sc.Deadline != nil && now.After(*sc.Deadline)
@@ -565,21 +586,24 @@ func (e *Engine) sweepSecurityScan(ctx context.Context, sc store.SecurityScan, n
 		}
 		return
 	}
+	obs, err := e.Launcher.Inspect(ctx, sc.JobName, now)
+	if err != nil {
+		log.Info("security scan: couldn't read the Job", "error", e.redact(err.Error()))
+		return
+	}
+	// The name is stored before the Job is created: a Job that is missing
+	// may be one that is still being created.
+	if !obs.Exists && !late && sc.StartedAt != nil && !now.After(sc.StartedAt.Add(securityLaunchTimeout+time.Minute)) {
+		return
+	}
 	reason, err := e.Launcher.SecurityFailure(ctx, sc.JobName)
 	if err != nil {
 		log.Info("security scan: couldn't read the Job", "error", e.redact(err.Error()))
 		return
 	}
-	if reason != "" && !late {
-		// A Job at its deadline gave pergent SIGTERM: it may still post.
-		obs, err := e.Launcher.Inspect(ctx, sc.JobName, now)
-		if err != nil {
-			log.Info("security scan: couldn't read the Job", "error", e.redact(err.Error()))
-			return
-		}
-		if obs.Exists && obs.Finished && now.Sub(obs.FinishedAt) < securityCancelGrace {
-			return
-		}
+	// A Job at its deadline gave pergent SIGTERM: it may still post.
+	if reason != "" && !late && obs.Exists && obs.Finished && now.Sub(obs.FinishedAt) < securityCancelGrace {
+		return
 	}
 	if reason == "" && late {
 		reason = msgSecurityTimedOut
@@ -589,7 +613,9 @@ func (e *Engine) sweepSecurityScan(ctx context.Context, sc store.SecurityScan, n
 	}
 	e.failSecurityScan(ctx, sc, reason)
 	if late {
-		e.deleteSecurityJob(ctx, sc, log)
+		// Its log first: the Job of a scan that took too long has the most
+		// useful one.
+		e.stopSecurityJob(ctx, sc)
 	}
 }
 
