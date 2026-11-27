@@ -43,6 +43,7 @@ const routes = (view: SecurityView, role: "admin" | "viewer" = "admin") => ({
   "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, role) },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
   [`GET ${sec}`]: { body: view },
+  [`GET ${sec}/findings?state=open`]: { body: { findings: [], truncated: false } },
 });
 
 const withLast = (last: SecurityView["last"]): SecurityView => ({ ...securityView, last });
@@ -109,6 +110,7 @@ describe("Security", () => {
       ...routes({ ...securityView, canManage: false, canStart: false }, "viewer"),
       "GET /api/repositories/main/acme/tools": { body: repoDetail(repoToolsPaused, "viewer") },
       "GET /api/repositories/main/acme/tools/security": { body: { ...securityView, canManage: false, canStart: false } },
+      "GET /api/repositories/main/acme/tools/security/findings?state=open": { body: { findings: [], truncated: false } },
     });
     renderApp("/repos/main/acme/tools?tab=security");
     await screen.findByText("Critical 1 · High 2 · Medium 3 · Low 4 · Needs validation 2");
@@ -121,6 +123,7 @@ describe("Security", () => {
       ...routes(securityView),
       "GET /api/repositories/main/acme/tools": { body: repoDetail(repoToolsPaused, "maintainer") },
       "GET /api/repositories/main/acme/tools/security": { body: { ...securityView, canStart: false } },
+      "GET /api/repositories/main/acme/tools/security/findings?state=open": { body: { findings: [], truncated: false } },
     });
     renderApp("/repos/main/acme/tools?tab=security");
     expect(await screen.findByText("Scans are off while the repository is paused.")).toBeInTheDocument();

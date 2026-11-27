@@ -9,6 +9,8 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { api, paths, type SecurityScanView, type SecurityStartView, type SecurityView } from "../api";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Pill, count, duration, type Tone } from "../ui";
+import SecurityFinding from "./SecurityFinding";
+import SecurityFindings from "./SecurityFindings";
 
 // How often the tab asks again while a scan is queued or running.
 export const securityPollMs = 10_000;
@@ -33,9 +35,9 @@ const stateTone: Record<SecurityScanView["state"], [Tone, string]> = {
 // pages are this tab with ?finding= or ?scan= in the address.
 export default function Security({ instance, project, paused }: { instance: string; project: string; paused: boolean }) {
   const [search] = useSearchParams();
-  // Tasks 4 and 5 show these two pages in place of the summary.
-  void search.get("finding");
+  // Task 5 shows the scan page in place of the summary.
   void search.get("scan");
+  const finding = Number(search.get("finding"));
   const key = ["security", instance, project];
   // The tab asks again every 10 seconds while a scan is queued or running, and
   // not at all otherwise.
@@ -44,6 +46,10 @@ export default function Security({ instance, project, paused }: { instance: stri
     queryFn: () => api.get<SecurityView>(paths.apiRepoSecurity(instance, project)),
     refetchInterval: (q) => (q.state.data?.running ? securityPollMs : false),
   });
+  // A finding's page takes the place of the tab's summary and list.
+  if (search.has("finding") && Number.isInteger(finding) && finding > 0) {
+    return <SecurityFinding instance={instance} project={project} id={finding} paused={paused} />;
+  }
   if (security.isPending) return <Loading />;
   if (security.isError) return <ErrorBox error={security.error} onRetry={() => void security.refetch()} />;
   const v = security.data;
@@ -123,6 +129,7 @@ function Summary({ v, instance, project, paused, queryKey }: { v: SecurityView; 
           </div>
         )}
       </Card>
+      <SecurityFindings instance={instance} project={project} />
     </>
   );
 }
