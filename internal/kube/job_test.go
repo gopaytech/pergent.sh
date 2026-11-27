@@ -938,3 +938,72 @@ func TestBuildJobUnchanged(t *testing.T) {
 		t.Errorf("a review Job changed:\n got:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestBuildJobSecurityFindings(t *testing.T) {
+	env := func(j *batchv1.Job) (string, bool) {
+		for _, e := range containerByName(t, j.Spec.Template.Spec.Containers, "pergent").Env {
+			if e.Name == "PERGENT_SECURITY_FINDINGS" {
+				return e.Value, true
+			}
+		}
+		return "", false
+	}
+	item := func(j *batchv1.Job) bool {
+		for _, v := range j.Spec.Template.Spec.Volumes {
+			if v.ConfigMap == nil {
+				continue
+			}
+			for _, it := range v.ConfigMap.Items {
+				if it.Key == "security-findings.md" && it.Path == "security-findings.md" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	p := testParams()
+	p.Inputs.SecurityFindings = []byte("- high a.go:3 sql")
+	j := BuildJob(p)
+	if got, _ := env(j); got != "/in/security-findings.md" {
+		t.Errorf("PERGENT_SECURITY_FINDINGS = %q", got)
+	}
+	// A flag would make an older image exit 2.
+	for _, a := range containerByName(t, j.Spec.Template.Spec.Containers, "pergent").Args {
+		if strings.HasPrefix(a, "--security-findings") {
+			t.Errorf("unexpected arg %q", a)
+		}
+	}
+	if got := BuildConfigMap(p, nil).Data["security-findings.md"]; got != "- high a.go:3 sql" {
+		t.Errorf("security-findings.md = %q", got)
+	}
+	if !item(j) {
+		t.Error("no security-findings.md item in the inputs volume")
+	}
+
+	// The judge Job has neither.
+	jp := judgeParams()
+	jp.Inputs.SecurityFindings = []byte("- high a.go:3 sql")
+	jj := BuildJob(jp)
+	if _, ok := env(jj); ok || item(jj) {
+		t.Error("the judge Job has the security findings")
+	}
+	if _, ok := BuildConfigMap(jp, nil).Data["security-findings.md"]; ok {
+		t.Error("the judge ConfigMap has the security findings")
+	}
+	if jp.Inputs.SecurityFindings == nil {
+		t.Error("BuildJob changed the caller's params")
+	}
+
+	p.Inputs.SecurityFindings = nil
+	j = BuildJob(p)
+	if _, ok := env(j); ok {
+		t.Error("PERGENT_SECURITY_FINDINGS set without findings")
+	}
+	if _, ok := BuildConfigMap(p, nil).Data["security-findings.md"]; ok {
+		t.Error("security-findings.md present without findings")
+	}
+	if item(j) {
+		t.Error("security-findings.md item without findings")
+	}
+}

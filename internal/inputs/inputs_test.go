@@ -743,3 +743,33 @@ func TestSizeCountsLinked(t *testing.T) {
 		t.Errorf("Fit = %v, linked = %q", err, in.Linked)
 	}
 }
+
+// The open security findings go before the CI results: the review is as good
+// without them as without a CI run, and they are only a hint.
+func TestFitDropsSecurityFindingsFirst(t *testing.T) {
+	in := &Inputs{
+		Skills: map[string][]byte{"a": make([]byte, 40)}, CIResults: make([]byte, 20), SecurityFindings: make([]byte, 20),
+	}
+	if in.Size() != 80 {
+		t.Fatalf("size = %d, want 80 (it counts the findings)", in.Size())
+	}
+	if err := in.Fit(70); err != nil {
+		t.Fatal(err)
+	}
+	if in.SecurityFindings != nil || in.CIResults == nil {
+		t.Errorf("findings %d bytes, CI results %d bytes; want the findings dropped alone", len(in.SecurityFindings), len(in.CIResults))
+	}
+
+	in = &Inputs{Skills: map[string][]byte{"a": make([]byte, 40)}, CIResults: make([]byte, 20), SecurityFindings: make([]byte, 20)}
+	if err := in.Fit(50); err != nil {
+		t.Fatal(err)
+	}
+	if in.SecurityFindings != nil || in.CIResults != nil {
+		t.Error("both should go when the findings are not enough")
+	}
+
+	in = &Inputs{Skills: map[string][]byte{"a": make([]byte, 40)}, SecurityFindings: make([]byte, 20)}
+	if err := in.Fit(100); err != nil || in.SecurityFindings == nil {
+		t.Errorf("fit within limit dropped the findings: %v", err)
+	}
+}
