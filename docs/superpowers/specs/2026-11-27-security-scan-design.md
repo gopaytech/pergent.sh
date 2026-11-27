@@ -109,6 +109,7 @@ When a step limit, the token budget, the timeout or a cancel stops the run, perg
 - pergent starts opencode with an allow-list of environment variables (`pergent/internal/runner/runner.go`), and keeps `PERGENT_RESULT_TOKEN` out of it. But bash runs as the same user as pergent, so it can read pergent's own environment through `/proc/<pid>/environ`. So bash can reach `OPENCODE_API_KEY`, the result token, any cloud credentials pergent keeps for a provider (`AWS_`, `GOOGLE_`, `VERTEX_`, `AZURE_`, `CLOUDFLARE_`) and the proxy variables. `GIT_TOKEN` stays in the checkout container only. Removing curl is not enough, because bash and node can open a network connection themselves. The real guard is the network:
   - **A scan Job has its own Kubernetes NetworkPolicy, `securityJobEgress.cidrs`, with no default.** Until an admin sets it (the LLM provider only), **Start scan** is off and the tab says why. It never falls back to `jobEgress.cidrs`, whose default is `0.0.0.0/0`.
   - The pergent.sh callback stays reachable on its own port, as for reviews.
+  - **No proxy variables in a scan Job** (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and their lower-case forms), unless an admin sets `security.proxy` on purpose. A proxy is an allowed address that can reach any other, so it would undo the egress rule.
 - pergent.sh withholds any text that holds a secret it knows. This check covers every string in a scan result: finding messages, `reason`, `state` and the SARIF.
 
 ### The envelope
@@ -220,6 +221,12 @@ Scans by status, open findings by severity, and scan tokens in the usage metrics
 - `docs/reference/limits.md`, `docs/concepts/dashboard.md`, and the Helm values for `jobs.security_image`, `securityJobEgress` and `security.max_running`.
 - `docs/upgrading.md`: the new image, the egress setting that must be set before the first scan, and the migration.
 
+## Build order
+
+- **Two plans.** One for `pergent`: the `pergent scan` command, the manifest, the converter, usage and the budget, and the `pergent-security` image. One for `pergent.sh`: the tables, the result route, the engine, the API, the Security tab, the review input, Helm and docs.
+- pergent comes first. pergent.sh is built against the envelope in this document, with test fixtures, so it does not wait for a pergent release.
+- Neither is released until the owner says so.
+
 ## Testing
 
 Each task runs its own tests. The full run is on CI only.
@@ -237,6 +244,7 @@ Each task runs its own tests. The full run is on CI only.
 | Risk | Handling |
 |---|---|
 | A prompt injection in the scanned code makes the model send the API key out | No default egress. `securityJobEgress.cidrs` must be set to the LLM provider before a scan can start. No curl. Secrets are withheld from every result string |
+| A prompt injection makes the model post its own result for the scan, such as "no findings", with the result token read from `/proc` | Accepted. The token is tied to that one scan, pergent.sh accepts one result per scan, and the next scan finds the problems again |
 | A sub-agent gets opencode's default rights | pergent sets the same permission block on every agent. A test checks it |
 | A scan costs far more than expected | Manual start only, a confirm box with the last scan's cost, step limits, a timeout, a token budget from the quotas, Cancel, and `security.max_running` |
 | Sub-agent tokens go uncounted | Usage is read from opencode's database with `opencode stats`, not from the JSON stream. A test checks that a run with a sub-agent reports its tokens |
