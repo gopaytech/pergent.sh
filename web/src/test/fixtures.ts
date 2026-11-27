@@ -1381,6 +1381,6 @@ export const securitySettings: SecuritySettingsView = {
   subagentMaxSteps: null,
   timeoutSeconds: null,
   findingsInReviews: false,
-  defaults: { maxSteps: 120, subagentMaxSteps: 60, timeoutSeconds: 3600 },
+  defaults: { maxSteps: 600, subagentMaxSteps: 100, timeoutSeconds: 10800 },
   canEdit: true,
 };

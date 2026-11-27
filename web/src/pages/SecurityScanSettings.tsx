@@ -45,11 +45,13 @@ const chainKey = (instance: string, project: string) => ["security-chain", insta
 // whether reviews get the open findings. Everyone who sees the repository
 // sees it; the server says who edits (canEdit, and readOnly on the chain). On
 // a paused repository nothing is edited, and that is not an error.
-export default function SecurityScanSettings({ instance, project, paused = false }: { instance: string; project: string; paused?: boolean }) {
+export default function SecurityScanSettings({ instance, project, paused }: { instance: string; project: string; paused: boolean }) {
   const settings = useQuery({
     queryKey: settingsKey(instance, project),
     queryFn: () => api.get<SecuritySettingsView>(paths.apiRepoSecuritySettings(instance, project)),
   });
+  // Kept here: a saved answer remounts the form, which would lose it.
+  const [note, setNote] = useState("");
   return (
     <FoldCard label="Security scan" title="Security scan" summary="scan model, limits, findings in reviews">
       <ScanChain instance={instance} project={project} paused={paused} />
@@ -61,7 +63,7 @@ export default function SecurityScanSettings({ instance, project, paused = false
       )}
       {settings.isSuccess && (
         // A new answer from the server starts the form again.
-        <Limits key={JSON.stringify(settings.data)} instance={instance} project={project} view={settings.data} paused={paused} />
+        <Limits key={JSON.stringify(settings.data)} instance={instance} project={project} view={settings.data} paused={paused} note={note} setNote={setNote} />
       )}
     </FoldCard>
   );
@@ -79,7 +81,21 @@ function Row({ name, help, children }: { name: string; help?: ReactNode; childre
   );
 }
 
-function Limits({ instance, project, view, paused }: { instance: string; project: string; view: SecuritySettingsView; paused: boolean }) {
+function Limits({
+  instance,
+  project,
+  view,
+  paused,
+  note,
+  setNote,
+}: {
+  instance: string;
+  project: string;
+  view: SecuritySettingsView;
+  paused: boolean;
+  note: string;
+  setNote: (note: string) => void;
+}) {
   const client = useQueryClient();
   const write = useWrite();
   const editable = view.canEdit && !paused;
@@ -88,7 +104,6 @@ function Limits({ instance, project, view, paused }: { instance: string; project
   const [minutes, setMinutes] = useState(minutesText(view.timeoutSeconds));
   const [findings, setFindings] = useState(view.findingsInReviews);
   const [problem, setProblem] = useState("");
-  const [note, setNote] = useState("");
   const save = useMutation({
     mutationFn: (body: SecuritySettingsRequest) => write<SecuritySettingsView>("PUT", paths.apiRepoSecuritySettings(instance, project), body),
     onMutate: () => setNote(""),

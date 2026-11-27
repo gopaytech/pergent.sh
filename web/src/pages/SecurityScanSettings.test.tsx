@@ -11,18 +11,16 @@ afterEach(() => vi.unstubAllGlobals());
 
 const payments = "/api/repositories/main/acme/payments";
 const open = "/repos/main/acme/payments?tab=settings";
-// The real defaults: 600 and 100 steps, 3 hours.
-const real = { maxSteps: 600, subagentMaxSteps: 100, timeoutSeconds: 10800 };
 const inherited: ChainView = { ...chainRepoInherit, source: "chain", team: "" };
 
 const noInputs = { branch: "main", skills: [], detected: [], instructions: "" };
 
-const routes = (set: SecuritySettingsView = { ...securitySettings, defaults: real }, chain: ChainView = inherited) => ({
+const routes = (set: SecuritySettingsView = securitySettings, chain: ChainView = inherited, detail = repoDetail(repoPayments)) => ({
   "GET /api/skills": { body: librarySkills },
   [`GET ${payments}/inputs`]: { body: noInputs },
   [`GET ${payments}/teams`]: { body: repoTeams },
   "GET /api/me": { body: ssoAdmin },
-  [`GET ${payments}`]: { body: repoDetail(repoPayments) },
+  [`GET ${payments}`]: { body: detail },
   [`GET ${payments}/chain`]: { body: chainRepoInherit },
   [`GET ${payments}/reviewers`]: { body: { reviewers: [], judge: null, warnings: [], addRefusal: "" } },
   [`GET ${payments}/security/settings`]: { body: set },
@@ -62,13 +60,14 @@ describe("SecurityScanSettings", () => {
   });
 
   it("Save sends the 4 fields with null for empty, and keeps the others", async () => {
-    const set = { ...securitySettings, defaults: real, maxSteps: 300, subagentMaxSteps: 50, findingsInReviews: true };
+    const set = { ...securitySettings, maxSteps: 300, subagentMaxSteps: 50, findingsInReviews: true };
     const fake = fakeApi({ ...routes(set), [`PUT ${payments}/security/settings`]: { body: { ...set, timeoutSeconds: 1800 } } });
     renderApp(open, { unfolded: true });
     const box = await card();
     await userEvent.type(await within(box).findByLabelText("Scan timeout (minutes)"), "30");
     await userEvent.click(within(box).getByRole("button", { name: "Save scan settings" }));
     await vi.waitFor(() => expect(fake.find("PUT", `${payments}/security/settings`)).toHaveLength(1));
+    expect(await within(box).findByText("Saved.")).toBeInTheDocument();
     expect(fake.find("PUT", `${payments}/security/settings`)[0].body).toEqual({
       maxSteps: 300,
       subagentMaxSteps: 50,
@@ -110,13 +109,35 @@ describe("SecurityScanSettings", () => {
   });
 
   it("a viewer sees values and no Edit or Save", async () => {
-    const set = { ...securitySettings, defaults: real, maxSteps: 300, canEdit: false };
+    const set = { ...securitySettings, maxSteps: 300, canEdit: false };
     fakeApi({ ...routes(set, { ...inherited, readOnly: true }) });
     renderApp(open, { unfolded: true });
     const box = await card();
     expect(await within(box).findByText("300")).toBeInTheDocument();
     expect(within(box).queryByRole("button", { name: "Save scan settings" })).not.toBeInTheDocument();
     expect(within(box).queryByRole("button", { name: "Edit scan model" })).not.toBeInTheDocument();
+    expect(within(box).queryByLabelText("Max steps, main agent")).not.toBeInTheDocument();
+    expect(within(box).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("a maintainer who is not of the owner team edits the limits but not the chain", async () => {
+    fakeApi(routes(securitySettings, { ...inherited, readOnly: true }));
+    renderApp(open, { unfolded: true });
+    const box = await card();
+    expect(await within(box).findByRole("button", { name: "Save scan settings" })).toBeInTheDocument();
+    expect(within(box).queryByRole("button", { name: "Edit scan model" })).not.toBeInTheDocument();
+    expect(within(box).queryByRole("button", { name: "Inherit the repository's chain" })).not.toBeInTheDocument();
+  });
+
+  it("a paused repository shows values, a note and no edit controls", async () => {
+    const paused = repoDetail({ ...repoPayments, paused: true, on: false, health: "paused" });
+    fakeApi(routes(securitySettings, chainRepoCustom, paused));
+    renderApp(open, { unfolded: true });
+    const box = await card();
+    expect(await within(box).findByText(/This repository is paused/)).toBeInTheDocument();
+    expect(within(box).queryByRole("button", { name: "Save scan settings" })).not.toBeInTheDocument();
+    expect(within(box).queryByRole("button", { name: "Edit scan model" })).not.toBeInTheDocument();
+    expect(within(box).queryByRole("button", { name: "Inherit the repository's chain" })).not.toBeInTheDocument();
     expect(within(box).queryByLabelText("Max steps, main agent")).not.toBeInTheDocument();
     expect(within(box).queryByRole("alert")).not.toBeInTheDocument();
   });
