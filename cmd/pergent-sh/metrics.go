@@ -14,6 +14,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/metrics"
 	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/security"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -156,7 +157,7 @@ func tokenKinds(t store.TokenSum, rows int64) []kindCount {
 func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.LibrarySkill) metrics.Snapshot {
 	type repoKey struct{ instance, project string }
 	repos := make(map[repoKey]string, len(on))
-	skills := map[string]bool{result.ImpactSkill: true}
+	skills := map[string]bool{result.ImpactSkill: true, security.UsageSkill: true}
 	for _, s := range library {
 		skills[s.Name] = true
 	}
@@ -176,6 +177,10 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 		return labelSwitchedOff
 	}
 	skill := func(name string) string {
+		// A scan's other models are security-scan@provider/model rows: one label.
+		if strings.HasPrefix(name, security.UsageSkill+"@") {
+			return security.UsageSkill
+		}
 		if skills[name] {
 			return name
 		}

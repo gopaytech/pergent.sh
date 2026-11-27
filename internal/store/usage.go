@@ -28,6 +28,43 @@ type ScanModelUsage struct {
 	Usage           SkillUsage
 }
 
+// notScanSQL leaves a security scan's usage rows out of a count of reviews or
+// merge requests. A scan's tokens are real, so every count of tokens keeps
+// them; a scan is no review, no merge request and no cost-per-review sample.
+// A query with a table alias writes it in front: u.` + "`" + `+notScanSQL.
+const notScanSQL = "trigger <> 'security_scan'"
+
+// RecordScanUsage stores what each model of security scan scanID used: one
+// run_usage row per model on the scan's carrier run, with the scan's own
+// repository (the carrier run has none), trigger 'security_scan' and verdict
+// 'security', at the time the scan finished. The source and team come from
+// the carrier run's entry; the owner team is the repository's now. A row
+// already there is kept, so a second call changes nothing.
+func (s *Store) RecordScanUsage(ctx context.Context, scanID string, rows []ScanModelUsage) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	for _, m := range rows {
+		u := m.Usage
+		if _, err := tx.Exec(ctx, `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid,
+				trigger, incremental, provider, model, verdict, reported_at, tokens_in, tokens_out, cache_read, cache_write,
+				reasoning, findings, blocking, source, team_id, owner_team_id)
+			SELECT r.id, $2::text, sc.instance, sc.project_id, sc.project, r.mr_iid, 'security_scan', false,
+				$3::text, $4::text, 'security', COALESCE(sc.finished_at, sc.started_at, sc.queued_at), $5::bigint, $6::bigint,
+				$7::bigint, $8::bigint, $9::bigint, 0, 0,
+				CASE WHEN r.model_source = 'team' THEN 'team' ELSE 'global' END,
+				CASE WHEN r.model_source = 'team' THEN r.model_team_id END, `+ownerTeamSQL("sc.instance", "sc.project")+`
+			FROM security_scans sc JOIN runs r ON r.id = sc.run_id WHERE sc.id = $1::uuid
+			ON CONFLICT (run_id, skill) DO NOTHING`,
+			scanID, u.Skill, m.Provider, m.Model, u.In, u.Out, u.CacheRead, u.CacheWrite, u.Reasoning); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 // RecordUsage stores what each skill of run id used, with the run's
 // repository, merge request, trigger, provider, model and time, and whose key
 // paid (the run's entry: global, or a team and its ID), and the owner team of
@@ -537,7 +574,7 @@ func (s *Store) UsageByRepository(ctx context.Context, since time.Time) ([]RepoU
 	rows, err := s.pool.Query(ctx, `SELECT a.instance, a.project_id, a.path, a.t_in, a.t_out, a.cr, a.cw, a.rs, a.unknown,
 			a.reviews, COALESCE(src.global, 0), COALESCE(src.team, 0)
 		FROM (SELECT instance, project_id, (array_agg(project_path ORDER BY reported_at DESC))[1] AS path,
-				`+tokenSumColumnsNamed+`, count(DISTINCT run_id) AS reviews
+				`+tokenSumColumnsNamed+`, count(DISTINCT run_id) FILTER (WHERE `+notScanSQL+`) AS reviews
 			FROM run_usage WHERE reported_at >= $1::timestamptz AND instance <> ''
 			GROUP BY instance, project_id) a
 		LEFT JOIN (SELECT instance, project_id, `+sourceTokensColumnsNamed+`
@@ -771,7 +808,7 @@ func (s *Store) UsageByMR(ctx context.Context, instance string, projectID int64,
 	rows, err := s.pool.Query(ctx, `SELECT u.mr_iid, (array_agg(r.title ORDER BY r.created_at DESC))[1],
 			(array_agg(r.web_url ORDER BY r.created_at DESC))[1], `+tokenSumColumnsOfUsage+`, count(DISTINCT u.run_id)
 		FROM run_usage u JOIN runs r ON r.id = u.run_id
-		WHERE u.instance = $1::text AND u.project_id = $2::bigint AND u.reported_at >= $3::timestamptz
+		WHERE u.instance = $1::text AND u.project_id = $2::bigint AND u.reported_at >= $3::timestamptz AND u.`+notScanSQL+`
 		GROUP BY u.mr_iid
 		ORDER BY COALESCE(sum(`+allTokensOf("u")+`), 0) DESC, u.mr_iid
 		LIMIT $4::integer`, instance, projectID, since, limit)
@@ -796,7 +833,7 @@ func (s *Store) UsageByMR(ctx context.Context, instance string, projectID int64,
 	}
 	rows, err = s.pool.Query(ctx, `SELECT mr_iid, provider, model FROM run_usage
 		WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz
-			AND mr_iid = ANY($4::bigint[]) AND model <> ''
+			AND mr_iid = ANY($4::bigint[]) AND model <> '' AND `+notScanSQL+`
 		GROUP BY mr_iid, provider, model ORDER BY mr_iid, provider, model`, instance, projectID, since, iids)
 	if err != nil {
 		return nil, err
@@ -836,7 +873,7 @@ func (s *Store) UsageWasted(ctx context.Context, instance string, projectID int6
 			COALESCE(sum(reasoning)  FILTER (WHERE trigger IN ('rerun', 'rerun_failed')), 0),
 			count(*) FILTER (WHERE trigger IN ('rerun', 'rerun_failed') AND (cache_read IS NULL OR cache_write IS NULL OR reasoning IS NULL)),
 			count(DISTINCT run_id) FILTER (WHERE trigger IN ('rerun', 'rerun_failed'))
-		FROM run_usage WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz`,
+		FROM run_usage WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz AND `+notScanSQL,
 		instance, projectID, since).Scan(append(append(w.Failed.dests(), w.Reruns.dests()...), &w.RerunCount)...)
 	if err != nil {
 		return WastedUsage{}, err
@@ -869,7 +906,7 @@ func (s *Store) UsageCostPerReview(ctx context.Context, instance string, project
 			SELECT run_id, bool_or(incremental) AS incremental, max(mr_iid) AS iid, max(reported_at) AS at,
 				sum(`+allTokensSQL+`)::bigint AS total
 			FROM run_usage
-			WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz AND trigger <> 'rerun_failed'
+			WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz AND trigger <> 'rerun_failed' AND `+notScanSQL+`
 			GROUP BY run_id
 		), medians AS (
 			SELECT incremental, percentile_cont(0.5) WITHIN GROUP (ORDER BY total) AS median FROM per_run GROUP BY incremental
@@ -996,7 +1033,7 @@ func (s *Store) UsageOnDecidedChanges(ctx context.Context, instance string, proj
 		)
 		SELECT u.skill, `+tokenSumColumnsOfUsage+`
 		FROM run_usage u JOIN decided d ON d.mr_iid = u.mr_iid
-		WHERE u.instance = $1::text AND u.project_id = $2::bigint
+		WHERE u.instance = $1::text AND u.project_id = $2::bigint AND u.`+notScanSQL+`
 		GROUP BY u.skill ORDER BY u.skill`, instance, projectID, since)
 	if err != nil {
 		return nil, err
@@ -1153,7 +1190,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	// A dropped attempt (fell_back) is not a review: the next attempt is. Its
 	// tokens were spent, so Tokens keeps them.
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, trigger, incremental, count(DISTINCT run_id)
-		FROM run_usage WHERE instance <> '' AND `+notFellBack+` AND NOT `+multiReviewNoResult+`
+		FROM run_usage WHERE instance <> '' AND `+notScanSQL+` AND `+notFellBack+` AND NOT `+multiReviewNoResult+`
 		GROUP BY instance, project_path, trigger, incremental`); err != nil {
 		return MetricsTotals{}, err
 	}
@@ -1196,7 +1233,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	}
 
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, skill, verdict, count(*)
-		FROM run_usage WHERE instance <> '' AND `+notFellBack+` AND NOT `+multiReviewNoResult+`
+		FROM run_usage WHERE instance <> '' AND `+notScanSQL+` AND `+notFellBack+` AND NOT `+multiReviewNoResult+`
 		GROUP BY instance, project_path, skill, verdict`); err != nil {
 		return MetricsTotals{}, err
 	}
@@ -1211,7 +1248,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	// findings counts every finding of the skill, blocking ones included.
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, skill,
 			COALESCE(sum(blocking), 0), COALESCE(sum(findings - blocking), 0)
-		FROM run_usage WHERE instance <> '' GROUP BY instance, project_path, skill`); err != nil {
+		FROM run_usage WHERE instance <> '' AND `+notScanSQL+` GROUP BY instance, project_path, skill`); err != nil {
 		return MetricsTotals{}, err
 	}
 	if t.Findings, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (FindingTotal, error) {

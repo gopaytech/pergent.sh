@@ -528,3 +528,25 @@ func TestMetricsFailureRateIgnoresFellBack(t *testing.T) {
 		t.Errorf("fallbacks missing:\n%s", out)
 	}
 }
+
+// A scan's tokens are labelled skill="security-scan", for its own model and
+// for the other models (security-scan@provider/model), not "(other)".
+func TestMetricsScanSkillLabel(t *testing.T) {
+	on := []settings.Effective{metricsEff("main", "acme/widgets", []string{"security"}, nil)}
+	totals := store.MetricsTotals{Tokens: []store.TokenTotal{
+		{Instance: "main", Project: "acme/widgets", Skill: "security-scan", Model: "m", Tokens: store.TokenSum{In: 7}, Rows: 1},
+		{Instance: "main", Project: "acme/widgets", Skill: "security-scan@q/sub", Model: "sub", Tokens: store.TokenSum{In: 3}, Rows: 1},
+	}}
+	out := metricsText(t, snapshotOf(totals, on, nil))
+	for _, want := range []string{
+		`skill="security-scan",model="m",kind="input"} 7`,
+		`skill="security-scan",model="sub",kind="input"} 3`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics lack %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `skill="(other)"`) || strings.Contains(out, "@q/sub") {
+		t.Errorf("a scan's tokens are labelled with another skill:\n%s", out)
+	}
+}
