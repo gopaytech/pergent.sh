@@ -13,6 +13,8 @@
   - The chart sets `PERGENT_SH_SECURITY_EGRESS` from them.
 - **The jobs NetworkPolicy now leaves scan pods out.** Scan pods have their own policy. Review Jobs are not changed.
 - **`callback_url` must be the in-cluster Service address** (the chart's default) for scans. The scan policy allows only the pergent.sh pods on port 8080, so with a public `callback_url` every scan fails at the source download. A public `callback_url` also needs `/security-scans/` routed, as `/runs/` is: see [Install](setup/install.md).
+- **A Security tab** on every repository's page, right after **Reviews**, and a **Security scan** card on the repository's **Settings** tab. Maintainers and admins start and cancel scans and dismiss or restore findings there: see [The Security tab](concepts/security-scan.md#the-security-tab).
+- **New API paths** under `/api/repositories/{instance}/{project}/security`: the summary, `findings`, `scans`, `settings` and `chain`. See [HTTP routes](reference/http-routes.md). **New audit entries:** `security_scan_started`, `security_scan_cancelled`, `security_finding_dismissed` and `security_finding_restored`.
 - **New routes** `GET /security-scans/{id}/source` and `POST /security-scans/{id}/result` for the scan Jobs.
 - **New metrics** `pergent_security_scans_total` and `pergent_security_findings_open`, and a **Security scans** row in the example Grafana dashboard.
 - **Rolling back** needs the config keys removed, as above. The scans and findings stay in the database.
