@@ -35,9 +35,9 @@ pergent reviews read `PERGENT_CONTEXT_LIMIT`, but pergent.sh never sets it, `per
 | Field | Meaning | Empty | Range |
 |---|---|---|---|
 | Context window (`context_window`) | Most tokens in one request, input and output together | opencode's catalog | 4,096 to 10,000,000 |
-| Max output (`max_output`) | Most tokens in one reply, thinking included | opencode's catalog, or 32,000 | 1,024 to the context window when set, else to 10,000,000 |
+| Max output (`max_output`) | Most tokens in one reply, thinking included | opencode's catalog, or 32,000 | 1,024 to the context window |
 
-Whole numbers only. A max output above the entry's context window is refused.
+Whole numbers only. **Set both, or neither.** An entry with only one of them is refused, and so is a max output above the context window. Reason: opencode merges pergent's `limit` block over its own catalog values, so the `0` pergent writes for an unset one replaces the catalog value instead of keeping it (opencode 2.3.2 `config/plugin/provider.ts`).
 
 **Names.** pergent.sh already has *model limits* (monthly token limits, migration `0051`, the Limits UI), so these fields are never called limits there: **Context window** and **Max output** in the UI, `contextWindow` and `maxOutput` in the API, `context_window` and `max_output` in the DB and the config file. Only the pergent CLI keeps its own words: `PERGENT_CONTEXT_LIMIT` / `--context-limit` (exists) and `PERGENT_OUTPUT_LIMIT` / `--output-limit` (new). The deprecated `--max-tokens` stays unused.
 
@@ -66,7 +66,7 @@ A review, judge or scan Job gets `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIM
 
 - `pergent scan` reads `PERGENT_CONTEXT_LIMIT` / `--context-limit`, as reviews do.
 - `pergent` reviews and `pergent scan` read a new `PERGENT_OUTPUT_LIMIT` / `--output-limit`.
-- The generated opencode config declares the model with `limit: {context, output}` when either is set; an unset one is `0`, which opencode reads as "use your own value". opencode caps the request at 256,000 output tokens itself.
+- The generated opencode config declares the model with `limit: {context, output}` when either is set; an unset one is written as `0`, which replaces opencode's catalog value. pergent.sh therefore always sends both or neither; the CLI docs tell direct users to set both. opencode caps the request at 256,000 output tokens itself.
 - **Review batches stay at most 40,000 tokens.** `PERGENT_CONTEXT_LIMIT` also sets the review's diff batch size (`diff.BatchBudget`, `context / 4`, else 40,000). It becomes `min(context / 4, 40000)`, so a big window stops failures without making batches bigger. A smaller window still gives smaller batches. This changes the CLI for anyone passing a large `--context-limit` today, so the pergent release notes say so.
 - **A clear reason for cut replies.** opencode fails a run whose replies end with `finish = length` 3 times with the error type `output-limit`. pergent maps that type to the fixed reason "the model's replies were cut at the max output: set Max output on the model entry", for reviews and scans.
 
