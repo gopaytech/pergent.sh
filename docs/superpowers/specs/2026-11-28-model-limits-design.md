@@ -2,7 +2,7 @@
 
 ## Why
 
-opencode reads a model's context window and max output from its own catalog. A model id the catalog does not have gets context `0` and a max output of 32,000 tokens (`OUTPUT_TOKEN_FALLBACK`, opencode 2.3.2). With context `0`, opencode never compacts ("With no window at all, only a provider rejection can limit the request", `compaction.ts`).
+opencode reads a model's context window and max output from its own catalog. A model id the catalog does not have gets context `0` and a max output of 32,000 tokens (`OUTPUT_TOKEN_FALLBACK`, opencode 2.3.2). With context `0`, opencode cannot size a reply to the room left in the window. pergent turns auto-compaction off (`compaction.auto: false`), so a declared window never makes opencode compact; it only sizes the replies.
 
 The first real security scan, on a model whose id the catalog spells differently (dots instead of dashes), stopped after 40 steps: three replies in a row ended with `finish = length` at 829, 392 and 81 output tokens, and opencode failed with "Response still truncated after two output token limit continuations". The model has a 1M context window and 384K max output. Thinking and output shared the 32,000 budget.
 
