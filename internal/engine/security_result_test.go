@@ -696,7 +696,9 @@ func TestOpenSecuritySourceOnceAtATime(t *testing.T) {
 	if asked != 3 {
 		t.Errorf("the platform was asked %d times; want 3", asked)
 	}
-	// A wrong token takes no try.
+	// A wrong token takes no try. A repository runs one scan at a time, so
+	// the first scan ends before the second one starts.
+	secFinish(t, env, sc, store.SecurityResult{Status: store.SecurityFailed, UsageSource: "stats", Reason: "test"})
 	other, otherToken := secRunning(t, env)
 	for range securitySourceTries + 1 {
 		if _, out, _ := env.Engine.OpenSecuritySource(env.ctx, other.ID, "wrong"); out != security.Unauthorized {

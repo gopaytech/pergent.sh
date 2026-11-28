@@ -16,6 +16,9 @@ import (
 func TestDispatchSecurityFindings(t *testing.T) {
 	t.Parallel()
 	env := newSecurityEnv(t)
+	// Every subtest's review Job keeps running, and there are more of them
+	// than the test config's jobs.max_running of 5.
+	env.Engine.Config.Jobs.MaxRunning = 20
 	sc := secQueue(t, env, testProjectPath, testProjectID, 0)
 	if _, ok, err := env.Store.ClaimSecurityScan(env.ctx, 1, env.Now(), env.Now().Add(time.Hour)); err != nil || !ok {
 		t.Fatalf("claim = %v, %v", ok, err)
