@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseTokens, windowText } from "./ModelForms";
 
 describe("parseTokens", () => {
-  it.each([
+  it.each<[string, number | null | undefined]>([
     ["1,000,000", 1000000],
     [" 64 000 ", 64000],
     ["1_000", 1000],
@@ -18,7 +18,7 @@ describe("parseTokens", () => {
 });
 
 describe("windowText", () => {
-  it.each([
+  it.each<[number | null, number | null, string]>([
     [1_000_000, 64_000, "1M / 64k"],
     [200_000, null, "200k / –"],
     [null, 64_000, "– / 64k"],

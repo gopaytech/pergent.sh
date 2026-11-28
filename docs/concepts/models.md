@@ -14,25 +14,6 @@ An entry has a **name**, a provider, a model, a base URL (optional), a context w
 - The provider and model can't be changed. Add another entry instead. The name, the base URL, the context window, the max output and the key can be changed, and the change applies from the next Job.
 - Nothing is tested when you add an entry. A review that can't use it fails and says why.
 
-### Context window and max output
-
-These 2 optional fields tell a Job how big the model is. They are on global entries, on team entries, and in the config file (`llm.context_window` and `llm.max_output`, also in each `llm.fallbacks` item: see [Configuration](../reference/configuration.md)).
-
-| Field | What it is | Range |
-| --- | --- | --- |
-| **Context window** | The most tokens the model can hold, input and output together. | 4,096 to 10,000,000 |
-| **Max output** | The most tokens one reply may need, thinking included. | 1,024 to the context window |
-
-- Both are whole numbers. **Set both, or neither.** An entry with only one is refused: `Set both Context window and Max output, or neither.` The reason is that opencode puts pergent's values over its own catalog, so a missing one would replace the catalog value.
-- Empty means opencode's own values, as before. Opencode takes them from its catalog.
-- Set them for a model id that opencode does not know, such as one on a custom base URL or one spelled another way. Take the context window from the provider's page.
-- For max output, 64,000 is enough for reviews and scans. A provider that counts the asked amount against a per-minute rate limit throttles a higher value.
-- A declared window sizes each reply to the room left. It does not make opencode compact: pergent keeps compaction off.
-- Whoever may change the entry's base URL and key may change these. A change is in the audit, in the same entry as other edits to the entry, with the old and the new values. It applies from the next Job.
-- Every Job that runs the entry gets them: reviews, the reviewers and the judge of a multi-review, and security scans. After a fallback, the next entry's values apply.
-
-**The pergent image.** A Job gets `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIMIT` only when both fields are set and the Job's image is a pergent at or above the version that reads them. A review Job is checked against `jobs.image`, a scan Job against `jobs.security_image`. An image with a digest only, a tag such as `main`, or no tag never gets them. Older pergent versions read only the context window and also size the diff batches from it, so a large window would make batches too big. Until a pergent.sh release names the version, no image gets them. Values you save before then wait in the database, and the model form says in one line that Jobs do not use them yet. Jobs then run as if both fields were empty.
-
 There are 2 kinds of entries:
 
 | | Global entries | Team entries |
@@ -49,6 +30,26 @@ There are 2 kinds of entries:
 | A global entry | Allowed while chains name it. The confirm lists those chains. They keep naming it, show it as `removed` and skip it. The default can't be removed: `this is the default model: make another one the default first`. |
 | A team entry | The confirm lists the chains it is in. It is taken out of them, and its key is deleted. |
 | A team | Its entries, its keys and its chain are deleted. Its repositories use the next chain in [Which chain a review uses](#which-chain-a-review-uses). |
+
+### Context window and max output
+
+These 2 optional fields tell a Job how big the model is. They are on global entries, on team entries, and in the config file (`llm.context_window` and `llm.max_output`, also in each `llm.fallbacks` item: see [Configuration](../reference/configuration.md)).
+
+| Field | What it is | Range |
+| --- | --- | --- |
+| **Context window** | The most tokens the model can hold, input and output together. | 4,096 to 10,000,000 |
+| **Max output** | The most tokens one reply may need, thinking included. | 1,024 to the context window |
+
+- Both are whole numbers. **Set both, or neither.** An entry with only one is refused: `Set both Context window and Max output, or neither.` The reason is that opencode puts pergent's values over its own catalog, so a missing one would replace the catalog value.
+- Empty means opencode's own values, as before. Opencode takes them from its catalog.
+- Set them for a model id that opencode does not know, such as one on a custom base URL or one spelled another way. Take the context window from the provider's page.
+- A model id that opencode does not know gets a context window of 0 and a max output of 32,000.
+- For max output, 64,000 is enough for reviews and scans. A provider that counts the asked amount against a per-minute rate limit throttles a higher value.
+- A declared window sizes each reply to the room left. It does not make opencode compact: pergent keeps compaction off.
+- Whoever may change the entry's base URL and key may change these. A change is in the audit, in the same entry as other edits to the entry, with the old and the new values. It applies from the next Job.
+- Every Job that runs the entry gets them: reviews, the reviewers and the judge of a multi-review, and security scans. After a fallback, the next entry's values apply.
+
+**The pergent image.** A Job gets `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIMIT` only when both fields are set and the Job's image is a pergent at or above the version that reads them. A review Job is checked against `jobs.image`, a scan Job against `jobs.security_image`. An image with a digest only, a tag such as `main`, or no tag never gets them. Older pergent versions read only the context window and also size the diff batches from it, so a large window would make batches too big. Until a pergent.sh release names the version, no image gets them. Values you save before then wait in the database, and the model form says in one line that Jobs do not use them yet. Jobs then run as if both fields were empty.
 
 ## The config file
 

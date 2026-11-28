@@ -1098,14 +1098,16 @@ describe("AdminSettings models", () => {
     await userEvent.click(within(form).getByRole("button", { name: "Save" }));
     expect(fake.find("PUT", "/api/admin/models/m-opus")[0].body).toEqual({ name: "Claude Opus 2", baseURL: "https://llm.example.com/v1" });
     await vi.waitFor(() => expect(screen.queryByRole("form", { name: "Edit Claude Opus" })).not.toBeInTheDocument());
-    // Emptying Max output sends null for it alone.
+    // The server refuses one value alone, so emptying both sends null for both.
     await userEvent.click(within(await entry("Claude Opus")).getByRole("button", { name: "Edit Claude Opus" }));
     const again = screen.getByRole("form", { name: "Edit Claude Opus" });
+    await userEvent.clear(within(again).getByLabelText("Context window"));
     await userEvent.clear(within(again).getByLabelText("Max output"));
     await userEvent.click(within(again).getByRole("button", { name: "Save" }));
     expect(fake.find("PUT", "/api/admin/models/m-opus")[1].body).toEqual({
       name: "Claude Opus",
       baseURL: "https://llm.example.com/v1",
+      contextWindow: null,
       maxOutput: null,
     });
   });
