@@ -1,19 +1,10 @@
 # ⬆️ Upgrading
 
-## Unreleased
-
-**The NetworkPolicies are optional.** No migration and no new config key.
-
-- **New chart value `networkPolicy.enabled`** (default `true`, no change). With `false` the chart creates no NetworkPolicy for the Jobs, review Jobs and scan Jobs alike, ignores `jobEgress` and `securityJobEgress`, and turns security scans on (`PERGENT_SH_SECURITY_EGRESS=true`). Every Job may then reach any address. A scan Job runs a shell, so a scanned repository's text could make it send the model key anywhere.
-- The **Start scan is off** text now also names `networkPolicy.enabled: false`.
-- **Rolling back** to 0.26.0: the old chart ignores `networkPolicy.enabled` and creates both policies again. Set `securityJobEgress.cidrs` before you roll back, or Start scan turns off.
-
 ## Upgrading to 0.26.0
 
-**A security scan: a whole-repository security audit, started by hand.** See [Security scan](concepts/security-scan.md). Scans stay off until you set a Helm value.
+**A security scan: a whole-repository security audit, started by hand.** See [Security scan](concepts/security-scan.md). Scans stay off until you set a Helm value, and the Job NetworkPolicies are optional.
 
 - **The default images are pergent v0.13.0**: `jobs.image` `ghcr.io/gopaytech/pergent:v0.13.0` (was v0.12.0) and `jobs.security_image` `ghcr.io/gopaytech/pergent-security:v0.13.0`, the first release of the security image. v0.13.0 is also the first pergent that reads the open security findings for a review. An older `jobs.image` ignores them, and its reviews run as before.
-
 - **Migration `0055_security_scan.sql`** runs at startup. Back up Postgres first, as for any migration. It only adds tables and columns and drops nothing, so the previous release keeps working on the migrated database and ignores them. It does count a scan's usage rows in its review counts.
 - **New image.** Scan Jobs run `jobs.security_image` (`ghcr.io/gopaytech/pergent-security`, with the same tag as the review image).
 - **New config keys** `jobs.security_image`, `security.max_running`, `security.proxy` and `security.max_source_bytes`. **They break a rollback:** the previous release refuses unknown keys, so remove them from the config before you roll back.
@@ -27,6 +18,8 @@
 - **New API paths** under `/api/repositories/{instance}/{project}/security`: the summary, `findings`, `scans`, `settings` and `chain`. See [HTTP routes](reference/http-routes.md). **New audit entries:** `security_scan_started`, `security_scan_cancelled`, `security_finding_dismissed` and `security_finding_restored`.
 - **New routes** `GET /security-scans/{id}/source` and `POST /security-scans/{id}/result` for the scan Jobs.
 - **New metrics** `pergent_security_scans_total` and `pergent_security_findings_open`, and a **Security scans** row in the example Grafana dashboard.
+- **New chart value `networkPolicy.enabled`** (default `true`, no change). With `false` the chart creates no NetworkPolicy for the Jobs, review Jobs and scan Jobs alike, ignores `jobEgress` and `securityJobEgress`, and turns security scans on (`PERGENT_SH_SECURITY_EGRESS=true`). Every Job may then reach any address. A scan Job runs a shell, so a scanned repository's text could make it send the model key anywhere.
+- The **Start scan is off** text names both ways to turn scans on: `securityJobEgress.cidrs`, or `networkPolicy.enabled: false`.
 - **Rolling back** needs the config keys removed, as above. The scans and findings stay in the database.
 
 ## Upgrading to 0.25.0
