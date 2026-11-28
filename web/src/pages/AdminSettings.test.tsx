@@ -1048,6 +1048,113 @@ describe("AdminSettings models", () => {
     await vi.waitFor(() => expect(screen.queryByRole("form", { name: "Edit Claude Opus" })).not.toBeInTheDocument());
   });
 
+  it("adds a model with its context window and max output, under the help lines", async () => {
+    const fake = fakeApi({ ...listed(), "POST /api/admin/models": { status: 201, body: modelOpus } });
+    await openSettings();
+    const form = await openAddModel();
+    expect(
+      within(form).getByText(
+        "Leave empty for models opencode knows. Set them for a model id it does not know: the context window from the provider's page.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(form).getByText(
+        "The most one reply may need, thinking included. 64,000 is enough for reviews and scans. A provider that counts it against a rate limit throttles a higher value.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.type(within(form).getByLabelText("Name"), "Big");
+    await userEvent.selectOptions(within(form).getByLabelText("Provider"), "openai");
+    await userEvent.type(within(form).getByLabelText("Model"), "big-1");
+    await userEvent.type(within(form).getByLabelText("Context window"), "1,000,000");
+    await userEvent.type(within(form).getByLabelText("Max output"), "64000");
+    await userEvent.type(within(form).getByLabelText("API key"), "sk-b");
+    await userEvent.click(within(form).getByRole("button", { name: "Add model" }));
+    expect(fake.find("POST", "/api/admin/models")[0].body).toEqual({
+      name: "Big",
+      provider: "openai",
+      model: "big-1",
+      baseURL: "",
+      contextWindow: 1000000,
+      maxOutput: 64000,
+      apiKey: "sk-b",
+      teamsMayUse: false,
+    });
+  });
+
+  it("edits the context window and max output, sending only what changed, and lists them as 1M / 64k", async () => {
+    const big = { ...modelOpus, contextWindow: 1_000_000, maxOutput: 64_000 };
+    const fake = fakeApi({ ...listed({ models: [modelSonnet, big] }), "PUT /api/admin/models/m-opus": { body: big } });
+    await openSettings();
+    const row = await entry("Claude Opus");
+    expect(row).toHaveTextContent("1M / 64k");
+    expect(await entry("Claude Sonnet")).not.toHaveTextContent("/ –");
+    expect(within(await entry("Claude Sonnet")).queryByTitle("Context window / Max output")).not.toBeInTheDocument();
+    await userEvent.click(within(row).getByRole("button", { name: "Edit Claude Opus" }));
+    const form = screen.getByRole("form", { name: "Edit Claude Opus" });
+    expect(within(form).getByLabelText("Context window")).toHaveValue("1000000");
+    expect(within(form).getByLabelText("Max output")).toHaveValue("64000");
+    // Renaming only sends neither value.
+    await userEvent.type(within(form).getByLabelText("Name"), " 2");
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/admin/models/m-opus")[0].body).toEqual({ name: "Claude Opus 2", baseURL: "https://llm.example.com/v1" });
+    await vi.waitFor(() => expect(screen.queryByRole("form", { name: "Edit Claude Opus" })).not.toBeInTheDocument());
+    // Emptying Max output sends null for it alone.
+    await userEvent.click(within(await entry("Claude Opus")).getByRole("button", { name: "Edit Claude Opus" }));
+    const again = screen.getByRole("form", { name: "Edit Claude Opus" });
+    await userEvent.clear(within(again).getByLabelText("Max output"));
+    await userEvent.click(within(again).getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/admin/models/m-opus")[1].body).toEqual({
+      name: "Claude Opus",
+      baseURL: "https://llm.example.com/v1",
+      maxOutput: null,
+    });
+  });
+
+  it("says on the model form when Jobs get no context window or max output", async () => {
+    const off = "Jobs get no context window or max output for now: no pergent image reads them yet.";
+    fakeApi(listed({ windowOff: off }));
+    await openSettings();
+    const form = await openAddModel();
+    expect(within(form).getAllByText(off)).toHaveLength(1);
+  });
+
+  it("shows no such line when Jobs get the values", async () => {
+    fakeApi(listed());
+    await openSettings();
+    const form = await openAddModel();
+    expect(within(form).queryByText(/Jobs get no context window/)).not.toBeInTheDocument();
+  });
+
+  it("refuses a context window that is not a whole number and sends nothing", async () => {
+    const fake = fakeApi({ ...listed(), "POST /api/admin/models": { status: 201, body: modelOpus } });
+    await openSettings();
+    const form = await openAddModel();
+    await userEvent.type(within(form).getByLabelText("Name"), "Big");
+    await userEvent.selectOptions(within(form).getByLabelText("Provider"), "openai");
+    await userEvent.type(within(form).getByLabelText("Model"), "big-1");
+    await userEvent.type(within(form).getByLabelText("Context window"), "1M");
+    await userEvent.type(within(form).getByLabelText("API key"), "sk-b");
+    await userEvent.click(within(form).getByRole("button", { name: "Add model" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("Context window is a whole number of tokens, or empty.");
+    expect(fake.find("POST", "/api/admin/models")).toHaveLength(0);
+  });
+
+  it("shows the server's text when only one of the two is set", async () => {
+    fakeApi({
+      ...listed(),
+      "POST /api/admin/models": { status: 400, body: { error: "Set both Context window and Max output, or neither." } },
+    });
+    await openSettings();
+    const form = await openAddModel();
+    await userEvent.type(within(form).getByLabelText("Name"), "Big");
+    await userEvent.selectOptions(within(form).getByLabelText("Provider"), "openai");
+    await userEvent.type(within(form).getByLabelText("Model"), "big-1");
+    await userEvent.type(within(form).getByLabelText("Max output"), "64000");
+    await userEvent.type(within(form).getByLabelText("API key"), "sk-b");
+    await userEvent.click(within(form).getByRole("button", { name: "Add model" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("Set both Context window and Max output, or neither.");
+  });
+
   it("sends a replacement key from an empty password input, and forgets it", async () => {
     const fake = fakeApi({ ...listed(), "PUT /api/admin/models/m-opus": { body: modelOpus } });
     await openSettings();

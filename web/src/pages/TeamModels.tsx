@@ -9,7 +9,7 @@ import { api, paths, type ChainEntryView, type ChainRef, type ChainView, type Te
 import ChainEditor from "../ChainEditor";
 import { useWrite } from "../layout/write";
 import MarkBanner, { markText } from "../MarkBanner";
-import { AddModelForm, EditModelForm } from "../ModelForms";
+import { AddModelForm, EditModelForm, windowText } from "../ModelForms";
 import { ErrorBox, Loading, secretText } from "../ui";
 
 // muted is a small grey line under a model's name.
@@ -41,11 +41,11 @@ export default function TeamModelsTab({ team }: { team: number }) {
         <MarkBanner entries={v.models} />
         {v.models.length === 0 && <div className="text-muted-foreground px-4 py-3 text-sm">No model of the team's own yet.</div>}
         {v.models.map((m) => (
-          <TeamModelRow key={m.id} team={team} m={m} canEdit={v.canEdit} />
+          <TeamModelRow key={m.id} team={team} m={m} canEdit={v.canEdit} windowOff={v.windowOff} />
         ))}
       </Card>
       <TeamChain team={team} />
-      {v.canEdit && <AddTeamModel team={team} />}
+      {v.canEdit && <AddTeamModel team={team} windowOff={v.windowOff} />}
     </>
   );
 }
@@ -63,12 +63,12 @@ function useTeamChanged(team: number) {
   };
 }
 
-function AddTeamModel({ team }: { team: number }) {
+function AddTeamModel({ team, windowOff }: { team: number; windowOff: string }) {
   const changed = useTeamChanged(team);
-  return <AddModelForm<TeamModelView> path={paths.apiTeamModels(team)} onAdded={changed} />;
+  return <AddModelForm<TeamModelView> path={paths.apiTeamModels(team)} windowOff={windowOff} onAdded={changed} />;
 }
 
-function TeamModelRow({ team, m, canEdit }: { team: number; m: TeamModelView; canEdit: boolean }) {
+function TeamModelRow({ team, m, canEdit, windowOff }: { team: number; m: TeamModelView; canEdit: boolean; windowOff: string }) {
   const write = useWrite();
   const changed = useTeamChanged(team);
   const [editing, setEditing] = useState(false);
@@ -84,6 +84,11 @@ function TeamModelRow({ team, m, canEdit }: { team: number; m: TeamModelView; ca
       <div className="text-muted-foreground font-mono text-xs">
         {m.provider} / {m.model}
       </div>
+      {windowText(m.contextWindow, m.maxOutput) !== "" && (
+        <div className={muted} title="Context window / Max output">
+          {windowText(m.contextWindow, m.maxOutput)}
+        </div>
+      )}
       {m.baseURL && <div className={muted}>Base URL {m.baseURL}</div>}
       <div className={muted}>Key {secretText(m.key)}</div>
       {m.usedIn.length > 0 && <div className={muted}>In chains: {m.usedIn.join(", ")}</div>}
@@ -107,7 +112,7 @@ function TeamModelRow({ team, m, canEdit }: { team: number; m: TeamModelView; ca
           </Button>
         </div>
       )}
-      {editing && <EditModelForm m={m} path={paths.apiTeamModel(team, m.id)} onDone={() => setEditing(false)} onSaved={changed} />}
+      {editing && <EditModelForm m={m} path={paths.apiTeamModel(team, m.id)} windowOff={windowOff} onDone={() => setEditing(false)} onSaved={changed} />}
       {remove.isError && <ErrorBox error={remove.error} />}
       {clear.isError && <ErrorBox error={clear.error} />}
     </div>

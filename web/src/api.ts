@@ -1176,6 +1176,10 @@ export type ModelAdminView = {
   provider: string;
   model: string;
   baseURL: string;
+  // contextWindow and maxOutput are tokens, whole numbers, set both or
+  // neither (null: opencode's own value).
+  contextWindow: number | null;
+  maxOutput: number | null;
   source: "config" | "dashboard";
   default: boolean;
   // teamsMayUse lets team chains name the entry.
@@ -1202,7 +1206,14 @@ export type TeamLimitView = { teamId: number; team: string; limit: number; used:
 // config file has an llm: block (adding, changing and removing still work).
 // followingDefault counts the repositories that name no model, which a change
 // of the default moves.
-export type ModelsAdminView = { canSetDefault: boolean; followingDefault: number; models: ModelAdminView[] };
+// windowOff is why Jobs get no context window or max output for now ("" when
+// they do).
+export type ModelsAdminView = {
+  canSetDefault: boolean;
+  followingDefault: number;
+  windowOff: string;
+  models: ModelAdminView[];
+};
 
 // --- model chains ---
 
@@ -1635,6 +1646,9 @@ export type TeamModelView = {
   provider: string;
   model: string;
   baseURL: string;
+  // contextWindow and maxOutput are ModelAdminView's (null: opencode's own).
+  contextWindow: number | null;
+  maxOutput: number | null;
   key: SecretView;
   usedIn: string[];
   mark: MarkView | null;
@@ -1642,7 +1656,8 @@ export type TeamModelView = {
 
 // TeamModelsView is GET /api/teams/{id}/models. canEdit says the session may
 // add, change and remove the entries (a maintainer of the team, or an admin).
-export type TeamModelsView = { team: TeamRef; role: Role; canEdit: boolean; models: TeamModelView[] };
+// windowOff is ModelsAdminView's.
+export type TeamModelsView = { team: TeamRef; role: Role; canEdit: boolean; windowOff: string; models: TeamModelView[] };
 
 // TeamLimitsView is GET /api/teams/{id}/limits, for the team's maintainers
 // and admins: the team's own entries with their limits (null: none), and the

@@ -87,6 +87,32 @@ describe("TeamModels", () => {
     expect(document.body.textContent).not.toContain("sk-team-secret");
   });
 
+  it("sends a team entry's context window and max output, and lists them", async () => {
+    const fake = fakeApi({
+      ...routes(maintainer, { ...teamModelsPayments, models: [{ ...teamModelQwen, contextWindow: 128_000, maxOutput: null }] }),
+      "POST /api/teams/2/models": { status: 201, body: { ...teamModelQwen, id: "t-new", name: "Mistral" } },
+    });
+    renderApp("/teams/2?tab=models");
+    expect(await entry("qwen3.5")).toHaveTextContent("128k / –");
+    const form = await screen.findByRole("form", { name: "Add a model" });
+    await userEvent.type(within(form).getByLabelText("Name"), "Mistral");
+    await userEvent.selectOptions(within(form).getByLabelText("Provider"), "mistral");
+    await userEvent.type(within(form).getByLabelText("Model"), "mistral-large");
+    await userEvent.type(within(form).getByLabelText("Context window"), "128000");
+    await userEvent.type(within(form).getByLabelText("Max output"), "16000");
+    await userEvent.type(within(form).getByLabelText("API key"), "sk-team");
+    await userEvent.click(within(form).getByRole("button", { name: "Add model" }));
+    expect(fake.find("POST", "/api/teams/2/models")[0].body).toEqual({
+      name: "Mistral",
+      provider: "mistral",
+      model: "mistral-large",
+      baseURL: "",
+      contextWindow: 128000,
+      maxOutput: 16000,
+      apiKey: "sk-team",
+    });
+  });
+
   it("changes an entry's name and base URL with a PUT to the team's route", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/teams/2/models/t-qwen": { body: teamModelQwen } });
     renderApp("/teams/2?tab=models");
