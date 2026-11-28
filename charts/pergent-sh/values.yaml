@@ -3,7 +3,7 @@ image:
   repository: ghcr.io/gopaytech/pergent.sh
   # -- Image tag. A released chart pins its own release. "main" is the newest build of the main branch (it moves, so use pullPolicy Always with it); "sha-<short sha>" pins one build. Empty means the chart appVersion.
   # Releasing the chart: set this to the release version (and pullPolicy to IfNotPresent); "main" must not ship in a released chart.
-  tag: v0.25.0
+  tag: v0.26.0
   # -- Image pull policy.
   pullPolicy: IfNotPresent
 
@@ -93,7 +93,7 @@ securityJobEgress:
 # for the scan Jobs, no user info; its address must be in securityJobEgress.cidrs and its
 # port in securityJobEgress.ports) and max_source_bytes (default 500 MiB, 1 MiB to 500 MiB). E.g.
 #   jobs:
-#     security_image: registry.example.com/pergent-security:v0.12.0
+#     security_image: registry.example.com/pergent-security:v0.13.0
 #   security:
 #     max_running: 2
 #     proxy: http://192.0.2.10:3128   # with securityJobEgress cidrs 192.0.2.10/32 and ports [3128]

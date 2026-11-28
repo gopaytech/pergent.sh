@@ -1,8 +1,10 @@
 # ⬆️ Upgrading
 
-## Unreleased
+## Upgrading to 0.26.0
 
 **A security scan: a whole-repository security audit, started by hand.** See [Security scan](concepts/security-scan.md). Scans stay off until you set a Helm value.
+
+- **The default images are pergent v0.13.0**: `jobs.image` `ghcr.io/gopaytech/pergent:v0.13.0` (was v0.12.0) and `jobs.security_image` `ghcr.io/gopaytech/pergent-security:v0.13.0`, the first release of the security image. v0.13.0 is also the first pergent that reads the open security findings for a review. An older `jobs.image` ignores them, and its reviews run as before.
 
 - **Migration `0055_security_scan.sql`** runs at startup. Back up Postgres first, as for any migration. It only adds tables and columns and drops nothing, so the previous release keeps working on the migrated database and ignores them. It does count a scan's usage rows in its review counts.
 - **New image.** Scan Jobs run `jobs.security_image` (`ghcr.io/gopaytech/pergent-security`, with the same tag as the review image).
