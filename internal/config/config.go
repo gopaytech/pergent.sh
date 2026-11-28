@@ -414,19 +414,47 @@ func ValidMaxOutput(n, contextWindow int) bool {
 }
 
 // checkWindow checks the context window and max output of one entry; prefix
-// names it in the message ("llm", "llm.fallbacks[1]"). A key left out is
-// skipped.
+// names it in the message ("llm", "llm.fallbacks[1]").
 func checkWindow(prefix string, l LLM) []error {
+	return windowErrors(prefix, int(l.ContextWindow), int(l.MaxOutput))
+}
+
+// ValidModelWindow checks the context window and max output of one model
+// entry (0 is not set): both or neither, then each in its range. The error
+// names the keys without an entry prefix, for the API.
+func ValidModelWindow(contextWindow, maxOutput TokenCount) error {
+	if errs := windowErrors("", int(contextWindow), int(maxOutput)); len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
+}
+
+// windowErrors is the one check behind checkWindow and ValidModelWindow.
+// prefix "" gives bare key names. opencode merges the two over its own
+// values, so an unset one would replace the known value with 0: an entry
+// sets both or neither.
+func windowErrors(prefix string, cw, mo int) []error {
+	key := func(k string) string {
+		if prefix == "" {
+			return k
+		}
+		return prefix + "." + k
+	}
+	if (cw == 0) != (mo == 0) {
+		if prefix == "" {
+			return []error{errors.New("set both context_window and max_output, or neither")}
+		}
+		return []error{fmt.Errorf("%s: set both context_window and max_output, or neither", prefix)}
+	}
 	var errs []error
-	cw, mo := int(l.ContextWindow), int(l.MaxOutput)
 	if cw != 0 && !ValidContextWindow(cw) {
-		errs = append(errs, fmt.Errorf("%s.context_window must be from %d to %d, got %d", prefix, MinContextWindow, MaxContextWindow, cw))
+		errs = append(errs, fmt.Errorf("%s must be from %d to %d, got %d", key("context_window"), MinContextWindow, MaxContextWindow, cw))
 	}
 	if mo != 0 && !ValidMaxOutput(mo, cw) {
 		if cw > 0 {
-			errs = append(errs, fmt.Errorf("%s.max_output must be from %d to %d (the context window), got %d", prefix, MinMaxOutput, MaxOutputCeiling(cw), mo))
+			errs = append(errs, fmt.Errorf("%s must be from %d to %d (the context window), got %d", key("max_output"), MinMaxOutput, MaxOutputCeiling(cw), mo))
 		} else {
-			errs = append(errs, fmt.Errorf("%s.max_output must be from %d to %d, got %d", prefix, MinMaxOutput, MaxContextWindow, mo))
+			errs = append(errs, fmt.Errorf("%s must be from %d to %d, got %d", key("max_output"), MinMaxOutput, MaxContextWindow, mo))
 		}
 	}
 	return errs
