@@ -570,10 +570,10 @@ func TestIsPagePath(t *testing.T) {
 		"/": true, "/repos": true, "/repos/acme/widgets.io": true, "/admin": true, "/signin": true, "/sign-in": true,
 		"/signed-out": false, "/signed-out/": false, "/assets/index-abc.js": false, "/favicon.svg": false, "/index.html": false,
 		"/api": false, "/api/me": false, "/auth/oidc/login": false, "/webhooks/gitlab/x": false, "/runs/1/result": false,
-		"/healthz": false, "/skill-fetches/1/result": false, "/readiness-scans/1/result": false, "/a/../signed-out": false,
-		"//signed-out": false, "/./signed-out": false, "/Signed-Out": false, "/SIGNED-OUT/": false,
-		"/admin/sign-in": false, "/admin/sign-in/": false, "/Admin/Sign-In": false, "/admin/../admin/sign-in": false,
-		"/admin/sign-in/x": true, "/admin/users": true,
+		"/healthz": false, "/skill-fetches/1/result": false, "/readiness-scans/1/result": false, "/security-scans/1/source": false,
+		"/a/../signed-out": false, "//signed-out": false, "/./signed-out": false, "/Signed-Out": false,
+		"/SIGNED-OUT/": false, "/admin/sign-in": false, "/admin/sign-in/": false, "/Admin/Sign-In": false,
+		"/admin/../admin/sign-in": false, "/admin/sign-in/x": true, "/admin/users": true,
 	} {
 		if got := isPagePath(p); got != want {
 			t.Errorf("isPagePath(%q) = %v; want %v", p, got, want)

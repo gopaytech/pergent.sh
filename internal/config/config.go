@@ -30,13 +30,22 @@ import (
 )
 
 const (
-	defaultListen      = ":8080"
-	defaultImage       = "ghcr.io/gopaytech/pergent:v0.12.0"
-	defaultMaxRunning  = 5
-	defaultWorkSize    = "20Gi"
-	defaultTimeout     = 30 * time.Minute
-	defaultConcurrency = 4
-	defaultAPIKeyEnv   = "OPENCODE_API_KEY"
+	defaultListen = ":8080"
+	defaultImage  = "ghcr.io/gopaytech/pergent:v0.12.0"
+	// defaultSecurityImage is released with pergent: its tag is always the
+	// tag of defaultImage (a test pins this).
+	defaultSecurityImage = "ghcr.io/gopaytech/pergent-security:v0.12.0"
+	// Defaults and limits of the security: block.
+	defaultSecurityMaxRunning     = 1
+	maxSecurityMaxRunning         = 20
+	defaultSecurityMaxSourceBytes = int64(500 << 20)
+	minSecurityMaxSourceBytes     = int64(1 << 20)
+	maxSecurityMaxSourceBytes     = int64(500 << 20) // pergent refuses an archive over 500 MiB
+	defaultMaxRunning             = 5
+	defaultWorkSize               = "20Gi"
+	defaultTimeout                = 30 * time.Minute
+	defaultConcurrency            = 4
+	defaultAPIKeyEnv              = "OPENCODE_API_KEY"
 )
 
 // FailureStatus is the commit status used when a review fails.
@@ -82,6 +91,7 @@ type Config struct {
 	LLMFallbacks []LLM
 	Fallback     Fallback
 	Jobs         Jobs      `yaml:"jobs"`
+	Security     Security  `yaml:"security"`
 	Dashboard    Dashboard `yaml:"dashboard"`
 	// RuleSets are the rule sets the file defines (rule_sets:). They are
 	// read-only in the dashboard and win over a stored set of the same name.
@@ -351,14 +361,26 @@ type LLM struct {
 	APIKeyEnv string `yaml:"api_key_env"`
 }
 
+// Security is the security: block: how security scans run.
+type Security struct {
+	// MaxRunning is the most scan Jobs running at once, from 1 to 20.
+	MaxRunning int
+	// Proxy is the egress proxy URL the scan Jobs use; empty means none.
+	Proxy string
+	// MaxSourceBytes is the most source a scan takes in, from 1 MiB to 500 MiB.
+	MaxSourceBytes int64
+}
+
 // Jobs shapes the Kubernetes Jobs that run pergent.
 type Jobs struct {
-	Namespace   string
-	Image       string
-	MaxRunning  int
-	Timeout     time.Duration
-	Concurrency int
-	Resources   corev1.ResourceRequirements
+	Namespace string
+	Image     string
+	// SecurityImage is the image the security scan Jobs run.
+	SecurityImage string
+	MaxRunning    int
+	Timeout       time.Duration
+	Concurrency   int
+	Resources     corev1.ResourceRequirements
 	// WorkSize limits a review Job's work volume, which holds the checkout.
 	WorkSize resource.Quantity
 	// MaxTurns is pergent's step limit per opencode run (--max-turns), from
@@ -379,6 +401,7 @@ type fileConfig struct {
 	LLM           fileLLM          `yaml:"llm"`
 	Fallback      fileFallback     `yaml:"fallback"`
 	Jobs          fileJobs         `yaml:"jobs"`
+	Security      fileSecurity     `yaml:"security"`
 	Dashboard     Dashboard        `yaml:"dashboard"`
 
 	// SkillsDir is kept only to refuse it: the skill library lives in the
@@ -520,15 +543,23 @@ func (f fileRepository) repository() Repository {
 	return r
 }
 
+// fileSecurity uses pointers to tell an omitted number from an explicit 0.
+type fileSecurity struct {
+	MaxRunning     *int   `yaml:"max_running"`
+	Proxy          string `yaml:"proxy"`
+	MaxSourceBytes *int64 `yaml:"max_source_bytes"`
+}
+
 type fileJobs struct {
-	Namespace   string        `yaml:"namespace"`
-	Image       string        `yaml:"image"`
-	MaxRunning  *int          `yaml:"max_running"`
-	Timeout     *duration     `yaml:"timeout"`
-	MaxTurns    *int          `yaml:"max_turns"`
-	Concurrency *int          `yaml:"concurrency"`
-	Resources   fileResources `yaml:"resources"`
-	WorkSize    *quantity     `yaml:"work_size"`
+	Namespace     string        `yaml:"namespace"`
+	Image         string        `yaml:"image"`
+	SecurityImage string        `yaml:"security_image"`
+	MaxRunning    *int          `yaml:"max_running"`
+	Timeout       *duration     `yaml:"timeout"`
+	MaxTurns      *int          `yaml:"max_turns"`
+	Concurrency   *int          `yaml:"concurrency"`
+	Resources     fileResources `yaml:"resources"`
+	WorkSize      *quantity     `yaml:"work_size"`
 }
 
 type fileResources struct {
@@ -669,12 +700,13 @@ func Load(path string) (*Config, error) {
 		Fallback:      Fallback{QuotaCooldown: DefaultQuotaCooldown},
 		Dashboard:     raw.Dashboard,
 		Jobs: Jobs{
-			Namespace:   raw.Jobs.Namespace,
-			Image:       raw.Jobs.Image,
-			MaxRunning:  defaultMaxRunning,
-			Timeout:     defaultTimeout,
-			MaxTurns:    DefaultMaxTurns,
-			Concurrency: defaultConcurrency,
+			Namespace:     raw.Jobs.Namespace,
+			Image:         raw.Jobs.Image,
+			SecurityImage: raw.Jobs.SecurityImage,
+			MaxRunning:    defaultMaxRunning,
+			Timeout:       defaultTimeout,
+			MaxTurns:      DefaultMaxTurns,
+			Concurrency:   defaultConcurrency,
 			Resources: corev1.ResourceRequirements{
 				Requests: toResourceList(raw.Jobs.Resources.Requests),
 				Limits:   toResourceList(raw.Jobs.Resources.Limits),
@@ -686,6 +718,17 @@ func Load(path string) (*Config, error) {
 	}
 	for _, rs := range raw.RuleSets {
 		cfg.RuleSets = append(cfg.RuleSets, ConfigRuleSet{Name: rs.Name, Content: rs.Content})
+	}
+	cfg.Security = Security{
+		MaxRunning:     defaultSecurityMaxRunning,
+		Proxy:          raw.Security.Proxy,
+		MaxSourceBytes: defaultSecurityMaxSourceBytes,
+	}
+	if raw.Security.MaxRunning != nil {
+		cfg.Security.MaxRunning = *raw.Security.MaxRunning
+	}
+	if raw.Security.MaxSourceBytes != nil {
+		cfg.Security.MaxSourceBytes = *raw.Security.MaxSourceBytes
 	}
 	if raw.Jobs.WorkSize != nil {
 		cfg.Jobs.WorkSize = raw.Jobs.WorkSize.Quantity
@@ -734,6 +777,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Jobs.Image == "" {
 		c.Jobs.Image = defaultImage
+	}
+	if c.Jobs.SecurityImage == "" {
+		c.Jobs.SecurityImage = defaultSecurityImage
 	}
 	if len(c.Jobs.Resources.Requests) == 0 && len(c.Jobs.Resources.Limits) == 0 {
 		c.Jobs.Resources = defaultResources()
@@ -1014,6 +1060,10 @@ func (c *Config) Validate() error {
 	if err := checkImagePinned(c.Jobs.Image); err != nil {
 		errs = append(errs, err)
 	}
+	if err := checkImagePinned(c.Jobs.SecurityImage); err != nil {
+		errs = append(errs, fmt.Errorf("jobs.security_image: %w", err))
+	}
+	errs = append(errs, c.Security.check()...)
 	if c.Jobs.WorkSize.Sign() < 0 {
 		add("jobs.work_size must not be negative, got %s", c.Jobs.WorkSize.String())
 	}
@@ -1474,4 +1524,26 @@ func PanelImage(image string) (ok bool, reason string) {
 		return false, fmt.Sprintf("image tag %q is older than %s, the first pergent with multi review", tag, PanelMinVersion)
 	}
 	return true, ""
+}
+
+// check returns the problems of the security: block.
+func (s Security) check() []error {
+	var errs []error
+	if s.MaxRunning < 1 || s.MaxRunning > maxSecurityMaxRunning {
+		errs = append(errs, fmt.Errorf("security.max_running must be from 1 to %d, got %d", maxSecurityMaxRunning, s.MaxRunning))
+	}
+	if s.MaxSourceBytes < minSecurityMaxSourceBytes || s.MaxSourceBytes > maxSecurityMaxSourceBytes {
+		errs = append(errs, fmt.Errorf("security.max_source_bytes must be from %d (1 MiB) to %d (500 MiB), got %d",
+			minSecurityMaxSourceBytes, maxSecurityMaxSourceBytes, s.MaxSourceBytes))
+	}
+	if s.Proxy != "" {
+		u, err := url.Parse(s.Proxy)
+		switch {
+		case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+			errs = append(errs, fmt.Errorf("security.proxy must be an http or https URL with a host, such as http://proxy.example.com:3128"))
+		case u.User != nil:
+			errs = append(errs, fmt.Errorf("security.proxy must not hold user info: a secret does not belong in the config file"))
+		}
+	}
+	return errs
 }

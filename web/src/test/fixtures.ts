@@ -46,6 +46,10 @@ import type {
   RuleSet,
   RuleSetDetail,
   BuiltInRule,
+  SecurityFindingView,
+  SecurityScanView,
+  SecuritySettingsView,
+  SecurityView,
 } from "../api";
 
 // Tokens with the apart counts reported, and with none of them reported.
@@ -1243,4 +1247,140 @@ export const teamChoicesPay2: RepositoryChoicesView = {
   items: [{ instance: "side", project: "acme/paybox", paused: false, ownedBy: null }],
   page: 2,
   hasMore: false,
+};
+
+// --- security scans ---
+
+const scanBase: SecurityScanView = {
+  id: "0b9f2c1e-1111-4222-8333-444455556661",
+  number: 1,
+  state: "complete",
+  reason: "",
+  startedBy: "alice (gitlab main)",
+  queuedAt: "2026-11-20T09:00:00Z",
+  startedAt: "2026-11-20T09:00:05Z",
+  finishedAt: "2026-11-20T09:20:05Z",
+  durationSeconds: 1200,
+  branch: "main",
+  commit: "0123456789abcdef0123456789abcdef01234567",
+  model: "Qwen",
+  skillName: "security-scan",
+  skillCommit: "89abcdef0123456789abcdef0123456789abcdef",
+  skillUpdated: false,
+  coverage: { done: 12, planned: 12 },
+  tokens: tok(1_000, 4_000),
+  usageSource: "stats",
+  newCount: 3,
+  fixedCount: 1,
+  hasSarif: true,
+  cancelRequested: false,
+};
+export const securityScanComplete: SecurityScanView = scanBase;
+export const securityScanPartial: SecurityScanView = {
+  ...scanBase,
+  id: "0b9f2c1e-1111-4222-8333-444455556662",
+  number: 2,
+  state: "partial",
+  reason: "timeout",
+  coverage: { done: 7, planned: 12 },
+  usageSource: "stream",
+  newCount: 1,
+  fixedCount: 0,
+};
+export const securityScanFailed: SecurityScanView = {
+  ...scanBase,
+  id: "0b9f2c1e-1111-4222-8333-444455556663",
+  number: 3,
+  state: "failed",
+  reason: "the Job could not start",
+  startedAt: null,
+  durationSeconds: null,
+  model: "",
+  skillName: "",
+  skillCommit: "",
+  coverage: null,
+  tokens: null,
+  usageSource: "",
+  newCount: 0,
+  fixedCount: 0,
+  hasSarif: false,
+};
+export const securityScanRunning: SecurityScanView = {
+  ...scanBase,
+  id: "0b9f2c1e-1111-4222-8333-444455556664",
+  number: 4,
+  state: "running",
+  finishedAt: null,
+  durationSeconds: null,
+  coverage: null,
+  tokens: null,
+  usageSource: "",
+  newCount: 0,
+  fixedCount: 0,
+  hasSarif: false,
+};
+
+export const securityView: SecurityView = {
+  canStart: true,
+  startOff: "",
+  canManage: true,
+  running: null,
+  last: securityScanComplete,
+  counts: { critical: 1, high: 2, medium: 3, low: 4, needsValidation: 2 },
+  start: {
+    model: "Qwen",
+    maxSteps: 120,
+    subagentMaxSteps: 60,
+    stepsFromSkill: false,
+    maxStepsFromSkill: false,
+    subagentMaxStepsFromSkill: false,
+    timeoutSeconds: 3600,
+    lastTokens: 5_000,
+    lastSeconds: 1200,
+  },
+};
+
+export const securityFindingOpen: SecurityFindingView = {
+  finding: {
+    id: 7,
+    state: "open",
+    severity: "high",
+    ruleId: "injection",
+    cwe: "CWE-89",
+    title: "SQL built from a request value",
+    file: "internal/store/search.go",
+    startLine: 42,
+    needsValidation: true,
+    firstSeenAt: "2026-11-20T09:20:05Z",
+    firstScan: 1,
+  },
+  description: "The query joins the search text into the SQL.",
+  exploit: "A search text with a quote reads other rows.",
+  fixHint: "Pass the search text as a query argument.",
+  confidence: "high",
+  tags: ["CWE-89", "sql"],
+  codeUrl: "https://gitlab.example.com/acme/widgets/-/blob/0123456789abcdef0123456789abcdef01234567/internal/store/search.go#L42",
+  dismissal: null,
+  history: [{ kind: "found", scan: 1, actor: "", reason: "", comment: "", at: "2026-11-20T09:20:05Z" }],
+  canManage: true,
+};
+export const securityFindingDismissed: SecurityFindingView = {
+  ...securityFindingOpen,
+  finding: { ...securityFindingOpen.finding, id: 8, state: "dismissed", severity: "low", ruleId: "secrets", cwe: "", needsValidation: false },
+  tags: [],
+  codeUrl: "",
+  dismissal: { reason: "used_in_tests", comment: "A test key.", by: "bob", at: "2026-11-21T10:00:00Z" },
+  history: [
+    { kind: "found", scan: 1, actor: "", reason: "", comment: "", at: "2026-11-20T09:20:05Z" },
+    { kind: "dismissed", scan: 0, actor: "bob", reason: "used_in_tests", comment: "A test key.", at: "2026-11-21T10:00:00Z" },
+  ],
+};
+
+export const securitySettings: SecuritySettingsView = {
+  maxSteps: null,
+  subagentMaxSteps: null,
+  timeoutSeconds: null,
+  findingsInReviews: false,
+  defaults: { maxSteps: 600, subagentMaxSteps: 100, timeoutSeconds: 10800 },
+  canEdit: true,
 };

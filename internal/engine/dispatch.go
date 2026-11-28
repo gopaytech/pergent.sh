@@ -686,6 +686,10 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.retry(ctx, fmt.Errorf("record the CI jobs' results: %w", err))
 		}
 	}
+	// The open security findings are added before Fit too, which drops them
+	// before the CI results. Any problem leaves them out.
+	d.addSecurityFindings(ctx, plat, repo, mr, in)
+	hadSecurity := len(in.SecurityFindings) > 0
 	hadCI := len(in.CIResults) > 0
 	hadCarried := len(in.Carried) > 0
 	hadDismissals := len(in.Dismissals) > 0
@@ -719,6 +723,9 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		}
 		return d.fail(ctx, err.Error())
 	}
+	if hadSecurity && in.SecurityFindings == nil {
+		d.log.Warn(securityDroppedMsg)
+	}
 	if hadCI && in.CIResults == nil {
 		d.log.Warn(ciDroppedMsg)
 	}
@@ -750,8 +757,13 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		in.Dismissals, _ = d.pastDismissals(ctx, repo, in, mr.AuthorID, false)
 	}
 	if len(links.Entries) > 0 {
+		if in.Size() > limit && in.SecurityFindings != nil {
+			// The security findings go before the CI results, as in Fit.
+			in.SecurityFindings = nil
+			d.log.Warn(securityDroppedMsg)
+		}
 		if in.Size() > limit && in.CIResults != nil {
-			// The CI results go first, as in Fit.
+			// The CI results go next, as in Fit.
 			in.CIResults = nil
 			d.log.Warn(ciDroppedMsg)
 		}

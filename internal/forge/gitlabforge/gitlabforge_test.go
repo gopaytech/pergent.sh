@@ -985,3 +985,35 @@ func TestUserByName(t *testing.T) {
 		t.Errorf("500: err = %v, want an error that isn't ErrNotFound", err)
 	}
 }
+
+// Archive reads a project by its path, with the review bot, at the commit;
+// a project or commit the bot can't read (404 or 403) is
+// forge.ErrSourceNotFound.
+func TestGitLabArchiveReader(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, "/projects/acme%2Fwidgets", http.StatusOK, map[string]any{"id": 42})
+	f.on(http.MethodGet, "/projects/42/repository/archive.tar.gz", http.StatusOK, "tar-gz-bytes")
+	f.on(http.MethodGet, "/projects/acme%2Fsecret", http.StatusOK, map[string]any{"id": 43})
+	f.on(http.MethodGet, "/projects/43/repository/archive.tar.gz", http.StatusForbidden, `{"message":"403 Forbidden"}`)
+	g := f.forge()
+	ctx := context.Background()
+
+	rc, err := g.Archive(ctx, "acme/widgets", commitSHA)
+	if err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	b, _ := io.ReadAll(rc)
+	rc.Close()
+	if string(b) != "tar-gz-bytes" {
+		t.Errorf("archive = %q", b)
+	}
+	last := f.requests()[len(f.requests())-1]
+	if last.Query != "sha="+commitSHA || last.Token != reviewToken {
+		t.Errorf("archive request = %+v; want the commit and the review bot's token", last)
+	}
+	for _, project := range []string{"acme/private", "acme/secret", ""} {
+		if _, err := g.Archive(ctx, project, commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("Archive(%q) = %v; want ErrSourceNotFound", project, err)
+		}
+	}
+}

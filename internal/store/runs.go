@@ -179,9 +179,10 @@ type Run struct {
 	// Nil is none, for a run from before the column or one that never
 	// started.
 	LinkedRepos []Link
-	// Kind is KindMR for a merge request's review and KindAPI for one asked
-	// for through the review API (see EnqueueAPIReview); APIClientID is the
-	// client of an API review, nil for a merge request's.
+	// Kind is KindMR for a merge request's review, KindAPI for one asked
+	// for through the review API (see EnqueueAPIReview) and KindScan for a
+	// security scan's hidden run. APIClientID is the client of an API
+	// review, nil for a merge request's.
 	Kind        string
 	APIClientID *int64
 	// AttemptOf is the first run of the review this run is a later attempt
@@ -207,6 +208,11 @@ const (
 	// KindAPI is a review asked for through the review API: it has no merge
 	// request (instance '', project 0, and a number of its own as mr_iid).
 	KindAPI = "api"
+	// KindScan is the hidden run a security scan owns (QueueSecurityScan),
+	// only so its usage and entry reach the usage, quota and limit SQL. It is
+	// never a review: no repository (instance '', project 0, a number of its
+	// own as mr_iid), stored superseded and with its usage recorded.
+	KindScan = "scan"
 )
 
 // How a run came to be (Run.Trigger).

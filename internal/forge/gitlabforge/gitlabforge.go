@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -132,6 +133,23 @@ func (f *Forge) ResolveRef(ctx context.Context, project, ref string) (string, er
 		return "", forge.ErrSourceNotFound
 	}
 	return commit, err
+}
+
+var _ forge.ArchiveReader = (*Forge)(nil)
+
+// Archive opens the .tar.gz of the project at commit, read with the review
+// bot. A project or commit the bot can't read (404 or 403) is
+// forge.ErrSourceNotFound.
+func (f *Forge) Archive(ctx context.Context, project, commit string) (io.ReadCloser, error) {
+	id, err := f.projectID(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := f.c.Archive(ctx, id, commit)
+	if unreadable(err) {
+		return nil, forge.ErrSourceNotFound
+	}
+	return rc, err
 }
 
 // ListTreeAt lists one directory of the project at commit. A missing

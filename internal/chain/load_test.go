@@ -159,3 +159,39 @@ func TestLoadReadsLimits(t *testing.T) {
 		t.Fatalf("no owner: model %v, team %v; want the model limit only", in.ModelLimitUsedUp, in.TeamLimitUsedUp)
 	}
 }
+
+// A scan uses its repository's own scan chain; with none, or an empty one,
+// the chain in effect for a review (here the team's chain A).
+func TestLoadScan(t *testing.T) {
+	t.Parallel()
+	e := newLoadEnv(t, &config.Config{})
+	e.repoRow(t)
+	e.save(t, store.Chain{Scope: store.ScopeTeam, TeamID: e.team, Entries: []store.EntryRef{e.a}})
+	saveScan := func(t *testing.T, admin bool, refs ...store.EntryRef) {
+		t.Helper()
+		c := store.Chain{Scope: store.ScopeRepo, Instance: inst, Project: project, Entries: refs, SavedByAdmin: admin}
+		if err := e.st.SaveChainOf(ctx, store.ChainScan, c, now); err != nil {
+			t.Fatalf("SaveChainOf: %v", err)
+		}
+	}
+	for _, c := range []struct {
+		name      string
+		save      func(t *testing.T)
+		scope     string
+		refs      []store.EntryRef
+		wantAdmin bool
+	}{
+		{"no scan chain", func(*testing.T) {}, store.ScopeTeam, []store.EntryRef{e.a}, false},
+		{"a scan chain", func(t *testing.T) { saveScan(t, true, e.b, e.a) }, store.ScopeRepo, []store.EntryRef{e.b, e.a}, true},
+		{"an empty scan chain", func(t *testing.T) { saveScan(t, false) }, store.ScopeTeam, []store.EntryRef{e.a}, false},
+	} {
+		c.save(t)
+		in, err := LoadScan(ctx, e.st, e.reg, now, repo)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if in.Scope != c.scope || !slices.Equal(in.Refs, c.refs) || in.SavedByAdmin != c.wantAdmin {
+			t.Errorf("%s: scope %q refs %v admin %v; want %q %v %v", c.name, in.Scope, in.Refs, in.SavedByAdmin, c.scope, c.refs, c.wantAdmin)
+		}
+	}
+}

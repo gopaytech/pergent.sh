@@ -1,0 +1,5 @@
+{"kind":"security","status":"partial","reason":"a step limit was reached","commit":"0123456789abcdef0123456789abcdef01234567",
+ "skill":{"name":"security-audit","commit":"abc123"},
+ "usage":{"source":"stats_poll","sessions":1,"subagents":0,"steps":600,"tokens":{"input":5,"output":6,"reasoning":0,"cache_read":0,"cache_write":0},"models":[]},
+ "coverage":{"done":1,"planned":4},"state":{},
+ "sarif":{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"security-audit","version":"abc123"}},"results":[]}]}}

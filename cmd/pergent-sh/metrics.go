@@ -14,6 +14,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/metrics"
 	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/security"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -156,7 +157,7 @@ func tokenKinds(t store.TokenSum, rows int64) []kindCount {
 func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.LibrarySkill) metrics.Snapshot {
 	type repoKey struct{ instance, project string }
 	repos := make(map[repoKey]string, len(on))
-	skills := map[string]bool{result.ImpactSkill: true}
+	skills := map[string]bool{result.ImpactSkill: true, security.UsageSkill: true}
 	for _, s := range library {
 		skills[s.Name] = true
 	}
@@ -176,6 +177,10 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 		return labelSwitchedOff
 	}
 	skill := func(name string) string {
+		// A scan's other models are security-scan@provider/model rows: one label.
+		if strings.HasPrefix(name, security.UsageSkill+"@") {
+			return security.UsageSkill
+		}
 		if skills[name] {
 			return name
 		}
@@ -260,7 +265,27 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 	for _, u := range t.APICallbacks {
 		snap.Add(metrics.APICallbacksTotal, u.Count, label("client", u.Client), label("outcome", callbackOutcome(u.Outcome)))
 	}
+	// A scan's status and a finding's severity are fixed words; a repository
+	// is named only while it is switched on, like the review metrics.
+	for _, u := range t.SecurityScans {
+		snap.Add(metrics.SecurityScansTotal, u.Count, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
+			label("status", oneOf(u.Status, store.SecurityComplete, store.SecurityPartial, store.SecurityFailed)))
+	}
+	for _, u := range t.SecurityOpen {
+		snap.Add(metrics.SecurityFindingsOpen, u.Count, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
+			label("severity", oneOf(u.Severity, "critical", "high", "medium", "low")))
+	}
 	return snap
+}
+
+// oneOf returns v when it is one of known, else labelOther.
+func oneOf(v string, known ...string) string {
+	for _, k := range known {
+		if v == k {
+			return v
+		}
+	}
+	return labelOther
 }
 
 // metricsHandler serves GET /metrics and nothing else: any other path is a

@@ -12,6 +12,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/readiness"
 	"github.com/gopaytech/pergent.sh/internal/reviewapi"
+	"github.com/gopaytech/pergent.sh/internal/security"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
@@ -385,5 +386,62 @@ func TestServerMemberRouteOnPublicMux(t *testing.T) {
 		if rec.Code != r.want {
 			t.Errorf("%s = %d; want %d", r.method, rec.Code, r.want)
 		}
+	}
+}
+
+// securityStub takes any post and serves an archive of 3 bytes, to the
+// scan token "t".
+type securityStub struct{ posts, opens, tooLarge int }
+
+func (s *securityStub) CompleteSecurityScan(context.Context, string, string, []byte) (security.Outcome, error) {
+	s.posts++
+	return security.Stored, nil
+}
+func (s *securityStub) SecurityTooLarge(context.Context, string, string) error { return nil }
+func (s *securityStub) OpenSecuritySource(_ context.Context, _, token string) (io.ReadCloser, security.Outcome, error) {
+	s.opens++
+	if token != "t" {
+		return nil, security.Unauthorized, nil
+	}
+	return io.NopCloser(strings.NewReader("abc")), security.Stored, nil
+}
+func (s *securityStub) SecuritySourceTooLarge(context.Context, string, string) error {
+	s.tooLarge++
+	return nil
+}
+
+// The security scan routes exist only when set (the dashboard is on), take
+// their own methods only, and the source route stops at the limit it gets.
+func TestRoutesSecurityScansOnlyWhenSet(t *testing.T) {
+	cfg := &config.Config{}
+	do := func(mux *http.ServeMux, method, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		req.Header.Set("Authorization", "Bearer t")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+	off := Routes(Deps{Config: cfg, Instances: instances.New(cfg, nil, nil)})
+	for _, r := range []struct{ method, path string }{{http.MethodPost, "/security-scans/s1/result"},
+		{http.MethodGet, "/security-scans/s1/source"}} {
+		if code := do(off, r.method, r.path).Code; code != http.StatusNotFound {
+			t.Errorf("%s %s while off = %d; want 404", r.method, r.path, code)
+		}
+	}
+
+	s := &securityStub{}
+	mux := Routes(Deps{Config: cfg, Instances: instances.New(cfg, nil, nil), SecurityScans: s, SecuritySources: s,
+		SecuritySourceLimit: 10})
+	if rec := do(mux, http.MethodPost, "/security-scans/s1/result"); rec.Code != http.StatusNoContent || s.posts != 1 {
+		t.Errorf("result = %d (%d posts); want 204", rec.Code, s.posts)
+	}
+	if rec := do(mux, http.MethodGet, "/security-scans/s1/result"); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET result = %d; want 405", rec.Code)
+	}
+	if rec := do(mux, http.MethodGet, "/security-scans/s1/source"); rec.Code != http.StatusOK || rec.Body.String() != "abc" {
+		t.Errorf("source = %d %q; want 200 abc", rec.Code, rec.Body.String())
+	}
+	if rec := do(mux, http.MethodPost, "/security-scans/s1/source"); rec.Code != http.StatusMethodNotAllowed || s.opens != 1 {
+		t.Errorf("POST source = %d (%d opens); want 405", rec.Code, s.opens)
 	}
 }

@@ -9,6 +9,11 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/managed-by: pergent-sh
+    # A security scan Job has its own policy below. NetworkPolicies add up, so
+    # the scan pod must match only that one.
+    matchExpressions:
+      - key: pergent.sh/security-scan
+        operator: DoesNotExist
   policyTypes:
     - Ingress
     - Egress
@@ -40,6 +45,77 @@ spec:
           port: 80
     {{- end }}
     # The result callback to pergent-sh.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "pergent-sh.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Security scan Jobs: DNS, the callback and the LLM provider only. They get the code
+# from pergent.sh, so no GitLab or GitHub address is allowed here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pergent-sh.fullname" . }}-security-jobs
+  namespace: {{ .Values.jobsNamespace }}
+  labels:
+    {{- include "pergent-sh.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: pergent-sh
+    matchExpressions:
+      - key: pergent.sh/security-scan
+        operator: Exists
+  policyTypes:
+    - Ingress
+    - Egress
+  # Nothing connects to a scan Job.
+  ingress: []
+  egress:
+    # DNS: the cluster DNS only, or securityJobEgress.dns. A rule with no "to"
+    # would allow port 53 on every address.
+    - to:
+        {{- if .Values.securityJobEgress.dns }}
+        {{- toYaml .Values.securityJobEgress.dns | nindent 8 }}
+        {{- else }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if .Values.securityJobEgress.cidrs }}
+    # The LLM provider. Only emitted for a non-empty list: a rule with an empty
+    # "to" would allow every destination.
+    - to:
+        {{- range .Values.securityJobEgress.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+            {{- with $.Values.securityJobEgress.except }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      ports:
+        {{- /* An empty list would render no ports, which means ALL ports. */}}
+        {{- range (.Values.securityJobEgress.ports | default (list 443 80)) }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    # The source and result calls to pergent-sh.
     - to:
         - namespaceSelector:
             matchLabels:

@@ -72,6 +72,11 @@ type Inputs struct {
 	// status, log tail or report of each); nil when none is chosen. It is not
 	// part of any skill's hash.
 	CIResults []byte
+	// SecurityFindings is the security-findings.md of the repository's open
+	// security findings in the files the change touches; nil when the
+	// repository's switch is off or there are none. It is not part of any
+	// skill's hash. Fit drops it first.
+	SecurityFindings []byte
 	// Rules is the path rule list the review gets, as pergent's
 	// rule.EncodeList JSON (rules.json); nil when the list is empty. Fit never
 	// drops it: a review without its rules is never run.
@@ -310,20 +315,24 @@ func (in *Inputs) AddDescription(title, description string) {
 
 // Size is the total number of bytes the inputs put into a ConfigMap.
 func (in *Inputs) Size() int {
-	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals) + len(in.Description) + len(in.Linked) + len(in.CIResults) + len(in.Rules)
+	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals) + len(in.Description) + len(in.Linked) + len(in.CIResults) + len(in.SecurityFindings) + len(in.Rules)
 	for _, c := range in.Skills {
 		n += len(c)
 	}
 	return n
 }
 
-// Fit makes the inputs fit limit bytes: over the limit, the CI results are
-// dropped first, since the review still runs without them; then the dismissals
+// Fit makes the inputs fit limit bytes: over the limit, the security findings
+// and then the CI results are dropped first, since the review still runs without them; then the dismissals
 // and the change's description, so neither ever turns an incremental review
 // into a full one; then the previous result, together with the carried files
 // (the review is then a full one). The rules are never dropped. If they are
 // still over, it returns ErrTooLarge.
 func (in *Inputs) Fit(limit int) error {
+	if in.Size() <= limit {
+		return nil
+	}
+	in.SecurityFindings = nil
 	if in.Size() <= limit {
 		return nil
 	}

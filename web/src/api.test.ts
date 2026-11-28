@@ -22,6 +22,43 @@ describe("paths", () => {
   });
 });
 
+describe("security paths", () => {
+  const base = "/api/repositories/main/group/sub/app/security";
+  it("keeps the slashes and escapes a # in the project", () => {
+    expect(paths.apiRepoSecurity("main", "group/sub/app")).toBe(base);
+    expect(paths.apiRepoSecurity("main", "group/su#b/app")).toBe("/api/repositories/main/group/su%23b/app/security");
+    expect(paths.apiRepoSecurityFinding("main", "group/sub/app", 7)).toBe(`${base}/findings/7`);
+    expect(paths.apiRepoSecurityFindingAction("main", "group/sub/app", 7, "dismiss")).toBe(`${base}/findings/7/dismiss`);
+    expect(paths.apiRepoSecurityFindingAction("main", "group/sub/app", 7, "restore")).toBe(`${base}/findings/7/restore`);
+    expect(paths.apiRepoSecurityScans("main", "group/sub/app")).toBe(`${base}/scans`);
+    expect(paths.apiRepoSecurityScan("main", "group/sub/app", "s/1")).toBe(`${base}/scans/s%2F1`);
+    expect(paths.apiRepoSecurityScanSarif("main", "group/sub/app", "s1")).toBe(`${base}/scans/s1/sarif`);
+    expect(paths.apiRepoSecurityScanCancel("main", "group/sub/app", "s1")).toBe(`${base}/scans/s1/cancel`);
+    expect(paths.apiRepoSecuritySettings("main", "group/sub/app")).toBe(`${base}/settings`);
+    expect(paths.apiRepoSecurityChain("main", "group/sub/app")).toBe(`${base}/chain`);
+    expect(paths.apiRepoSecurityChainReset("main", "group/sub/app")).toBe(`${base}/chain/reset`);
+  });
+
+  it("drops empty filter keys and encodes q", () => {
+    expect(paths.apiRepoSecurityFindings("main", "group/sub/app", {})).toBe(`${base}/findings`);
+    expect(paths.apiRepoSecurityFindings("main", "group/sub/app", { state: "open", severity: "", rule: undefined, q: "a b&c" })).toBe(
+      `${base}/findings?state=open&q=a+b%26c`,
+    );
+    expect(paths.apiRepoSecurityFindings("main", "group/sub/app", { state: "dismissed", severity: "high", rule: "injection" })).toBe(
+      `${base}/findings?state=dismissed&severity=high&rule=injection`,
+    );
+  });
+
+  it("builds the Security page path in ?tab=, with a finding or a scan", () => {
+    expect(paths.repoSecurity("main", "group/su#b/app")).toBe("/repos/main/group/su%23b/app?tab=security");
+    expect(paths.repoSecurity("main", "group/sub/app", {})).toBe("/repos/main/group/sub/app?tab=security");
+    expect(paths.repoSecurity("main", "group/sub/app", { finding: 7 })).toBe("/repos/main/group/sub/app?tab=security&finding=7");
+    expect(paths.repoSecurity("main", "group/sub/app", { scan: "0b9f2c1e-1111-4222-8333-444455556666" })).toBe(
+      "/repos/main/group/sub/app?tab=security&scan=0b9f2c1e-1111-4222-8333-444455556666",
+    );
+  });
+});
+
 describe("safeHref", () => {
   it("keeps only http and https addresses", () => {
     expect(safeHref("https://gitlab.example.com/acme/widgets")).toBe("https://gitlab.example.com/acme/widgets");

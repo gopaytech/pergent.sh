@@ -7,6 +7,7 @@ package forge
 import (
 	"context"
 	"errors"
+	"io"
 
 	"github.com/gopaytech/pergent.sh/internal/ci"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -222,6 +223,17 @@ type SourceReader interface {
 	ListTreeAt(ctx context.Context, project, path, commit string) ([]TreeEntry, error)
 	// GetFileAt returns a file's raw content at commit.
 	GetFileAt(ctx context.Context, project, path, commit string) ([]byte, bool, error)
+}
+
+// ArchiveReader opens the platform's .tar.gz of a repository at a commit,
+// read as a SourceReader reads (the review bot, or the review App's
+// installation). A security scan's Job downloads it through pergent.sh.
+type ArchiveReader interface {
+	// Archive opens the archive of project ("group/project", "owner/name")
+	// at commit, as the platform sends it; the caller closes it. Only ctx
+	// bounds the download. A repository or commit the bot or App can't read
+	// (404 or 403) is ErrSourceNotFound.
+	Archive(ctx context.Context, project, commit string) (io.ReadCloser, error)
 }
 
 // FileDiff is one file of a diff as the platform returns it: Patch is the

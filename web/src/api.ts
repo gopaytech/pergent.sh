@@ -517,6 +517,183 @@ export type GraphView = {
 export type QuotaUseView = { used: number; limit: number | null };
 export type QuotaView = { repository: QuotaUseView; instance: QuotaUseView };
 
+// --- security scans (GET .../security and its routes) ---
+//
+// The texts of a scan and of a finding are the model's or the platform's: show
+// them as text only, never as HTML. codeUrl is checked with safeHref.
+
+export type SecurityState = "queued" | "running" | "complete" | "partial" | "failed";
+export type Severity = "critical" | "high" | "medium" | "low";
+export type FindingState = "open" | "dismissed" | "fixed";
+export type DismissReason = "false_positive" | "wont_fix" | "used_in_tests" | "mitigated" | "acceptable_risk";
+
+export const dismissReasonText: Record<DismissReason, string> = {
+  false_positive: "false positive",
+  wont_fix: "won't fix",
+  used_in_tests: "used in tests",
+  mitigated: "mitigated",
+  acceptable_risk: "acceptable risk",
+};
+
+// SecurityCountsView counts the open findings by severity, and the open ones
+// that need a person to check them.
+export type SecurityCountsView = {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  needsValidation: number;
+};
+
+// SecurityStartView is what the Start scan confirm box shows. model is "" when
+// no chain entry can be used. lastTokens and lastSeconds (the newest complete
+// scan) are null with none. stepsFromSkill: no step limit is set.
+export type SecurityStartView = {
+  model: string;
+  maxSteps: number;
+  subagentMaxSteps: number;
+  stepsFromSkill: boolean;
+  // Each limit alone: its own setting is unset, so its number is the skill's.
+  maxStepsFromSkill: boolean;
+  subagentMaxStepsFromSkill: boolean;
+  timeoutSeconds: number;
+  lastTokens: number | null;
+  lastSeconds: number | null;
+};
+
+export type SecurityCoverageView = { done: number; planned: number };
+
+// SecurityScanView is one security scan. reason says why it is partial or
+// failed ("cancelled" for a cancelled one). A time not reached is null.
+// usageSource is "stats", "stats_poll" or "stream" (a string: more may come);
+// "" with no usage. hasSarif: the scan still keeps its SARIF.
+export type SecurityScanView = {
+  id: string;
+  number: number;
+  state: SecurityState;
+  reason: string;
+  startedBy: string;
+  queuedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationSeconds: number | null;
+  branch: string;
+  commit: string;
+  model: string;
+  skillName: string;
+  skillCommit: string;
+  skillUpdated: boolean;
+  coverage: SecurityCoverageView | null;
+  tokens: UsageTokensView | null;
+  usageSource: string;
+  newCount: number;
+  fixedCount: number;
+  hasSarif: boolean;
+  cancelRequested: boolean;
+};
+
+// SecurityView is GET .../security. startOff is why Start scan is off ("" when
+// it is on). running is the queued or running scan, last the newest that ended.
+export type SecurityView = {
+  canStart: boolean;
+  startOff: string;
+  canManage: boolean;
+  running: SecurityScanView | null;
+  last: SecurityScanView | null;
+  counts: SecurityCountsView;
+  start: SecurityStartView;
+};
+
+export type SecurityScansView = { scans: SecurityScanView[] };
+
+// SecurityFindingRowView is one finding in a list. ruleId is the skill's
+// attack class (such as "injection"), not a CWE; cwe is set only when a rule
+// tag is CWE-<n>, else "".
+export type SecurityFindingRowView = {
+  id: number;
+  state: FindingState;
+  severity: Severity;
+  ruleId: string;
+  cwe: string;
+  title: string;
+  file: string;
+  startLine: number;
+  needsValidation: boolean;
+  firstSeenAt: string;
+  firstScan: number;
+};
+
+// SecurityScanDetailView is GET .../security/scans/{id}. log is the redacted
+// tail of the Job's log ("" when none was kept); new and fixed hold at most
+// 1000 findings each.
+export type SecurityScanDetailView = {
+  scan: SecurityScanView;
+  log: string;
+  new: SecurityFindingRowView[];
+  fixed: SecurityFindingRowView[];
+};
+
+// SecurityFindingsView is GET .../security/findings. truncated: more than 1000
+// matched.
+export type SecurityFindingsView = { findings: SecurityFindingRowView[]; truncated: boolean };
+
+export type SecurityDismissalView = { reason: DismissReason; comment: string; by: string; at: string };
+
+// SecurityEventView is one thing that happened to a finding. kind is "found",
+// "reopened", "fixed", "dismissed" or "restored"; scan is 0 for a person's act.
+export type SecurityEventView = {
+  kind: string;
+  scan: number;
+  actor: string;
+  reason: string;
+  comment: string;
+  at: string;
+};
+
+// SecurityFindingView is GET .../security/findings/{id}. codeUrl is "" or an
+// http(s) link to the line.
+export type SecurityFindingView = {
+  finding: SecurityFindingRowView;
+  description: string;
+  exploit: string;
+  fixHint: string;
+  confidence: string;
+  tags: string[];
+  codeUrl: string;
+  dismissal: SecurityDismissalView | null;
+  history: SecurityEventView[];
+  canManage: boolean;
+};
+
+// The body of POST .../findings/{id}/dismiss.
+export type SecurityDismissBody = { reason: DismissReason; comment: string };
+
+export type SecurityDefaultsView = { maxSteps: number; subagentMaxSteps: number; timeoutSeconds: number };
+
+// SecuritySettingsView is GET and PUT .../security/settings. A null scan
+// setting means the default in defaults.
+export type SecuritySettingsView = {
+  maxSteps: number | null;
+  subagentMaxSteps: number | null;
+  timeoutSeconds: number | null;
+  findingsInReviews: boolean;
+  defaults: SecurityDefaultsView;
+  canEdit: boolean;
+};
+
+// The body of PUT .../security/settings. A null step limit or timeout means
+// the default; a missing findingsInReviews is left as it is.
+export type SecuritySettingsRequest = {
+  maxSteps: number | null;
+  subagentMaxSteps: number | null;
+  timeoutSeconds: number | null;
+  findingsInReviews?: boolean | null;
+};
+
+// The findings list filter. Rule is the attack class (ruleId). An empty or
+// missing key is left out of the query.
+export type SecurityFilter = { state?: string; severity?: string; rule?: string; q?: string };
+
 // --- readiness (GET .../readiness) ---
 //
 // Every path, reason, skill name and error below comes from a scan Job: it is
@@ -1081,10 +1258,11 @@ export type ChainEntryView = {
 // owner team's, named by team, or the global one). readOnly is set when the
 // session may not change it; choices are then empty. savedByAdmin says an
 // admin saved it: a repository chain an admin saved may hold global entries
-// teams may not use.
+// teams may not use. source "chain" is a scan chain with none of its own: it
+// shows the repository's model chain in effect.
 export type ChainView = {
   scope: "global" | "team" | "repo";
-  source: "repository" | "team" | "global";
+  source: "repository" | "team" | "global" | "chain";
   team: string;
   readOnly: boolean;
   savedByAdmin: boolean;
@@ -1695,6 +1873,9 @@ export function query(params: [string, string | number | undefined][]): string {
 export const paths = {
   review: (instance: string, project: string, number: number) => `/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}`,
   repo: (instance: string, project: string) => `/repos/${seg(instance)}/${proj(project)}`,
+  // The Security tab, opened on a finding (&finding=<id>) or a scan (&scan=<id>).
+  repoSecurity: (instance: string, project: string, open: { finding?: number; scan?: string } = {}) =>
+    `/repos/${seg(instance)}/${proj(project)}${query([["tab", "security"], ["finding", open.finding], ["scan", open.scan]])}`,
 
   apiReview: (instance: string, project: string, number: number) =>
     `/api/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}`,
@@ -1738,6 +1919,26 @@ export const paths = {
   // The repository's model chain: GET, PUT {entries}; POST .../reset to inherit again.
   apiRepoChain: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/chain`,
   apiRepoChainReset: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/chain/reset`,
+  // The Security tab and its routes. A finding id is a number, a scan id a string.
+  apiRepoSecurity: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/security`,
+  apiRepoSecurityFindings: (instance: string, project: string, filter: SecurityFilter) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/security/findings${query([["state", filter.state], ["severity", filter.severity], ["rule", filter.rule], ["q", filter.q]])}`,
+  apiRepoSecurityFinding: (instance: string, project: string, id: number) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/security/findings/${seg(String(id))}`,
+  apiRepoSecurityFindingAction: (instance: string, project: string, id: number, action: "dismiss" | "restore") =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/security/findings/${seg(String(id))}/${action}`,
+  apiRepoSecurityScans: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/security/scans`,
+  apiRepoSecurityScan: (instance: string, project: string, id: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/security/scans/${seg(id)}`,
+  apiRepoSecurityScanSarif: (instance: string, project: string, id: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/security/scans/${seg(id)}/sarif`,
+  apiRepoSecurityScanCancel: (instance: string, project: string, id: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/security/scans/${seg(id)}/cancel`,
+  apiRepoSecuritySettings: (instance: string, project: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/security/settings`,
+  apiRepoSecurityChain: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/security/chain`,
+  apiRepoSecurityChainReset: (instance: string, project: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/security/chain/reset`,
   // The repository's reviewers 2 to 5 and its judge: GET, PUT {reviewers, judge}.
   apiRepoReviewers: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/reviewers`,
   // The team pages of the user area, and the team routes.

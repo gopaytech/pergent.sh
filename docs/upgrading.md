@@ -1,5 +1,24 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+**A security scan: a whole-repository security audit, started by hand.** See [Security scan](concepts/security-scan.md). Scans stay off until you set a Helm value.
+
+- **Migration `0055_security_scan.sql`** runs at startup. Back up Postgres first, as for any migration. It only adds tables and columns and drops nothing, so the previous release keeps working on the migrated database and ignores them. It does count a scan's usage rows in its review counts.
+- **New image.** Scan Jobs run `jobs.security_image` (`ghcr.io/gopaytech/pergent-security`, with the same tag as the review image).
+- **New config keys** `jobs.security_image`, `security.max_running`, `security.proxy` and `security.max_source_bytes`. **They break a rollback:** the previous release refuses unknown keys, so remove them from the config before you roll back.
+- **New chart values.**
+  - `securityJobEgress.cidrs` has **no default**. Until you set it, **Start scan** stays off. Set it to the LLM provider's addresses only, **never the GitLab or GitHub host**: a scan gets the code from pergent.sh and holds no git token.
+  - `securityJobEgress.ports` (default 443 and 80) and `securityJobEgress.dns` (default: the cluster DNS).
+  - The chart sets `PERGENT_SH_SECURITY_EGRESS` from them.
+- **The jobs NetworkPolicy now leaves scan pods out.** Scan pods have their own policy. Review Jobs are not changed.
+- **`callback_url` must be the in-cluster Service address** (the chart's default) for scans. The scan policy allows only the pergent.sh pods on port 8080, so with a public `callback_url` every scan fails at the source download. A public `callback_url` also needs `/security-scans/` routed, as `/runs/` is: see [Install](setup/install.md).
+- **A Security tab** on every repository's page, right after **Reviews**, and a **Security scan** card on the repository's **Settings** tab. Maintainers and admins start and cancel scans and dismiss or restore findings there: see [The Security tab](concepts/security-scan.md#the-security-tab).
+- **New API paths** under `/api/repositories/{instance}/{project}/security`: the summary, `findings`, `scans`, `settings` and `chain`. See [HTTP routes](reference/http-routes.md). **New audit entries:** `security_scan_started`, `security_scan_cancelled`, `security_finding_dismissed` and `security_finding_restored`.
+- **New routes** `GET /security-scans/{id}/source` and `POST /security-scans/{id}/result` for the scan Jobs.
+- **New metrics** `pergent_security_scans_total` and `pergent_security_findings_open`, and a **Security scans** row in the example Grafana dashboard.
+- **Rolling back** needs the config keys removed, as above. The scans and findings stay in the database.
+
 ## Upgrading to 0.25.0
 
 **The dashboard moves to shadcn/ui on Tailwind v4, and its page CSP carries a style nonce.** No migration, no new config key and no API change.

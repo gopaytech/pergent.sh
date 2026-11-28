@@ -80,11 +80,11 @@ func forJudge(p JobParams) JobParams {
 
 // dropRefusedInputs is p without the inputs pergent refuses with
 // --multi-review: previous, carried, description, linked repositories, CI
-// results, graph and --no-skill-verify. p itself is not changed.
+// results, security findings, graph and --no-skill-verify. p itself is not changed.
 func dropRefusedInputs(p JobParams) JobParams {
 	if p.Inputs != nil {
 		in := *p.Inputs
-		in.Previous, in.Carried, in.Description, in.Linked, in.CIResults = nil, nil, nil, nil, nil
+		in.Previous, in.Carried, in.Description, in.Linked, in.CIResults, in.SecurityFindings = nil, nil, nil, nil, nil, nil
 		p.Inputs = &in
 	}
 	p.LinkedClones = nil

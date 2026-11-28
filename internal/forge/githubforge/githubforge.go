@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -170,6 +171,24 @@ func (f *Forge) ResolveRef(ctx context.Context, project, ref string) (string, er
 		return "", forge.ErrSourceNotFound
 	}
 	return commit, err
+}
+
+var _ forge.ArchiveReader = (*Forge)(nil)
+
+// Archive opens the .tar.gz of owner/name at commit, read with the review
+// App's installation on it; GitHub's download host gets no token. A
+// repository or commit the App can't read (404, or a 403 that is no rate
+// limit) is forge.ErrSourceNotFound.
+func (f *Forge) Archive(ctx context.Context, project, commit string) (io.ReadCloser, error) {
+	c, owner, name, err := f.source(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := c.Tarball(ctx, owner, name, commit)
+	if unreadable(err) {
+		return nil, forge.ErrSourceNotFound
+	}
+	return rc, err
 }
 
 // ListTreeAt lists one directory of owner/name at commit. A missing

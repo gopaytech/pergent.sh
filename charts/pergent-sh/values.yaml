@@ -44,6 +44,24 @@ jobEgress:
   # -- Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"), e.g. 169.254.169.254/32. Kubernetes rejects an entry that lies outside its cidr, so use this with broad cidrs such as the default 0.0.0.0/0.
   except: []
 
+# Where security scan Jobs may connect. A scan Job has its own NetworkPolicy and is left
+# out of the jobs one above, so jobEgress does not apply to it.
+# A scan gets its source from pergent.sh and posts its result there, both through
+# config.callback_url. The scan policy allows only the pergent.sh pods in this cluster on
+# 8080, so callback_url must be the chart's own in-cluster Service address (the default
+# when you leave it out). A public callback_url makes every scan fail at the source download.
+securityJobEgress:
+  # -- CIDRs the security scan Jobs may reach on the ports below. Scans need config.callback_url to be the chart's in-cluster Service address (the default): the scan policy allows only the pergent.sh pods on 8080. No default: the LLM provider only (or the egress proxy, see config.security.proxy). Never add the GitLab or GitHub host: the scan gets the code from pergent.sh, not from the platform. An EMPTY list allows no external egress: scan Jobs then reach only the DNS servers below and the pergent.sh pods on 8080, and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS). Remaining risk: DNS queries through a recursive resolver can still carry data out.
+  cidrs: []
+  # -- Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"). Kubernetes rejects an entry that lies outside its cidr.
+  except: []
+  # -- TCP ports the cidrs are open on (an empty list means 443 and 80, never all ports). A proxy must be in cidrs, and its port (for example 3128) in this list.
+  ports:
+    - 443
+    - 80
+  # -- DNS servers the scan Jobs may query on port 53 (TCP and UDP): a list of NetworkPolicy peers (the entries of "to"). Empty means the cluster DNS: pods labelled k8s-app=kube-dns in the kube-system namespace. Set it for NodeLocal DNSCache or another DNS label. Remaining risk: a resolver that recurses can still carry data out in the names it is asked.
+  dns: []
+
 # Instances and the LLM can be entered in the dashboard instead of here, with
 # their secrets. Only a GitOps install keeps them in the config. E.g. for
 # GitLab (add llm: the same way when the LLM is not set in the dashboard):
@@ -68,6 +86,19 @@ jobEgress:
 #     approve_with_review_app: true   # or approve_app: {app_id, private_key_env}, or approve_token_env
 #     webhook_secret_env: GITHUB_WEBHOOK_SECRET
 
+# Security scans have 2 more keys in config, both
+# optional. jobs.security_image is the scan Job image: it defaults to the pergent-security
+# image with the same tag as the review image (jobs.image), so leave it out unless you mirror
+# the image. security has max_running (default 1, up to 20), proxy (an egress proxy URL
+# for the scan Jobs, no user info; its address must be in securityJobEgress.cidrs and its
+# port in securityJobEgress.ports) and max_source_bytes (default 500 MiB, 1 MiB to 500 MiB). E.g.
+#   jobs:
+#     security_image: registry.example.com/pergent-security:v0.12.0
+#   security:
+#     max_running: 2
+#     proxy: http://192.0.2.10:3128   # with securityJobEgress cidrs 192.0.2.10/32 and ports [3128]
+# Scans also need securityJobEgress.cidrs above: without it no scan can start.
+
 # To turn the dashboard on, set config.dashboard.url and route its host to
 # the Service (see "Exposing pergent.sh" in docs/setup/install.md). The "Dashboard" page in docs/concepts explains each
 # step. Local admins sign in with a password at /admin/sign-in. Everyone else
@@ -90,7 +121,7 @@ jobEgress:
 #       allowed_domains: [example.com]
 #       allowed_emails: []
 
-# -- Rendered to /etc/pergent-sh/config.yaml. callback_url defaults to this chart's Service, so Jobs post their results inside the cluster; set it to send them elsewhere. See the repository README for every field and for examples of config.gitlab, config.github, config.llm and config.dashboard ("Config reference", "Instances and the LLM in the config file"). No instance and no LLM are set by default: without config.dashboard.url, pergent.sh needs at least one instance and an LLM here. listen is fixed by the chart: leave it as it is. skills_dir was removed: the skill library lives in the dashboard.
+# -- Rendered to /etc/pergent-sh/config.yaml. callback_url defaults to this chart's Service, so Jobs post their results inside the cluster; set it to send them elsewhere, but security scans need the in-cluster Service address: a scan gets its source from pergent.sh and posts its result there through callback_url, and the scan NetworkPolicy allows only the pergent.sh pods on 8080, so with a public callback_url every scan fails at the source download. See the repository README for every field and for examples of config.gitlab, config.github, config.llm and config.dashboard ("Config reference", "Instances and the LLM in the config file"). No instance and no LLM are set by default: without config.dashboard.url, pergent.sh needs at least one instance and an LLM here. listen is fixed by the chart: leave it as it is. skills_dir was removed: the skill library lives in the dashboard.
 config:
   listen: ":8080"
   public_url: https://pergent.example.com

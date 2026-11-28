@@ -78,12 +78,16 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `fallback.quota_cooldown` | `1h` | How long reviews skip an entry the provider said is out of quota or credit. At least `1m`; `0s` and shorter values are refused. A rejected key is skipped until its key is changed, whatever this says. See [Marks](../concepts/models.md#marks). |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
 | `jobs.image` | `ghcr.io/gopaytech/pergent:v0.12.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.security_image` | `ghcr.io/gopaytech/pergent-security:v0.12.0` | The image the security scan Jobs run. It is released with pergent: the tag is the same as the default `jobs.image`. Pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `30m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. At startup pergent.sh warns about a timeout shorter than its step limit times 30 seconds. |
 | `jobs.max_turns` | `40` | pergent's step limit per opencode run (`--max-turns`) for every repository, 5 to 200. |
 | `jobs.concurrency` | `4` | pergent's `--concurrency`: opencode runs in flight inside one Job. At least 1. |
 | `jobs.work_size` | `20Gi` | The limit of a review Job's work volume, which holds the checkout. A change that needs more ends the Job with a failed review. |
 | `jobs.resources` | requests 500m CPU, 1Gi memory; limits 2 CPU, 4Gi memory | Kubernetes `requests` and `limits` for both containers of a Job. If you set either `requests` or `limits`, the default is not used at all. |
+| `security.max_running` | `1` | Most security scan Jobs running at once, 1 to 20. They wait in the queue beyond this. |
+| `security.proxy` | none | The egress proxy URL the scan Jobs use: `http` or `https`, with a host and no user info (a secret does not belong in the config file). Empty means no proxy. |
+| `security.max_source_bytes` | `524288000` (500 MiB) | Most source a scan takes in, 1 MiB (`1048576`) to 500 MiB (`524288000`). pergent refuses a bigger archive. |
 
 # Instances and the LLM in the config file
 
@@ -137,5 +141,6 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 | each `gitlab[].oauth_client_id_env`, `oauth_client_secret_env`, and the same on `github[]` | No longer used: signing in to the [dashboard](../concepts/dashboard.md) with GitLab or GitHub is gone. An old config that names them still loads, even half of a pair, and pergent.sh logs a warning for each instance that does; nothing reads the variables. A later release refuses them. |
 | `PERGENT_SH_IMAGE` | pergent.sh's own image, which skill fetch, readiness scan and code graph Jobs run their small commands in. The chart sets it. |
 | `PERGENT_SH_GRAPHS_DIR`, `PERGENT_SH_GRAPH_IMAGE` | The [code graph](../concepts/code-graph.md) volume and the graph build image. The chart sets both with `graphs.enabled`. Either unset keeps code graphs off, and the Code graph switch can't be turned on. |
+| `PERGENT_SH_SECURITY_EGRESS` | `true` means the chart set `securityJobEgress.cidrs`, so security scan Jobs can reach the network. The chart sets it. Any other value, or unset, means the scan Jobs have no egress and security scans can't be turned on. |
 
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.

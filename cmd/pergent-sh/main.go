@@ -324,6 +324,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		fetcher      *skillfetch.Fetcher
 		fetchResults callback.FetchResults
 		scanResults  callback.ScanResults
+		secResults   callback.SecurityResults
+		secSources   callback.SecuritySources
 		graphs       callback.GraphResults
 		api          *reviewapi.Handler
 	)
@@ -332,6 +334,14 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		// them), and the same image to send their result back.
 		eng.Scans = true
 		eng.ScanImage = os.Getenv("PERGENT_SH_IMAGE")
+		// true means the chart set securityJobEgress.cidrs: scan Jobs may
+		// reach the network, so security scans can be turned on.
+		eng.SecurityEgress = os.Getenv("PERGENT_SH_SECURITY_EGRESS") == "true"
+		eng.SecurityImage = cfg.Jobs.SecurityImage
+		// A scan Job downloads its source through pergent.sh, read with the
+		// instance's review bot or App, and posts its result back.
+		eng.Archives = conn.archiveReader
+		secResults, secSources = eng, eng
 		scanResults = eng
 		// Code graphs need the graphs volume and the graph image (the chart's
 		// graphs.enabled sets both); a repository turns them on in the
@@ -359,6 +369,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		// The engine queues the readiness scans (eng.Scans is on whenever
 		// the dashboard is) and rechecks them after a skill setting is saved.
 		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng, Graphs: eng,
+		// Start scan and Cancel on the Security tab.
+		SecurityScans: eng,
 		// Removing an API client ends its live reviews: their Jobs go.
 		DeleteJob: launcher.Delete,
 		// Send test callback goes the way a real callback does: the engine's
@@ -392,6 +404,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
 		Store: st, Reviewers: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, CI: eng, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
 		SkillFetches: fetchResults, ReadinessScans: scanResults, Graphs: graphs, ReviewAPI: api, Log: log,
+		SecurityScans: secResults, SecuritySources: secSources, SecuritySourceLimit: cfg.Security.MaxSourceBytes,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -435,6 +448,10 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	})
 	if eng.Scans {
 		loops = append(loops, eng.RunScans)
+		// The security scans have a loop of their own. It runs whenever the
+		// dashboard is on, so scans queued or running still end after Start
+		// scan is turned off.
+		loops = append(loops, eng.RunSecurityScans)
 	}
 	if eng.GraphsOn() {
 		log.Info("code graphs on", "dir", eng.GraphDir, "image", eng.GraphImage)

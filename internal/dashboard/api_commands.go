@@ -12,6 +12,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/actions"
 	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/security"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -31,8 +32,8 @@ const (
 	msgDraftsNotOn     = "drafts aren't reviewed in this repository"
 	msgQuotaUsedUp     = "the monthly token quota is used up"
 	// msgTeamLimitUsedUp is an admin's 409, and only the dashboard's: it names
-	// the team, never a number.
-	msgTeamLimitUsedUp = "every model of the chain is at the team's own limit: a maintainer of %s can raise it on the team page"
+	// the team, never a number. A security scan's start says the same.
+	msgTeamLimitUsedUp = security.TeamLimitFormat
 	msgPlatformFailed  = "could not read this change from its platform, please try again"
 	msgRedecideFailed  = "the change was saved, but the review could not be decided again yet; the next review will use it"
 )

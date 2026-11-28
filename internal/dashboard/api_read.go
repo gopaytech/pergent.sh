@@ -1191,9 +1191,11 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 // (admins only) what each skill used on the changes those count, with a
 // trailing /teams (admins only)
 // the teams that cover it, or with a trailing /usage (admins only) what it
-// used. A repository whose own path is the one asked for wins over the
-// /inputs, /readiness, /past-dismissals, /skill-results, /skill-results/tokens, /teams or /usage of
-// another.
+// used, and the security routes (securityRoute). A repository whose own path
+// is the one asked for wins over the /inputs, /readiness, /past-dismissals,
+// /skill-results, /skill-results/tokens, /teams, /usage or /security of
+// another; the security routes come next, as .../security/chain ends in
+// /chain.
 func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	instance, rest := r.PathValue("instance"), r.PathValue("rest")
@@ -1213,6 +1215,9 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	}
 	if repo, ok := find(rest); ok {
 		d.repositoryDetail(w, r, se, repo)
+		return
+	}
+	if d.securityRoute(w, r) {
 		return
 	}
 	if project, ok := strings.CutSuffix(rest, "/inputs"); ok {

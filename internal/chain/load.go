@@ -36,6 +36,25 @@ func Load(ctx context.Context, st *store.Store, reg *instances.Registry, now tim
 	return in, nil
 }
 
+// LoadScan is Load for a security scan: the input of a review with no run,
+// except that the chain is the repository's own scan chain when it has one
+// with entries (scope repo, as saved by an admin or not). Otherwise it is the
+// chain in effect for the repository (chain A), as the review uses it.
+func LoadScan(ctx context.Context, st *store.Store, reg *instances.Registry, now time.Time, repo settings.Effective) (Input, error) {
+	in, err := Load(ctx, st, reg, now, store.Run{}, repo)
+	if err != nil {
+		return Input{}, err
+	}
+	c, found, err := st.ChainOf(ctx, store.ChainScan, store.ScopeRepo, 0, repo.Instance, repo.Project)
+	if err != nil {
+		return Input{}, fmt.Errorf("read the repository's scan chain: %w", err)
+	}
+	if found && len(c.Entries) > 0 {
+		in.Scope, in.Refs, in.SavedByAdmin = store.ScopeRepo, c.Entries, c.SavedByAdmin
+	}
+	return in, nil
+}
+
 func load(ctx context.Context, st *store.Store, reg *instances.Registry, now time.Time, run store.Run, repo settings.Effective) (Input, error) {
 	in := Input{Entries: map[store.EntryRef]instances.Model{}, Now: now}
 	for _, m := range reg.AllModels() {

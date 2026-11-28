@@ -27,6 +27,7 @@ Only admins set or change a quota. Maintainers and viewers see neither the field
 - A repository's usage is its own reviews, on any key. An instance's usage is all its repositories' tokens on global keys, switched-off and removed ones included: those tokens were spent. Tokens on a team's own keys are not in the instance's usage.
 - An attempt dropped for the next entry of its chain counts too, on the entry that used the tokens ([Attempts](models.md#attempts)).
 - A review that a quota held costs nothing, so it counts nothing.
+- **A [security scan](security-scan.md) counts too**, in its repository's and its instance's usage, on the day it ends. It is not a review. A scan that starts takes a token budget from the room left under every quota and limit that applies, and stops partial when it reaches it. A quota used up stops **Start scan** for a maintainer, and an admin may start past it.
 - **Every Job of a multi review counts**: each reviewer and the judge ([Multi review](multi-review.md)).
 
 ## When a quota is used up

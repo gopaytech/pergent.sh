@@ -396,7 +396,7 @@ func (s *Store) DeleteTeam(ctx context.Context, id int64, check func(Team) error
 		return false, err
 	}
 	at := time.Now()
-	for _, set := range []ChainSet{ChainA, ChainReviewers} {
+	for _, set := range []ChainSet{ChainA, ChainReviewers, ChainScan} {
 		if _, err := removeFromChains(ctx, tx, set, SourceTeam, modelIDs, at); err != nil {
 			return false, err
 		}

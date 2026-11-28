@@ -301,6 +301,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 	hasDescription := p.Inputs != nil && len(p.Inputs.Description) > 0
 	hasLinked := p.Inputs != nil && len(p.Inputs.Linked) > 0
 	hasCI := p.Inputs != nil && len(p.Inputs.CIResults) > 0
+	hasSecurity := p.Inputs != nil && len(p.Inputs.SecurityFindings) > 0
 	hasRules := p.Inputs != nil && len(p.Inputs.Rules) > 0
 	hasGraph := p.GraphURL != "" && p.GraphImage != ""
 
@@ -358,6 +359,10 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasCI {
 		// An environment variable for the same reason.
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_CI_RESULTS", Value: "/in/ci-results.md"})
+	}
+	if hasSecurity {
+		// An environment variable for the same reason.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_SECURITY_FINDINGS", Value: "/in/security-findings.md"})
 	}
 	if hasGraph {
 		// An environment variable for the same reason: an older image then
@@ -469,6 +474,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasCI {
 		items = append(items, corev1.KeyToPath{Key: "ci-results.md", Path: "ci-results.md"})
 	}
+	if hasSecurity {
+		items = append(items, corev1.KeyToPath{Key: "security-findings.md", Path: "security-findings.md"})
+	}
 	if hasRules {
 		items = append(items, corev1.KeyToPath{Key: "rules.json", Path: "rules.json"})
 	}
@@ -571,6 +579,9 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 		}
 		if len(p.Inputs.CIResults) > 0 {
 			data["ci-results.md"] = string(p.Inputs.CIResults)
+		}
+		if len(p.Inputs.SecurityFindings) > 0 {
+			data["security-findings.md"] = string(p.Inputs.SecurityFindings)
 		}
 		if len(p.Inputs.Rules) > 0 {
 			data["rules.json"] = string(p.Inputs.Rules)

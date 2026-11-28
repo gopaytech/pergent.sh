@@ -229,7 +229,8 @@ func (a *Auth) fromHeader(r *http.Request) (email string, status headerStatus) {
 
 // reservedPrefixes are the paths other routes of the server own, as
 // web.Handler lists them and the Job callbacks: never pages.
-var reservedPrefixes = []string{"/api", "/auth", "/webhooks", "/runs", "/healthz", "/skill-fetches", "/readiness-scans"}
+var reservedPrefixes = []string{"/api", "/auth", "/webhooks", "/runs", "/healthz", "/skill-fetches", "/readiness-scans",
+	"/security-scans"}
 
 // isPagePath reports whether p is a page of the web app: the shell the
 // browser's router takes over. It is not a path another route owns, a hashed

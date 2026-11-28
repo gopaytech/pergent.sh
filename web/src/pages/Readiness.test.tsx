@@ -547,7 +547,7 @@ describe("Readiness", () => {
     const names = within(tabs)
       .getAllByRole("tab")
       .map((t) => t.textContent);
-    expect(names).toEqual(["Reviews", "Skill results", "Settings", "Past dismissals", "Skills & instructions", "Readiness", "Setup checks (1)"]);
+    expect(names).toEqual(["Reviews", "Security", "Skill results", "Settings", "Past dismissals", "Skills & instructions", "Readiness", "Setup checks (1)"]);
   });
 });
 
