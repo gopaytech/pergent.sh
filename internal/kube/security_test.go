@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -362,6 +363,27 @@ func TestSecurityFailure(t *testing.T) {
 			}
 			if got != c.want {
 				t.Errorf("SecurityFailure = %q; want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestSecurityJobModelWindow(t *testing.T) {
+	for _, c := range windowCases(func(tag string) string { return "ghcr.io/x/pergent-security:" + tag }) {
+		t.Run(c.name, func(t *testing.T) {
+			modelWindowFloor(t, c.floor)
+			base := testSecurityParams()
+			base.Image = c.image
+			p := base
+			p.LLM.ContextWindow, p.LLM.MaxOutput = c.context, c.output
+			job := BuildSecurityJob(p)
+			spec := job.Spec.Template.Spec
+			checkWindowEnv(t, spec.Containers[0].Env, c)
+			for _, ic := range spec.InitContainers {
+				checkWindowEnv(t, ic.Env, windowCase{})
+			}
+			if !c.wantCtx && !reflect.DeepEqual(job, BuildSecurityJob(base)) {
+				t.Error("a Job with no window differs from one that never had the fields")
 			}
 		})
 	}

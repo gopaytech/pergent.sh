@@ -42,6 +42,30 @@ func addTeamModel(t *testing.T, env *testEnv, team int64, name, model, key strin
 	return store.EntryRef{Source: store.SourceTeam, ID: m.ID}
 }
 
+// addTeamModelWindow is addTeamModel with a context window and a max output
+// (0 is unset).
+func addTeamModelWindow(t *testing.T, env *testEnv, team int64, name, model, key string, contextWindow, maxOutput int) store.EntryRef {
+	t.Helper()
+	m, err := env.Store.CreateTeamModel(env.ctx, store.TeamModel{TeamID: team, Name: name, Provider: "openai", Model: model,
+		APIKeySealed: env.Box.Seal([]byte(key)), ContextWindow: contextWindow, MaxOutput: maxOutput}, env.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
+		t.Fatal(err)
+	}
+	return store.EntryRef{Source: store.SourceTeam, ID: m.ID}
+}
+
+// modelWindowFloor sets the version gate for a test and restores it. Such a
+// test is serial: the gate is a package variable.
+func modelWindowFloor(t *testing.T, v string) {
+	t.Helper()
+	old := config.ModelWindowMinVersion
+	config.ModelWindowMinVersion = v
+	t.Cleanup(func() { config.ModelWindowMinVersion = old })
+}
+
 // globalRef adds a global entry with its own key and returns its ref.
 func globalRef(t *testing.T, env *testEnv, model, key string) store.EntryRef {
 	t.Helper()

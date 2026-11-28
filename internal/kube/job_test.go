@@ -1007,3 +1007,98 @@ func TestBuildJobSecurityFindings(t *testing.T) {
 		t.Error("security-findings.md item without findings")
 	}
 }
+
+// modelWindowFloor sets the version gate for a test and restores it. A test
+// that calls it is serial: the gate is a package variable.
+func modelWindowFloor(t *testing.T, v string) {
+	t.Helper()
+	old := config.ModelWindowMinVersion
+	config.ModelWindowMinVersion = v
+	t.Cleanup(func() { config.ModelWindowMinVersion = old })
+}
+
+type windowCase struct {
+	name             string
+	floor, image     string
+	context, output  config.TokenCount
+	wantCtx, wantOut bool
+}
+
+// windowCases are the value cases and the gate cases, shared by the review and
+// the scan Job tests.
+func windowCases(image func(tag string) string) []windowCase {
+	const ctx, out = config.TokenCount(1_000_000), config.TokenCount(64_000)
+	return []windowCase{
+		{"none", "v0.14.0", image("v0.14.0"), 0, 0, false, false},
+		{"both", "v0.14.0", image("v0.14.0"), ctx, out, true, true},
+		{"context only", "v0.14.0", image("v0.14.0"), ctx, 0, false, false},
+		{"output only", "v0.14.0", image("v0.14.0"), 0, out, false, false},
+		{"gate dormant", "", image("v0.14.0"), ctx, out, false, false},
+		{"image below", "v0.14.0", image("v0.13.0"), ctx, out, false, false},
+		{"image above", "v0.14.0", image("v0.15.0"), ctx, out, true, true},
+		{"tag main", "v0.14.0", image("main"), ctx, out, false, false},
+		{"digest", "v0.14.0", "ghcr.io/x/pergent@sha256:abc123", ctx, out, false, false},
+		{"no tag", "v0.14.0", "host:5000/pergent", ctx, out, false, false},
+	}
+}
+
+func checkWindowEnv(t *testing.T, env []corev1.EnvVar, c windowCase) {
+	t.Helper()
+	for _, w := range []struct {
+		name, value string
+		want        bool
+	}{
+		{"PERGENT_CONTEXT_LIMIT", "1000000", c.wantCtx},
+		{"PERGENT_OUTPUT_LIMIT", "64000", c.wantOut},
+	} {
+		n := 0
+		for _, e := range env {
+			if e.Name == w.name {
+				n++
+				if e.Value != w.value {
+					t.Errorf("%s = %q, want %q", w.name, e.Value, w.value)
+				}
+			}
+		}
+		if want := map[bool]int{true: 1, false: 0}[w.want]; n != want {
+			t.Errorf("%s appears %d times, want %d", w.name, n, want)
+		}
+	}
+}
+
+func TestBuildJobModelWindow(t *testing.T) {
+	jobs := []struct {
+		name string
+		make func() JobParams
+	}{
+		{"review", goldenParams},
+		{"reviewer", func() JobParams {
+			p := goldenParams()
+			p.SkipSkillVerify = true
+			p.Reviewer = "2"
+			return p
+		}},
+		{"judge", judgeParams},
+	}
+	for _, j := range jobs {
+		for _, c := range windowCases(func(tag string) string { return "ghcr.io/x/pergent:" + tag }) {
+			t.Run(j.name+"/"+c.name, func(t *testing.T) {
+				modelWindowFloor(t, c.floor)
+				base := j.make()
+				base.Image = c.image
+				p := j.make()
+				p.Image = c.image
+				p.LLM.ContextWindow, p.LLM.MaxOutput = c.context, c.output
+				job := BuildJob(p)
+				spec := job.Spec.Template.Spec
+				checkWindowEnv(t, containerByName(t, spec.Containers, "pergent").Env, c)
+				for _, ic := range spec.InitContainers {
+					checkWindowEnv(t, ic.Env, windowCase{})
+				}
+				if !c.wantCtx && !reflect.DeepEqual(job, BuildJob(base)) {
+					t.Error("a Job with no window differs from one that never had the fields")
+				}
+			})
+		}
+	}
+}

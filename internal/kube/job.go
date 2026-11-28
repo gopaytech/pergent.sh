@@ -289,6 +289,25 @@ func lockedDown() *corev1.SecurityContext {
 	}
 }
 
+// windowEnv is the context window and max output of the model entry a Job
+// runs, as PERGENT_CONTEXT_LIMIT and PERGENT_OUTPUT_LIMIT. It sends nothing
+// unless both are set (opencode merges them over its own model data, so one
+// alone would be wrong) and the image runs a pergent that reads them. They are
+// env vars, not flags: an older image ignores an env var it does not read, but
+// exits 2 on an unknown flag.
+func windowEnv(llm config.LLM, image string) []corev1.EnvVar {
+	if llm.ContextWindow <= 0 || llm.MaxOutput <= 0 {
+		return nil
+	}
+	if ok, _ := config.ModelWindowImage(image); !ok {
+		return nil
+	}
+	return []corev1.EnvVar{
+		{Name: "PERGENT_CONTEXT_LIMIT", Value: strconv.Itoa(int(llm.ContextWindow))},
+		{Name: "PERGENT_OUTPUT_LIMIT", Value: strconv.Itoa(int(llm.MaxOutput))},
+	}
+}
+
 // BuildJob builds the (not yet suspended) review Job; Launch suspends it.
 // With p.Judge set it is a multi review's judge (forJudge).
 func BuildJob(p JobParams) *batchv1.Job {
@@ -343,6 +362,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if p.LLM.BaseURL != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENCODE_BASE_URL", Value: p.LLM.BaseURL})
 	}
+	mainEnv = append(mainEnv, windowEnv(p.LLM, p.Image)...)
 	if hasDismissals {
 		// An environment variable, not an argument: an older image ignores a
 		// variable it doesn't know, but exits 2 on an unknown flag.
