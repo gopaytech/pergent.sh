@@ -139,7 +139,7 @@ describe("Security", () => {
   });
 
   it("Start scan off shows the reason", async () => {
-    const off = "Start scan is off: an admin must set securityJobEgress.cidrs in the Helm values first";
+    const off = "Start scan is off: an admin must set securityJobEgress.cidrs, or networkPolicy.enabled: false, in the Helm values first";
     fakeApi(routes({ ...securityView, canStart: false, startOff: off }));
     renderApp(open);
     expect(await screen.findByText(off)).toBeInTheDocument();

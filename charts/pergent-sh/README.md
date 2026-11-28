@@ -44,6 +44,7 @@ helm install pergent-sh pergent-sh/pergent-sh -n pergent-sh -f values.yaml
 | metrics.serviceMonitor.interval | string | `"60s"` | Scrape interval. |
 | metrics.serviceMonitor.labels | object | `{}` | Extra labels, for a Prometheus that selects ServiceMonitors by label. |
 | nameOverride | string | `""` | Overrides the chart name in resource names. |
+| networkPolicy.enabled | bool | `true` | Create the 2 NetworkPolicies for the Jobs: the review Jobs one (jobEgress) and the security scan Jobs one (securityJobEgress). false creates neither: every Job may reach any address, jobEgress and securityJobEgress are ignored, and security scans are on with no securityJobEgress.cidrs. A scan Job runs a shell, so with false a scanned repository's instructions could send its LLM key anywhere. |
 | nodeSelector | object | `{}` | Node selector of the pod. |
 | podAnnotations | object | `{}` | Annotations of the pod. |
 | podLabels | object | `{}` | Extra labels of the pod. |

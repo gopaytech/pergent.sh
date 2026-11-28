@@ -46,6 +46,7 @@ A scan runs shell commands and sub-agents, so its pod can read its own environme
 
 - A scan Job has **its own NetworkPolicy**, built from `securityJobEgress.cidrs`. There is **no default**. Set it to the LLM provider's addresses only. **Never add the GitLab or GitHub host**: the code comes from pergent.sh.
 - Until an admin sets it, **Start scan** is off and the tab says why. A scan never falls back to `jobEgress.cidrs`, and the review Jobs' policy leaves scan pods out.
+- `networkPolicy.enabled: false` creates **no** NetworkPolicy at all, for review Jobs or scan Jobs. **Start scan** is then on with no `securityJobEgress` setting, and a scan Job may reach any address. Its shell can then send the model key anywhere a scanned repository's text tells it to. Use it only when something else limits the Jobs' egress, or when you accept that risk.
 - The pod can reach DNS (the cluster DNS, or `securityJobEgress.dns`) and the pergent.sh pods on port 8080. That is why a scan needs `callback_url` to be the chart's in-cluster Service address.
 - A scan Job gets **no proxy variables**, unless an admin sets `security.proxy` on purpose. A proxy is an allowed address that can reach any other, so it undoes the rule: its address goes in `securityJobEgress.cidrs` and its port in `securityJobEgress.ports`.
 
@@ -93,7 +94,7 @@ The filters of the findings list (state, severity, rule and the search text) sta
 
 - `Skill updated: some findings may show as new`, when the scan's skill differs from the last complete scan's.
 - `Sub-agent tokens are missing from this count.`, when only the main agent's tokens were counted.
-- Until `securityJobEgress.cidrs` is set, **Start scan** is off, and the tab says: `Start scan is off: an admin must set securityJobEgress.cidrs in the Helm values first`.
+- Until `securityJobEgress.cidrs` is set (or `networkPolicy.enabled` is `false`), **Start scan** is off, and the tab says: `Start scan is off: an admin must set securityJobEgress.cidrs, or networkPolicy.enabled: false, in the Helm values first`.
 - On a paused repository, **Start scan** is off and the tab says `the repository is paused`. A finding's page has no **Dismiss** or **Restore**, and the scan settings can't be changed. This is a note, not an error.
 
 ## Retention
