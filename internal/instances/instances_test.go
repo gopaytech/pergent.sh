@@ -1127,18 +1127,19 @@ func TestModelWindowFromStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateTeamModel(ctx, store.TeamModel{TeamID: tm.ID, Name: "t", Provider: "openai", Model: "gpt", ContextWindow: 128_000}, time.Now()); err != nil {
+	if _, err := st.CreateTeamModel(ctx, store.TeamModel{TeamID: tm.ID, Name: "t", Provider: "openai", Model: "gpt", ContextWindow: 128_000, MaxOutput: 8_000}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	r := New(testConfig(), st, nil)
 	if err := r.LoadLLM(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if m, ok := r.ModelByID(g.ID); !ok || m.LLM.ContextWindow != 200_000 || m.LLM.MaxOutput != 16_000 {
-		t.Errorf("ModelByID(global) = %+v, %v", m.LLM, ok)
+	// ok is false here: the entry has no key. The values are what this test checks.
+	if m, _ := r.ModelByID(g.ID); m.ID != g.ID || m.LLM.ContextWindow != 200_000 || m.LLM.MaxOutput != 16_000 {
+		t.Errorf("ModelByID(global) = %+v, %+v", m.ID, m.LLM)
 	}
 	tms := r.TeamModels(tm.ID)
-	if len(tms) != 1 || tms[0].LLM.ContextWindow != 128_000 || tms[0].LLM.MaxOutput != 0 {
+	if len(tms) != 1 || tms[0].LLM.ContextWindow != 128_000 || tms[0].LLM.MaxOutput != 8_000 {
 		t.Errorf("TeamModels = %+v", tms)
 	}
 }
