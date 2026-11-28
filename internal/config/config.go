@@ -31,10 +31,10 @@ import (
 
 const (
 	defaultListen = ":8080"
-	defaultImage  = "ghcr.io/gopaytech/pergent:v0.12.0"
+	defaultImage  = "ghcr.io/gopaytech/pergent:v0.13.0"
 	// defaultSecurityImage is released with pergent: its tag is always the
 	// tag of defaultImage (a test pins this).
-	defaultSecurityImage = "ghcr.io/gopaytech/pergent-security:v0.12.0"
+	defaultSecurityImage = "ghcr.io/gopaytech/pergent-security:v0.13.0"
 	// Defaults and limits of the security: block.
 	defaultSecurityMaxRunning     = 1
 	maxSecurityMaxRunning         = 20
