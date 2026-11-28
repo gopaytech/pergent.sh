@@ -34,24 +34,28 @@ pergent reviews read `PERGENT_CONTEXT_LIMIT`, but pergent.sh never sets it, `per
 
 | Field | Meaning | Empty | Range |
 |---|---|---|---|
-| Context window (`context_limit`) | Most tokens in one request, input and output together | opencode's catalog | 4,096 to 10,000,000 |
-| Max output (`output_limit`) | Most tokens in one reply, thinking included | opencode's catalog, or 32,000 | 1,024 to the context window when set, else to 10,000,000 |
+| Context window (`context_window`) | Most tokens in one request, input and output together | opencode's catalog | 4,096 to 10,000,000 |
+| Max output (`max_output`) | Most tokens in one reply, thinking included | opencode's catalog, or 32,000 | 1,024 to the context window when set, else to 10,000,000 |
 
 Whole numbers only. A max output above the entry's context window is refused.
+
+**Names.** pergent.sh already has *model limits* (monthly token limits, migration `0051`, the Limits UI), so these fields are never called limits there: **Context window** and **Max output** in the UI, `contextWindow` and `maxOutput` in the API, `context_window` and `max_output` in the DB and the config file. Only the pergent CLI keeps its own words: `PERGENT_CONTEXT_LIMIT` / `--context-limit` (exists) and `PERGENT_OUTPUT_LIMIT` / `--output-limit` (new). The deprecated `--max-tokens` stays unused.
+
+**How high to set Max output.** opencode asks for `min(max output, 256,000)` on every reply. Some providers count the asked amount against a per-minute rate limit, so several sub-agents asking for 256,000 each can be throttled although their replies are small. The help text recommends 64,000.
 
 ### Where they live
 
 - Global entries: 2 nullable integer columns on `llm_models`.
 - Team entries: the same on `team_models`.
-- Config file: `llm.context_limit`, `llm.output_limit`, and the same keys in each `llm.fallbacks` item. Checked with the same ranges at load.
+- Config file: `llm.context_window`, `llm.max_output`, and the same keys in each `llm.fallbacks` item. Checked with the same ranges at load.
 - Migration `0056_model_limits_per_entry.sql` adds the columns. The previous release ignores them.
 
-Who edits them: whoever may edit the entry's base URL and key. A change applies from the next Job.
+Who edits them: whoever may edit the entry's base URL and key. A change applies from the next Job, and goes into the existing entry-edit audit entry with the old and new values.
 
 ### API and dashboard
 
-- The entry API takes and returns `contextLimit` and `outputLimit`; `null` is empty. A refused value is a 400 with the range in the message.
-- The model form (admin Settings, a team's Models tab) has the 2 fields with the help line: "Leave empty for models opencode knows. Set both from the provider's page for a model id it does not know."
+- The entry API takes and returns `contextWindow` and `maxOutput`; `null` is empty. A refused value is a 400 with the range in the message.
+- The model form (admin Settings, a team's Models tab) has the 2 fields with the help lines: "Leave empty for models opencode knows. Set them for a model id it does not know: the context window from the provider's page." and, for Max output, "The most one reply may need, thinking included. 64,000 is enough for reviews and scans. A provider that counts it against a rate limit throttles a higher value."
 - Entry lists show the limits as `1M / 384k`, or nothing when both are empty.
 
 ### Jobs
@@ -63,6 +67,8 @@ A review, judge or scan Job gets `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIM
 - `pergent scan` reads `PERGENT_CONTEXT_LIMIT` / `--context-limit`, as reviews do.
 - `pergent` reviews and `pergent scan` read a new `PERGENT_OUTPUT_LIMIT` / `--output-limit`.
 - The generated opencode config declares the model with `limit: {context, output}` when either is set; an unset one is `0`, which opencode reads as "use your own value". opencode caps the request at 256,000 output tokens itself.
+- **Review batches stay at most 40,000 tokens.** `PERGENT_CONTEXT_LIMIT` also sets the review's diff batch size (`diff.BatchBudget`, `context / 4`, else 40,000). It becomes `min(context / 4, 40000)`, so a big window stops failures without making batches bigger. A smaller window still gives smaller batches. This changes the CLI for anyone passing a large `--context-limit` today, so the pergent release notes say so.
+- **A clear reason for cut replies.** opencode fails a run whose replies end with `finish = length` 3 times with the error type `output-limit`. pergent maps that type to the fixed reason "the model's replies were cut at the max output: set Max output on the model entry", for reviews and scans.
 
 ### Older pergent images
 
@@ -70,8 +76,8 @@ pergent v0.13.0 reviews read the context limit and ignore the output limit; v0.1
 
 ## Tests
 
-- pergent: the generated review and scan configs hold the limits (both, one, none); a bad value is refused; `pergent scan` passes the flag and the env.
-- pergent.sh: migration; config load ranges; store round trip for global and team entries; API set, clear and refused values (including output above context); Job env with and without values, for a review, a judge and a scan, and after a fallback; the form and the list.
+- pergent: the generated review and scan configs hold the limits (both, one, none); a bad value is refused; `pergent scan` passes the flag and the env; `BatchBudget` is capped at 40,000; a fake model that ends 3 replies with `finish_reason: length` gives the `output-limit` reason (opencode e2e).
+- pergent.sh: migration; config load ranges; store round trip for global and team entries; API set, clear and refused values (including output above context); the audit entry holds old and new values; Job env with and without values, for a review, a judge and a scan, and after a fallback; the form and the list.
 
 ## Left to the builder
 
