@@ -9,8 +9,9 @@ import (
 // ModelWindowMinVersion is the first pergent release that reads
 // PERGENT_CONTEXT_LIMIT and PERGENT_OUTPUT_LIMIT in reviews and scans, as
 // "vX.Y.Z". An older pergent ignores them, so an image below it gets neither,
-// and "" refuses every image. The release that ships that pergent sets it.
-var ModelWindowMinVersion = ""
+// and "" refuses every image. pergent v0.14.0 is the first that reads both
+// and caps the review batch size at 40,000 tokens.
+var ModelWindowMinVersion = "v0.14.0"
 
 // ModelWindowImage says whether image runs a pergent that reads the context
 // window and max output of a model entry: its tag is a version

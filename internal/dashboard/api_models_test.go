@@ -373,8 +373,8 @@ func TestModelWindowAdmin(t *testing.T) {
 
 	list := decode[ModelsAdminView](t, e.get(c, modelsURL), "GET models", http.StatusOK)
 	want("config entry", modelNamed(t, list, store.ConfigModelID), 200_000, 32_000)
-	// The gate is not set in this test.
-	if list.WindowOff != "Jobs get no context window or max output for now: no pergent image reads them yet." {
+	// The test config names no Jobs image, so no image passes the gate.
+	if !strings.HasPrefix(list.WindowOff, "Jobs get no context window or max output for now: ") {
 		t.Errorf("windowOff = %q", list.WindowOff)
 	}
 }
