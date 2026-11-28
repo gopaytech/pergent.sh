@@ -175,6 +175,14 @@ jobs:
             echo "the security scan CIDR is in the jobs policy" >&2
             exit 1
           fi
+          # networkPolicy.enabled=false: no NetworkPolicy, and scans are on.
+          nopol=$(helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --set networkPolicy.enabled=false)
+          if echo "$nopol" | grep -q '^kind: NetworkPolicy$'; then
+            echo "networkPolicy.enabled=false still renders a NetworkPolicy" >&2
+            exit 1
+          fi
+          echo "$nopol" | grep -q 'name: PERGENT_SH_SECURITY_EGRESS$'
 
   # Publishes the newest main build as ghcr.io/gopaytech/pergent.sh:main and
   # :sha-<short sha>. Not on pull requests. `latest` stays the release tag

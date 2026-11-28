@@ -57,9 +57,10 @@ spec:
             # this same image (pergent-sh fetch-skills).
             - name: PERGENT_SH_IMAGE
               value: {{ include "pergent-sh.image" . | quote }}
-          {{- if .Values.securityJobEgress.cidrs }}
-            # The scan Jobs can reach the LLM provider: security scans may be
-            # turned on. Without it the engine fails a scan at launch.
+          {{- if or (not .Values.networkPolicy.enabled) .Values.securityJobEgress.cidrs }}
+            # The scan Jobs can reach the LLM provider (no NetworkPolicy, or
+            # the scan policy lets it through): security scans may be turned
+            # on. Without it the engine fails a scan at launch.
             - name: PERGENT_SH_SECURITY_EGRESS
               value: "true"
           {{- end }}

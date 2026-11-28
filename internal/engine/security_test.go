@@ -139,7 +139,7 @@ func TestSecurityStartOffWithoutEgress(t *testing.T) {
 	if _, err := env.Engine.RequestSecurityScan(env.ctx, secAdmin(testProjectPath)); !errors.Is(err, security.ErrOff) {
 		t.Fatalf("RequestSecurityScan = %v; want ErrOff", err)
 	}
-	if got := env.Engine.StartOff(); got != "Start scan is off: an admin must set securityJobEgress.cidrs in the Helm values first" {
+	if got := env.Engine.StartOff(); got != "Start scan is off: an admin must set securityJobEgress.cidrs, or networkPolicy.enabled: false, in the Helm values first" {
 		t.Errorf("StartOff = %q", got)
 	}
 	if active, err := env.Store.ActiveSecurityScan(env.ctx, testInstance, testProjectPath); err != nil || active != nil {

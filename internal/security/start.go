@@ -19,7 +19,7 @@ type Start struct {
 var (
 	// ErrOff: the chart did not give the scan Jobs a way to the network, so
 	// no scan may start.
-	ErrOff = errors.New("Start scan is off: an admin must set securityJobEgress.cidrs in the Helm values first")
+	ErrOff = errors.New("Start scan is off: an admin must set securityJobEgress.cidrs, or networkPolicy.enabled: false, in the Helm values first")
 	// ErrPaused: the repository is paused.
 	ErrPaused = errors.New("the repository is paused")
 	// ErrNotOn: the repository is not switched on.

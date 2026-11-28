@@ -34,6 +34,10 @@ adminPassword:
 # -- The namespace the review Jobs run in. It must already exist. The chart creates the Role, RoleBinding and NetworkPolicy there. Must equal config.jobs.namespace.
 jobsNamespace: pergent
 
+networkPolicy:
+  # -- Create the 2 NetworkPolicies for the Jobs: the review Jobs one (jobEgress) and the security scan Jobs one (securityJobEgress). false creates neither: every Job may reach any address, jobEgress and securityJobEgress are ignored, and security scans are on with no securityJobEgress.cidrs. A scan Job runs a shell, so with false a scanned repository's instructions could send its LLM key anywhere.
+  enabled: true
+
 # Where review Jobs may connect over TCP 443 and 80: GitLab or GitHub (Jobs
 # clone over HTTPS), the LLM provider and (only if config.callback_url is set
 # to a public address) the pergent.sh URL.

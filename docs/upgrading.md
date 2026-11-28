@@ -1,5 +1,13 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+**The NetworkPolicies are optional.** No migration and no new config key.
+
+- **New chart value `networkPolicy.enabled`** (default `true`, no change). With `false` the chart creates no NetworkPolicy for the Jobs, review Jobs and scan Jobs alike, ignores `jobEgress` and `securityJobEgress`, and turns security scans on (`PERGENT_SH_SECURITY_EGRESS=true`). Every Job may then reach any address. A scan Job runs a shell, so a scanned repository's text could make it send the model key anywhere.
+- The **Start scan is off** text now also names `networkPolicy.enabled: false`.
+- **Rolling back** to 0.26.0: the old chart ignores `networkPolicy.enabled` and creates both policies again. Set `securityJobEgress.cidrs` before you roll back, or Start scan turns off.
+
 ## Upgrading to 0.26.0
 
 **A security scan: a whole-repository security audit, started by hand.** See [Security scan](concepts/security-scan.md). Scans stay off until you set a Helm value.

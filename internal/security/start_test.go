@@ -13,7 +13,7 @@ func TestStartErrorTexts(t *testing.T) {
 		err  error
 		want string
 	}{
-		{ErrOff, "Start scan is off: an admin must set securityJobEgress.cidrs in the Helm values first"},
+		{ErrOff, "Start scan is off: an admin must set securityJobEgress.cidrs, or networkPolicy.enabled: false, in the Helm values first"},
 		{ErrPaused, "the repository is paused"},
 		{ErrQuota, "the monthly token quota is used up"},
 		{&TeamLimitError{Team: "Payments"},
