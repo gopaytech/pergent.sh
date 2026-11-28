@@ -18,7 +18,7 @@ pergent reviews read `PERGENT_CONTEXT_LIMIT`, but pergent.sh never sets it, `per
 
 - pergent.sh guessing limits (cleaned-up ids, the provider's `/models` endpoint).
 - One install-wide default for unknown models.
-- Blocking the fields on older pergent images.
+- Blocking the fields on older pergent images. They can be saved; only the Job env waits for a new enough image.
 
 ## Approaches
 
@@ -72,12 +72,18 @@ A review, judge or scan Job gets `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIM
 
 ### Older pergent images
 
-pergent v0.13.0 reviews read the context limit and ignore the output limit; v0.13.0 scans ignore both. The fix needs the next pergent release, and pergent.sh's default image moves to it in the same pergent.sh release. The docs say so. An ignored env var does no harm, so the fields are never blocked.
+pergent v0.13.0 reviews read the context limit and ignore the output limit; v0.13.0 scans ignore both. A v0.13.0 review also sets its diff batch size to a quarter of the context limit with no cap, so a 1M window would give batches of 250,000 tokens.
+
+So pergent.sh sends `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIMIT` only when the Job's image is at or above `config.ModelWindowMinVersion`, the same version gate as `BuiltInRulesListMinVersion` and `PanelMinVersion`. Review, reviewer and judge Jobs check `jobs.image`; scan Jobs check `jobs.security_image`. A digest-only reference, `main` or a missing tag is not new enough.
+
+- The version starts as `""`, so no Job gets the variables in this feature. The release that moves the default images to the next pergent sets it to that version. The code holds no version number before then.
+- The fields can always be saved. When the image is too old, the model form says so in one line, as the Rules picker does for built-in rules.
+- The upgrade notes and the Models page say the values take effect only with a pergent at or above that version.
 
 ## Tests
 
 - pergent: the generated review and scan configs hold the limits (both, one, none); a bad value is refused; `pergent scan` passes the flag and the env; `BatchBudget` is capped at 40,000; a fake model that ends 3 replies with `finish_reason: length` gives the `output-limit` reason (opencode e2e).
-- pergent.sh: migration; config load ranges; store round trip for global and team entries; API set, clear and refused values (including output above context); the audit entry holds old and new values; Job env with and without values, for a review, a judge and a scan, and after a fallback; the form and the list.
+- pergent.sh: migration; config load ranges; store round trip for global and team entries; API set, clear and refused values (including output above context); the audit entry holds old and new values; Job env with and without values, for a review, a judge and a scan, and after a fallback; the version gate (sent at and above the min version, not below, not for a digest, `main` or no tag; a scan checks the security image); the form, its one-line note and the list.
 
 ## Left to the builder
 

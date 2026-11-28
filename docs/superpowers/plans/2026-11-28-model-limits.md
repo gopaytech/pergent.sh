@@ -4,7 +4,7 @@
 
 **Goal:** Every model entry (global, team, config file) can hold a context window and a max output, and every Job that runs the entry gets them as `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIMIT`.
 
-**Architecture:** The 2 values ride on `config.LLM` (2 new fields, `0` = empty), so they travel with the entry the same way provider, model and base URL do: store row or config file → `instances.Model.LLM` → chain resolution → `kube.JobParams.LLM` / `kube.SecurityJobParams.LLM` → env. One range check in `internal/config` serves the config loader and the dashboard API. The pergent CLI side (`pergent scan` reading the context limit, the new output limit, the 40,000 batch cap, the `output-limit` reason) is a separate plan in the pergent repository.
+**Architecture:** The 2 values ride on `config.LLM` (2 new fields, `0` = empty), so they travel with the entry the same way provider, model and base URL do: store row or config file → `instances.Model.LLM` → chain resolution → `kube.JobParams.LLM` / `kube.SecurityJobParams.LLM` → env. The env is sent only when the Job's own image is at or above `config.ModelWindowMinVersion`, the same version gate as `BuiltInRulesListMinVersion` and `PanelMinVersion`. It is `""` in this feature, so the whole Job side is dormant until the release that ships the next pergent sets it. One range check in `internal/config` serves the config loader and the dashboard API. The pergent CLI side (`pergent scan` reading the context limit, the new output limit, the 40,000 batch cap, the `output-limit` reason) is a separate plan in the pergent repository.
 
 **Tech Stack:** Go 1.24, pgx v5, Postgres 13+, yaml.v3, client-go types; React 18 + TanStack Query + vitest.
 
@@ -18,11 +18,12 @@
 - A refused value is a **400 with the range in the message**. The config loader refuses the same values and names the key.
 - **Who edits:** whoever may edit the entry's base URL and key (admins for global entries; admins and the team's maintainers for team entries; nobody for config entries, which stay 409 `msgConfigModel`).
 - **Audit:** a change goes into the existing `model_updated` / `team_model_updated` entry, with old and new values.
-- **Jobs:** each var only when its value is set. An entry with both empty gives a Job byte for byte as today (`TestBuildJobUnchanged` stays green with no golden update).
+- **Jobs:** each var only when its value is set **and** the Job's image passes `config.ModelWindowImage`. Review, reviewer and judge Jobs check their image, `jobs.image`; security scan Jobs check theirs, `jobs.security_image`. A digest-only reference, a non-version tag such as `main`, or no tag is not new enough. An entry with both empty, or an image below the gate, gives a Job byte for byte as today (`TestBuildJobUnchanged` stays green with no golden update).
+- **The gate starts dormant.** `var ModelWindowMinVersion = ""`: with `""` no image passes and no Job gets the env. Setting it to the first pergent that reads both variables (and caps the batch size) is the job of the release that moves the default images to that pergent. This plan puts no version number in the code. Tests that need the env set the var to a test version and restore it with `t.Cleanup`, as the built-in rules tests do (`setBuiltInListMin`, `builtInListFloor`), so those tests never call `t.Parallel`.
 - **Help lines, exact copy.** Context window: `Leave empty for models opencode knows. Set them for a model id it does not know: the context window from the provider's page.` Max output: `The most one reply may need, thinking included. 64,000 is enough for reviews and scans. A provider that counts it against a rate limit throttles a higher value.`
 - **Lists** show `1M / 64k` (the existing `count()` in `web/src/ui.tsx`), and nothing when both are empty.
 - **Migration** `0056_model_limits_per_entry.sql` (0056 is free on `origin/main` and every open branch). It only adds; the previous release keeps working and ignores the columns.
-- **No release in this plan:** no default image bump, no chart or version change, no tag. Upgrade notes go under `## Unreleased` in `docs/upgrading.md`.
+- **No release in this plan:** no default image bump, no `ModelWindowMinVersion` value, no chart or version change, no tag. Upgrade notes go under `## Unreleased` in `docs/upgrading.md`.
 - **Tests, locally:** only `go test ./<pkg> -count=1 -run '^(TestA|TestB)$'` with exact names, `go vet` per changed package, and `npx vitest run <file>` per changed web test file. Never a whole package, `./...`, `make test` or a bare `npx vitest run`. Full runs are CI's `test` and `web` checks.
 - **DB tests** (store, instances DB tests, engine, dashboard handlers) skip without `PERGENT_SH_TEST_DATABASE_URL`. Run one focused only when the already-running Postgres answers on port 55432 (`nc -z localhost 55432`); put the `export` in the same command as `go test`. Otherwise leave it to CI. **Never start Postgres, docker or any container.** When a DB test cannot run, its "fails first" proof is the compile error from `go vet ./<pkg>/`.
 - **Fast tests:** unit < 100 ms, DB < 2 s, web < 500 ms. One setup per DB test with `t.Run` subtests, `t.Parallel()` unless the test sets a package variable or env (migration tests with `newStoreAt` stay serial). No sleeps, no real clock.
@@ -44,6 +45,7 @@
 **Files:**
 - Modify: `internal/config/config.go` (type `LLM` at :357, `checkFallbacks` at :589, the `llm:` checks in `Validate` at :1044)
 - Test: `internal/config/config_test.go` (beside `TestConfigFallbacks`)
+- Create: `internal/config/model_window.go`, `internal/config/model_window_test.go` (the version gate, beside the shape of `builtins.go`)
 - Modify: `docs/reference/configuration.md` (the `llm.*` rows at :75-77)
 
 **Interfaces:**
@@ -54,6 +56,11 @@
   - `func ValidContextWindow(n int) bool` (4096..10,000,000; `0` is false, callers skip empty).
   - `func MaxOutputCeiling(contextWindow int) int` (the context window when > 0, else `MaxContextWindow`).
   - `func ValidMaxOutput(n, contextWindow int) bool` (1024..`MaxOutputCeiling(contextWindow)`).
+  - In `model_window.go`: `var ModelWindowMinVersion = ""` (doc comment: the first pergent release that reads `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIMIT` in reviews and scans, as `vX.Y.Z`; `""` refuses every image; the release that ships that pergent sets it) and `func ModelWindowImage(image string) (ok bool, reason string)`, built like `BuiltInRulesListImage` (`ImageTag`, `result.VersionAtLeast`). The reason names the tag only, never the registry, and reads after a prefix such as "Jobs get no context window or max output for now: ":
+    - `""` → `no pergent image reads them yet`
+    - no tag → `the image has no tag, so its pergent version is not known; they need <min> or later`
+    - not a version → `image tag "main" is not a version (vX.Y.Z); they need <min> or later`
+    - older → `image tag "v0.13.0" is older than <min>, the first pergent that reads them`
 
 - [ ] **Step 1: Write the failing test `TestConfigModelWindow`** (unit, no DB; shape of `TestConfigFallbacks`, same `body` and `main`)
 
@@ -80,9 +87,11 @@ for _, tc := range []struct{ yaml, want string }{
 
 Also a small table `TestModelWindowRanges` for the 3 pure functions: `ValidContextWindow(4096)`, `(10_000_000)` true; `(4095)`, `(0)`, `(10_000_001)` false; `MaxOutputCeiling(0) == 10_000_000`, `MaxOutputCeiling(200_000) == 200_000`; `ValidMaxOutput(1024, 0)`, `(200_000, 200_000)` true; `(1023, 0)`, `(200_001, 200_000)`, `(10_000_001, 0)` false.
 
+And `TestModelWindowImage` in `model_window_test.go` (serial: it sets the package var through a helper `setModelWindowMin(t, v)`), a table like `TestBuiltInRulesListImage`: floor `""` with `pergent:v0.14.0` and `pergent:v99.0.0` → false, `no pergent image reads them yet`; floor `v0.14.0` with `pergent:v0.14.0` (at) and `pergent:v0.15.1` (above) → true, `""`; `pergent:v0.13.0` (below) → false, `is older than v0.14.0`; `pergent:main` → false, `not a version`; `pergent@sha256:abc123` and `host:5000/pergent` → false, `no tag`. No reason holds `ghcr.io` or `host:5000`. The test versions are test data only; the code keeps `""`.
+
 - [ ] **Step 2: Run them and watch them fail**
 
-Run: `go test ./internal/config -count=1 -run '^(TestConfigModelWindow|TestModelWindowRanges)$'`
+Run: `go test ./internal/config -count=1 -run '^(TestConfigModelWindow|TestModelWindowRanges|TestModelWindowImage)$'`
 Expected: build failure, `undefined: ValidContextWindow` / unknown field `ContextWindow`.
 
 - [ ] **Step 3: Implement in `internal/config/config.go`**
@@ -93,10 +102,10 @@ Expected: build failure, `undefined: ValidContextWindow` / unknown field `Contex
 
 - [ ] **Step 4: Run them and see them pass**
 
-Run: `go test ./internal/config -count=1 -run '^(TestConfigModelWindow|TestModelWindowRanges|TestConfigFallbacks|TestLoadValid)$'`
+Run: `go test ./internal/config -count=1 -run '^(TestConfigModelWindow|TestModelWindowRanges|TestModelWindowImage|TestBuiltInRulesListImage|TestConfigFallbacks|TestLoadValid)$'`
 Expected: PASS. Then `go vet ./internal/config/`.
 
-- [ ] **Step 5: Document the keys** in `docs/reference/configuration.md`: 2 rows after `llm.api_key_env`: `llm.context_window` (none; "The model's context window in tokens, input and output together, from 4096 to 10000000. Leave it out for a model opencode knows. See [Models](../concepts/models.md#context-window-and-max-output).") and `llm.max_output` (none; "The most tokens one reply may need, thinking included, from 1024 to the context window (or 10000000). 64000 is enough for reviews and scans."). The `llm.fallbacks` row adds "and optional `base_url`, `context_window` and `max_output`".
+- [ ] **Step 5: Document the keys** in `docs/reference/configuration.md`: 2 rows after `llm.api_key_env`: `llm.context_window` (none; "The model's context window in tokens, input and output together, from 4096 to 10000000. Leave it out for a model opencode knows. See [Models](../concepts/models.md#context-window-and-max-output).") and `llm.max_output` (none; "The most tokens one reply may need, thinking included, from 1024 to the context window (or 10000000). 64000 is enough for reviews and scans."). Both rows add: "Sent to a Job only when its image is a pergent at or above the version that reads them; see [Models](../concepts/models.md#context-window-and-max-output)." The `llm.fallbacks` row adds "and optional `base_url`, `context_window` and `max_output`".
 
 - [ ] **Step 6: Commit** `feat(config): context_window and max_output on llm entries`
 
@@ -190,11 +199,13 @@ Run: `go test ./internal/instances -count=1 -run '^(TestModelWindowFromConfig)$'
 
 **Interfaces:**
 - Consumes: `config.LLM.ContextWindow/MaxOutput` (Task 1), filled by the registry (Task 3). The engine passes the resolved entry's `LLM` whole: `dispatch.go:966` (reviews, multi-review reviewers and the judge, whose `LLM` is the judge entry's), `apireview.go:277` (API reviews), `security.go:445` (scans). No engine code changes.
-- Produces: `func windowEnv(llm config.LLM) []corev1.EnvVar` in `job.go`: `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIMIT` as plain decimal strings (`strconv.Itoa`), each only when > 0. Appended right after `OPENCODE_BASE_URL` in `BuildJob`'s main container and in `BuildSecurityJob`. No other container gets them. A comment says why it is env: an older image ignores an env var it does not read.
+- Consumes too: `config.ModelWindowImage` (Task 1). The image to check is the Job's own `p.Image`: the engine fills it from `jobs.image` for review, reviewer and judge Jobs (`dispatch.go:953`, and the API review's) and from `jobs.security_image` for scans (`security.go:443`, `e.SecurityImage`).
+- Produces: `func windowEnv(llm config.LLM, image string) []corev1.EnvVar` in `job.go`: nil unless `config.ModelWindowImage(image)` passes; then `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIMIT` as plain decimal strings (`strconv.Itoa`), each only when > 0. Appended right after `OPENCODE_BASE_URL` in `BuildJob`'s main container and in `BuildSecurityJob`. No other container gets them. A comment says why it is env: an older image ignores an env var it does not read.
 
 - [ ] **Step 1: Write the failing kube tests** (unit)
-  - `TestBuildJobModelWindow` in `job_test.go`, a table over 3 Jobs: a review (`goldenParams()`), a reviewer (`SkipSkillVerify = true`, `Reviewer = "2"`), a judge (`judgeParams()`), each with 4 cases: none, both (`1_000_000`, `64_000`), context only, output only. Assert on the `pergent` container: exactly one `PERGENT_CONTEXT_LIMIT` = `"1000000"` when set and none when not, the same for `PERGENT_OUTPUT_LIMIT` = `"64000"`; no init container carries either; and for "none", `reflect.DeepEqual(BuildJob(p), BuildJob(base))` where `base` never had the fields touched.
-  - `TestSecurityJobModelWindow` in `security_test.go`: the same 4 cases on `testSecurityParams()`, checked on the scan container's env.
+  - Both kube tests are serial and set the gate with a local helper `modelWindowFloor(t, v)` (restores in `t.Cleanup`). Floor `v0.14.0` unless the case says otherwise.
+  - `TestBuildJobModelWindow` in `job_test.go`, a table over 3 Jobs: a review (`goldenParams()`), a reviewer (`SkipSkillVerify = true`, `Reviewer = "2"`), a judge (`judgeParams()`), each with 4 value cases at `p.Image = "ghcr.io/x/pergent:v0.14.0"`: none, both (`1_000_000`, `64_000`), context only, output only. Then gate cases with both values set, where no var is sent: floor `""`; image `pergent:v0.13.0` (below); `pergent:main`; `pergent@sha256:abc123`; `host:5000/pergent` (no tag). `pergent:v0.15.0` (above) sends both. Assert on the `pergent` container: exactly one `PERGENT_CONTEXT_LIMIT` = `"1000000"` when set and none when not, the same for `PERGENT_OUTPUT_LIMIT` = `"64000"`; no init container carries either; and for "none", `reflect.DeepEqual(BuildJob(p), BuildJob(base))` where `base` never had the fields touched.
+  - `TestSecurityJobModelWindow` in `security_test.go`: the same value and gate cases on `testSecurityParams()` with `p.Image` set to a `pergent-security:` reference, checked on the scan container's env.
 
 - [ ] **Step 2: Watch them fail**
 
@@ -208,7 +219,9 @@ Expected: FAIL, `PERGENT_CONTEXT_LIMIT missing`.
 Run: `go test ./internal/kube -count=1 -run '^(TestBuildJobModelWindow|TestSecurityJobModelWindow|TestBuildJobUnchanged|TestBuildJobShape|TestBuildSecurityJob|TestBuildJudgeJob|TestBuildReviewerJob)$'`
 Expected: PASS, with no golden file written.
 
-- [ ] **Step 5: Write the engine fallback test** `TestE2EFallbackUsesNextEntryWindow` (DB, parallel) in `e2e_fallback_test.go`, with a helper `addTeamModelWindow(t, env, team, name, model, key string, contextWindow, maxOutput int) store.EntryRef` (creates through `env.Store.CreateTeamModel` with the values, then `env.Engine.Instances.LoadLLM`). `e := newE2E(t)`, `teamOwning(t, env, "Payments")`, chain `[team-a (1_000_000, 64_000), team-b (empty)]` saved with `saveChain`, then `servePublish(env, 1, head)` and `env.Enqueue(1, head)`, as in `TestE2EFallbackQuota`.
+- [ ] **Step 5: Write the engine tests** (DB, **serial**: each sets the gate with a local helper `modelWindowFloor(t, v)` shaped like `builtInListFloor` in `rules_dispatch_test.go`). The engine env's images are `testImage` (`pergent:v0.5.2`) and `testSecurityImage` (`pergent-security:v0.0.0-test`).
+
+`TestE2EFallbackUsesNextEntryWindow` (floor `v0.5.0`, so `testImage` passes) in `e2e_fallback_test.go`, with a helper `addTeamModelWindow(t, env, team, name, model, key string, contextWindow, maxOutput int) store.EntryRef` (creates through `env.Store.CreateTeamModel` with the values, then `env.Engine.Instances.LoadLLM`). `e := newE2E(t)`, `teamOwning(t, env, "Payments")`, chain `[team-a (1_000_000, 64_000), team-b (empty)]` saved with `saveChain`, then `servePublish(env, 1, head)` and `env.Enqueue(1, head)`, as in `TestE2EFallbackQuota`.
 
 ```go
 first := e.attempt(t, "key-team-a", failedOn(t, head, "quota"))
@@ -217,9 +230,13 @@ second := e.attempt(t, "key-team-b", clean(t, head), first)
 // jobEnv(env, second): neither key present
 ```
 
-A scan never falls back (`engine/security.go`), so there is no scan case here; the kube test covers the scan env.
+A scan never falls back (`engine/security.go`), so there is no scan case in that test.
 
-- [ ] **Step 6: Run it** — `go vet ./internal/engine/`, then with Postgres up only: `go test ./internal/engine -count=1 -run '^(TestE2EFallbackUsesNextEntryWindow|TestE2EFallbackQuota)$'` with the env var in the same command. Else leave it to CI.
+`TestSecurityScanModelWindowImage` in `security_test.go` proves a scan checks `jobs.security_image`, not `jobs.image`. `newSecurityEnv`, and give the scan chain's entry `1_000_000` / `64_000` (the config entry through `env.Engine.Config.LLM` when the registry reads that same config, else a global entry with `SetLLMModelWindow` put in the scan chain). Subtests, each with `secQueue`, `secLaunch`, `secJob` and `secEnvOf`:
+- floor `v0.5.0`: `jobs.image` v0.5.2 passes but the scan image v0.0.0-test does not → the scan Job has neither var.
+- floor `v1.0.0` and `env.Engine.SecurityImage = "ghcr.io/x/pergent-security:v9.9.9"`: `jobs.image` is below, the scan image is above → the scan Job has `PERGENT_CONTEXT_LIMIT=1000000` and `PERGENT_OUTPUT_LIMIT=64000`.
+
+- [ ] **Step 6: Run it** — `go vet ./internal/engine/`, then with Postgres up only: `go test ./internal/engine -count=1 -run '^(TestE2EFallbackUsesNextEntryWindow|TestSecurityScanModelWindowImage|TestE2EFallbackQuota)$'` with the env var in the same command. Else leave it to CI.
 
 - [ ] **Step 7: Commit** `feat(kube): PERGENT_CONTEXT_LIMIT and PERGENT_OUTPUT_LIMIT from the entry a Job runs`
 
@@ -231,8 +248,8 @@ A scan never falls back (`engine/security.go`), so there is no scan case here; t
 - Create: `internal/dashboard/model_window.go`, `internal/dashboard/model_window_test.go`
 - Modify: `internal/dashboard/api_models.go` (`createModel`, `updateModel`, `modelView`, the config entries in `modelsView`, `msgBadModelBody`, `msgBadModelEdit`)
 - Modify: `internal/dashboard/api_team_models.go` (`createTeamModel`, `updateTeamModel`, `teamModelView`, `msgBadTeamModelBody`, `msgBadTeamModelEdit`)
-- Modify: `internal/dashboard/view.go` (`ModelAdminView` at :1661, `TeamModelView` at :1397)
-- Modify: `openapi.yaml` (`CreateModelRequest`, `UpdateModelRequest`, `ModelAdminView`, `TeamModelView`, `CreateTeamModelRequest`, `UpdateTeamModelRequest`)
+- Modify: `internal/dashboard/view.go` (`ModelAdminView` at :1661, `ModelsAdminView`, `TeamModelView` at :1397, `TeamModelsView`)
+- Modify: `openapi.yaml` (`CreateModelRequest`, `UpdateModelRequest`, `ModelAdminView`, `ModelsAdminView`, `TeamModelView`, `TeamModelsView`, `CreateTeamModelRequest`, `UpdateTeamModelRequest`)
 - Test: `internal/dashboard/api_models_test.go`, `internal/dashboard/api_team_models_test.go`
 - Modify: `docs/concepts/dashboard.md` (the audit paragraph at :356)
 
@@ -244,6 +261,8 @@ A scan never falls back (`engine/security.go`), so there is no scan case here; t
   - `func windowBody(w http.ResponseWriter, contextRaw, outputRaw json.RawMessage, beforeContext, beforeOutput int) (contextWindow, maxOutput int, ok bool)`: an absent field (`len(raw) == 0`) keeps `before`, `null` empties it, anything else is read as text like `quotaValue` (digits only, `strconv.Atoi`). The pair is checked after both are applied. On a refusal it has written the 400 and `ok` is false.
   - `func windowChanges(beforeContext, beforeOutput, contextWindow, maxOutput int) []string`: one item per changed field, `context_window <old> to <new>` / `max_output <old> to <new>`, `none` for 0.
   - `func tokensOrNull(n int) *int`: nil for 0.
+  - `func modelWindowOff(reviewImage, scanImage string) string`: one line, `""` when both images pass `config.ModelWindowImage`. Both refused → `Jobs get no context window or max output for now: <review reason>.`; only the review image → `Reviews get no context window or max output for now: <reason>.`; only the scan image → `Security scans get no context window or max output for now: <reason>.` The same shape as `builtInRulesOff` ("Reviews get no built-in rules for now: ...").
+  - `ModelsAdminView` and `TeamModelsView` gain `WindowOff string \`json:"windowOff"\``, filled with `modelWindowOff(d.cfg.Jobs.Image, d.cfg.Jobs.SecurityImage)`.
   - `ModelAdminView` and `TeamModelView` gain `ContextWindow *int \`json:"contextWindow"\`` and `MaxOutput *int \`json:"maxOutput"\`` (always present, `null` when empty). A team viewer sees them too (they are not secret, unlike the base URL).
   - Request structs gain `ContextWindow json.RawMessage \`json:"contextWindow"\`` and `MaxOutput json.RawMessage \`json:"maxOutput"\``.
 
@@ -257,11 +276,12 @@ A scan never falls back (`engine/security.go`), so there is no scan case here; t
     - context absent, output `1000001`, before `(1_000_000, 0)` → 400 containing `to 1000000, the entry's context window` (Review Focus 1)
     - context `100000`, output absent, before `(1_000_000, 200_000)` → 400 on max output (Review Focus 1)
     - output `2000000`, no context, before `(0, 0)` → ok
+  - `TestModelWindowOff` (serial, sets the gate like `TestBuiltInRulesOffNotes` does): floor `""` → `Jobs get no context window or max output for now: no pergent image reads them yet.`; floor `v0.14.0` with review `pergent:v0.14.0` and scan `pergent-security:v0.14.0` → `""`; review `v0.13.0`, scan `v0.14.0` → starts `Reviews get no`; review `v0.14.0`, scan `@sha256:abc123` → starts `Security scans get no` and contains `no tag`.
   - `TestWindowChanges`: `(0, 0, 1_000_000, 64_000)` → `["context_window none to 1000000", "max_output none to 64000"]`; `(1_000_000, 64_000, 1_000_000, 0)` → `["max_output 64000 to none"]`; no change → empty.
 
 - [ ] **Step 2: Watch them fail**
 
-Run: `go test ./internal/dashboard -count=1 -run '^(TestWindowBody|TestWindowChanges)$'`
+Run: `go test ./internal/dashboard -count=1 -run '^(TestWindowBody|TestWindowChanges|TestModelWindowOff)$'`
 Expected: build failure, `undefined: windowBody`.
 
 - [ ] **Step 3: Implement `model_window.go`**, then wire it:
@@ -272,9 +292,9 @@ Expected: build failure, `undefined: windowBody`.
 
 - [ ] **Step 4: See the unit tests pass**
 
-Run: `go test ./internal/dashboard -count=1 -run '^(TestWindowBody|TestWindowChanges)$'` → PASS.
+Run: `go test ./internal/dashboard -count=1 -run '^(TestWindowBody|TestWindowChanges|TestModelWindowOff)$'` → PASS.
 
-- [ ] **Step 5: Update `openapi.yaml`.** Both views: add `contextWindow` and `maxOutput` as `type: [integer, 'null']` to `properties` and `required` ("null: opencode's own value"). The 4 request bodies: `contextWindow` `{type: [integer, 'null'], minimum: 4096, maximum: 10000000}`, `maxOutput` `{type: [integer, 'null'], minimum: 1024, maximum: 10000000, description: At most contextWindow when that is set. Leaving a field out keeps it on a PUT; null empties it.}`. Check the request bodies by hand: the test does not cover them.
+- [ ] **Step 5: Update `openapi.yaml`.** Both entry views: add `contextWindow` and `maxOutput` as `type: [integer, 'null']` to `properties` and `required` ("null: opencode's own value"). Both list views: `windowOff` (`type: string`, required: "Why Jobs get no context window or max output for now; empty when they do"). The 4 request bodies: `contextWindow` `{type: [integer, 'null'], minimum: 4096, maximum: 10000000}`, `maxOutput` `{type: [integer, 'null'], minimum: 1024, maximum: 10000000, description: At most contextWindow when that is set. Leaving a field out keeps it on a PUT; null empties it.}`. Check the request bodies by hand: the test does not cover them.
 
 Run: `go test ./internal/dashboard -count=1 -run '^(TestOpenAPISchemasMatchGoTypes|TestOpenAPIEveryViewTypeHasASchema|TestOpenAPIDocumentIsValid)$'` → PASS (no DB needed).
 
@@ -286,7 +306,7 @@ Run: `go test ./internal/dashboard -count=1 -run '^(TestOpenAPISchemasMatchGoTyp
     - PUT `{"baseURL": "", "contextWindow": 100000, "maxOutput": 200000}` → 400 with `to 100000, the entry's context window`, and GET shows the values unchanged.
     - PUT `{"baseURL": "", "contextWindow": 1e6}` → 400 `msgBadContextWindow`.
     - `auditDetails(e, "model_updated")` holds `context_window none to 1000000`-style items only for the PUTs that changed something.
-    - GET: the `config` entry's view has `200000` / `32000`.
+    - GET: the `config` entry's view has `200000` / `32000`, and `windowOff` is the dormant line (the gate is `""`; this test does not set it, so it stays parallel).
   - `TestTeamModelWindow` in `api_team_models_test.go`: `newTeamsEnv`; a maintainer POSTs with `maxOutput: 64000`; PUT `{"name": "renamed"}` keeps it; PUT `{"contextWindow": 32768}` → 400 (64000 is above it); PUT `{"contextWindow": 1000000}` → 200; a viewer's GET of the team's models shows `1000000` / `64000`; `team_model_updated` detail has `context_window none to 1000000`.
 
 - [ ] **Step 7: Run them** — `go vet ./internal/dashboard/`, then with Postgres up only: `go test ./internal/dashboard -count=1 -run '^(TestModelWindowAdmin|TestTeamModelWindow|TestModelsAdminLifecycle|TestTeamModelsAccess)$'` with the env var in the same command. Else CI.
@@ -300,11 +320,11 @@ Run: `go test ./internal/dashboard -count=1 -run '^(TestOpenAPISchemasMatchGoTyp
 ### Task 6: Web forms and lists
 
 **Files:**
-- Modify: `web/src/api.ts` (`ModelAdminView` at :1171, `TeamModelView` at :1632)
+- Modify: `web/src/api.ts` (`ModelAdminView` at :1171, `ModelsAdminView` at :1205, `TeamModelView` at :1632, `TeamModelsView` at :1645)
 - Modify: `web/src/ModelForms.tsx`
 - Modify: `web/src/pages/AdminSettings.tsx` (`ModelRow` at :819, the line at :875)
 - Modify: `web/src/pages/TeamModels.tsx` (the row at :84)
-- Modify: `web/src/test/fixtures.ts` (every `ModelAdminView` / `TeamModelView` object gets `contextWindow: null, maxOutput: null`)
+- Modify: `web/src/test/fixtures.ts` (every `ModelAdminView` / `TeamModelView` object gets `contextWindow: null, maxOutput: null`; `models` and every `TeamModelsView` get `windowOff: ""`)
 - Create: `web/src/ModelForms.test.tsx`
 - Test: `web/src/pages/AdminSettings.test.tsx`, `web/src/pages/TeamModels.test.tsx`
 
@@ -315,12 +335,14 @@ Run: `go test ./internal/dashboard -count=1 -run '^(TestOpenAPISchemasMatchGoTyp
   - `export function windowText(contextWindow: number | null, maxOutput: number | null): string`: `count()` of each joined by ` / `, a missing one as `–`, `""` when both are null.
   - `EditableModel` gains `contextWindow: number | null; maxOutput: number | null`.
   - Consts `contextWindowHelp` and `maxOutputHelp` with the exact help lines of Global Constraints.
+  - `AddModelForm` and `EditModelForm` take a `windowOff: string` prop (the list view's `windowOff`). When it is not `""` they show it as one line under the 2 fields, in the style of the Rules picker's note in `RepositorySettings.tsx:1138`: muted, and `problem text-bad` while either field holds a value.
 
 - [ ] **Step 1: Write the failing tests**
   - `ModelForms.test.tsx`: `parseTokens("1,000,000") === 1000000`, `parseTokens(" 64 000 ") === 64000`, `parseTokens("") === null`, `parseTokens("1M") === undefined`, `parseTokens("1.5") === undefined`; `windowText(1_000_000, 64_000) === "1M / 64k"`, `windowText(200_000, null) === "200k / –"`, `windowText(null, 64_000) === "– / 64k"`, `windowText(null, null) === ""`.
   - `AdminSettings.test.tsx`:
     - `"adds a model with its context window and max output, under the help lines"`: the add form has inputs labelled **Context window** and **Max output**, each with its exact help line; typing `1,000,000` and `64000` POSTs `contextWindow: 1000000, maxOutput: 64000` beside the other fields. The existing add test (no values typed) keeps its exact body: empty fields are not sent.
     - `"edits the context window and max output, sending only what changed, and lists them as 1M / 64k"`: list with `{...modelOpus, contextWindow: 1_000_000, maxOutput: 64_000}`; the row shows `1M / 64k`; Edit shows the 2 values; renaming only → PUT body `{name, baseURL}` (Review Focus 4); emptying Max output → body has `maxOutput: null` and no `contextWindow`. A row with both null shows no `/` text.
+    - `"says on the model form when Jobs get no context window or max output"`: `models` with `windowOff: "Jobs get no context window or max output for now: no pergent image reads them yet."` → the add form shows that line once; with `windowOff: ""` it shows none.
     - `"refuses a context window that is not a whole number and sends nothing"`: `1M` → the form shows `Context window is a whole number of tokens, or empty.` and no POST is made.
   - `TeamModels.test.tsx`: `"sends a team entry's context window and max output, and lists them"`: POST body carries them; a viewer's list (`{...teamModelQwen, contextWindow: 128_000, maxOutput: null}`) shows `128k / –`.
 
@@ -357,20 +379,21 @@ Expected: PASS. Each new test under 500 ms; name any that is not in the report. 
   - When to set them: a model id opencode's catalog does not know (a custom base URL, an id spelled another way). The context window from the provider's page. Max output: 64,000 is enough for reviews and scans; opencode asks for at most 256,000 per reply, and a provider that counts the asked amount against a per-minute rate limit throttles a higher value.
   - Every Job that runs the entry gets them: reviews, multi-review reviewers and the judge, security scans. After a fallback the next entry's values apply. A change applies from the next Job.
   - Who changes them (as the base URL), and the config keys (link to the config reference).
-  - **The pergent image.** pergent v0.13.0, the default `jobs.image`, reads the context window in reviews only. There it also sets the diff batch size to a quarter of it, so a context window of 1,000,000 gives batches of up to 250,000 tokens. v0.13.0 scans read neither value, and nothing reads max output. The next pergent release reads both, in reviews and scans, and keeps batches at most 40,000 tokens.
+  - **The pergent image.** The values take effect only with a pergent at or above the version that reads them: review Jobs check `jobs.image`, scan Jobs check `jobs.security_image`, and an image with a digest only, a tag such as `main` or no tag never gets them. Below that, Jobs run as if the fields were empty, and the model form says so in one line. Why: pergent v0.13.0, the default image, reads the context window in reviews and also sets the diff batch size to a quarter of it, so 1,000,000 would give batches of up to 250,000 tokens. The next pergent release reads both values in reviews and scans and keeps batches at most 40,000 tokens. Until a pergent.sh release names that version, no image gets them. (Write the text so the release only has to name the version.)
 
 - [ ] **Step 2: `docs/upgrading.md`, `## Unreleased`**, one bullet each:
   - **Migration `0056_model_limits_per_entry.sql`** runs at startup. Back up Postgres first. It adds 2 nullable columns to `llm_models` and `team_models` and drops nothing; the previous release ignores them.
   - **Context window and Max output** on every model entry, on the admin **Settings** page and a team's **Models** tab; API fields `contextWindow` and `maxOutput` on the model routes; the audit's `model_updated` / `team_model_updated` give old and new values.
   - **New config keys** `llm.context_window` and `llm.max_output`, also in each `llm.fallbacks` item. **They break a rollback:** the previous release refuses unknown keys, so remove them before you roll back.
-  - **Jobs get `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIMIT`**, each only when set. With the default image (pergent v0.13.0) only reviews read the context window, and it also sets their batch size (as in models.md). Scans and the output limit need the next pergent release. An image that does not read a variable ignores it.
+  - **The values take effect only with a pergent at or above the version that reads them.** Jobs get `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIMIT`, each only when set, and only when the Job's image (`jobs.image` for reviews, `jobs.security_image` for scans) is that pergent or newer. In this release no image is: the release that moves the default images to that pergent turns them on. Values saved before then wait in the database.
   - **Rolling back:** the values stay in the database and the previous release ignores them; its Jobs run without the variables.
 
 - [ ] **Step 3: Check the prose.** Run the `prose-slop-check` skill's check on the new text of the 4 docs pages (old text may already fail; judge the new lines). No `→` in UI paths: write "the admin **Settings** page". No "limits" for these fields anywhere a person reads: `git diff origin/main -- docs web/src internal/dashboard | grep -in 'limit'` and read each hit (the env names `PERGENT_*_LIMIT` and the existing monthly limits are fine).
 
 - [ ] **Step 4: Final gate.**
   - `go vet ./...` (vet only, never `go test ./...`).
-  - The focused runs of Tasks 1, 4 and 5 again: `go test ./internal/config -count=1 -run '^(TestConfigModelWindow|TestModelWindowRanges)$'`, `go test ./internal/kube -count=1 -run '^(TestBuildJobModelWindow|TestSecurityJobModelWindow|TestBuildJobUnchanged)$'`, `go test ./internal/dashboard -count=1 -run '^(TestWindowBody|TestWindowChanges|TestOpenAPISchemasMatchGoTypes|TestOpenAPIDocumentIsValid)$'`.
+  - The focused runs of Tasks 1, 4 and 5 again: `go test ./internal/config -count=1 -run '^(TestConfigModelWindow|TestModelWindowRanges|TestModelWindowImage)$'`, `go test ./internal/kube -count=1 -run '^(TestBuildJobModelWindow|TestSecurityJobModelWindow|TestBuildJobUnchanged)$'`, `go test ./internal/dashboard -count=1 -run '^(TestWindowBody|TestWindowChanges|TestModelWindowOff|TestOpenAPISchemasMatchGoTypes|TestOpenAPIDocumentIsValid)$'`.
+  - `git grep -n 'ModelWindowMinVersion = ' -- internal/config` shows `""` only.
   - `git log HEAD..origin/main --oneline` is empty, or merge `origin/main` first and check the migration number again.
   - The private-name scan and the email / local-path grep from the agent memory, over the branch's changed files and any new untracked file: both print nothing.
 
