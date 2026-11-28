@@ -1096,3 +1096,49 @@ func TestGlobalModelsStoredAfterConfig(t *testing.T) {
 		t.Fatalf("GlobalModels = %+v", got)
 	}
 }
+
+// A config entry and each fallback carry their own context window and max
+// output as they are.
+func TestModelWindowFromConfig(t *testing.T) {
+	cfg := testConfig()
+	cfg.LLM = config.LLM{Provider: "anthropic", Model: "main", ContextWindow: 1_000_000, MaxOutput: 64_000}
+	cfg.LLMFallbacks = []config.LLM{{Provider: "openai", Model: "backup", MaxOutput: 32_000}}
+	models := New(cfg, nil, nil).GlobalModels()
+	if len(models) != 2 {
+		t.Fatalf("GlobalModels() = %+v, want 2 entries", models)
+	}
+	if l := models[0].LLM; l.ContextWindow != 1_000_000 || l.MaxOutput != 64_000 {
+		t.Errorf("main entry = %d, %d, want 1000000, 64000", l.ContextWindow, l.MaxOutput)
+	}
+	if l := models[1].LLM; l.ContextWindow != 0 || l.MaxOutput != 32_000 {
+		t.Errorf("fallback entry = %d, %d, want 0, 32000", l.ContextWindow, l.MaxOutput)
+	}
+}
+
+// A store entry, global or a team's, reaches the registry with its values.
+func TestModelWindowFromStore(t *testing.T) {
+	t.Parallel()
+	st := newStore(t)
+	g := addModel(t, st, "anthropic", "claude", "", nil, time.Now())
+	if found, err := st.SetLLMModelWindow(ctx, g.ID, 200_000, 16_000, time.Now()); err != nil || !found {
+		t.Fatalf("SetLLMModelWindow = %v, %v", found, err)
+	}
+	tm, err := st.CreateTeam(ctx, "platform", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateTeamModel(ctx, store.TeamModel{TeamID: tm.ID, Name: "t", Provider: "openai", Model: "gpt", ContextWindow: 128_000}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r := New(testConfig(), st, nil)
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := r.ModelByID(g.ID); !ok || m.LLM.ContextWindow != 200_000 || m.LLM.MaxOutput != 16_000 {
+		t.Errorf("ModelByID(global) = %+v, %v", m.LLM, ok)
+	}
+	tms := r.TeamModels(tm.ID)
+	if len(tms) != 1 || tms[0].LLM.ContextWindow != 128_000 || tms[0].LLM.MaxOutput != 0 {
+		t.Errorf("TeamModels = %+v", tms)
+	}
+}
