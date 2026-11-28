@@ -6522,6 +6522,16 @@ components:
           type: string
           format: password
           description: At most 16 KiB. Sealed, and never returned.
+        contextWindow:
+          type: [integer, 'null']
+          minimum: 4096
+          maximum: 10000000
+          description: The model's context window in tokens. An entry holds both contextWindow and maxOutput, or neither (400 otherwise, judged after the change). Optional; null or left out means opencode's own value.
+        maxOutput:
+          type: [integer, 'null']
+          minimum: 1024
+          maximum: 10000000
+          description: At most contextWindow when that is set. Optional; null or left out means opencode's own value.
     UpdateModelRequest:
       type: object
       required: [baseURL]
@@ -6544,6 +6554,16 @@ components:
         teamsMayUse:
           type: [boolean, 'null']
           description: Turns teams may use on or off when sent (audited as `teams_may_use_changed`).
+        contextWindow:
+          type: [integer, 'null']
+          minimum: 4096
+          maximum: 10000000
+          description: The model's context window in tokens. An entry holds both contextWindow and maxOutput, or neither (400 otherwise, judged after the change). Leaving a field out keeps it on a PUT; null empties it, and both must be emptied together.
+        maxOutput:
+          type: [integer, 'null']
+          minimum: 1024
+          maximum: 10000000
+          description: At most contextWindow when that is set. Leaving a field out keeps it on a PUT; null empties it, and both must be emptied together.
     CreateSkillRequest:
       type: object
       required: [name, content]
@@ -7581,8 +7601,11 @@ components:
     ModelsAdminView:
       description: The list of models and how many repositories follow the default.
       type: object
-      required: [canSetDefault, followingDefault, models]
+      required: [canSetDefault, followingDefault, models, windowOff]
       properties:
+        windowOff:
+          type: string
+          description: Why Jobs get no context window or max output for now; empty when they do.
         canSetDefault:
           type: boolean
           description: False while the config file has an `llm:` block, which is the default then; making another entry the default is 409. Entries can still be added, changed and removed.
@@ -7595,8 +7618,14 @@ components:
     ModelAdminView:
       description: One entry of the list of models.
       type: object
-      required: [id, name, provider, model, baseURL, source, default, teamsMayUse, key, repositories, usedIn, mark, limit, used, teamLimits]
+      required: [id, name, provider, model, baseURL, source, default, teamsMayUse, key, repositories, usedIn, mark, limit, used, teamLimits, contextWindow, maxOutput]
       properties:
+        contextWindow:
+          type: [integer, 'null']
+          description: "null: opencode's own value."
+        maxOutput:
+          type: [integer, 'null']
+          description: "null: opencode's own value."
         id:
           type: string
           description: The entry's ID, which stays; `config` for the entry the config file's `llm:` block supplies, `config-1` to `config-4` for `llm.fallbacks`.
@@ -9573,8 +9602,11 @@ components:
     TeamModelsView:
       description: A team's own entries.
       type: object
-      required: [team, role, canEdit, models]
+      required: [team, role, canEdit, models, windowOff]
       properties:
+        windowOff:
+          type: string
+          description: Why Jobs get no context window or max output for now; empty when they do.
         team: {$ref: '#/components/schemas/TeamRef'}
         role:
           type: string
@@ -9588,8 +9620,14 @@ components:
     TeamModelView:
       description: One of a team's entries. It runs only for repositories its team owns.
       type: object
-      required: [id, name, provider, model, baseURL, key, usedIn, mark]
+      required: [id, name, provider, model, baseURL, key, usedIn, mark, contextWindow, maxOutput]
       properties:
+        contextWindow:
+          type: [integer, 'null']
+          description: "null: opencode's own value."
+        maxOutput:
+          type: [integer, 'null']
+          description: "null: opencode's own value."
         id: {type: string}
         name:
           type: string
@@ -9670,6 +9708,16 @@ components:
           type: string
           format: password
           description: At most 16 KiB. Sealed, and never returned.
+        contextWindow:
+          type: [integer, 'null']
+          minimum: 4096
+          maximum: 10000000
+          description: The model's context window in tokens. An entry holds both contextWindow and maxOutput, or neither (400 otherwise, judged after the change). Optional; null or left out means opencode's own value.
+        maxOutput:
+          type: [integer, 'null']
+          minimum: 1024
+          maximum: 10000000
+          description: At most contextWindow when that is set. Optional; null or left out means opencode's own value.
     UpdateTeamModelRequest:
       type: object
       additionalProperties: false
@@ -9685,6 +9733,16 @@ components:
           type: string
           format: password
           description: Replaces the key, and clears an auth mark. Never returned.
+        contextWindow:
+          type: [integer, 'null']
+          minimum: 4096
+          maximum: 10000000
+          description: The model's context window in tokens. An entry holds both contextWindow and maxOutput, or neither (400 otherwise, judged after the change). Leaving a field out keeps it on a PUT; null empties it, and both must be emptied together.
+        maxOutput:
+          type: [integer, 'null']
+          minimum: 1024
+          maximum: 10000000
+          description: At most contextWindow when that is set. Leaving a field out keeps it on a PUT; null empties it, and both must be emptied together.
     TeamView:
       description: One team.
       type: object

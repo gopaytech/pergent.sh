@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -297,5 +298,83 @@ func TestViewerSeesModelNameNotBaseURL(t *testing.T) {
 		if strings.Contains(rec.Body.String(), secret) {
 			t.Errorf("an admin's repository shows %q: %s", secret, rec.Body)
 		}
+	}
+}
+
+// A global entry holds a context window and a max output, both or neither:
+// a PUT judges the pair after the change (a missing field keeps, null
+// empties), and only a change is audited.
+func TestModelWindowAdmin(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, func(cfg *config.Config) {
+		cfg.LLM = config.LLM{Provider: "anthropic", Model: "from-config", APIKeyEnv: "PERGENT_TEST_LLM_KEY",
+			ContextWindow: 200_000, MaxOutput: 32_000}
+	})
+	c := e.operator()
+	intOf := func(p *int) int {
+		if p == nil {
+			return -1
+		}
+		return *p
+	}
+	read := func(id string) ModelAdminView {
+		return modelNamed(t, decode[ModelsAdminView](t, e.get(c, modelsURL), "GET models", http.StatusOK), id)
+	}
+	want := func(step string, v ModelAdminView, cw, mo int) {
+		t.Helper()
+		if intOf(v.ContextWindow) != cw || intOf(v.MaxOutput) != mo {
+			t.Errorf("%s: context window %v, max output %v; want %d, %d", step, v.ContextWindow, v.MaxOutput, cw, mo)
+		}
+	}
+	created := decode[ModelAdminView](t, e.sendJSON(c, "POST", modelsURL, map[string]any{"name": "big", "provider": "openai", "model": "gpt-x",
+		"apiKey": llmKeyOne, "contextWindow": 1_000_000, "maxOutput": 64_000}), "POST", http.StatusCreated)
+	want("POST", created, 1_000_000, 64_000)
+	url := modelsURL + "/" + created.ID
+
+	v := decode[ModelAdminView](t, e.sendJSON(c, "PUT", url, map[string]any{"baseURL": ""}), "PUT keeps", http.StatusOK)
+	want("PUT with neither field", v, 1_000_000, 64_000)
+	if got := auditDetails(e, "model_updated"); len(got) != 0 {
+		t.Errorf("a PUT that changed nothing was audited: %q", got)
+	}
+
+	// One value alone is refused, whatever side is emptied or changed.
+	const pair = "Set both Context window and Max output, or neither."
+	for name, body := range map[string]map[string]any{
+		"maxOutput null":     {"baseURL": "", "maxOutput": nil},
+		"contextWindow null": {"baseURL": "", "contextWindow": nil},
+	} {
+		if rec := e.sendJSON(c, "PUT", url, body); rec.Code != http.StatusBadRequest || errorOf(t, rec) != pair {
+			t.Errorf("PUT %s = %d %s, want 400 %q", name, rec.Code, rec.Body, pair)
+		}
+	}
+	rec := e.sendJSON(c, "PUT", url, map[string]any{"baseURL": "", "contextWindow": 100_000, "maxOutput": 200_000})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, rec), "to 100000, the entry's context window") {
+		t.Errorf("PUT output above context = %d %s", rec.Code, rec.Body)
+	}
+	rec = e.send(c, "PUT", url, `{"baseURL":"","contextWindow":1e6}`)
+	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgBadContextWindow {
+		t.Errorf("PUT 1e6 = %d %s", rec.Code, rec.Body)
+	}
+	want("after the refusals", read(created.ID), 1_000_000, 64_000)
+
+	v = decode[ModelAdminView](t, e.sendJSON(c, "PUT", url, map[string]any{"baseURL": "", "maxOutput": 128_000}), "PUT output", http.StatusOK)
+	want("PUT max output", v, 1_000_000, 128_000)
+	v = decode[ModelAdminView](t, e.sendJSON(c, "PUT", url, map[string]any{"baseURL": "", "contextWindow": nil, "maxOutput": nil}), "PUT clear", http.StatusOK)
+	want("PUT clear both", v, -1, -1)
+	v = decode[ModelAdminView](t, e.sendJSON(c, "PUT", url, map[string]any{"baseURL": "", "contextWindow": 1_000_000, "maxOutput": 64_000}), "PUT set", http.StatusOK)
+	want("PUT set both", v, 1_000_000, 64_000)
+	if got := auditDetails(e, "model_updated"); !slices.Equal(got, []string{
+		"big (openai / gpt-x) (max_output 64000 to 128000)",
+		"big (openai / gpt-x) (context_window 1000000 to none, max_output 128000 to none)",
+		"big (openai / gpt-x) (context_window none to 1000000, max_output none to 64000)",
+	}) {
+		t.Errorf("model_updated = %q", got)
+	}
+
+	list := decode[ModelsAdminView](t, e.get(c, modelsURL), "GET models", http.StatusOK)
+	want("config entry", modelNamed(t, list, store.ConfigModelID), 200_000, 32_000)
+	// The gate is not set in this test.
+	if list.WindowOff != "Jobs get no context window or max output for now: no pergent image reads them yet." {
+		t.Errorf("windowOff = %q", list.WindowOff)
 	}
 }
