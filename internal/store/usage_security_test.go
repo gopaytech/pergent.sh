@@ -336,12 +336,12 @@ func TestSecurityMetricsTotals(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `UPDATE security_findings SET severity = 'low' WHERE fingerprint = 'b'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.pool.Exec(ctx, `INSERT INTO security_findings (instance, project, fingerprint, severity, first_scan_id, last_scan_id, state)
-		SELECT instance, project, 'c', 'high', first_scan_id, last_scan_id, 'open' FROM security_findings WHERE fingerprint = 'a'`); err != nil {
+	if _, err := s.pool.Exec(ctx, `INSERT INTO security_findings (instance, project, fingerprint, severity, first_scan_id, last_scan_id, state, updated_at)
+		SELECT instance, project, 'c', 'high', first_scan_id, last_scan_id, 'open', updated_at FROM security_findings WHERE fingerprint = 'a'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.pool.Exec(ctx, `INSERT INTO security_findings (instance, project, fingerprint, severity, first_scan_id, last_scan_id, state)
-		SELECT instance, project, 'd', 'high', first_scan_id, last_scan_id, 'fixed' FROM security_findings WHERE fingerprint = 'a'`); err != nil {
+	if _, err := s.pool.Exec(ctx, `INSERT INTO security_findings (instance, project, fingerprint, severity, first_scan_id, last_scan_id, state, updated_at)
+		SELECT instance, project, 'd', 'high', first_scan_id, last_scan_id, 'fixed', updated_at FROM security_findings WHERE fingerprint = 'a'`); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.MetricsTotals(ctx)

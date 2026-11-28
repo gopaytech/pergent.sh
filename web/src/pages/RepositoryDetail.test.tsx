@@ -21,6 +21,7 @@ import {
   skillTokens,
   ssoAdmin,
   viewer,
+  securitySettings,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
@@ -45,6 +46,8 @@ const base = {
   "GET /api/repositories/main/acme/payments/reviewers": { body: reviewersNone },
   "GET /api/repositories/main/acme/widgets/reviewers": { body: reviewersNone },
   "GET /api/repositories/main/acme/payments/skill-results/tokens": { body: [] },
+  "GET /api/repositories/main/acme/payments/security/settings": { body: securitySettings },
+  "GET /api/repositories/main/acme/payments/security/chain": { body: { ...chainRepoInherit, source: "chain", team: "" } },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
 };
 
@@ -1208,6 +1211,8 @@ describe("RepositorySettings: Linked repositories", () => {
     "GET /api/repositories/hub/acme/gadgets/teams": { body: repoTeams },
     "GET /api/repositories/hub/acme/gadgets/chain": { body: chainRepoInherit },
     "GET /api/repositories/hub/acme/gadgets/reviewers": { body: reviewersNone },
+    "GET /api/repositories/hub/acme/gadgets/security/settings": { body: securitySettings },
+    "GET /api/repositories/hub/acme/gadgets/security/chain": { body: { ...chainRepoInherit, source: "chain", team: "" } },
     [`GET ${linkablePath}`]: { body: linkable },
   };
   const withLinks = (enabled: boolean) => ({

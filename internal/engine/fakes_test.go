@@ -369,9 +369,11 @@ func testConfig(gitlabURL string) *config.Config {
 		}},
 		LLM: config.LLM{Provider: "anthropic", Model: "claude-sonnet-4", APIKeyEnv: "OPENCODE_API_KEY"},
 		Jobs: config.Jobs{
-			Namespace: testNamespace, Image: testImage, MaxRunning: 5,
+			Namespace: testNamespace, Image: testImage, SecurityImage: testSecurityImage, MaxRunning: 5,
 			Timeout: 10 * time.Minute, MaxTurns: config.DefaultMaxTurns, Concurrency: 4,
 		},
+		// What the loader sets when the security: block is left out.
+		Security: config.Security{MaxRunning: 1, MaxSourceBytes: 500 << 20},
 	}
 }
 
