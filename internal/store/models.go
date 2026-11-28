@@ -29,21 +29,23 @@ const modelsLockKey = 0x6d6f646c // "modl"
 // sealed with PERGENT_SH_SECRET_KEY; nil when none is set. Name is unique
 // among global entries ignoring case; a row with no name (the previous
 // release writes none) reads as provider/model. TeamsMayUse lets team and
-// repository chains name it.
+// repository chains name it. ContextWindow and MaxOutput are token counts;
+// 0 is not set (stored as NULL).
 type LLMModel struct {
 	ID, Name, Provider, Model, BaseURL string
 	APIKeySealed                       []byte
 	Default, TeamsMayUse               bool
+	ContextWindow, MaxOutput           int
 	CreatedAt, UpdatedAt               time.Time
 }
 
 const modelColumns = `id, COALESCE(name, provider || '/' || model), provider, model, base_url, api_key_sealed, is_default,
-	teams_may_use, created_at, updated_at`
+	teams_may_use, COALESCE(context_window, 0), COALESCE(max_output, 0), created_at, updated_at`
 
 func scanModel(row pgx.Row) (LLMModel, error) {
 	var m LLMModel
 	err := row.Scan(&m.ID, &m.Name, &m.Provider, &m.Model, &m.BaseURL, &m.APIKeySealed, &m.Default, &m.TeamsMayUse,
-		&m.CreatedAt, &m.UpdatedAt)
+		&m.ContextWindow, &m.MaxOutput, &m.CreatedAt, &m.UpdatedAt)
 	return m, err
 }
 
@@ -121,10 +123,11 @@ func (s *Store) CreateLLMModel(ctx context.Context, m LLMModel, at time.Time) (L
 		}
 	}
 	out, err := scanModel(tx.QueryRow(ctx, `INSERT INTO llm_models (id, name, provider, model, base_url, api_key_sealed, is_default,
-			teams_may_use, created_at, updated_at)
+			teams_may_use, context_window, max_output, created_at, updated_at)
 		VALUES (gen_random_uuid()::text, NULLIF($1, ''), $2, $3, $4, $5, NOT EXISTS (SELECT 1 FROM llm_models WHERE is_default),
-			$6, $7, $7)
-		RETURNING `+modelColumns, m.Name, m.Provider, m.Model, m.BaseURL, m.APIKeySealed, m.TeamsMayUse, at))
+			$6, NULLIF($7, 0), NULLIF($8, 0), $9, $9)
+		RETURNING `+modelColumns, m.Name, m.Provider, m.Model, m.BaseURL, m.APIKeySealed, m.TeamsMayUse,
+		m.ContextWindow, m.MaxOutput, at))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return LLMModel{}, ErrNameTaken
@@ -208,6 +211,15 @@ func (s *Store) SetLLMModelMeta(ctx context.Context, id string, name *string, te
 		return false, nil
 	}
 	return true, tx.Commit(ctx)
+}
+
+// SetLLMModelWindow sets the context window and max output of an entry; 0
+// clears one. found is false when there is no such entry. It takes no list
+// lock: llm_settings does not change.
+func (s *Store) SetLLMModelWindow(ctx context.Context, id string, contextWindow, maxOutput int, at time.Time) (found bool, err error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE llm_models SET context_window = NULLIF($2, 0), max_output = NULLIF($3, 0), updated_at = $4
+		WHERE id = $1`, id, contextWindow, maxOutput, at)
+	return tag.RowsAffected() > 0, err
 }
 
 // SetDefaultLLMModel makes an entry the default, in place of the one that is,

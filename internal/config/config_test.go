@@ -1930,6 +1930,95 @@ func TestConfigFallbacks(t *testing.T) {
 	}
 }
 
+func TestConfigModelWindow(t *testing.T) {
+	body := minimalYAML + "dashboard:\n  url: https://pergent.example.com\n"
+	main := "llm:\n  provider: anthropic\n  model: claude-sonnet-4\n"
+	cfg, err := Load(writeConfig(t, body+main+"  context_window: 1000000\n  max_output: 64000\n"+
+		"  fallbacks:\n    - provider: openai\n      model: gpt-a\n      api_key_env: K\n      context_window: 200000\n      max_output: 128000\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LLM.ContextWindow != 1_000_000 || cfg.LLM.MaxOutput != 64_000 {
+		t.Errorf("LLM = %+v", cfg.LLM)
+	}
+	if want := (LLM{Provider: "openai", Model: "gpt-a", APIKeyEnv: "K", ContextWindow: 200_000, MaxOutput: 128_000}); len(cfg.LLMFallbacks) != 1 || cfg.LLMFallbacks[0] != want {
+		t.Errorf("LLMFallbacks = %+v, want %+v", cfg.LLMFallbacks, want)
+	}
+	for _, tc := range []struct{ yaml, want string }{
+		{main + "  context_window: 4095\n  max_output: 1024\n", "llm.context_window must be from 4096 to 10000000, got 4095"},
+		{main + "  context_window: 10000001\n  max_output: 1024\n", "llm.context_window must be from 4096 to 10000000"},
+		{main + "  context_window: 0\n", "0 is not a token count"},
+		{main + "  context_window: -1\n  max_output: 1024\n", "llm.context_window"},
+		{main + "  context_window: 1.5e6\n  max_output: 1024\n", "whole number"},
+		{main + "  context_window: 100000\n  max_output: 64000.5\n", "whole number"},
+		{main + "  context_window: 100000\n  max_output: 1M\n", "whole number"},
+		{main + "  context_window: 10000000\n  max_output: 1023\n", "llm.max_output must be from 1024 to 10000000 (the context window), got 1023"},
+		{main + "  context_window: 100000\n  max_output: 100001\n", "llm.max_output must be from 1024 to 100000 (the context window), got 100001"},
+		{main + "  context_window: 100000\n", "llm: set both context_window and max_output, or neither"},
+		{main + "  max_output: 64000\n", "llm: set both context_window and max_output, or neither"},
+		{main + "  fallbacks:\n    - {provider: o, model: a, api_key_env: K}\n    - {provider: o, model: b, api_key_env: K, max_output: 9000}\n", "llm.fallbacks[1]: set both context_window and max_output, or neither"},
+		{main + "  fallbacks:\n    - {provider: o, model: a, api_key_env: K}\n    - {provider: o, model: b, api_key_env: K, context_window: 8192, max_output: 9000}\n",
+			"llm.fallbacks[1].max_output must be from 1024 to 8192 (the context window), got 9000"},
+	} {
+		if _, err := Load(writeConfig(t, body+tc.yaml)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("Load(%q) = %v; want %s", tc.yaml, err, tc.want)
+		}
+	}
+	// Without the keys nothing changes.
+	cfg, err = Load(writeConfig(t, body+main))
+	if err != nil || cfg.LLM.ContextWindow != 0 || cfg.LLM.MaxOutput != 0 {
+		t.Fatalf("Load without the keys = %+v, %v", cfg.LLM, err)
+	}
+}
+
+func TestValidModelWindow(t *testing.T) {
+	for _, tc := range []struct {
+		cw, mo TokenCount
+		want   string // "" means valid
+	}{
+		{0, 0, ""},
+		{200_000, 64_000, ""},
+		{8192, 8192, ""},
+		{200_000, 0, "set both context_window and max_output, or neither"},
+		{0, 64_000, "set both context_window and max_output, or neither"},
+		{4095, 1024, "context_window must be from 4096 to 10000000, got 4095"},
+		{10_000_001, 1024, "context_window must be from 4096 to 10000000, got 10000001"},
+		{100_000, 1023, "max_output must be from 1024 to 100000 (the context window), got 1023"},
+		{100_000, 100_001, "max_output must be from 1024 to 100000 (the context window), got 100001"},
+	} {
+		err := ValidModelWindow(tc.cw, tc.mo)
+		if (tc.want == "") != (err == nil) || (err != nil && err.Error() != tc.want) {
+			t.Errorf("ValidModelWindow(%d, %d) = %v, want %q", tc.cw, tc.mo, err, tc.want)
+		}
+	}
+}
+
+func TestModelWindowRanges(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		got  bool
+		want bool
+	}{
+		{"window 4096", ValidContextWindow(4096), true},
+		{"window 10M", ValidContextWindow(10_000_000), true},
+		{"window 4095", ValidContextWindow(4095), false},
+		{"window 0", ValidContextWindow(0), false},
+		{"window 10M+1", ValidContextWindow(10_000_001), false},
+		{"output 1024", ValidMaxOutput(1024, 0), true},
+		{"output = window", ValidMaxOutput(200_000, 200_000), true},
+		{"output 1023", ValidMaxOutput(1023, 0), false},
+		{"output > window", ValidMaxOutput(200_001, 200_000), false},
+		{"output 10M+1", ValidMaxOutput(10_000_001, 0), false},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+	if MaxOutputCeiling(0) != 10_000_000 || MaxOutputCeiling(200_000) != 200_000 {
+		t.Errorf("MaxOutputCeiling = %d, %d", MaxOutputCeiling(0), MaxOutputCeiling(200_000))
+	}
+}
+
 func TestConfigQuotaCooldown(t *testing.T) {
 	body := minimalYAML + "dashboard:\n  url: https://pergent.example.com\n"
 	cfg, err := Load(writeConfig(t, body))

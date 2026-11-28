@@ -129,6 +129,7 @@ func BuildSecurityJob(p SecurityJobParams) *batchv1.Job {
 	if p.LLM.BaseURL != "" {
 		env = append(env, corev1.EnvVar{Name: "OPENCODE_BASE_URL", Value: p.LLM.BaseURL})
 	}
+	env = append(env, windowEnv(p.LLM, p.Image)...)
 	env = append(env,
 		secretEnv("OPENCODE_API_KEY", secret, keyLLMKey),
 		secretEnv("PERGENT_RESULT_TOKEN", secret, keyResultToken),

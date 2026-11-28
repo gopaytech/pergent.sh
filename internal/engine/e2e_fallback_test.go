@@ -97,6 +97,35 @@ func TestE2EFallbackQuota(t *testing.T) {
 	}
 }
 
+// Each attempt gets the context window and max output of the entry it runs:
+// the fallback entry has none, so its Job gets neither.
+func TestE2EFallbackUsesNextEntryWindow(t *testing.T) {
+	modelWindowFloor(t, "v0.5.0") // testImage is v0.5.2
+	e := newE2E(t)
+	env := e.env
+	team := teamOwning(t, env, "Payments")
+	a := addTeamModelWindow(t, env, team, "team-a", "gpt-team-a", "key-team-a", 1_000_000, 64_000)
+	b := addTeamModelWindow(t, env, team, "team-b", "gpt-team-b", "key-team-b", 0, 0)
+	saveChain(t, env, store.Chain{Scope: store.ScopeTeam, TeamID: team, Entries: []store.EntryRef{a, b}})
+	head := sha('a')
+	servePublish(env, 1, head)
+	env.Enqueue(1, head)
+
+	first := e.attempt(t, "key-team-a", failedOn(t, head, "quota"))
+	v := jobEnv(env, first)
+	if v["PERGENT_CONTEXT_LIMIT"] != "1000000" || v["PERGENT_OUTPUT_LIMIT"] != "64000" {
+		t.Errorf("first attempt env = %v, want both set", v)
+	}
+	second := e.attempt(t, "key-team-b", clean(t, head), first)
+	v = jobEnv(env, second)
+	if _, ok := v["PERGENT_CONTEXT_LIMIT"]; ok {
+		t.Errorf("second attempt has PERGENT_CONTEXT_LIMIT: %v", v)
+	}
+	if _, ok := v["PERGENT_OUTPUT_LIMIT"]; ok {
+		t.Errorf("second attempt has PERGENT_OUTPUT_LIMIT: %v", v)
+	}
+}
+
 // A rejected key falls back the same way, and its mark has no end.
 func TestE2EFallbackAuth(t *testing.T) {
 	t.Parallel()

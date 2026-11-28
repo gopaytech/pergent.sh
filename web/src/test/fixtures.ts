@@ -611,6 +611,8 @@ export const modelSonnet: ModelAdminView = {
   provider: "anthropic",
   model: "claude-sonnet",
   baseURL: "",
+  contextWindow: null,
+  maxOutput: null,
   source: "dashboard",
   default: true,
   teamsMayUse: false,
@@ -628,6 +630,8 @@ export const modelOpus: ModelAdminView = {
   provider: "anthropic",
   model: "claude-opus",
   baseURL: "https://llm.example.com/v1",
+  contextWindow: null,
+  maxOutput: null,
   source: "dashboard",
   default: false,
   teamsMayUse: false,
@@ -641,7 +645,7 @@ export const modelOpus: ModelAdminView = {
 };
 
 // The list of models: three repositories follow the default.
-export const models: ModelsAdminView = { canSetDefault: true, followingDefault: 3, models: [modelSonnet, modelOpus] };
+export const models: ModelsAdminView = { canSetDefault: true, followingDefault: 3, windowOff: "", models: [modelSonnet, modelOpus] };
 
 export const instanceGitLab: InstanceAdminView = {
   name: "main",
@@ -1140,6 +1144,8 @@ export const teamModelQwen: TeamModelView = {
   provider: "openrouter",
   model: "qwen/qwen3.5",
   baseURL: "https://router.example.com/v1",
+  contextWindow: null,
+  maxOutput: null,
   key: { set: true, updatedAt: minutesAgo(60) },
   usedIn: ["team Payments", "main/acme/payments"],
   mark: null,
@@ -1149,6 +1155,7 @@ export const teamModelsPayments: TeamModelsView = {
   team: { id: 2, name: "Payments" },
   role: "maintainer",
   canEdit: true,
+  windowOff: "",
   models: [teamModelQwen],
 };
 

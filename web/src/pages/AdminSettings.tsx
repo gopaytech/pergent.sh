@@ -32,7 +32,7 @@ import { FoldHead, countText } from "../Fold";
 import { useWrite } from "../layout/write";
 import RuleSetPicker from "../RuleSetPicker";
 import MarkBanner, { markText } from "../MarkBanner";
-import { AddModelForm, EditModelForm } from "../ModelForms";
+import { AddModelForm, EditModelForm, windowText } from "../ModelForms";
 import { QuotaLine, parseQuota, quotaMax } from "../quota";
 import { blockingHelp, blockingLabel, failureHelp, failureLabel, notUsedNote } from "../statusSettings";
 import { ErrorBox, Loading, PageHeader, Switch, bytesText, noFill, secretText } from "../ui";
@@ -778,12 +778,13 @@ function Models({ v }: { v: ModelsAdminView }) {
           )}
           {v.models.length === 0 && <div className={cardText}>No model yet. Add one with Add model; the first is the default.</div>}
           {v.models.map((m) => (
-            <ModelRow key={m.id} m={m} canSetDefault={v.canSetDefault} following={v.followingDefault} />
+            <ModelRow key={m.id} m={m} canSetDefault={v.canSetDefault} following={v.followingDefault} windowOff={v.windowOff} />
           ))}
           {adding && (
             <AddModelForm<ModelAdminView>
               path="/api/admin/models"
               teamsMayUse
+              windowOff={v.windowOff}
               onCancel={() => setAdding(false)}
               onAdded={() => {
                 // The first entry is the default: the list says which.
@@ -816,7 +817,17 @@ function modelsSummary(v: ModelsAdminView) {
 const fmt = (n: number) => n.toLocaleString("en-US");
 const tokensText = (used: number, limit: number | null) => `${fmt(used)}${limit === null ? "" : ` of ${fmt(limit)}`} tokens this month`;
 
-function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDefault: boolean; following: number }) {
+function ModelRow({
+  m,
+  canSetDefault,
+  following,
+  windowOff,
+}: {
+  m: ModelAdminView;
+  canSetDefault: boolean;
+  following: number;
+  windowOff: string;
+}) {
   const client = useQueryClient();
   const write = useWrite();
   // A row shows its name, model and tokens; the rest opens on a click.
@@ -875,6 +886,11 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
         <span className="text-muted-foreground min-w-0 grow truncate font-mono text-xs">
           {m.provider} / {m.model}
         </span>
+        {windowText(m.contextWindow, m.maxOutput) !== "" && (
+          <span className="text-muted-foreground text-xs whitespace-nowrap" title="Context window / Max output">
+            {windowText(m.contextWindow, m.maxOutput)}
+          </span>
+        )}
         <span className="text-muted-foreground text-xs whitespace-nowrap">{tokensText(m.used, m.limit)}</span>
       </button>
       <div className="grid justify-items-stretch gap-3 pr-4 pb-4 pl-9" hidden={!open}>
@@ -949,7 +965,7 @@ function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDe
         )}
         {!fromConfig && m.default && !editing && <div className={hint}>Make another model the default to remove this one.</div>}
         {editing && (
-          <EditModelForm m={m} path={`/api/admin/models/${encodeURIComponent(m.id)}`} onDone={() => setEditing(false)} onSaved={changed} />
+          <EditModelForm m={m} path={`/api/admin/models/${encodeURIComponent(m.id)}`} windowOff={windowOff} onDone={() => setEditing(false)} onSaved={changed} />
         )}
         {makeDefault.isError && <ErrorBox error={makeDefault.error} />}
         {remove.isError && <ErrorBox error={remove.error} />}

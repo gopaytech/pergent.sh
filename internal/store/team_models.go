@@ -14,20 +14,24 @@ var ErrNameTaken = errors.New("store: an entry with this name exists")
 
 // TeamModel is one of a team's own entries. APIKeySealed is the API key
 // sealed with PERGENT_SH_SECRET_KEY; nil when none is set. It runs only for a
-// repository its team owns.
+// repository its team owns. ContextWindow and MaxOutput are token counts; 0
+// is not set (stored as NULL).
 type TeamModel struct {
 	ID                             string
 	TeamID                         int64
 	Name, Provider, Model, BaseURL string
 	APIKeySealed                   []byte
+	ContextWindow, MaxOutput       int
 	CreatedAt, UpdatedAt           time.Time
 }
 
-const teamModelColumns = `id, team_id, name, provider, model, base_url, api_key_sealed, created_at, updated_at`
+const teamModelColumns = `id, team_id, name, provider, model, base_url, api_key_sealed,
+	COALESCE(context_window, 0), COALESCE(max_output, 0), created_at, updated_at`
 
 func scanTeamModel(row pgx.Row) (TeamModel, error) {
 	var m TeamModel
-	err := row.Scan(&m.ID, &m.TeamID, &m.Name, &m.Provider, &m.Model, &m.BaseURL, &m.APIKeySealed, &m.CreatedAt, &m.UpdatedAt)
+	err := row.Scan(&m.ID, &m.TeamID, &m.Name, &m.Provider, &m.Model, &m.BaseURL, &m.APIKeySealed,
+		&m.ContextWindow, &m.MaxOutput, &m.CreatedAt, &m.UpdatedAt)
 	return m, err
 }
 
@@ -53,9 +57,10 @@ func (s *Store) AllTeamModels(ctx context.Context) ([]TeamModel, error) {
 // both times) and returns it as stored. A name the team already uses,
 // ignoring case, is ErrNameTaken.
 func (s *Store) CreateTeamModel(ctx context.Context, m TeamModel, at time.Time) (TeamModel, error) {
-	out, err := scanTeamModel(s.pool.QueryRow(ctx, `INSERT INTO team_models (team_id, name, provider, model, base_url, api_key_sealed, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING `+teamModelColumns,
-		m.TeamID, m.Name, m.Provider, m.Model, m.BaseURL, m.APIKeySealed, at))
+	out, err := scanTeamModel(s.pool.QueryRow(ctx, `INSERT INTO team_models (team_id, name, provider, model, base_url, api_key_sealed,
+			context_window, max_output, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, 0), NULLIF($8, 0), $9, $9) RETURNING `+teamModelColumns,
+		m.TeamID, m.Name, m.Provider, m.Model, m.BaseURL, m.APIKeySealed, m.ContextWindow, m.MaxOutput, at))
 	if isUniqueViolation(err) {
 		return TeamModel{}, ErrNameTaken
 	}
@@ -92,6 +97,14 @@ func (s *Store) UpdateTeamModel(ctx context.Context, teamID int64, id string, na
 		}
 	}
 	return true, tx.Commit(ctx)
+}
+
+// SetTeamModelWindow sets the context window and max output of an entry of
+// teamID; 0 clears one. found is false when the team has no such entry.
+func (s *Store) SetTeamModelWindow(ctx context.Context, teamID int64, id string, contextWindow, maxOutput int, at time.Time) (found bool, err error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE team_models SET context_window = NULLIF($3, 0), max_output = NULLIF($4, 0), updated_at = $5
+		WHERE team_id = $1 AND id = $2`, teamID, id, contextWindow, maxOutput, at)
+	return tag.RowsAffected() > 0, err
 }
 
 // DeleteTeamModel removes an entry of teamID, takes it out of every chain

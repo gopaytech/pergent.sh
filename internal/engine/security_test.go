@@ -130,6 +130,42 @@ func secAdmin(project string) security.Start {
 	return security.Start{Instance: testInstance, Project: project, Actor: "root", Admin: true}
 }
 
+// A scan checks jobs.security_image against the version gate, not jobs.image.
+func TestSecurityScanModelWindowImage(t *testing.T) {
+	for _, c := range []struct {
+		name, floor, image string
+		want               bool
+	}{
+		// jobs.image (v0.5.2) passes, the scan image (v0.0.0-test) does not.
+		{"scan image below", "v0.5.0", "", false},
+		// jobs.image is below, the scan image is above.
+		{"scan image above", "v1.0.0", "ghcr.io/x/pergent-security:v9.9.9", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			modelWindowFloor(t, c.floor)
+			env := newSecurityEnv(t)
+			env.Engine.Config.LLM.ContextWindow, env.Engine.Config.LLM.MaxOutput = 1_000_000, 64_000
+			if c.image != "" {
+				env.Engine.SecurityImage = c.image
+			}
+			sc := secQueue(t, env, testProjectPath, testProjectID, time.Minute)
+			secLaunch(env)
+			j := secJob(t, env, sc.ID)
+			if j == nil {
+				t.Fatalf("no Job\n%s", env.Logs())
+			}
+			ctx, okC := secEnvOf(j, "PERGENT_CONTEXT_LIMIT")
+			out, okO := secEnvOf(j, "PERGENT_OUTPUT_LIMIT")
+			if okC != c.want || okO != c.want {
+				t.Fatalf("context %q (%v), output %q (%v); want set = %v", ctx, okC, out, okO, c.want)
+			}
+			if c.want && (ctx != "1000000" || out != "64000") {
+				t.Errorf("context %q, output %q", ctx, out)
+			}
+		})
+	}
+}
+
 // With no way out for the scan Jobs, no scan starts and nothing is asked of
 // the platform.
 func TestSecurityStartOffWithoutEgress(t *testing.T) {

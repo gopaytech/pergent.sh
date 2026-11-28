@@ -359,6 +359,105 @@ type LLM struct {
 	Model     string `yaml:"model"`
 	BaseURL   string `yaml:"base_url"`
 	APIKeyEnv string `yaml:"api_key_env"`
+	// ContextWindow is the model's context window in tokens, input and
+	// output together (0: not set, opencode's own value is used).
+	ContextWindow TokenCount `yaml:"context_window"`
+	// MaxOutput is the most tokens one reply may need, thinking included
+	// (0: not set).
+	MaxOutput TokenCount `yaml:"max_output"`
+}
+
+// Token counts for ContextWindow and MaxOutput.
+const (
+	MinContextWindow = 4096
+	MaxContextWindow = 10_000_000
+	MinMaxOutput     = 1024
+)
+
+// TokenCount is a number of tokens in a config file: a whole number, never
+// 0 (leave the key out instead). Its range is checked by Validate, so the
+// message names the key.
+type TokenCount int
+
+func (n *TokenCount) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode || value.Tag != "!!int" {
+		return fmt.Errorf("line %d: must be a whole number of tokens", value.Line)
+	}
+	var v int
+	if err := value.Decode(&v); err != nil {
+		return fmt.Errorf("line %d: must be a whole number of tokens", value.Line)
+	}
+	if v == 0 {
+		return fmt.Errorf("line %d: 0 is not a token count; leave the key out to use opencode's value", value.Line)
+	}
+	*n = TokenCount(v)
+	return nil
+}
+
+// ValidContextWindow reports whether n is a context window from
+// MinContextWindow to MaxContextWindow. 0 is false: callers skip an empty one.
+func ValidContextWindow(n int) bool { return n >= MinContextWindow && n <= MaxContextWindow }
+
+// MaxOutputCeiling is the most a max output may be: the context window when
+// it is set, else MaxContextWindow.
+func MaxOutputCeiling(contextWindow int) int {
+	if contextWindow > 0 {
+		return contextWindow
+	}
+	return MaxContextWindow
+}
+
+// ValidMaxOutput reports whether n is a max output from MinMaxOutput to
+// MaxOutputCeiling(contextWindow).
+func ValidMaxOutput(n, contextWindow int) bool {
+	return n >= MinMaxOutput && n <= MaxOutputCeiling(contextWindow)
+}
+
+// checkWindow checks the context window and max output of one entry; prefix
+// names it in the message ("llm", "llm.fallbacks[1]").
+func checkWindow(prefix string, l LLM) []error {
+	return windowErrors(prefix, int(l.ContextWindow), int(l.MaxOutput))
+}
+
+// ValidModelWindow checks the context window and max output of one model
+// entry (0 is not set): both or neither, then each in its range. The error
+// names the keys without an entry prefix, for the API.
+func ValidModelWindow(contextWindow, maxOutput TokenCount) error {
+	if errs := windowErrors("", int(contextWindow), int(maxOutput)); len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
+}
+
+// windowErrors is the one check behind checkWindow and ValidModelWindow.
+// prefix "" gives bare key names. opencode merges the two over its own
+// values, so an unset one would replace the known value with 0: an entry
+// sets both or neither.
+func windowErrors(prefix string, cw, mo int) []error {
+	key := func(k string) string {
+		if prefix == "" {
+			return k
+		}
+		return prefix + "." + k
+	}
+	if (cw == 0) != (mo == 0) {
+		if prefix == "" {
+			return []error{errors.New("set both context_window and max_output, or neither")}
+		}
+		return []error{fmt.Errorf("%s: set both context_window and max_output, or neither", prefix)}
+	}
+	var errs []error
+	if cw != 0 && !ValidContextWindow(cw) {
+		errs = append(errs, fmt.Errorf("%s must be from %d to %d, got %d", key("context_window"), MinContextWindow, MaxContextWindow, cw))
+	}
+	if mo != 0 && !ValidMaxOutput(mo, cw) {
+		if cw > 0 {
+			errs = append(errs, fmt.Errorf("%s must be from %d to %d (the context window), got %d", key("max_output"), MinMaxOutput, MaxOutputCeiling(cw), mo))
+		} else {
+			errs = append(errs, fmt.Errorf("%s must be from %d to %d, got %d", key("max_output"), MinMaxOutput, MaxContextWindow, mo))
+		}
+	}
+	return errs
 }
 
 // Security is the security: block: how security scans run.
@@ -605,6 +704,7 @@ func (c *Config) checkFallbacks() []error {
 		if f.APIKeyEnv == "" {
 			add("llm.fallbacks[%d].api_key_env is required", i)
 		}
+		errs = append(errs, checkWindow(fmt.Sprintf("llm.fallbacks[%d]", i), f)...)
 	}
 	if c.Fallback.QuotaCooldown != 0 && c.Fallback.QuotaCooldown < MinQuotaCooldown {
 		add("fallback.quota_cooldown must be at least 1m, got %s", c.Fallback.QuotaCooldown)
@@ -1051,6 +1151,7 @@ func (c *Config) Validate() error {
 		if c.LLM.APIKeyEnv == "" {
 			add("llm.api_key_env is required")
 		}
+		errs = append(errs, checkWindow("llm", c.LLM)...)
 	}
 	errs = append(errs, c.checkFallbacks()...)
 

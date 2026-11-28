@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -14,8 +15,8 @@ import (
 
 const (
 	msgTeamWrite        = "only maintainers of this team change its models and chain"
-	msgBadTeamModelBody = `the body must be {"name": ..., "provider": ..., "model": ..., "baseURL": ..., "apiKey": ...}`
-	msgBadTeamModelEdit = `the body must be {"name": ..., "baseURL": ..., "apiKey": ...}, each optional: an entry's provider and model never change`
+	msgBadTeamModelBody = `the body must be {"name": ..., "provider": ..., "model": ..., "baseURL": ..., "apiKey": ..., "contextWindow": ..., "maxOutput": ...}`
+	msgBadTeamModelEdit = `the body must be {"name": ..., "baseURL": ..., "apiKey": ..., "contextWindow": ..., "maxOutput": ...}, each optional: an entry's provider and model never change`
 )
 
 // teamAPIRoutes adds the user area's team API to mux: session routes, each
@@ -194,7 +195,8 @@ func (d *Dashboard) teamPage(w http.ResponseWriter, r *http.Request) {
 // teamModelView is a team entry. Its base URL is shown to those who may
 // change it (edit) only; its key is never shown.
 func (d *Dashboard) teamModelView(m store.TeamModel, l modelLists, edit bool) TeamModelView {
-	v := TeamModelView{ID: m.ID, Name: m.Name, Provider: m.Provider, Model: m.Model}
+	v := TeamModelView{ID: m.ID, Name: m.Name, Provider: m.Provider, Model: m.Model,
+		ContextWindow: tokensOrNull(m.ContextWindow), MaxOutput: tokensOrNull(m.MaxOutput)}
 	if edit {
 		v.BaseURL = m.BaseURL
 	}
@@ -261,7 +263,8 @@ func (d *Dashboard) teamModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	edit := role >= RoleMaintainer
-	v := TeamModelsView{Team: TeamRef{ID: t.ID, Name: t.Name}, Role: role.String(), CanEdit: edit, Models: []TeamModelView{}}
+	v := TeamModelsView{Team: TeamRef{ID: t.ID, Name: t.Name}, Role: role.String(), CanEdit: edit, Models: []TeamModelView{},
+		WindowOff: modelWindowOff(d.cfg.Jobs.Image, d.cfg.Jobs.SecurityImage)}
 	for _, m := range rows {
 		v.Models = append(v.Models, d.teamModelView(m, l, edit))
 	}
@@ -282,6 +285,9 @@ func (d *Dashboard) createTeamModel(w http.ResponseWriter, r *http.Request) {
 		Model    string  `json:"model"`
 		BaseURL  string  `json:"baseURL"`
 		APIKey   *string `json:"apiKey"`
+
+		ContextWindow json.RawMessage `json:"contextWindow"`
+		MaxOutput     json.RawMessage `json:"maxOutput"`
 	}
 	if err := decodeStrict(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, msgBadTeamModelBody)
@@ -313,8 +319,13 @@ func (d *Dashboard) createTeamModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msgBadKey)
 		return
 	}
+	contextWindow, maxOutput, ok := windowBody(w, in.ContextWindow, in.MaxOutput, 0, 0)
+	if !ok {
+		return
+	}
 	m, err := d.Store.CreateTeamModel(ctx, store.TeamModel{TeamID: t.ID, Name: name, Provider: in.Provider, Model: in.Model,
-		BaseURL: in.BaseURL, APIKeySealed: d.Auth.box.Seal([]byte(*in.APIKey))}, d.now())
+		BaseURL: in.BaseURL, APIKeySealed: d.Auth.box.Seal([]byte(*in.APIKey)),
+		ContextWindow: contextWindow, MaxOutput: maxOutput}, d.now())
 	if errors.Is(err, store.ErrNameTaken) {
 		writeError(w, http.StatusConflict, msgNameTaken)
 		return
@@ -344,6 +355,9 @@ func (d *Dashboard) updateTeamModel(w http.ResponseWriter, r *http.Request) {
 		Name    *string `json:"name"`
 		BaseURL *string `json:"baseURL"`
 		APIKey  *string `json:"apiKey"`
+
+		ContextWindow json.RawMessage `json:"contextWindow"`
+		MaxOutput     json.RawMessage `json:"maxOutput"`
 	}
 	if err := decodeStrict(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, msgBadTeamModelEdit)
@@ -384,6 +398,10 @@ func (d *Dashboard) updateTeamModel(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
+	contextWindow, maxOutput, ok := windowBody(w, in.ContextWindow, in.MaxOutput, before.ContextWindow, before.MaxOutput)
+	if !ok {
+		return
+	}
 	found, err = d.Store.UpdateTeamModel(ctx, t.ID, id, name, baseURL, sealed, d.now())
 	if errors.Is(err, store.ErrNameTaken) {
 		writeError(w, http.StatusConflict, msgNameTaken)
@@ -398,9 +416,22 @@ func (d *Dashboard) updateTeamModel(w http.ResponseWriter, r *http.Request) {
 		notFound(w) // removed meanwhile
 		return
 	}
+	if contextWindow != before.ContextWindow || maxOutput != before.MaxOutput {
+		found, err = d.Store.SetTeamModelWindow(ctx, t.ID, id, contextWindow, maxOutput, d.now())
+		if err != nil {
+			d.Log.Error("dashboard: changing a team model failed", "team", t.ID, "model_id", id, "error", d.registry.Redact(err.Error()))
+			writeError(w, http.StatusInternalServerError, msgWriteFailed)
+			return
+		}
+		if !found {
+			notFound(w) // removed meanwhile
+			return
+		}
+	}
 	d.reloadModels(ctx, hidden)
 
 	after := before
+	after.ContextWindow, after.MaxOutput = contextWindow, maxOutput
 	var changed []string
 	if name != nil && *name != before.Name {
 		after.Name = *name
@@ -414,6 +445,7 @@ func (d *Dashboard) updateTeamModel(w http.ResponseWriter, r *http.Request) {
 		after.APIKeySealed, after.UpdatedAt = sealed, d.now()
 		changed = append(changed, "api_key")
 	}
+	changed = append(changed, windowChanges(before.ContextWindow, before.MaxOutput, contextWindow, maxOutput)...)
 	if len(changed) > 0 {
 		detail := t.Name + ": " + modelDetail(after.Name, after.Provider, after.Model) + " (" + strings.Join(changed, ", ") + ")"
 		d.Log.Info("dashboard: team model updated", "team", t.ID, "model_id", id, "fields", changed, "by", se.Username)

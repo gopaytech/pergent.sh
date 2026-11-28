@@ -1389,6 +1389,8 @@ type TeamModelsView struct {
 	Role    string          `json:"role"`
 	CanEdit bool            `json:"canEdit"`
 	Models  []TeamModelView `json:"models"`
+	// WindowOff is ModelsAdminView's.
+	WindowOff string `json:"windowOff"`
 }
 
 // TeamModelView is one of a team's entries. BaseURL is "" for a viewer; the
@@ -1403,6 +1405,10 @@ type TeamModelView struct {
 	Key      SecretView `json:"key"`
 	UsedIn   []string   `json:"usedIn"`
 	Mark     *MarkView  `json:"mark"`
+	// ContextWindow and MaxOutput are ModelAdminView's. A viewer sees them
+	// too: they are not secret.
+	ContextWindow *int `json:"contextWindow"`
+	MaxOutput     *int `json:"maxOutput"`
 }
 
 // TeamLimitsView is GET /api/teams/{id}/limits, for the team's maintainers
@@ -1644,6 +1650,9 @@ type ModelsAdminView struct {
 	// the default moves them.
 	FollowingDefault int              `json:"followingDefault"`
 	Models           []ModelAdminView `json:"models"`
+	// WindowOff is why Jobs get no context window or max output for now;
+	// "" when they do.
+	WindowOff string `json:"windowOff"`
 }
 
 // ModelAdminView is one entry of the list. Source is "config" (read-only, ID
@@ -1674,6 +1683,10 @@ type ModelAdminView struct {
 	Limit        *int64          `json:"limit"`
 	Used         int64           `json:"used"`
 	TeamLimits   []TeamLimitView `json:"teamLimits"`
+	// ContextWindow and MaxOutput are null when the entry has none: opencode's
+	// own value is used.
+	ContextWindow *int `json:"contextWindow"`
+	MaxOutput     *int `json:"maxOutput"`
 }
 
 // TeamLimitView is a team's limit on a global entry and that team's tokens on

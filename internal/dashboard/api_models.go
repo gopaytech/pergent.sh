@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -16,8 +17,8 @@ import (
 const (
 	maxLLMField = 256
 
-	msgBadModelBody   = `the body must be {"name": ..., "provider": ..., "model": ..., "baseURL": ..., "apiKey": ..., "teamsMayUse": ...}`
-	msgBadModelEdit   = `the body must be {"baseURL": ..., "apiKey": ..., "name": ..., "teamsMayUse": ...}: an entry's provider and model never change, add another entry instead`
+	msgBadModelBody   = `the body must be {"name": ..., "provider": ..., "model": ..., "baseURL": ..., "apiKey": ..., "teamsMayUse": ..., "contextWindow": ..., "maxOutput": ...}`
+	msgBadModelEdit   = `the body must be {"baseURL": ..., "apiKey": ..., "name": ..., "teamsMayUse": ..., "contextWindow": ..., "maxOutput": ...}: an entry's provider and model never change, add another entry instead`
 	msgLLMRequired    = "provider and model are required, each at most 256 characters"
 	msgBadBaseURL     = "baseURL must be empty or an absolute http or https URL"
 	msgKeyRequired    = "apiKey is required"
@@ -144,6 +145,7 @@ func (d *Dashboard) modelView(m store.LLMModel, l modelLists) ModelAdminView {
 			v.Key = SecretView{Set: true, UpdatedAt: &at}
 		}
 	}
+	v.ContextWindow, v.MaxOutput = tokensOrNull(m.ContextWindow), tokensOrNull(m.MaxOutput)
 	return d.globalView(v, l)
 }
 
@@ -172,12 +174,14 @@ func (d *Dashboard) modelsView(ctx context.Context) (ModelsAdminView, error) {
 	if err != nil {
 		return ModelsAdminView{}, err
 	}
-	v := ModelsAdminView{CanSetDefault: !d.cfg.HasLLM(), FollowingDefault: following, Models: []ModelAdminView{}}
+	v := ModelsAdminView{CanSetDefault: !d.cfg.HasLLM(), FollowingDefault: following, Models: []ModelAdminView{},
+		WindowOff: modelWindowOff(d.cfg.Jobs.Image, d.cfg.Jobs.SecurityImage)}
 	for _, m := range d.registry.GlobalModels() {
 		if m.Source == instances.SourceConfig {
 			v.Models = append(v.Models, d.globalView(ModelAdminView{ID: m.ID, Name: m.Name, Provider: m.LLM.Provider, Model: m.LLM.Model,
 				BaseURL: m.LLM.BaseURL, Source: string(instances.SourceConfig), Default: m.ID == store.ConfigModelID,
-				Key: SecretView{Set: m.Key != ""}}, l))
+				Key: SecretView{Set: m.Key != ""}, ContextWindow: tokensOrNull(int(m.LLM.ContextWindow)),
+				MaxOutput: tokensOrNull(int(m.LLM.MaxOutput))}, l))
 		}
 	}
 	for _, row := range rows {
@@ -249,6 +253,9 @@ func (d *Dashboard) createModel(w http.ResponseWriter, r *http.Request) {
 		BaseURL     string  `json:"baseURL"`
 		APIKey      *string `json:"apiKey"`
 		TeamsMayUse bool    `json:"teamsMayUse"`
+
+		ContextWindow json.RawMessage `json:"contextWindow"`
+		MaxOutput     json.RawMessage `json:"maxOutput"`
 	}
 	if err := decodeStrict(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, msgBadModelBody)
@@ -280,8 +287,13 @@ func (d *Dashboard) createModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msgBadKey)
 		return
 	}
+	contextWindow, maxOutput, ok := windowBody(w, in.ContextWindow, in.MaxOutput, 0, 0)
+	if !ok {
+		return
+	}
 	m, err := d.Store.CreateLLMModel(ctx, store.LLMModel{Name: name, Provider: in.Provider, Model: in.Model, BaseURL: in.BaseURL,
-		TeamsMayUse: in.TeamsMayUse, APIKeySealed: d.Auth.box.Seal([]byte(*in.APIKey))}, d.now())
+		TeamsMayUse: in.TeamsMayUse, APIKeySealed: d.Auth.box.Seal([]byte(*in.APIKey)),
+		ContextWindow: contextWindow, MaxOutput: maxOutput}, d.now())
 	if errors.Is(err, store.ErrNameTaken) {
 		writeError(w, http.StatusConflict, msgNameTaken)
 		return
@@ -316,6 +328,9 @@ func (d *Dashboard) updateModel(w http.ResponseWriter, r *http.Request) {
 		APIKey      *string `json:"apiKey"`
 		Name        *string `json:"name"`
 		TeamsMayUse *bool   `json:"teamsMayUse"`
+
+		ContextWindow json.RawMessage `json:"contextWindow"`
+		MaxOutput     json.RawMessage `json:"maxOutput"`
 	}
 	if err := decodeStrict(r, &in); err != nil || in.BaseURL == nil {
 		writeError(w, http.StatusBadRequest, msgBadModelEdit)
@@ -354,6 +369,10 @@ func (d *Dashboard) updateModel(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
+	contextWindow, maxOutput, ok := windowBody(w, in.ContextWindow, in.MaxOutput, before.ContextWindow, before.MaxOutput)
+	if !ok {
+		return
+	}
 	if name != nil && *name == before.Name {
 		name = nil
 	}
@@ -381,10 +400,24 @@ func (d *Dashboard) updateModel(w http.ResponseWriter, r *http.Request) {
 		notFound(w) // removed meanwhile
 		return
 	}
+	windowSet := contextWindow != before.ContextWindow || maxOutput != before.MaxOutput
+	if windowSet {
+		found, err = d.Store.SetLLMModelWindow(ctx, id, contextWindow, maxOutput, d.now())
+		if err != nil {
+			d.Log.Error("dashboard: changing a model failed", "model_id", id, "error", d.registry.Redact(err.Error()))
+			writeError(w, http.StatusInternalServerError, msgWriteFailed)
+			return
+		}
+		if !found {
+			notFound(w) // removed meanwhile
+			return
+		}
+	}
 	d.reloadModels(ctx, hidden)
 
 	after := before
 	after.BaseURL, after.UpdatedAt = baseURL, d.now()
+	after.ContextWindow, after.MaxOutput = contextWindow, maxOutput
 	if sealed != nil {
 		after.APIKeySealed = sealed
 	}
@@ -404,6 +437,7 @@ func (d *Dashboard) updateModel(w http.ResponseWriter, r *http.Request) {
 	if in.APIKey != nil {
 		changed = append(changed, "api_key")
 	}
+	changed = append(changed, windowChanges(before.ContextWindow, before.MaxOutput, contextWindow, maxOutput)...)
 	detail := modelDetail(after.Name, before.Provider, before.Model)
 	if len(changed) > 0 {
 		d.Log.Info("dashboard: model updated", "model_id", id, "model", detail, "fields", changed, "by", se.Username)

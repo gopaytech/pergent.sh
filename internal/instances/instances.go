@@ -763,7 +763,8 @@ func (r *Registry) LoadTeamModels(ctx context.Context) error {
 	}
 	next := make([]Model, 0, len(rows))
 	for _, row := range rows {
-		m := Model{ID: row.ID, Name: row.Name, LLM: config.LLM{Provider: row.Provider, Model: row.Model, BaseURL: row.BaseURL},
+		m := Model{ID: row.ID, Name: row.Name, LLM: config.LLM{Provider: row.Provider, Model: row.Model, BaseURL: row.BaseURL,
+			ContextWindow: config.TokenCount(row.ContextWindow), MaxOutput: config.TokenCount(row.MaxOutput)},
 			Source: SourceTeam, TeamID: row.TeamID}
 		if len(row.APIKeySealed) > 0 && r.box != nil {
 			if plain, err := r.box.Open(row.APIKeySealed); err == nil {
@@ -806,7 +807,8 @@ func (r *Registry) loadGlobal(ctx context.Context) error {
 	next := make([]llmEntry, 0, len(rows))
 	for _, row := range rows {
 		e := llmEntry{updatedAt: row.UpdatedAt, Model: Model{
-			ID: row.ID, Name: row.Name, LLM: config.LLM{Provider: row.Provider, Model: row.Model, BaseURL: row.BaseURL},
+			ID: row.ID, Name: row.Name, LLM: config.LLM{Provider: row.Provider, Model: row.Model, BaseURL: row.BaseURL,
+				ContextWindow: config.TokenCount(row.ContextWindow), MaxOutput: config.TokenCount(row.MaxOutput)},
 			Default: row.Default, Source: SourceDashboard, TeamsMayUse: row.TeamsMayUse,
 		}}
 		if len(row.APIKeySealed) > 0 && r.box != nil {

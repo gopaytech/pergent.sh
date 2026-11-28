@@ -432,3 +432,44 @@ func TestTeamModelNameTaken(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// A team entry holds a context window and a max output as a global one does;
+// a viewer reads them, and a change is audited with its old and new values.
+func TestTeamModelWindow(t *testing.T) {
+	t.Parallel()
+	te := newTeamsEnv(t)
+	url := teamURL(te.payments, "/models")
+	m := decode[TeamModelView](t, te.sendJSON(te.maintainer, "POST", url, map[string]any{"name": "big", "provider": "openai", "model": "gpt-x",
+		"apiKey": teamKeyOne, "contextWindow": 64_000, "maxOutput": 64_000}), "POST", http.StatusCreated)
+	if m.ContextWindow == nil || *m.ContextWindow != 64_000 || m.MaxOutput == nil || *m.MaxOutput != 64_000 {
+		t.Fatalf("created = %+v", m)
+	}
+	one := url + "/" + m.ID
+
+	v := decode[TeamModelView](t, te.sendJSON(te.maintainer, "PUT", one, map[string]any{"name": "renamed"}), "PUT rename", http.StatusOK)
+	if v.ContextWindow == nil || *v.ContextWindow != 64_000 || v.MaxOutput == nil || *v.MaxOutput != 64_000 {
+		t.Errorf("a rename lost the window: %+v", v)
+	}
+	// 64000 is above 32768.
+	rec := te.sendJSON(te.maintainer, "PUT", one, map[string]any{"contextWindow": 32_768})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, rec), "to 32768, the entry's context window") {
+		t.Errorf("PUT context below the output = %d %s", rec.Code, rec.Body)
+	}
+	rec = te.sendJSON(te.maintainer, "PUT", one, map[string]any{"maxOutput": nil})
+	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != "Set both Context window and Max output, or neither." {
+		t.Errorf("PUT one value emptied = %d %s", rec.Code, rec.Body)
+	}
+	decode[TeamModelView](t, te.sendJSON(te.maintainer, "PUT", one, map[string]any{"contextWindow": 1_000_000}), "PUT context", http.StatusOK)
+
+	list := decode[TeamModelsView](t, te.get(te.viewer, teamURL(te.payments, "/models")), "viewer GET", http.StatusOK)
+	if len(list.Models) != 1 || list.Models[0].ContextWindow == nil || *list.Models[0].ContextWindow != 1_000_000 ||
+		list.Models[0].MaxOutput == nil || *list.Models[0].MaxOutput != 64_000 || list.WindowOff == "" {
+		t.Errorf("viewer's list = %+v", list)
+	}
+	if got := auditDetails(te.env, "team_model_updated"); !slices.Equal(got, []string{
+		"Payments: renamed (openai / gpt-x) (name)",
+		"Payments: renamed (openai / gpt-x) (context_window 64000 to 1000000)",
+	}) {
+		t.Errorf("team_model_updated = %q", got)
+	}
+}
