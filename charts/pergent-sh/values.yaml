@@ -55,8 +55,9 @@ jobEgress:
 # 8080, so callback_url must be the chart's own in-cluster Service address (the default
 # when you leave it out). A public callback_url makes every scan fail at the source download.
 securityJobEgress:
-  # -- CIDRs the security scan Jobs may reach on the ports below. Scans need config.callback_url to be the chart's in-cluster Service address (the default): the scan policy allows only the pergent.sh pods on 8080. No default: the LLM provider only (or the egress proxy, see config.security.proxy). Never add the GitLab or GitHub host: the scan gets the code from pergent.sh, not from the platform. An EMPTY list allows no external egress: scan Jobs then reach only the DNS servers below and the pergent.sh pods on 8080, and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS). Remaining risk: DNS queries through a recursive resolver can still carry data out.
-  cidrs: []
+  # -- CIDRs the security scan Jobs may reach on the ports below. The default 0.0.0.0/0 lets a scan Job reach ANY address on 443 and 80, like jobEgress for review Jobs, so scans work out of the box. A scan Job runs a shell, so narrow it to the LLM provider (or the egress proxy, see config.security.proxy) to stop a scanned repository's text from sending the model key elsewhere. Scans need config.callback_url to be the chart's in-cluster Service address (the default): the scan policy allows only the pergent.sh pods on 8080. An EMPTY list allows no external egress: scan Jobs then reach only the DNS servers below and the pergent.sh pods on 8080, and Start scan stays off (the chart sets no PERGENT_SH_SECURITY_EGRESS). Remaining risk: DNS queries through a recursive resolver can still carry data out.
+  cidrs:
+    - 0.0.0.0/0
   # -- Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"). Kubernetes rejects an entry that lies outside its cidr.
   except: []
   # -- TCP ports the cidrs are open on (an empty list means 443 and 80, never all ports). A proxy must be in cidrs, and its port (for example 3128) in this list.

@@ -1,5 +1,12 @@
 # ⬆️ Upgrading
 
+## Upgrading to 0.26.1
+
+**Security scans work out of the box.** A chart-only release: the image stays `v0.26.0`. No migration and no config change.
+
+- **`securityJobEgress.cidrs` defaults to `0.0.0.0/0`** on 443 and 80, like `jobEgress` for review Jobs, so **Start scan** is on with no setting. Both NetworkPolicies stay, and review Jobs do not change. A scan Job runs a shell, so **narrow the list** to the LLM provider's addresses. An empty list (`cidrs: []`) turns scans off, as in 0.26.0.
+- **Rolling back** to chart 0.26.0 turns scans off again unless you set `securityJobEgress.cidrs` or `networkPolicy.enabled: false`.
+
 ## Upgrading to 0.26.0
 
 **A security scan: a whole-repository security audit, started by hand.** See [Security scan](concepts/security-scan.md). Scans stay off until you set a Helm value, and the Job NetworkPolicies are optional.

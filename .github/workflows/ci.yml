@@ -142,21 +142,20 @@ jobs:
             echo "graphs.enabled was accepted without the dashboard" >&2
             exit 1
           fi
-          # Security scans have no egress by default: no PERGENT_SH_SECURITY_EGRESS and
-          # no ipBlock in the scan policy, which still selects the scan pods. With a
-          # CIDR both appear, in the scan policy only. The jobs policy always leaves
-          # the scan pods out, or its jobEgress would apply to them too.
+          # Security scans are on by default: PERGENT_SH_SECURITY_EGRESS and a 0.0.0.0/0
+          # ipBlock in the scan policy, which selects the scan pods. An empty list
+          # turns both off. A CIDR appears in the scan policy only. The jobs policy
+          # always leaves the scan pods out, or its jobEgress would apply to them too.
           # policy prints one NetworkPolicy of the rendered file, by its name.
           policy() { awk -v want="  name: $1" '/^---/{f=0} $0 == want{f=1} f'; }
-          if helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
-            | grep -q 'PERGENT_SH_SECURITY_EGRESS'; then
-            echo "security scan egress is on by default" >&2
-            exit 1
-          fi
+          helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            | grep -q 'name: PERGENT_SH_SECURITY_EGRESS$'
           policies=$(helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
             --show-only templates/networkpolicy.yaml)
-          if echo "$policies" | policy t-pergent-sh-security-jobs | grep -q 'ipBlock'; then
-            echo "the security scan policy has an ipBlock by default" >&2
+          echo "$policies" | policy t-pergent-sh-security-jobs | grep -q 'cidr: "0.0.0.0/0"$'
+          if helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --set 'securityJobEgress.cidrs=null' | grep -q 'PERGENT_SH_SECURITY_EGRESS'; then
+            echo "an empty securityJobEgress.cidrs still turns scans on" >&2
             exit 1
           fi
           echo "$policies" | policy t-pergent-sh-security-jobs | grep -q 'operator: Exists$'
