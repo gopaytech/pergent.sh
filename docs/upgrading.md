@@ -1,5 +1,15 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+**A context window and a max output on every model entry.** See [Context window and max output](concepts/models.md#context-window-and-max-output).
+
+- **Migration `0056_model_limits_per_entry.sql`** runs at startup. Back up Postgres first, as for any migration. It only adds 2 nullable columns to `llm_models` and `team_models` and drops nothing. The previous release ignores them.
+- **Context window and Max output** on every model entry: on the admin **Settings** page and on a team's **Models** tab. The API fields are `contextWindow` and `maxOutput` on the model routes. The audit entries `model_updated` and `team_model_updated` give the old and new values. **Set both, or neither.** (These 2 fields are not the monthly token limits.)
+- **New config keys** `llm.context_window` and `llm.max_output`, also in each `llm.fallbacks` item. **They break a rollback:** the previous release refuses unknown keys, so remove them from the config before you roll back.
+- **The values take effect only with a new enough pergent.** Jobs get `PERGENT_CONTEXT_LIMIT` and `PERGENT_OUTPUT_LIMIT` only when both are set and the Job's image (`jobs.image` for reviews, `jobs.security_image` for scans) is a pergent at or above the version that reads them. In this release no image is, so no Job gets them yet, and the model form says so. The release that moves the default images to that pergent turns them on. Values saved before then wait in the database.
+- **Rolling back:** the values stay in the database and the previous release ignores them. Its Jobs run without the variables.
+
 ## Upgrading to 0.26.1
 
 **Security scans work out of the box.** A chart-only release: the image stays `v0.26.0`. No migration and no config change.
